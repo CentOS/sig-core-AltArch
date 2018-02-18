@@ -1,0 +1,69 @@
+From e0eb9e766dc3dd296e7a5e623bf7b10ebcdb33f7 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 6 Feb 2017 13:54:50 -0600
+Subject: [PATCH] Fix: libcrmcommon,pengine,tools: pass local node name to
+ resource agents
+
+Preivously, crm_node -n would show the local uname on remote nodes, even when
+the node name known to the cluster was different. Now, the policy engine adds
+environment variables with the local node name and UUID before calling the
+resource agent. If crm_node detects these variables, it will use them instead
+of uname.
+
+This only affects crm_node behavior when called via the cluster, not
+directly from the command line.
+
+Based on patch originally provided by Andrew Beekhof <andrew@beekhof.net>
+---
+ lib/common/utils.c | 2 ++
+ pengine/graph.c    | 3 +++
+ tools/crm_node.c   | 6 +++++-
+ 3 files changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/lib/common/utils.c b/lib/common/utils.c
+index 83072c5..3e3abd3 100644
+--- a/lib/common/utils.c
++++ b/lib/common/utils.c
+@@ -894,6 +894,8 @@ filter_action_parameters(xmlNode * param_set, const char *version)
+         XML_ATTR_ID,
+         XML_ATTR_CRM_VERSION,
+         XML_LRM_ATTR_OP_DIGEST,
++        XML_LRM_ATTR_TARGET,
++        XML_LRM_ATTR_TARGET_UUID,
+     };
+ 
+     gboolean do_delete = FALSE;
+diff --git a/pengine/graph.c b/pengine/graph.c
+index 569cf6e..81d8355 100644
+--- a/pengine/graph.c
++++ b/pengine/graph.c
+@@ -948,6 +948,9 @@ action2xml(action_t * action, gboolean as_input, pe_working_set_t *data_set)
+         if (router_node) {
+             crm_xml_add(action_xml, XML_LRM_ATTR_ROUTER_NODE, router_node->details->uname);
+         }
++
++        g_hash_table_insert(action->meta, strdup(XML_LRM_ATTR_TARGET), strdup(action->node->details->uname));
++        g_hash_table_insert(action->meta, strdup(XML_LRM_ATTR_TARGET_UUID), strdup(action->node->details->id));
+     }
+ 
+     /* No details if this action is only being listed in the inputs section */
+diff --git a/tools/crm_node.c b/tools/crm_node.c
+index d927f31..7092db4 100644
+--- a/tools/crm_node.c
++++ b/tools/crm_node.c
+@@ -951,7 +951,11 @@ main(int argc, char **argv)
+     }
+ 
+     if (command == 'n') {
+-        fprintf(stdout, "%s\n", get_local_node_name());
++        const char *name = getenv("OCF_RESKEY_" CRM_META "_" XML_LRM_ATTR_TARGET);
++        if(name == NULL) {
++            name = get_local_node_name();
++        }
++        fprintf(stdout, "%s\n", name);
+         crm_exit(pcmk_ok);
+ 
+     } else if (command == 'N') {
+-- 
+1.8.3.1
+

@@ -1,0 +1,739 @@
+From 0113ff6fb6bb576356d201cf698b98455dbf5180 Mon Sep 17 00:00:00 2001
+From: Klaus Wenninger <klaus.wenninger@aon.at>
+Date: Wed, 21 Dec 2016 18:08:40 +0100
+Subject: [PATCH] Fix: pacemaker-remote: pacemaker_remoted shutdown while
+ unmanaged
+
+Since introduction of the graceful shutdown of pacemaker_remoted
+the shutdown is hanging if the remote-resource is unmanaged.
+This happens as pacemaker_remoted is waiting for all resources
+running on the remote-node to be shut down and pacemaker
+on the other hand doesn't touch resources on a remote-node
+when the remote-resource is unmanaged.
+
+Fixes rhbz#1388102
+---
+ crmd/crmd_lrm.h              |   2 +
+ crmd/lrm_state.c             |  20 ++++---
+ crmd/messages.c              |   5 ++
+ crmd/remote_lrmd_ra.c        | 124 ++++++++++++++++++++++++++++++++++++++++---
+ crmd/te_actions.c            |  28 +++++++++-
+ include/crm/crm.h            |   1 +
+ include/crm/lrmd.h           |   1 +
+ include/crm/msg_xml.h        |   2 +
+ include/crm/pengine/status.h |   1 +
+ include/crm_internal.h       |   1 +
+ lib/lrmd/proxy_common.c      |  15 ++++++
+ lib/pengine/unpack.c         |  34 ++++++++----
+ lib/pengine/utils.c          |  28 ++++++----
+ lrmd/ipc_proxy.c             |   5 ++
+ lrmd/lrmd_private.h          |   2 +
+ lrmd/main.c                  |  24 +++++++++
+ pengine/allocate.c           |   3 ++
+ pengine/graph.c              |  68 +++++++++++++++++++++++-
+ pengine/pengine.h            |   1 +
+ 19 files changed, 329 insertions(+), 36 deletions(-)
+
+diff --git a/crmd/crmd_lrm.h b/crmd/crmd_lrm.h
+index c6373f1..64d80c4 100644
+--- a/crmd/crmd_lrm.h
++++ b/crmd/crmd_lrm.h
+@@ -162,5 +162,7 @@ int remote_ra_exec(lrm_state_t * lrm_state, const char *rsc_id, const char *acti
+ void remote_ra_cleanup(lrm_state_t * lrm_state);
+ void remote_ra_fail(const char *node_name);
+ void remote_ra_process_pseudo(xmlNode *xml);
++gboolean remote_ra_is_in_maintenance(lrm_state_t * lrm_state);
++void remote_ra_process_maintenance_nodes(xmlNode *xml);
+ 
+ gboolean process_lrm_event(lrm_state_t * lrm_state, lrmd_event_data_t * op, struct recurring_op_s *pending);
+diff --git a/crmd/lrm_state.c b/crmd/lrm_state.c
+index 7b4379b..d55755e 100644
+--- a/crmd/lrm_state.c
++++ b/crmd/lrm_state.c
+@@ -508,14 +508,22 @@ crmd_remote_proxy_cb(lrmd_t *lrmd, void *userdata, xmlNode *msg)
+         crm_notice("%s requested shutdown of its remote connection",
+                    lrm_state->node_name);
+
+-        now_s = crm_itoa(now);
+-        update_attrd(lrm_state->node_name, XML_CIB_ATTR_SHUTDOWN, now_s, NULL, TRUE);
+-        free(now_s);
++        if (!remote_ra_is_in_maintenance(lrm_state)) {
++            now_s = crm_itoa(now);
++            update_attrd(lrm_state->node_name, XML_CIB_ATTR_SHUTDOWN, now_s, NULL, TRUE);
++            free(now_s);
+
+-        remote_proxy_ack_shutdown(lrmd);
++            remote_proxy_ack_shutdown(lrmd);
+
+-        crm_warn("Reconnection attempts to %s may result in failures that must be cleared",
+-                 lrm_state->node_name);
++            crm_warn("Reconnection attempts to %s may result in failures that must be cleared",
++                    lrm_state->node_name);
++        } else {
++            remote_proxy_nack_shutdown(lrmd);
++
++            crm_notice("Remote resource for %s is not managed so no ordered shutdown happening",
++                    lrm_state->node_name);
++        }
++        return;
+
+     } else if (safe_str_eq(op, LRMD_IPC_OP_REQUEST) && proxy->is_local) {
+         /* this is for the crmd, which we are, so don't try
+diff --git a/crmd/messages.c b/crmd/messages.c
+index 87d0acf..c79d96e 100644
+--- a/crmd/messages.c
++++ b/crmd/messages.c
+@@ -872,6 +872,11 @@ handle_request(xmlNode * stored_msg, enum crmd_fsa_cause cause)
+             reap_crm_member(id, name);
+         }
+ 
++    } else if (strcmp(op, CRM_OP_MAINTENANCE_NODES) == 0) {
++        xmlNode *xml = get_message_xml(stored_msg, F_CRM_DATA);
++
++        remote_ra_process_maintenance_nodes(xml);
++
+     } else {
+         crm_err("Unexpected request (%s) sent to %s", op, AM_I_DC ? "the DC" : "non-DC node");
+         crm_log_xml_err(stored_msg, "Unexpected");
+diff --git a/crmd/remote_lrmd_ra.c b/crmd/remote_lrmd_ra.c
+index e68d784..8085219 100644
+--- a/crmd/remote_lrmd_ra.c
++++ b/crmd/remote_lrmd_ra.c
+@@ -80,6 +80,10 @@ typedef struct remote_ra_data_s {
+     enum remote_migration_status migrate_status;
+ 
+     gboolean active;
++    gboolean is_maintenance; /* kind of complex to determine from crmd-context
++                              * so we have it signalled back with the
++                              * transition from pengine
++                              */
+ } remote_ra_data_t;
+ 
+ static int handle_remote_ra_start(lrm_state_t * lrm_state, remote_ra_cmd_t * cmd, int timeout_ms);
+@@ -485,6 +489,28 @@ monitor_timeout_cb(gpointer data)
+     return FALSE;
+ }
+ 
++static void
++synthesize_lrmd_success(lrm_state_t *lrm_state, const char *rsc_id, const char *op_type)
++{
++    lrmd_event_data_t op = { 0, };
++
++    if (lrm_state == NULL) {
++        /* if lrm_state not given assume local */
++        lrm_state = lrm_state_find(fsa_our_uname);
++    }
++    CRM_ASSERT(lrm_state != NULL);
++
++    op.type = lrmd_event_exec_complete;
++    op.rsc_id = rsc_id;
++    op.op_type = op_type;
++    op.rc = PCMK_OCF_OK;
++    op.op_status = PCMK_LRM_OP_DONE;
++    op.t_run = time(NULL);
++    op.t_rcchange = op.t_run;
++    op.call_id = generate_callid();
++    process_lrm_event(lrm_state, &op, NULL);
++}
++
+ void
+ remote_lrm_op_callback(lrmd_event_data_t * op)
+ {
+@@ -536,9 +562,18 @@ remote_lrm_op_callback(lrmd_event_data_t * op)
+         (ra_data->cur_cmd == NULL) &&
+         (ra_data->active == TRUE)) {
+ 
+-        crm_err("Unexpected disconnect on remote-node %s", lrm_state->node_name);
+-        ra_data->recurring_cmds = fail_all_monitor_cmds(ra_data->recurring_cmds);
+-        ra_data->cmds = fail_all_monitor_cmds(ra_data->cmds);
++        if (!remote_ra_is_in_maintenance(lrm_state)) {
++            crm_err("Unexpected disconnect on remote-node %s", lrm_state->node_name);
++            ra_data->recurring_cmds = fail_all_monitor_cmds(ra_data->recurring_cmds);
++            ra_data->cmds = fail_all_monitor_cmds(ra_data->cmds);
++        } else {
++            crm_notice("Disconnect on unmanaged remote-node %s", lrm_state->node_name);
++            /* Do roughly what a 'stop' on the remote-resource would do */
++            handle_remote_ra_stop(lrm_state, NULL);
++            remote_node_down(lrm_state->node_name, DOWN_KEEP_LRM);
++            /* now fake the reply of a successful 'stop' */
++            synthesize_lrmd_success(NULL, lrm_state->node_name, "stop");
++        }
+         return;
+     }
+ 
+@@ -651,8 +686,6 @@ handle_remote_ra_stop(lrm_state_t * lrm_state, remote_ra_cmd_t * cmd)
+ 
+     ra_data->active = FALSE;
+     lrm_state_disconnect(lrm_state);
+-    cmd->rc = PCMK_OCF_OK;
+-    cmd->op_status = PCMK_LRM_OP_DONE;
+ 
+     if (ra_data->cmds) {
+         g_list_free_full(ra_data->cmds, free_cmd);
+@@ -664,7 +697,12 @@ handle_remote_ra_stop(lrm_state_t * lrm_state, remote_ra_cmd_t * cmd)
+     ra_data->recurring_cmds = NULL;
+     ra_data->cur_cmd = NULL;
+ 
+-    report_remote_ra_result(cmd);
++    if (cmd) {
++        cmd->rc = PCMK_OCF_OK;
++        cmd->op_status = PCMK_LRM_OP_DONE;
++
++        report_remote_ra_result(cmd);
++    }
+ }
+ 
+ static int
+@@ -1140,3 +1178,77 @@ remote_ra_process_pseudo(xmlNode *xml)
+     }
+     freeXpathObject(search);
+ }
++
++static void
++remote_ra_maintenance(lrm_state_t * lrm_state, gboolean maintenance)
++{
++    remote_ra_data_t *ra_data = lrm_state->remote_ra_data;
++    xmlNode *update, *state;
++    int call_opt, call_id = 0;
++    crm_node_t *node;
++
++    call_opt = crmd_cib_smart_opt();
++    node = crm_remote_peer_get(lrm_state->node_name);
++    CRM_CHECK(node != NULL, return);
++    update = create_xml_node(NULL, XML_CIB_TAG_STATUS);
++    state = create_node_state_update(node, node_update_none, update,
++                                     __FUNCTION__);
++    crm_xml_add(state, XML_NODE_IS_MAINTENANCE, maintenance?"1":"0");
++    fsa_cib_update(XML_CIB_TAG_STATUS, update, call_opt, call_id, NULL);
++    if (call_id < 0) {
++        crm_perror(LOG_WARNING, "%s CIB node state update failed", lrm_state->node_name);
++    } else {
++        /* TODO: still not 100% sure that async update will succeed ... */
++        ra_data->is_maintenance = maintenance;
++    }
++    free_xml(update);
++}
++
++#define XPATH_PSEUDO_MAINTENANCE "//" XML_GRAPH_TAG_PSEUDO_EVENT \
++    "[@" XML_LRM_ATTR_TASK "='" CRM_OP_MAINTENANCE_NODES "']/" \
++    XML_GRAPH_TAG_MAINTENANCE
++
++/*!
++ * \internal
++ * \brief Check a pseudo-action holding updates for maintenance state
++ *
++ * \param[in] xml  XML of pseudo-action to check
++ */
++
++void
++remote_ra_process_maintenance_nodes(xmlNode *xml)
++{
++    xmlXPathObjectPtr search = xpath_search(xml, XPATH_PSEUDO_MAINTENANCE);
++
++    if (numXpathResults(search) == 1) {
++        xmlNode *node;
++        int cnt = 0, cnt_remote = 0;
++
++        for (node =
++                first_named_child(getXpathResult(search, 0), XML_CIB_TAG_NODE);
++            node; node = __xml_next(node)) {
++            lrm_state_t *lrm_state = lrm_state_find(ID(node));
++
++            cnt++;
++            if (lrm_state && lrm_state->remote_ra_data &&
++                ((remote_ra_data_t *) lrm_state->remote_ra_data)->active) {
++                cnt_remote++;
++                remote_ra_maintenance(lrm_state,
++                                        crm_atoi(crm_element_value(node,
++                                            XML_NODE_IS_MAINTENANCE), "0"));
++
++            }
++        }
++        crm_trace("Action holds %d nodes (%d remotes found) "
++                    "adjusting maintenance-mode", cnt, cnt_remote);
++    }
++    freeXpathObject(search);
++}
++
++gboolean
++remote_ra_is_in_maintenance(lrm_state_t * lrm_state)
++{
++    remote_ra_data_t *ra_data = lrm_state->remote_ra_data;
++
++    return ra_data->is_maintenance;
++}
+diff --git a/crmd/te_actions.c b/crmd/te_actions.c
+index 5508234..c41d44d 100644
+--- a/crmd/te_actions.c
++++ b/crmd/te_actions.c
+@@ -53,8 +53,32 @@ te_start_action_timer(crm_graph_t * graph, crm_action_t * action)
+ static gboolean
+ te_pseudo_action(crm_graph_t * graph, crm_action_t * pseudo)
+ {
+-    /* Check action for Pacemaker Remote node side effects */
+-    remote_ra_process_pseudo(pseudo->xml);
++    const char *task = crm_element_value(pseudo->xml, XML_LRM_ATTR_TASK);
++
++    /* send to peers as well? */
++    if (safe_str_eq(task, CRM_OP_MAINTENANCE_NODES)) {
++        GHashTableIter iter;
++        crm_node_t *node = NULL;
++
++        g_hash_table_iter_init(&iter, crm_peer_cache);
++        while (g_hash_table_iter_next(&iter, NULL, (gpointer *) &node)) {
++            xmlNode *cmd = NULL;
++
++            if (safe_str_eq(fsa_our_uname, node->uname)) {
++                continue;
++            }
++
++            cmd = create_request(task, pseudo->xml, node->uname,
++                                 CRM_SYSTEM_CRMD, CRM_SYSTEM_TENGINE, NULL);
++            send_cluster_message(node, crm_msg_crmd, cmd, FALSE);
++            free_xml(cmd);
++        }
++
++        remote_ra_process_maintenance_nodes(pseudo->xml);
++    } else {
++        /* Check action for Pacemaker Remote node side effects */
++        remote_ra_process_pseudo(pseudo->xml);
++    }
+ 
+     crm_debug("Pseudo-action %d (%s) fired and confirmed", pseudo->id,
+               crm_element_value(pseudo->xml, XML_LRM_ATTR_TASK_KEY));
+diff --git a/include/crm/crm.h b/include/crm/crm.h
+index 3f83a91..6afc771 100644
+--- a/include/crm/crm.h
++++ b/include/crm/crm.h
+@@ -142,6 +142,7 @@ extern char *crm_system_name;
+ #  define CRM_OP_RELAXED_SET  "one-or-more"
+ #  define CRM_OP_RELAXED_CLONE  "clone-one-or-more"
+ #  define CRM_OP_RM_NODE_CACHE "rm_node_cache"
++#  define CRM_OP_MAINTENANCE_NODES "maintenance_nodes"
+ 
+ #  define CRMD_JOINSTATE_DOWN           "down"
+ #  define CRMD_JOINSTATE_PENDING        "pending"
+diff --git a/include/crm/lrmd.h b/include/crm/lrmd.h
+index 446b39c..e4dc61c 100644
+--- a/include/crm/lrmd.h
++++ b/include/crm/lrmd.h
+@@ -99,6 +99,7 @@ typedef struct lrmd_key_value_s {
+ #define LRMD_IPC_OP_RESPONSE      "response"
+ #define LRMD_IPC_OP_SHUTDOWN_REQ  "shutdown_req"
+ #define LRMD_IPC_OP_SHUTDOWN_ACK  "shutdown_ack"
++#define LRMD_IPC_OP_SHUTDOWN_NACK "shutdown_nack"
+ 
+ #define F_LRMD_IPC_OP           "lrmd_ipc_op"
+ #define F_LRMD_IPC_IPC_SERVER   "lrmd_ipc_server"
+diff --git a/include/crm/msg_xml.h b/include/crm/msg_xml.h
+index 4a3cd1e..3a0c0e8 100644
+--- a/include/crm/msg_xml.h
++++ b/include/crm/msg_xml.h
+@@ -255,6 +255,7 @@
+ #  define XML_NODE_IS_PEER    	"crmd"
+ #  define XML_NODE_IS_REMOTE    	"remote_node"
+ #  define XML_NODE_IS_FENCED		"node_fenced"
++#  define XML_NODE_IS_MAINTENANCE   "node_in_maintenance"
+ 
+ #  define XML_CIB_ATTR_SHUTDOWN       	"shutdown"
+ #  define XML_CIB_ATTR_STONITH	    	"stonith"
+@@ -297,6 +298,7 @@
+ #  define XML_GRAPH_TAG_PSEUDO_EVENT	"pseudo_event"
+ #  define XML_GRAPH_TAG_CRM_EVENT	"crm_event"
+ #  define XML_GRAPH_TAG_DOWNED            "downed"
++#  define XML_GRAPH_TAG_MAINTENANCE       "maintenance"
+ 
+ #  define XML_TAG_RULE			"rule"
+ #  define XML_RULE_ATTR_SCORE		"score"
+diff --git a/include/crm/pengine/status.h b/include/crm/pengine/status.h
+index 79e4572..eb401be 100644
+--- a/include/crm/pengine/status.h
++++ b/include/crm/pengine/status.h
+@@ -160,6 +160,7 @@ struct node_shared_s {
+     gboolean rsc_discovery_enabled;
+     gboolean remote_requires_reset;
+     gboolean remote_was_fenced;
++    gboolean remote_maintenance; /* what the remote-rsc is thinking */
+ };
+ 
+ struct node_s {
+diff --git a/include/crm_internal.h b/include/crm_internal.h
+index a498bcb..297e6b3 100644
+--- a/include/crm_internal.h
++++ b/include/crm_internal.h
+@@ -381,6 +381,7 @@ typedef struct remote_proxy_s {
+ int  remote_proxy_check(lrmd_t *lrmd, GHashTable *hash);
+ void remote_proxy_cb(lrmd_t *lrmd, const char *node_name, xmlNode *msg);
+ void remote_proxy_ack_shutdown(lrmd_t *lrmd);
++void remote_proxy_nack_shutdown(lrmd_t *lrmd);
+ 
+ int  remote_proxy_dispatch(const char *buffer, ssize_t length, gpointer userdata);
+ void remote_proxy_disconnected(gpointer data);
+diff --git a/lib/lrmd/proxy_common.c b/lib/lrmd/proxy_common.c
+index eb17e4e..69cfa8c 100644
+--- a/lib/lrmd/proxy_common.c
++++ b/lib/lrmd/proxy_common.c
+@@ -59,6 +59,21 @@ remote_proxy_ack_shutdown(lrmd_t *lrmd)
+     free_xml(msg);
+ }
+ 
++/*!
++ * \brief We're not gonna shutdown as response to
++ *        a remote proxy shutdown request.
++ *
++ * \param[in] lrmd  Connection to proxy
++ */
++void
++remote_proxy_nack_shutdown(lrmd_t *lrmd)
++{
++    xmlNode *msg = create_xml_node(NULL, T_LRMD_IPC_PROXY);
++    crm_xml_add(msg, F_LRMD_IPC_OP, LRMD_IPC_OP_SHUTDOWN_NACK);
++    lrmd_internal_proxy_send(lrmd, msg);
++    free_xml(msg);
++}
++
+ void
+ remote_proxy_relay_event(remote_proxy_t *proxy, xmlNode *msg)
+ {
+diff --git a/lib/pengine/unpack.c b/lib/pengine/unpack.c
+index e6a8f58..ed6ee7f 100644
+--- a/lib/pengine/unpack.c
++++ b/lib/pengine/unpack.c
+@@ -89,16 +89,22 @@ pe_fence_node(pe_working_set_t * data_set, node_t * node, const char *reason)
+         set_bit(node->details->remote_rsc->flags, pe_rsc_failed);
+ 
+     } else if (is_baremetal_remote_node(node)) {
+-        if(pe_can_fence(data_set, node)) {
+-            crm_warn("Node %s will be fenced %s", node->details->uname, reason);
++        resource_t *rsc = node->details->remote_rsc;
++
++        if (rsc && (!is_set(rsc->flags, pe_rsc_managed))) {
++            crm_notice("Not fencing node %s because connection is unmanaged, "
++                       "otherwise would %s", node->details->uname, reason);
+         } else {
+-            crm_warn("Node %s is unclean %s", node->details->uname, reason);
++            if (pe_can_fence(data_set, node)) {
++                crm_warn("Node %s will be fenced %s", node->details->uname, reason);
++            } else {
++                crm_warn("Node %s is unclean %s", node->details->uname, reason);
++            }
++            node->details->remote_requires_reset = TRUE;
+         }
+         node->details->unclean = TRUE;
+-        node->details->remote_requires_reset = TRUE;
+-
+     } else if (node->details->unclean == FALSE) {
+-        if(pe_can_fence(data_set, node)) {
++        if (pe_can_fence(data_set, node)) {
+             crm_warn("Node %s will be fenced %s", node->details->uname, reason);
+         } else {
+             crm_warn("Node %s is unclean %s", node->details->uname, reason);
+@@ -1163,6 +1169,7 @@ unpack_remote_status(xmlNode * status, pe_working_set_t * data_set)
+     const char *id = NULL;
+     const char *uname = NULL;
+     const char *shutdown = NULL;
++    resource_t *rsc = NULL;
+ 
+     GListPtr gIter = NULL;
+ 
+@@ -1202,6 +1209,10 @@ unpack_remote_status(xmlNode * status, pe_working_set_t * data_set)
+         }
+         crm_trace("Processing remote node id=%s, uname=%s", id, uname);
+ 
++        this_node->details->remote_maintenance =
++            crm_atoi(crm_element_value(state, XML_NODE_IS_MAINTENANCE), "0");
++
++        rsc = this_node->details->remote_rsc;
+         if (this_node->details->remote_requires_reset == FALSE) {
+             this_node->details->unclean = FALSE;
+             this_node->details->unseen = FALSE;
+@@ -1211,11 +1222,11 @@ unpack_remote_status(xmlNode * status, pe_working_set_t * data_set)
+ 
+         shutdown = g_hash_table_lookup(this_node->details->attrs, XML_CIB_ATTR_SHUTDOWN);
+         if (shutdown != NULL && safe_str_neq("0", shutdown)) {
+-            resource_t *rsc = this_node->details->remote_rsc;
+-
+             crm_info("Node %s is shutting down", this_node->details->uname);
+             this_node->details->shutdown = TRUE;
+-            rsc->next_role = RSC_ROLE_STOPPED;
++            if (rsc) {
++                rsc->next_role = RSC_ROLE_STOPPED;
++            }
+         }
+  
+         if (crm_is_true(g_hash_table_lookup(this_node->details->attrs, "standby"))) {
+@@ -1223,7 +1234,8 @@ unpack_remote_status(xmlNode * status, pe_working_set_t * data_set)
+             this_node->details->standby = TRUE;
+         }
+ 
+-        if (crm_is_true(g_hash_table_lookup(this_node->details->attrs, "maintenance"))) {
++        if (crm_is_true(g_hash_table_lookup(this_node->details->attrs, "maintenance")) ||
++            (rsc && !is_set(rsc->flags, pe_rsc_managed))) {
+             crm_info("Node %s is in maintenance-mode", this_node->details->uname);
+             this_node->details->maintenance = TRUE;
+         }
+@@ -2825,7 +2837,7 @@ determine_op_status(
+                 result = PCMK_LRM_OP_NOTSUPPORTED;
+                 break;
+ 
+-            } else if(pe_can_fence(data_set, node) == FALSE
++            } else if (pe_can_fence(data_set, node) == FALSE
+                && safe_str_eq(task, CRMD_ACTION_STOP)) {
+                 /* If a stop fails and we can't fence, there's nothing else we can do */
+                 pe_proc_err("No further recovery can be attempted for %s: %s action failed with '%s' (%d)",
+diff --git a/lib/pengine/utils.c b/lib/pengine/utils.c
+index 2b53999..0ce5c53 100644
+--- a/lib/pengine/utils.c
++++ b/lib/pengine/utils.c
+@@ -824,20 +824,28 @@ unpack_operation(action_t * action, xmlNode * xml_obj, resource_t * container,
+      * 2. start - a start failure indicates that an active connection does not already
+      * exist. The user can set op on-fail=fence if they really want to fence start
+      * failures. */
+-    } else if (value == NULL &&
+-               is_rsc_baremetal_remote_node(action->rsc, data_set) &&
++    } else if (((value == NULL) || !is_set(action->rsc->flags, pe_rsc_managed)) &&
++                (is_rsc_baremetal_remote_node(action->rsc, data_set) &&
+                !(safe_str_eq(action->task, CRMD_ACTION_STATUS) && interval == 0) &&
+-                (safe_str_neq(action->task, CRMD_ACTION_START))) {
++                (safe_str_neq(action->task, CRMD_ACTION_START)))) {
+ 
+-        if (is_set(data_set->flags, pe_flag_stonith_enabled)) {
+-            value = "fence baremetal remote node (default)";
+-        } else {
+-            value = "recover baremetal remote node connection (default)";
+-        }
+-        if (action->rsc->remote_reconnect_interval) {
++        if (!is_set(action->rsc->flags, pe_rsc_managed)) {
++            action->on_fail = action_fail_stop;
+             action->fail_role = RSC_ROLE_STOPPED;
++            value = "stop unmanaged baremetal remote node (enforcing default)";
++
++        } else {
++            if (is_set(data_set->flags, pe_flag_stonith_enabled)) {
++                value = "fence baremetal remote node (default)";
++            } else {
++                value = "recover baremetal remote node connection (default)";
++            }
++
++            if (action->rsc->remote_reconnect_interval) {
++                action->fail_role = RSC_ROLE_STOPPED;
++            }
++            action->on_fail = action_fail_reset_remote;
+         }
+-        action->on_fail = action_fail_reset_remote;
+ 
+     } else if (value == NULL && safe_str_eq(action->task, CRMD_ACTION_STOP)) {
+         if (is_set(data_set->flags, pe_flag_stonith_enabled)) {
+diff --git a/lrmd/ipc_proxy.c b/lrmd/ipc_proxy.c
+index 07c13ab..5d6ab34 100644
+--- a/lrmd/ipc_proxy.c
++++ b/lrmd/ipc_proxy.c
+@@ -164,6 +164,11 @@ ipc_proxy_forward_client(crm_client_t *ipc_proxy, xmlNode *xml)
+         return;
+     }
+ 
++    if (safe_str_eq(msg_type, LRMD_IPC_OP_SHUTDOWN_NACK)) {
++        handle_shutdown_nack();
++        return;
++    }
++
+     ipc_client = crm_client_get_by_id(session);
+     if (ipc_client == NULL) {
+         xmlNode *msg = create_xml_node(NULL, T_LRMD_IPC_PROXY);
+diff --git a/lrmd/lrmd_private.h b/lrmd/lrmd_private.h
+index 62e9c84..5579b92 100644
+--- a/lrmd/lrmd_private.h
++++ b/lrmd/lrmd_private.h
+@@ -85,6 +85,8 @@ void free_rsc(gpointer data);
+ 
+ void handle_shutdown_ack(void);
+ 
++void handle_shutdown_nack(void);
++
+ void lrmd_client_destroy(crm_client_t *client);
+ 
+ void client_disconnect_cleanup(const char *client_id);
+diff --git a/lrmd/main.c b/lrmd/main.c
+index e3d3aaa..a3aa08f 100644
+--- a/lrmd/main.c
++++ b/lrmd/main.c
+@@ -364,6 +364,7 @@ void handle_shutdown_ack()
+         crm_info("Received shutdown ack");
+         if (shutdown_ack_timer > 0) {
+             g_source_remove(shutdown_ack_timer);
++            shutdown_ack_timer = 0;
+         }
+         return;
+     }
+@@ -371,6 +372,29 @@ void handle_shutdown_ack()
+     crm_debug("Ignoring unexpected shutdown ack");
+ }
+ 
++/*!
++ * \internal
++ * \brief Make short exit timer fire immediately
++ */
++void handle_shutdown_nack()
++{
++#ifdef ENABLE_PCMK_REMOTE
++    if (shutting_down) {
++        crm_info("Received shutdown nack");
++        if (shutdown_ack_timer > 0) {
++            GSource *timer =
++                g_main_context_find_source_by_id(NULL, shutdown_ack_timer);
++
++            if (timer != NULL) {
++                g_source_set_ready_time(timer, 0);
++            }
++        }
++        return;
++    }
++#endif
++    crm_debug("Ignoring unexpected shutdown nack");
++}
++
+ /* *INDENT-OFF* */
+ static struct crm_option long_options[] = {
+     /* Top-level Options */
+diff --git a/pengine/allocate.c b/pengine/allocate.c
+index 9a87816..7562253 100644
+--- a/pengine/allocate.c
++++ b/pengine/allocate.c
+@@ -2150,6 +2150,9 @@ stage8(pe_working_set_t * data_set)
+ 
+     crm_log_xml_trace(data_set->graph, "created resource-driven action list");
+ 
++    /* pseudo action to distribute list of nodes with maintenance state update */
++    add_maintenance_update(data_set);
++
+     /* catch any non-resource specific actions */
+     crm_trace("processing non-resource actions");
+ 
+diff --git a/pengine/graph.c b/pengine/graph.c
+index 81d8355..5ba60f7 100644
+--- a/pengine/graph.c
++++ b/pengine/graph.c
+@@ -788,13 +788,15 @@ get_router_node(action_t *action)
+  * \param[in]     id      Node UUID to add
+  * \param[in,out] xml     Parent XML tag to add to
+  */
+-static void
++static xmlNode*
+ add_node_to_xml_by_id(const char *id, xmlNode *xml)
+ {
+     xmlNode *node_xml;
+ 
+     node_xml = create_xml_node(xml, XML_CIB_TAG_NODE);
+     crm_xml_add(node_xml, XML_ATTR_UUID, id);
++
++    return node_xml;
+ }
+ 
+ /*!
+@@ -812,6 +814,62 @@ add_node_to_xml(const node_t *node, void *xml)
+ 
+ /*!
+  * \internal
++ * \brief Add XML with nodes that need an update of their maintenance state
++ *
++ * \param[in,out] xml       Parent XML tag to add to
++ * \param[in]     data_set  Working set for cluster
++ */
++static int
++add_maintenance_nodes(xmlNode *xml, const pe_working_set_t *data_set)
++{
++    GListPtr gIter = NULL;
++    xmlNode *maintenance =
++        xml?create_xml_node(xml, XML_GRAPH_TAG_MAINTENANCE):NULL;
++    int count = 0;
++
++    for (gIter = data_set->nodes; gIter != NULL;
++         gIter = gIter->next) {
++        node_t *node = (node_t *) gIter->data;
++        struct node_shared_s *details = node->details;
++
++        if (!(is_remote_node(node))) {
++            continue; /* just remote nodes need to know atm */
++        }
++
++        if (details->maintenance != details->remote_maintenance) {
++            if (maintenance) {
++                crm_xml_add(
++                    add_node_to_xml_by_id(node->details->id, maintenance),
++                    XML_NODE_IS_MAINTENANCE, details->maintenance?"1":"0");
++            }
++            count++;
++        }
++    }
++    crm_trace("%s %d nodes to adjust maintenance-mode "
++              "to transition", maintenance?"Added":"Counted", count);
++    return count;
++}
++
++/*!
++ * \internal
++ * \brief Add pseudo action with nodes needing maintenance state update
++ *
++ * \param[in,out] data_set  Working set for cluster
++ */
++void
++add_maintenance_update(pe_working_set_t *data_set)
++{
++    action_t *action = NULL;
++
++    if (add_maintenance_nodes(NULL, data_set)) {
++        crm_trace("adding maintenance state update pseudo action");
++        action = get_pseudo_op(CRM_OP_MAINTENANCE_NODES, data_set);
++        set_bit(action->flags, pe_action_print_always);
++    }
++}
++
++/*!
++ * \internal
+  * \brief Add XML with nodes that an action is expected to bring down
+  *
+  * If a specified action is expected to bring any nodes down, add an XML block
+@@ -874,6 +932,7 @@ static xmlNode *
+ action2xml(action_t * action, gboolean as_input, pe_working_set_t *data_set)
+ {
+     gboolean needs_node_info = TRUE;
++    gboolean needs_maintenance_info = FALSE;
+     xmlNode *action_xml = NULL;
+     xmlNode *args_xml = NULL;
+ 
+@@ -901,6 +960,9 @@ action2xml(action_t * action, gboolean as_input, pe_working_set_t *data_set)
+ /* 		action_xml = create_xml_node(NULL, XML_GRAPH_TAG_CRM_EVENT); */
+ 
+     } else if (is_set(action->flags, pe_action_pseudo)) {
++        if (safe_str_eq(action->task, CRM_OP_MAINTENANCE_NODES)) {
++            needs_maintenance_info = TRUE;
++        }
+         action_xml = create_xml_node(NULL, XML_GRAPH_TAG_PSEUDO_EVENT);
+         needs_node_info = FALSE;
+ 
+@@ -1082,6 +1144,10 @@ action2xml(action_t * action, gboolean as_input, pe_working_set_t *data_set)
+         add_downed_nodes(action_xml, action, data_set);
+     }
+ 
++    if (needs_maintenance_info) {
++        add_maintenance_nodes(action_xml, data_set);
++    }
++
+     crm_log_xml_trace(action_xml, "dumped action");
+     return action_xml;
+ }
+diff --git a/pengine/pengine.h b/pengine/pengine.h
+index 5500819..e3f4874 100644
+--- a/pengine/pengine.h
++++ b/pengine/pengine.h
+@@ -145,6 +145,7 @@ extern int new_rsc_order(resource_t * lh_rsc, const char *lh_task,
+     new_rsc_order(rsc1, CRMD_ACTION_STOP, rsc2, CRMD_ACTION_STOP, type, data_set)
+ 
+ extern void graph_element_from_action(action_t * action, pe_working_set_t * data_set);
++extern void add_maintenance_update(pe_working_set_t *data_set);
+ 
+ extern gboolean show_scores;
+ extern int scores_log_level;
+-- 
+1.8.3.1
+

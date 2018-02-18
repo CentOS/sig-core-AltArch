@@ -1,0 +1,37 @@
+From 0b6890554a1928ec96cc22f71497d7874e72aa4f Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Tue, 27 Jun 2017 12:27:32 -0500
+Subject: [PATCH] Fix: crmd: abort transition whenever we lose quorum
+
+If a node drops us below quorum because it was unexpectedly lost, the peer
+update callback will abort the transition. If it was shut down cleanly while
+running resources, the CIB recovery results will abort the transition. However,
+if it was shut down cleanly while not running any resources (e.g. in standby
+mode), previously we would not trigger a new transition, and the remaining
+nodes would not stop their resources until the next recheck interval.
+---
+ crmd/membership.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/crmd/membership.c b/crmd/membership.c
+index b292f23..c36dbed 100644
+--- a/crmd/membership.c
++++ b/crmd/membership.c
+@@ -437,6 +437,14 @@ crm_update_quorum(gboolean quorum, gboolean force_update)
+         crm_debug("Updating quorum status to %s (call=%d)", quorum ? "true" : "false", call_id);
+         fsa_register_cib_callback(call_id, FALSE, NULL, cib_quorum_update_complete);
+         free_xml(update);
++
++        /* If a node not running any resources is cleanly shut down and drops us
++         * below quorum, we won't necessarily abort the transition, so abort it
++         * here to be safe.
++         */
++        if (quorum == FALSE) {
++            abort_transition(INFINITY, tg_restart, "Quorum loss", NULL);
++        }
+     }
+     fsa_has_quorum = quorum;
+ }
+-- 
+1.8.3.1
+

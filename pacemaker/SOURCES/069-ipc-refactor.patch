@@ -1,0 +1,126 @@
+From 769c210a4e9494757456c2896fdf67e2eb4b76c1 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Fri, 9 Jun 2017 10:49:07 -0500
+Subject: [PATCH] Refactor: libcrmcommon,cib,lrmd: functionize allocating IPC
+ client object
+
+reduces duplication
+---
+ cib/remote.c              |  6 +-----
+ include/crm/common/ipcs.h |  1 +
+ lib/common/ipc.c          | 25 +++++++++++++++++++------
+ lrmd/tls_backend.c        |  5 +----
+ 4 files changed, 22 insertions(+), 15 deletions(-)
+
+diff --git a/cib/remote.c b/cib/remote.c
+index 9011552..0160c7e 100644
+--- a/cib/remote.c
++++ b/cib/remote.c
+@@ -325,13 +325,9 @@ cib_remote_listen(gpointer data)
+     num_clients++;
+ 
+     crm_client_init();
+-    new_client = calloc(1, sizeof(crm_client_t));
++    new_client = crm_client_alloc(NULL);
+     new_client->remote = calloc(1, sizeof(crm_remote_t));
+ 
+-    new_client->id = crm_generate_uuid();
+-
+-    g_hash_table_insert(client_connections, new_client->id /* Should work */ , new_client);
+-
+     if (ssock == remote_tls_fd) {
+ #ifdef HAVE_GNUTLS_GNUTLS_H
+         new_client->kind = CRM_CLIENT_TLS;
+diff --git a/include/crm/common/ipcs.h b/include/crm/common/ipcs.h
+index ba1ccef..06cade9 100644
+--- a/include/crm/common/ipcs.h
++++ b/include/crm/common/ipcs.h
+@@ -105,6 +105,7 @@ crm_client_t *crm_client_get(qb_ipcs_connection_t * c);
+ crm_client_t *crm_client_get_by_id(const char *id);
+ const char *crm_client_name(crm_client_t * c);
+ 
++crm_client_t *crm_client_alloc(void *key);
+ crm_client_t *crm_client_new(qb_ipcs_connection_t * c, uid_t uid, gid_t gid);
+ void crm_client_destroy(crm_client_t * c);
+ void crm_client_disconnect_all(qb_ipcs_service_t *s);
+diff --git a/lib/common/ipc.c b/lib/common/ipc.c
+index d32e373..efe6480 100644
+--- a/lib/common/ipc.c
++++ b/lib/common/ipc.c
+@@ -293,6 +293,24 @@ crm_client_disconnect_all(qb_ipcs_service_t *service)
+     }
+ }
+ 
++/*!
++ * \brief Allocate a new crm_client_t object and generate its ID
++ *
++ * \param[in] key  What to use as connections hash table key (NULL to use ID)
++ *
++ * \return Pointer to new crm_client_t (asserts on failure)
++ */
++crm_client_t *
++crm_client_alloc(void *key)
++{
++    crm_client_t *client = calloc(1, sizeof(crm_client_t));
++
++    CRM_ASSERT(client != NULL);
++    client->id = crm_generate_uuid();
++    g_hash_table_insert(client_connections, (key? key : client->id), client);
++    return client;
++}
++
+ crm_client_t *
+ crm_client_new(qb_ipcs_connection_t * c, uid_t uid_client, gid_t gid_client)
+ {
+@@ -324,21 +342,16 @@ crm_client_new(qb_ipcs_connection_t * c, uid_t uid_client, gid_t gid_client)
+     crm_client_init();
+ 
+     /* TODO: Do our own auth checking, return NULL if unauthorized */
+-    client = calloc(1, sizeof(crm_client_t));
+-
++    client = crm_client_alloc(c);
+     client->ipcs = c;
+     client->kind = CRM_CLIENT_IPC;
+     client->pid = crm_ipcs_client_pid(c);
+ 
+-    client->id = crm_generate_uuid();
+-
+     crm_debug("Connecting %p for uid=%d gid=%d pid=%u id=%s", c, uid_client, gid_client, client->pid, client->id);
+ 
+ #if ENABLE_ACL
+     client->user = uid2username(uid_client);
+ #endif
+-
+-    g_hash_table_insert(client_connections, c, client);
+     return client;
+ }
+ 
+diff --git a/lrmd/tls_backend.c b/lrmd/tls_backend.c
+index 8c36434..7d790cf 100644
+--- a/lrmd/tls_backend.c
++++ b/lrmd/tls_backend.c
+@@ -212,11 +212,10 @@ lrmd_remote_listen(gpointer data)
+         return TRUE;
+     }
+ 
+-    new_client = calloc(1, sizeof(crm_client_t));
++    new_client = crm_client_alloc(NULL);
+     new_client->remote = calloc(1, sizeof(crm_remote_t));
+     new_client->kind = CRM_CLIENT_TLS;
+     new_client->remote->tls_session = session;
+-    new_client->id = crm_generate_uuid();
+     new_client->remote->auth_timeout =
+         g_timeout_add(LRMD_REMOTE_AUTH_TIMEOUT, lrmd_auth_timeout_cb, new_client);
+     crm_notice("LRMD client connection established. %p id: %s", new_client, new_client->id);
+@@ -224,8 +223,6 @@ lrmd_remote_listen(gpointer data)
+     new_client->remote->source =
+         mainloop_add_fd("lrmd-remote-client", G_PRIORITY_DEFAULT, csock, new_client,
+                         &lrmd_remote_fd_cb);
+-    g_hash_table_insert(client_connections, new_client->id, new_client);
+-
+     return TRUE;
+ }
+ 
+-- 
+1.8.3.1
+

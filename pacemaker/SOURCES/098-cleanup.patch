@@ -1,0 +1,175 @@
+From a6466923875cb752cb68ad412cfc8296191e62ac Mon Sep 17 00:00:00 2001
+From: Andrew Beekhof <andrew@beekhof.net>
+Date: Wed, 11 Oct 2017 13:28:58 +1100
+Subject: [PATCH 1/2] Fix: tools: Clean up everywhere if we don't know anything
+ about the resource
+
+---
+ tools/crm_resource_runtime.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/tools/crm_resource_runtime.c b/tools/crm_resource_runtime.c
+index b1fe892..2c3949a 100644
+--- a/tools/crm_resource_runtime.c
++++ b/tools/crm_resource_runtime.c
+@@ -617,6 +617,10 @@ cli_resource_delete(crm_ipc_t *crmd_channel, const char *host_uname,
+         GListPtr lpc = NULL;
+         GListPtr nodes = g_hash_table_get_values(rsc->known_on);
+ 
++        if(nodes == NULL) {
++            nodes = node_list_dup(data_set->nodes, FALSE, FALSE);
++        }
++
+         for (lpc = nodes; lpc != NULL; lpc = lpc->next) {
+             node = (node_t *) lpc->data;
+ 
+-- 
+1.8.3.1
+
+
+From b0ca9a11581e3ec62429e41899f76fe3afc8b294 Mon Sep 17 00:00:00 2001
+From: Andrew Beekhof <andrew@beekhof.net>
+Date: Wed, 11 Oct 2017 22:28:58 +1100
+Subject: [PATCH 2/2] Fix: Tools: Allow crm_resource to operate on anonymous
+ clones in unknown states
+
+Since the clone_name value wont be set
+---
+ include/crm/pengine/status.h |  8 +++++---
+ lib/pengine/native.c         | 15 ++++++++++-----
+ lib/pengine/status.c         |  8 +++++++-
+ tools/crm_resource.c         | 10 +++++-----
+ 4 files changed, 27 insertions(+), 14 deletions(-)
+
+diff --git a/include/crm/pengine/status.h b/include/crm/pengine/status.h
+index 4aacfe7..17787dd 100644
+--- a/include/crm/pengine/status.h
++++ b/include/crm/pengine/status.h
+@@ -49,9 +49,10 @@ enum pe_restart {
+ };
+ 
+ enum pe_find {
+-    pe_find_renamed = 0x001,
+-    pe_find_clone = 0x004,
+-    pe_find_current = 0x008,
++    pe_find_renamed  = 0x001,
++    pe_find_anon     = 0x002,
++    pe_find_clone    = 0x004,
++    pe_find_current  = 0x008,
+     pe_find_inactive = 0x010,
+ };
+ 
+@@ -459,6 +460,7 @@ gboolean cluster_status(pe_working_set_t * data_set);
+ void set_working_set_defaults(pe_working_set_t * data_set);
+ void cleanup_calculations(pe_working_set_t * data_set);
+ resource_t *pe_find_resource(GListPtr rsc_list, const char *id_rh);
++resource_t *pe_find_resource_with_flags(GListPtr rsc_list, const char *id, enum pe_find flags);
+ node_t *pe_find_node(GListPtr node_list, const char *uname);
+ node_t *pe_find_node_id(GListPtr node_list, const char *id);
+ node_t *pe_find_node_any(GListPtr node_list, const char *id, const char *uname);
+diff --git a/lib/pengine/native.c b/lib/pengine/native.c
+index 81977aa..777dcf3 100644
+--- a/lib/pengine/native.c
++++ b/lib/pengine/native.c
+@@ -180,14 +180,19 @@ native_find_rsc(resource_t * rsc, const char *id, node_t * on_node, int flags)
+             match = TRUE;
+         }
+ 
+-    } else {
+-        if (strcmp(rsc->id, id) == 0) {
+-            match = TRUE;
++    } else if (strcmp(rsc->id, id) == 0) {
++        match = TRUE;
++
++    } else if (is_set(flags, pe_find_renamed)
++               && rsc->clone_name && strcmp(rsc->clone_name, id) == 0) {
++        match = TRUE;
+ 
+-        } else if (is_set(flags, pe_find_renamed)
+-                   && rsc->clone_name && strcmp(rsc->clone_name, id) == 0) {
++    } else if (is_set(flags, pe_find_anon) && is_not_set(rsc->flags, pe_rsc_unique)) {
++        char *tmp = clone_strip(rsc->id);
++        if(strcmp(tmp, id) == 0) {
+             match = TRUE;
+         }
++        free(tmp);
+     }
+ 
+     if (match && on_node) {
+diff --git a/lib/pengine/status.c b/lib/pengine/status.c
+index 09874a3..ec5a028 100644
+--- a/lib/pengine/status.c
++++ b/lib/pengine/status.c
+@@ -248,13 +248,19 @@ set_working_set_defaults(pe_working_set_t * data_set)
+ resource_t *
+ pe_find_resource(GListPtr rsc_list, const char *id)
+ {
++    return pe_find_resource_with_flags(rsc_list, id, pe_find_renamed | pe_find_current);
++}
++
++resource_t *
++pe_find_resource_with_flags(GListPtr rsc_list, const char *id, enum pe_find flags)
++{
+     GListPtr rIter = NULL;
+ 
+     for (rIter = rsc_list; id && rIter; rIter = rIter->next) {
+         resource_t *parent = rIter->data;
+ 
+         resource_t *match =
+-            parent->fns->find_rsc(parent, id, NULL, pe_find_renamed | pe_find_current);
++            parent->fns->find_rsc(parent, id, NULL, flags);
+         if (match != NULL) {
+             return match;
+         }
+diff --git a/tools/crm_resource.c b/tools/crm_resource.c
+index 0eefa3b..56a1d09 100644
+--- a/tools/crm_resource.c
++++ b/tools/crm_resource.c
+@@ -674,7 +674,7 @@ main(int argc, char **argv)
+             goto bail;
+         }
+ 
+-        rsc = pe_find_resource(data_set.resources, rsc_id);
++        rsc = pe_find_resource_with_flags(data_set.resources, rsc_id, pe_find_renamed | pe_find_current | pe_find_anon);
+ 
+         rc = -EINVAL;
+         if (rsc == NULL) {
+@@ -692,7 +692,7 @@ main(int argc, char **argv)
+ 
+     } else if (rsc_cmd == 'A' || rsc_cmd == 'a') {
+         GListPtr lpc = NULL;
+-        resource_t *rsc = pe_find_resource(data_set.resources, rsc_id);
++        resource_t *rsc = pe_find_resource_with_flags(data_set.resources, rsc_id, pe_find_renamed | pe_find_current | pe_find_anon);
+         xmlNode *cib_constraints = get_object_root(XML_CIB_TAG_CONSTRAINTS, data_set.input);
+ 
+         if (rsc == NULL) {
+@@ -804,7 +804,7 @@ main(int argc, char **argv)
+         rc = cli_resource_move(rsc_id, host_uname, cib_conn, &data_set);
+ 
+     } else if (rsc_cmd == 'B' && host_uname) {
+-        resource_t *rsc = pe_find_resource(data_set.resources, rsc_id);
++        resource_t *rsc = pe_find_resource_with_flags(data_set.resources, rsc_id, pe_find_renamed | pe_find_current | pe_find_anon);
+         node_t *dest = pe_find_node(data_set.nodes, host_uname);
+ 
+         rc = -ENXIO;
+@@ -821,7 +821,7 @@ main(int argc, char **argv)
+         rc = cli_resource_ban(rsc_id, dest->details->uname, NULL, cib_conn);
+ 
+     } else if (rsc_cmd == 'B' || rsc_cmd == 'M') {
+-        resource_t *rsc = pe_find_resource(data_set.resources, rsc_id);
++        resource_t *rsc = pe_find_resource_with_flags(data_set.resources, rsc_id, pe_find_renamed | pe_find_current | pe_find_anon);
+ 
+         rc = -ENXIO;
+         if (rsc_id == NULL) {
+@@ -939,7 +939,7 @@ main(int argc, char **argv)
+         rc = cli_resource_delete_attribute(rsc_id, prop_set, prop_id, prop_name, cib_conn, &data_set);
+ 
+     } else if (rsc_cmd == 'C' && rsc_id) {
+-        resource_t *rsc = pe_find_resource(data_set.resources, rsc_id);
++        resource_t *rsc = pe_find_resource_with_flags(data_set.resources, rsc_id, pe_find_renamed | pe_find_current | pe_find_anon);
+ 
+         if(do_force == FALSE) {
+             rsc = uber_parent(rsc);
+-- 
+1.8.3.1
+

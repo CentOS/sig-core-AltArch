@@ -1,0 +1,1795 @@
+From 058d45e6adff4627bcd8504002d45df79bc4d1f6 Mon Sep 17 00:00:00 2001
+From: Andrew Beekhof <andrew@beekhof.net>
+Date: Wed, 25 Oct 2017 10:26:34 +1100
+Subject: [PATCH 1/4] Fix: PE: Use the node we already have and know isnt NULL
+
+---
+ pengine/native.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/pengine/native.c b/pengine/native.c
+index 64a8a90..82cfb57 100644
+--- a/pengine/native.c
++++ b/pengine/native.c
+@@ -2884,8 +2884,8 @@ native_create_probe(resource_t * rsc, node_t * node, action_t * complete,
+         return FALSE;
+     }
+ 
+-    if(allowed != NULL && is_container_remote_node(allowed)) {
+-        resource_t *remote = allowed->details->remote_rsc->container;
++    if(is_container_remote_node(node)) {
++        resource_t *remote = node->details->remote_rsc->container;
+ 
+         if(remote->role == RSC_ROLE_STOPPED) {
+             /* If the container is stopped, then we know anything that
+@@ -2922,8 +2922,8 @@ native_create_probe(resource_t * rsc, node_t * node, action_t * complete,
+             /* Here we really we want to check if remote->stop is required,
+              * but that information doesn't exist yet
+              */
+-        } else if(allowed->details->remote_requires_reset
+-                  || allowed->details->unclean
++        } else if(node->details->remote_requires_reset
++                  || node->details->unclean
+                   || is_set(remote->flags, pe_rsc_failed)
+                   || remote->next_role == RSC_ROLE_STOPPED
+                   || (remote->allocated_to
+-- 
+1.8.3.1
+
+
+From b322110dd85215ec58ba0a53c5bce3007959a8cd Mon Sep 17 00:00:00 2001
+From: Andrew Beekhof <andrew@beekhof.net>
+Date: Wed, 25 Oct 2017 10:27:09 +1100
+Subject: [PATCH 2/4] Fix: PE: Resources are allowed to stop before their state
+ is known everywhere
+
+---
+ pengine/native.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/pengine/native.c b/pengine/native.c
+index 82cfb57..5ba7b5f 100644
+--- a/pengine/native.c
++++ b/pengine/native.c
+@@ -3007,8 +3007,14 @@ native_create_probe(resource_t * rsc, node_t * node, action_t * complete,
+     custom_action_order(rsc, NULL, probe,
+                         top, reload_key(rsc), NULL,
+                         pe_order_optional, data_set);
+-    
+-    if (node->details->shutdown == FALSE) {
++
++    if(node->details->shutdown == FALSE
++       && is_not_set(rsc->flags, pe_rsc_failed)
++       && rsc->next_role != RSC_ROLE_STOPPED) {
++        /* Avoid trying to move resources before we know the location
++         * elsewhere, but stopping should always be allowed.
++         * Especially if the resource has failed.
++         */
+         custom_action_order(rsc, NULL, probe,
+                             rsc, generate_op_key(rsc->id, RSC_STOP, 0), NULL,
+                             pe_order_optional, data_set);
+-- 
+1.8.3.1
+
+
+From bc4228d8bc0bd074005dc9868f2cc892f9a763a6 Mon Sep 17 00:00:00 2001
+From: Andrew Beekhof <andrew@beekhof.net>
+Date: Wed, 25 Oct 2017 10:27:18 +1100
+Subject: [PATCH 3/4] Test: PE: Resources are allowed to stop before their
+ state is known everywhere
+
+---
+ pengine/test10/594.dot                          |  1 -
+ pengine/test10/594.exp                          |  3 -
+ pengine/test10/662.dot                          |  2 -
+ pengine/test10/662.exp                          |  6 --
+ pengine/test10/829.dot                          |  1 -
+ pengine/test10/829.exp                          |  3 -
+ pengine/test10/bug-cl-5247.dot                  |  3 -
+ pengine/test10/bug-cl-5247.exp                  | 12 +---
+ pengine/test10/bug-cl-5247.summary              |  4 +-
+ pengine/test10/bug-rh-1097457.dot               |  2 -
+ pengine/test10/bug-rh-1097457.exp               |  6 --
+ pengine/test10/clone-no-shuffle.dot             |  1 -
+ pengine/test10/clone-no-shuffle.exp             |  6 +-
+ pengine/test10/clone-no-shuffle.summary         |  2 +-
+ pengine/test10/group9.dot                       |  2 -
+ pengine/test10/group9.exp                       |  6 --
+ pengine/test10/inc2.dot                         |  1 -
+ pengine/test10/inc2.exp                         |  3 -
+ pengine/test10/inc3.dot                         |  1 -
+ pengine/test10/inc3.exp                         |  3 -
+ pengine/test10/inc4.dot                         |  1 -
+ pengine/test10/inc4.exp                         |  3 -
+ pengine/test10/master-7.dot                     |  3 -
+ pengine/test10/master-7.exp                     |  9 ---
+ pengine/test10/master-9.dot                     |  1 -
+ pengine/test10/master-9.exp                     |  3 -
+ pengine/test10/migrate-3.dot                    |  1 -
+ pengine/test10/migrate-3.exp                    |  6 +-
+ pengine/test10/notify-3.dot                     |  1 -
+ pengine/test10/notify-3.exp                     |  3 -
+ pengine/test10/novell-252693-3.dot              |  1 -
+ pengine/test10/novell-252693-3.exp              |  3 -
+ pengine/test10/params-2.dot                     |  2 -
+ pengine/test10/params-2.exp                     |  9 +--
+ pengine/test10/params-2.summary                 |  6 +-
+ pengine/test10/rec-rsc-1.dot                    |  1 -
+ pengine/test10/rec-rsc-1.exp                    |  6 +-
+ pengine/test10/rec-rsc-2.dot                    |  1 -
+ pengine/test10/rec-rsc-2.exp                    |  6 +-
+ pengine/test10/rec-rsc-5.dot                    |  1 -
+ pengine/test10/rec-rsc-5.exp                    |  3 -
+ pengine/test10/target-1.dot                     |  3 -
+ pengine/test10/target-1.exp                     | 12 +---
+ pengine/test10/target-1.summary                 |  2 +-
+ pengine/test10/target-2.dot                     |  3 -
+ pengine/test10/target-2.exp                     | 12 +---
+ pengine/test10/target-2.summary                 |  2 +-
+ pengine/test10/unrunnable-1.dot                 |  1 -
+ pengine/test10/whitebox-fail1.dot               |  1 -
+ pengine/test10/whitebox-fail1.exp               |  3 -
+ pengine/test10/whitebox-fail2.dot               |  1 -
+ pengine/test10/whitebox-fail2.exp               |  3 -
+ pengine/test10/whitebox-imply-stop-on-fence.dot |  8 ---
+ pengine/test10/whitebox-imply-stop-on-fence.exp | 24 -------
+ pengine/test10/whitebox-ms-ordering.dot         |  3 -
+ pengine/test10/whitebox-ms-ordering.exp         |  9 ---
+ pengine/test10/whitebox-orphan-ms.dot           | 18 -----
+ pengine/test10/whitebox-orphan-ms.exp           | 92 ++++++++++++-------------
+ pengine/test10/whitebox-orphaned.dot            |  3 -
+ pengine/test10/whitebox-orphaned.exp            | 70 +++++++++----------
+ 60 files changed, 97 insertions(+), 311 deletions(-)
+
+diff --git a/pengine/test10/594.dot b/pengine/test10/594.dot
+index 853f468..648a8f6 100644
+--- a/pengine/test10/594.dot
++++ b/pengine/test10/594.dot
+@@ -15,7 +15,6 @@ digraph "g" {
+ "DoFencing_stop_0" [ style=bold color="green" fontcolor="orange" ]
+ "DoFencing_stopped_0" [ style=bold color="green" fontcolor="orange" ]
+ "all_stopped" [ style=bold color="green" fontcolor="orange" ]
+-"child_DoFencing:0_monitor_0 hadev1" -> "child_DoFencing:0_stop_0 hadev2" [ style = bold]
+ "child_DoFencing:0_monitor_0 hadev1" [ style=bold color="green" fontcolor="black" ]
+ "child_DoFencing:0_stop_0 hadev2" -> "DoFencing_stopped_0" [ style = bold]
+ "child_DoFencing:0_stop_0 hadev2" -> "all_stopped" [ style = bold]
+diff --git a/pengine/test10/594.exp b/pengine/test10/594.exp
+index 400a5e7..a0b9fe1 100644
+--- a/pengine/test10/594.exp
++++ b/pengine/test10/594.exp
+@@ -125,9 +125,6 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="12" operation="monitor" operation_key="child_DoFencing:0_monitor_0" on_node="hadev1" on_node_uuid="6125a0df-456a-4395-829a-418e9a380d36"/>
+-      </trigger>
+-      <trigger>
+         <pseudo_event id="31" operation="stop" operation_key="DoFencing_stop_0"/>
+       </trigger>
+     </inputs>
+diff --git a/pengine/test10/662.dot b/pengine/test10/662.dot
+index b0c45a6..3287044 100644
+--- a/pengine/test10/662.dot
++++ b/pengine/test10/662.dot
+@@ -7,9 +7,7 @@
+ "DoFencing_stop_0" [ style=bold color="green" fontcolor="orange" ]
+ "DoFencing_stopped_0" [ style=bold color="green" fontcolor="orange" ]
+ "all_stopped" [ style=bold color="green" fontcolor="orange" ]
+-"child_DoFencing:0_monitor_0 c001n04" -> "child_DoFencing:0_stop_0 c001n02" [ style = bold]
+ "child_DoFencing:0_monitor_0 c001n04" [ style=bold color="green" fontcolor="black" ]
+-"child_DoFencing:0_monitor_0 c001n09" -> "child_DoFencing:0_stop_0 c001n02" [ style = bold]
+ "child_DoFencing:0_monitor_0 c001n09" [ style=bold color="green" fontcolor="black" ]
+ "child_DoFencing:0_stop_0 c001n02" -> "DoFencing_stopped_0" [ style = bold]
+ "child_DoFencing:0_stop_0 c001n02" -> "all_stopped" [ style = bold]
+diff --git a/pengine/test10/662.exp b/pengine/test10/662.exp
+index d05f4d3..4d95ef6 100644
+--- a/pengine/test10/662.exp
++++ b/pengine/test10/662.exp
+@@ -188,12 +188,6 @@
+      </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="26" operation="monitor" operation_key="child_DoFencing:0_monitor_0" on_node="c001n04" on_node_uuid="c2896699-96b8-4dbc-a94e-6c3b9252b559"/>
+-      </trigger>
+-      <trigger>
+-        <rsc_op id="32" operation="monitor" operation_key="child_DoFencing:0_monitor_0" on_node="c001n09" on_node_uuid="f67904e0-4dfc-4db1-83a2-e930fc1d20f4"/>
+-      </trigger>
+-      <trigger>
+         <pseudo_event id="54" operation="stop" operation_key="DoFencing_stop_0"/>
+       </trigger>
+     </inputs>
+diff --git a/pengine/test10/829.dot b/pengine/test10/829.dot
+index 8b95e2d..a0ea381 100644
+--- a/pengine/test10/829.dot
++++ b/pengine/test10/829.dot
+@@ -6,7 +6,6 @@ digraph "g" {
+ "DoFencing_stop_0" [ style=bold color="green" fontcolor="orange" ]
+ "DoFencing_stopped_0" [ style=bold color="green" fontcolor="orange" ]
+ "all_stopped" [ style=bold color="green" fontcolor="orange" ]
+-"child_DoFencing:0_monitor_0 c001n01" -> "child_DoFencing:0_stop_0 c001n02" [ style = bold]
+ "child_DoFencing:0_monitor_0 c001n01" [ style=bold color="green" fontcolor="black" ]
+ "child_DoFencing:0_stop_0 c001n02" -> "DoFencing_stopped_0" [ style = bold]
+ "child_DoFencing:0_stop_0 c001n02" -> "all_stopped" [ style = bold]
+diff --git a/pengine/test10/829.exp b/pengine/test10/829.exp
+index d1f85fa..a1617b9 100644
+--- a/pengine/test10/829.exp
++++ b/pengine/test10/829.exp
+@@ -168,9 +168,6 @@
+         <crm_event id="1" operation="stonith" operation_key="stonith-c001n02-reboot" on_node="c001n02" on_node_uuid="e9bdfde9-01b0-421f-acd8-8a65a53e775f"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="14" operation="monitor" operation_key="child_DoFencing:0_monitor_0" on_node="c001n01" on_node_uuid="de937e3d-0309-4b5d-b85c-f96edc1ed8e3"/>
+-      </trigger>
+-      <trigger>
+         <pseudo_event id="47" operation="stop" operation_key="DoFencing_stop_0"/>
+       </trigger>
+     </inputs>
+diff --git a/pengine/test10/bug-cl-5247.dot b/pengine/test10/bug-cl-5247.dot
+index decf5c3..41895a1 100644
+--- a/pengine/test10/bug-cl-5247.dot
++++ b/pengine/test10/bug-cl-5247.dot
+@@ -90,7 +90,6 @@ digraph "g" {
+ "pgsql_stop_0 pgsr02" -> "msPostgresql_stopped_0" [ style = bold]
+ "pgsql_stop_0 pgsr02" [ style=bold color="green" fontcolor="orange"]
+ "pgsr01_monitor_0 bl460g8n4" [ style=bold color="green" fontcolor="black"]
+-"pgsr02_monitor_0 bl460g8n3" -> "pgsr02_stop_0 bl460g8n4" [ style = bold]
+ "pgsr02_monitor_0 bl460g8n3" [ style=bold color="green" fontcolor="black"]
+ "pgsr02_stop_0 bl460g8n4" -> "all_stopped" [ style = bold]
+ "pgsr02_stop_0 bl460g8n4" -> "prmDB2_stop_0 bl460g8n4" [ style = bold]
+@@ -128,7 +127,6 @@ digraph "g" {
+ "stonith_complete" -> "vip-rep_start_0 pgsr01" [ style = bold]
+ "stonith_complete" [ style=bold color="green" fontcolor="orange"]
+ "vip-master_monitor_0 pgsr01" -> "vip-master_start_0 pgsr01" [ style = bold]
+-"vip-master_monitor_0 pgsr01" -> "vip-master_stop_0 pgsr02" [ style = bold]
+ "vip-master_monitor_0 pgsr01" [ style=bold color="green" fontcolor="black"]
+ "vip-master_monitor_10000 pgsr01" [ style=bold color="green" fontcolor="black"]
+ "vip-master_start_0 pgsr01" -> "master-group_running_0" [ style = bold]
+@@ -140,7 +138,6 @@ digraph "g" {
+ "vip-master_stop_0 pgsr02" -> "vip-master_start_0 pgsr01" [ style = bold]
+ "vip-master_stop_0 pgsr02" [ style=bold color="green" fontcolor="orange"]
+ "vip-rep_monitor_0 pgsr01" -> "vip-rep_start_0 pgsr01" [ style = bold]
+-"vip-rep_monitor_0 pgsr01" -> "vip-rep_stop_0 pgsr02" [ style = bold]
+ "vip-rep_monitor_0 pgsr01" [ style=bold color="green" fontcolor="black"]
+ "vip-rep_monitor_10000 pgsr01" [ style=bold color="green" fontcolor="black"]
+ "vip-rep_start_0 pgsr01" -> "master-group_running_0" [ style = bold]
+diff --git a/pengine/test10/bug-cl-5247.exp b/pengine/test10/bug-cl-5247.exp
+index 47c369a..7f55c64 100644
+--- a/pengine/test10/bug-cl-5247.exp
++++ b/pengine/test10/bug-cl-5247.exp
+@@ -308,9 +308,6 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="13" operation="monitor" operation_key="vip-master_monitor_0" on_node="pgsr01" on_node_uuid="pgsr01" router_node="bl460g8n3"/>
+-      </trigger>
+-      <trigger>
+         <pseudo_event id="30" operation="stop" operation_key="vip-rep_stop_0"/>
+       </trigger>
+       <trigger>
+@@ -376,9 +373,6 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="14" operation="monitor" operation_key="vip-rep_monitor_0" on_node="pgsr01" on_node_uuid="pgsr01" router_node="bl460g8n3"/>
+-      </trigger>
+-      <trigger>
+         <pseudo_event id="35" operation="stop" operation_key="master-group_stop_0"/>
+       </trigger>
+       <trigger>
+@@ -718,11 +712,7 @@
+         </downed>
+       </rsc_op>
+     </action_set>
+-    <inputs>
+-      <trigger>
+-        <rsc_op id="11" operation="monitor" operation_key="pgsr02_monitor_0" on_node="bl460g8n3" on_node_uuid="3232261399"/>
+-      </trigger>
+-    </inputs>
++    <inputs/>
+   </synapse>
+   <synapse id="50">
+     <action_set>
+diff --git a/pengine/test10/bug-cl-5247.summary b/pengine/test10/bug-cl-5247.summary
+index f15ef2e..99c00e9 100644
+--- a/pengine/test10/bug-cl-5247.summary
++++ b/pengine/test10/bug-cl-5247.summary
+@@ -36,7 +36,9 @@ Executing cluster transition:
+  * Resource action: vip-rep         monitor on pgsr01
+  * Pseudo action:   msPostgresql_pre_notify_demote_0
+  * Resource action: pgsr01          monitor on bl460g8n4
++ * Resource action: pgsr02          stop on bl460g8n4
+  * Resource action: pgsr02          monitor on bl460g8n3
++ * Resource action: prmDB2          stop on bl460g8n4
+  * Pseudo action:   grpStonith1_stopped_0
+  * Pseudo action:   grpStonith1_start_0
+  * Pseudo action:   grpStonith2_stopped_0
+@@ -44,8 +46,6 @@ Executing cluster transition:
+  * Resource action: pgsql           notify on pgsr01
+  * Pseudo action:   msPostgresql_confirmed-pre_notify_demote_0
+  * Pseudo action:   msPostgresql_demote_0
+- * Resource action: pgsr02          stop on bl460g8n4
+- * Resource action: prmDB2          stop on bl460g8n4
+  * Pseudo action:   stonith-pgsr02-off on pgsr02
+  * Pseudo action:   stonith_complete
+  * Pseudo action:   pgsql_post_notify_stop_0
+diff --git a/pengine/test10/bug-rh-1097457.dot b/pengine/test10/bug-rh-1097457.dot
+index 7791e06..512510e 100644
+--- a/pengine/test10/bug-rh-1097457.dot
++++ b/pengine/test10/bug-rh-1097457.dot
+@@ -60,10 +60,8 @@ digraph "g" {
+ "FSlun1_monitor_0 lamaVM3" [ style=bold color="green" fontcolor="black"]
+ "FSlun2_monitor_0 lamaVM3" [ style=bold color="green" fontcolor="black"]
+ "FSlun3_monitor_0 lamaVM1" -> "FSlun3_start_0 lama2" [ style = bold]
+-"FSlun3_monitor_0 lamaVM1" -> "FSlun3_stop_0 lamaVM2" [ style = bold]
+ "FSlun3_monitor_0 lamaVM1" [ style=bold color="green" fontcolor="black"]
+ "FSlun3_monitor_0 lamaVM3" -> "FSlun3_start_0 lama2" [ style = bold]
+-"FSlun3_monitor_0 lamaVM3" -> "FSlun3_stop_0 lamaVM2" [ style = bold]
+ "FSlun3_monitor_0 lamaVM3" [ style=bold color="green" fontcolor="black"]
+ "FSlun3_monitor_10000 lama2" [ style=bold color="green" fontcolor="black"]
+ "FSlun3_monitor_10000 lamaVM2" [ style=bold color="green" fontcolor="black"]
+diff --git a/pengine/test10/bug-rh-1097457.exp b/pengine/test10/bug-rh-1097457.exp
+index 33c13bd..e7e0e67 100644
+--- a/pengine/test10/bug-rh-1097457.exp
++++ b/pengine/test10/bug-rh-1097457.exp
+@@ -105,12 +105,6 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="26" operation="monitor" operation_key="FSlun3_monitor_0" on_node="lamaVM1" on_node_uuid="lamaVM1" router_node="lama2"/>
+-      </trigger>
+-      <trigger>
+-        <rsc_op id="35" operation="monitor" operation_key="FSlun3_monitor_0" on_node="lamaVM3" on_node_uuid="lamaVM3" router_node="lama3"/>
+-      </trigger>
+-      <trigger>
+         <pseudo_event id="98" operation="stopped" operation_key="lamaVM2-G4_stopped_0"/>
+       </trigger>
+       <trigger>
+diff --git a/pengine/test10/clone-no-shuffle.dot b/pengine/test10/clone-no-shuffle.dot
+index 7996ef4..883e779 100644
+--- a/pengine/test10/clone-no-shuffle.dot
++++ b/pengine/test10/clone-no-shuffle.dot
+@@ -76,7 +76,6 @@ digraph "g" {
+ "stonith-1_monitor_0 dktest2sles10" -> "stonith-1_start_0 dktest1sles10" [ style = bold]
+ "stonith-1_monitor_0 dktest2sles10" [ style=bold color="green" fontcolor="black" ]
+ "stonith-1_start_0 dktest1sles10" [ style=bold color="green" fontcolor="black" ]
+-"testip_monitor_0 dktest1sles10" -> "testip_stop_0 dktest2sles10" [ style = bold]
+ "testip_monitor_0 dktest1sles10" [ style=bold color="green" fontcolor="black" ]
+ "testip_stop_0 dktest2sles10" -> "all_stopped" [ style = bold]
+ "testip_stop_0 dktest2sles10" -> "ms-drbd1_demote_0" [ style = bold]
+diff --git a/pengine/test10/clone-no-shuffle.exp b/pengine/test10/clone-no-shuffle.exp
+index 126914b..1d5d70a 100644
+--- a/pengine/test10/clone-no-shuffle.exp
++++ b/pengine/test10/clone-no-shuffle.exp
+@@ -419,11 +419,7 @@
+         <attributes CRM_meta_on_node="dktest2sles10" CRM_meta_on_node_uuid="6676c8d5-552e-4a86-a2ea-172e954f7342" CRM_meta_timeout="20000" broadcast="10.200.200.255" cidr_netmask="24"  ip="10.200.200.222" nic="eth1"/>
+        </rsc_op>
+      </action_set>
+-     <inputs>
+-       <trigger>
+-        <rsc_op id="6" operation="monitor" operation_key="testip_monitor_0" on_node="dktest1sles10" on_node_uuid="c563f60c-45a8-439e-85dc-645f4ecc150d"/>
+-       </trigger>
+-     </inputs>
++    <inputs/>
+    </synapse>
+   <synapse id="31">
+      <action_set>
+diff --git a/pengine/test10/clone-no-shuffle.summary b/pengine/test10/clone-no-shuffle.summary
+index c69d8f3..c9cb373 100644
+--- a/pengine/test10/clone-no-shuffle.summary
++++ b/pengine/test10/clone-no-shuffle.summary
+@@ -19,11 +19,11 @@ Executing cluster transition:
+  * Resource action: stonith-1       monitor on dktest1sles10
+  * Resource action: drbd1:1         monitor on dktest1sles10
+  * Pseudo action:   ms-drbd1_pre_notify_demote_0
++ * Resource action: testip          stop on dktest2sles10
+  * Resource action: testip          monitor on dktest1sles10
+  * Resource action: stonith-1       start on dktest1sles10
+  * Resource action: drbd1:0         notify on dktest2sles10
+  * Pseudo action:   ms-drbd1_confirmed-pre_notify_demote_0
+- * Resource action: testip          stop on dktest2sles10
+  * Pseudo action:   ms-drbd1_demote_0
+  * Resource action: drbd1:0         demote on dktest2sles10
+  * Pseudo action:   ms-drbd1_demoted_0
+diff --git a/pengine/test10/group9.dot b/pengine/test10/group9.dot
+index a83b9ad..bc58f15 100644
+--- a/pengine/test10/group9.dot
++++ b/pengine/test10/group9.dot
+@@ -28,7 +28,6 @@
+ "rsc2_monitor_0 node2" [ style=bold color="green" fontcolor="black" ]
+ "rsc3_monitor_0 node2" [ style=bold color="green" fontcolor="black" ]
+ "rsc4_monitor_0 node2" -> "rsc4_start_0 node1" [ style = bold]
+-"rsc4_monitor_0 node2" -> "rsc4_stop_0 node1" [ style = bold]
+ "rsc4_monitor_0 node2" [ style=bold color="green" fontcolor="black" ]
+ "rsc4_start_0 node1" -> "foo_running_0" [ style = bold]
+ "rsc4_start_0 node1" -> "rsc5_start_0 node1" [ style = bold]
+@@ -58,7 +57,6 @@
+ "rsc6_stop_0 node1" -> "rsc6_start_0 node2" [ style = bold]
+ "rsc6_stop_0 node1" [ style=bold color="green" fontcolor="black" ]
+ "rsc7_monitor_0 node2" -> "rsc7_start_0 node2" [ style = bold]
+-"rsc7_monitor_0 node2" -> "rsc7_stop_0 node1" [ style = bold]
+ "rsc7_monitor_0 node2" [ style=bold color="green" fontcolor="black" ]
+ "rsc7_start_0 node2" -> "bar_running_0" [ style = bold]
+ "rsc7_start_0 node2" -> "rsc8_start_0 node2" [ style = bold]
+diff --git a/pengine/test10/group9.exp b/pengine/test10/group9.exp
+index 66e85a4..f57f2b4 100644
+--- a/pengine/test10/group9.exp
++++ b/pengine/test10/group9.exp
+@@ -119,9 +119,6 @@
+      </action_set>
+      <inputs>
+        <trigger>
+-        <rsc_op id="7" operation="monitor" operation_key="rsc4_monitor_0" on_node="node2" on_node_uuid="node2"/>
+-       </trigger>
+-       <trigger>
+         <rsc_op id="19" operation="stop" operation_key="rsc5_stop_0" on_node="node1" on_node_uuid="node1"/>
+        </trigger>
+        <trigger>
+@@ -325,9 +322,6 @@
+      </action_set>
+      <inputs>
+        <trigger>
+-        <rsc_op id="10" operation="monitor" operation_key="rsc7_monitor_0" on_node="node2" on_node_uuid="node2"/>
+-       </trigger>
+-       <trigger>
+         <rsc_op id="28" operation="stop" operation_key="rsc8_stop_0" on_node="node1" on_node_uuid="node1"/>
+        </trigger>
+        <trigger>
+diff --git a/pengine/test10/inc2.dot b/pengine/test10/inc2.dot
+index 88d210e..cd250e5 100644
+--- a/pengine/test10/inc2.dot
++++ b/pengine/test10/inc2.dot
+@@ -22,7 +22,6 @@
+ "child_rsc1:3_stop_0 node1" -> "child_rsc1:3_start_0 node2" [ style = bold]
+ "child_rsc1:3_stop_0 node1" -> "rsc1_stopped_0" [ style = bold]
+ "child_rsc1:3_stop_0 node1" [ style=bold color="green" fontcolor="black" ]
+-"child_rsc1:4_monitor_0 node2" -> "child_rsc1:4_stop_0 node1" [ style = bold]
+ "child_rsc1:4_monitor_0 node2" -> "rsc1_start_0" [ style = bold]
+ "child_rsc1:4_monitor_0 node2" [ style=bold color="green" fontcolor="black" ]
+ "child_rsc1:4_stop_0 node1" -> "all_stopped" [ style = bold]
+diff --git a/pengine/test10/inc2.exp b/pengine/test10/inc2.exp
+index 3fb5134..92b4cf1 100644
+--- a/pengine/test10/inc2.exp
++++ b/pengine/test10/inc2.exp
+@@ -108,9 +108,6 @@
+      </action_set>
+      <inputs>
+        <trigger>
+-        <rsc_op id="6" operation="monitor" operation_key="child_rsc1:4_monitor_0" on_node="node2" on_node_uuid="uuid2"/>
+-       </trigger>
+-       <trigger>
+         <pseudo_event id="18" operation="stop" operation_key="rsc1_stop_0"/>
+        </trigger>
+      </inputs>
+diff --git a/pengine/test10/inc3.dot b/pengine/test10/inc3.dot
+index eb3e7e9..113541a 100644
+--- a/pengine/test10/inc3.dot
++++ b/pengine/test10/inc3.dot
+@@ -22,7 +22,6 @@
+ "child_rsc1:3_stop_0 node1" -> "child_rsc1:3_start_0 node2" [ style = bold]
+ "child_rsc1:3_stop_0 node1" -> "rsc1_stopped_0" [ style = bold]
+ "child_rsc1:3_stop_0 node1" [ style=bold color="green" fontcolor="black" ]
+-"child_rsc1:4_monitor_0 node2" -> "child_rsc1:4_stop_0 node1" [ style = bold]
+ "child_rsc1:4_monitor_0 node2" -> "rsc1_start_0" [ style = bold]
+ "child_rsc1:4_monitor_0 node2" [ style=bold color="green" fontcolor="black" ]
+ "child_rsc1:4_stop_0 node1" -> "all_stopped" [ style = bold]
+diff --git a/pengine/test10/inc3.exp b/pengine/test10/inc3.exp
+index e6b0982..4c1e46d 100644
+--- a/pengine/test10/inc3.exp
++++ b/pengine/test10/inc3.exp
+@@ -108,9 +108,6 @@
+      </action_set>
+      <inputs>
+        <trigger>
+-        <rsc_op id="11" operation="monitor" operation_key="child_rsc1:4_monitor_0" on_node="node2" on_node_uuid="uuid2"/>
+-       </trigger>
+-       <trigger>
+         <pseudo_event id="23" operation="stop" operation_key="rsc1_stop_0"/>
+        </trigger>
+      </inputs>
+diff --git a/pengine/test10/inc4.dot b/pengine/test10/inc4.dot
+index 16f5f03..c5a1a00 100644
+--- a/pengine/test10/inc4.dot
++++ b/pengine/test10/inc4.dot
+@@ -24,7 +24,6 @@
+ "child_rsc1:3_stop_0 node1" -> "child_rsc1:3_start_0 node2" [ style = bold]
+ "child_rsc1:3_stop_0 node1" -> "rsc1_stopped_0" [ style = bold]
+ "child_rsc1:3_stop_0 node1" [ style=bold color="green" fontcolor="black" ]
+-"child_rsc1:4_monitor_0 node2" -> "child_rsc1:4_stop_0 node1" [ style = bold]
+ "child_rsc1:4_monitor_0 node2" -> "rsc1_start_0" [ style = bold]
+ "child_rsc1:4_monitor_0 node2" [ style=bold color="green" fontcolor="black" ]
+ "child_rsc1:4_stop_0 node1" -> "all_stopped" [ style = bold]
+diff --git a/pengine/test10/inc4.exp b/pengine/test10/inc4.exp
+index 1f4e71c..0d767d6 100644
+--- a/pengine/test10/inc4.exp
++++ b/pengine/test10/inc4.exp
+@@ -117,9 +117,6 @@
+      </action_set>
+      <inputs>
+        <trigger>
+-        <rsc_op id="11" operation="monitor" operation_key="child_rsc1:4_monitor_0" on_node="node2" on_node_uuid="uuid2"/>
+-       </trigger>
+-       <trigger>
+         <pseudo_event id="23" operation="stop" operation_key="rsc1_stop_0"/>
+        </trigger>
+      </inputs>
+diff --git a/pengine/test10/master-7.dot b/pengine/test10/master-7.dot
+index c6bdd3c..51fcfd8 100644
+--- a/pengine/test10/master-7.dot
++++ b/pengine/test10/master-7.dot
+@@ -80,11 +80,8 @@ digraph "g" {
+ "ocf_msdummy:0_stop_0 c001n01" -> "all_stopped" [ style = bold]
+ "ocf_msdummy:0_stop_0 c001n01" -> "master_rsc_1_stopped_0" [ style = bold]
+ "ocf_msdummy:0_stop_0 c001n01" [ style=bold color="green" fontcolor="orange" ]
+-"ocf_msdummy:4_monitor_0 c001n02" -> "ocf_msdummy:4_stop_0 c001n01" [ style = bold]
+ "ocf_msdummy:4_monitor_0 c001n02" [ style=bold color="green" fontcolor="black" ]
+-"ocf_msdummy:4_monitor_0 c001n03" -> "ocf_msdummy:4_stop_0 c001n01" [ style = bold]
+ "ocf_msdummy:4_monitor_0 c001n03" [ style=bold color="green" fontcolor="black" ]
+-"ocf_msdummy:4_monitor_0 c001n08" -> "ocf_msdummy:4_stop_0 c001n01" [ style = bold]
+ "ocf_msdummy:4_monitor_0 c001n08" [ style=bold color="green" fontcolor="black" ]
+ "ocf_msdummy:4_stop_0 c001n01" -> "all_stopped" [ style = bold]
+ "ocf_msdummy:4_stop_0 c001n01" -> "master_rsc_1_stopped_0" [ style = bold]
+diff --git a/pengine/test10/master-7.exp b/pengine/test10/master-7.exp
+index 971949d..33b5d49 100644
+--- a/pengine/test10/master-7.exp
++++ b/pengine/test10/master-7.exp
+@@ -456,15 +456,6 @@
+         <crm_event id="1" operation="stonith" operation_key="stonith-c001n01-reboot" on_node="c001n01" on_node_uuid="de937e3d-0309-4b5d-b85c-f96edc1ed8e3"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="20" operation="monitor" operation_key="ocf_msdummy:4_monitor_0" on_node="c001n02" on_node_uuid="e9bdfde9-01b0-421f-acd8-8a65a53e775f"/>
+-      </trigger>
+-      <trigger>
+-        <rsc_op id="25" operation="monitor" operation_key="ocf_msdummy:4_monitor_0" on_node="c001n03" on_node_uuid="5d9a8c11-8684-43ea-91.0.6e221530c193"/>
+-      </trigger>
+-      <trigger>
+-        <rsc_op id="29" operation="monitor" operation_key="ocf_msdummy:4_monitor_0" on_node="c001n08" on_node_uuid="6427cb5a-c7a5-4bdf-9892-a04ce56f4e6b"/>
+-      </trigger>
+-      <trigger>
+         <pseudo_event id="88" operation="stop" operation_key="master_rsc_1_stop_0"/>
+       </trigger>
+     </inputs>
+diff --git a/pengine/test10/master-9.dot b/pengine/test10/master-9.dot
+index b6cc5e0..343bb2d 100644
+--- a/pengine/test10/master-9.dot
++++ b/pengine/test10/master-9.dot
+@@ -5,7 +5,6 @@
+ "DoFencing_stop_0" [ style=bold color="green" fontcolor="orange" ]
+ "DoFencing_stopped_0" [ style=bold color="green" fontcolor="orange" ]
+ "all_stopped" [ style=bold color="green" fontcolor="orange"]
+-"child_DoFencing:1_monitor_0 va1" -> "child_DoFencing:1_stop_0 ibm1" [ style = bold]
+ "child_DoFencing:1_monitor_0 va1" [ style=bold color="green" fontcolor="black" ]
+ "child_DoFencing:1_stop_0 ibm1" -> "DoFencing_stopped_0" [ style = bold]
+ "child_DoFencing:1_stop_0 ibm1" -> "all_stopped" [ style = bold]
+diff --git a/pengine/test10/master-9.exp b/pengine/test10/master-9.exp
+index 51ab23e..e845751 100644
+--- a/pengine/test10/master-9.exp
++++ b/pengine/test10/master-9.exp
+@@ -8,9 +8,6 @@
+      </action_set>
+      <inputs>
+        <trigger>
+-        <rsc_op id="12" operation="monitor" operation_key="child_DoFencing:1_monitor_0" on_node="va1" on_node_uuid="b8f81462-2d65-42bf-bbb1-70db0ea29e5b"/>
+-      </trigger>
+-      <trigger>
+         <pseudo_event id="48" operation="stop" operation_key="DoFencing_stop_0"/>
+        </trigger>
+      </inputs>
+diff --git a/pengine/test10/migrate-3.dot b/pengine/test10/migrate-3.dot
+index 7b66503..a049b5b 100644
+--- a/pengine/test10/migrate-3.dot
++++ b/pengine/test10/migrate-3.dot
+@@ -1,7 +1,6 @@
+  digraph "g" {
+ "all_stopped" [ style=bold color="green" fontcolor="orange" ]
+ "rsc3_monitor_0 node2" -> "rsc3_start_0 node2" [ style = bold]
+-"rsc3_monitor_0 node2" -> "rsc3_stop_0 node1" [ style = bold]
+ "rsc3_monitor_0 node2" [ style=bold color="green" fontcolor="black" ]
+ "rsc3_start_0 node2" [ style=bold color="green" fontcolor="black" ]
+ "rsc3_stop_0 node1" -> "all_stopped" [ style = bold]
+diff --git a/pengine/test10/migrate-3.exp b/pengine/test10/migrate-3.exp
+index 1aeb422..6e8b041 100644
+--- a/pengine/test10/migrate-3.exp
++++ b/pengine/test10/migrate-3.exp
+@@ -31,11 +31,7 @@
+         <attributes CRM_meta_on_node="node1" CRM_meta_on_node_uuid="node1" CRM_meta_timeout="20000" allow_migrate="on" />
+        </rsc_op>
+      </action_set>
+-     <inputs>
+-       <trigger>
+-        <rsc_op id="3" operation="monitor" operation_key="rsc3_monitor_0" on_node="node2" on_node_uuid="node2"/>
+-       </trigger>
+-     </inputs>
++    <inputs/>
+    </synapse>
+   <synapse id="3">
+      <action_set>
+diff --git a/pengine/test10/notify-3.dot b/pengine/test10/notify-3.dot
+index bf0d8af..26b4899 100644
+--- a/pengine/test10/notify-3.dot
++++ b/pengine/test10/notify-3.dot
+@@ -23,7 +23,6 @@
+ "child_rsc1:1_stop_0 node2" -> "child_rsc1:1_start_0 node1" [ style = bold]
+ "child_rsc1:1_stop_0 node2" -> "rsc1_stopped_0" [ style = bold]
+ "child_rsc1:1_stop_0 node2" [ style=bold color="green" fontcolor="black" ]
+-"child_rsc2:0_monitor_0 node2" -> "child_rsc2:0_stop_0 node1" [ style = bold]
+ "child_rsc2:0_monitor_0 node2" [ style=bold color="green" fontcolor="black" ]
+ "child_rsc2:0_pre_notify_stop_0 node1" -> "rsc2_confirmed-pre_notify_stop_0" [ style = bold]
+ "child_rsc2:0_pre_notify_stop_0 node1" [ style=bold color="green" fontcolor="black" ]
+diff --git a/pengine/test10/notify-3.exp b/pengine/test10/notify-3.exp
+index 20028dd..fb96109 100644
+--- a/pengine/test10/notify-3.exp
++++ b/pengine/test10/notify-3.exp
+@@ -328,9 +328,6 @@
+      </action_set>
+      <inputs>
+        <trigger>
+-        <rsc_op id="5" operation="monitor" operation_key="child_rsc2:0_monitor_0" on_node="node2" on_node_uuid="uuid2"/>
+-       </trigger>
+-       <trigger>
+         <pseudo_event id="30" operation="stop" operation_key="rsc2_stop_0"/>
+        </trigger>
+      </inputs>
+diff --git a/pengine/test10/novell-252693-3.dot b/pengine/test10/novell-252693-3.dot
+index 925ff92..e26b164 100644
+--- a/pengine/test10/novell-252693-3.dot
++++ b/pengine/test10/novell-252693-3.dot
+@@ -70,7 +70,6 @@
+ "evmsdcloneset_start_0" -> "evmsdclone:1_start_0 node1" [ style = bold]
+ "evmsdcloneset_start_0" -> "evmsdcloneset_running_0" [ style = bold]
+ "evmsdcloneset_start_0" [ style=bold color="green" fontcolor="orange" ]
+-"imagestoreclone:0_monitor_0 node1" -> "imagestoreclone:0_stop_0 node2" [ style = bold]
+ "imagestoreclone:0_monitor_0 node1" -> "imagestorecloneset_start_0" [ style = bold]
+ "imagestoreclone:0_monitor_0 node1" [ style=bold color="green" fontcolor="black" ]
+ "imagestoreclone:0_monitor_20000 node1" [ style=bold color="green" fontcolor="black" ]
+diff --git a/pengine/test10/novell-252693-3.exp b/pengine/test10/novell-252693-3.exp
+index be4df36..9c97271 100644
+--- a/pengine/test10/novell-252693-3.exp
++++ b/pengine/test10/novell-252693-3.exp
+@@ -349,9 +349,6 @@
+      </action_set>
+      <inputs>
+        <trigger>
+-        <rsc_op id="11" operation="monitor" operation_key="imagestoreclone:0_monitor_0" on_node="node1" on_node_uuid="85d23ecf-8b5b-4cd3-9344-e1ff5d869d6a"/>
+-      </trigger>
+-      <trigger>
+         <pseudo_event id="55" operation="stop" operation_key="imagestorecloneset_stop_0"/>
+        </trigger>
+      </inputs>
+diff --git a/pengine/test10/params-2.dot b/pengine/test10/params-2.dot
+index 6a23fd7..67f2873 100644
+--- a/pengine/test10/params-2.dot
++++ b/pengine/test10/params-2.dot
+@@ -1,9 +1,7 @@
+  digraph "g" {
+ "all_stopped" [ style=bold color="green" fontcolor="orange" ]
+ "do_shutdown node1" [ style=bold color="green" fontcolor="black" ]
+-"rsc1_monitor_0 node2" -> "rsc1_stop_0 node1" [ style = bold]
+ "rsc1_monitor_0 node2" [ style=bold color="green" fontcolor="black" ]
+-"rsc1_monitor_0 node3" -> "rsc1_stop_0 node1" [ style = bold]
+ "rsc1_monitor_0 node3" [ style=bold color="green" fontcolor="black" ]
+ "rsc1_stop_0 node1" -> "all_stopped" [ style = bold]
+ "rsc1_stop_0 node1" -> "do_shutdown node1" [ style = bold]
+diff --git a/pengine/test10/params-2.exp b/pengine/test10/params-2.exp
+index 94f3773..3cbfe33 100644
+--- a/pengine/test10/params-2.exp
++++ b/pengine/test10/params-2.exp
+@@ -6,14 +6,7 @@
+         <attributes CRM_meta_on_node="node1" CRM_meta_on_node_uuid="node1" CRM_meta_timeout="20000" />
+        </rsc_op>
+      </action_set>
+-    <inputs>
+-      <trigger>
+-        <rsc_op id="8" operation="monitor" operation_key="rsc1_monitor_0" on_node="node2" on_node_uuid="node2"/>
+-      </trigger>
+-      <trigger>
+-        <rsc_op id="10" operation="monitor" operation_key="rsc1_monitor_0" on_node="node3" on_node_uuid="node3"/>
+-      </trigger>
+-    </inputs>
++    <inputs/>
+    </synapse>
+    <synapse id="1">
+      <action_set>
+diff --git a/pengine/test10/params-2.summary b/pengine/test10/params-2.summary
+index 1e73e77..97510f6 100644
+--- a/pengine/test10/params-2.summary
++++ b/pengine/test10/params-2.summary
+@@ -13,6 +13,7 @@ Transition Summary:
+  * Start   rsc3	(node3)
+ 
+ Executing cluster transition:
++ * Resource action: rsc1            stop on node1
+  * Resource action: rsc1            monitor on node3
+  * Resource action: rsc1            monitor on node2
+  * Resource action: rsc2            monitor on node3
+@@ -21,11 +22,10 @@ Executing cluster transition:
+  * Resource action: rsc3            monitor on node2
+  * Resource action: rsc3            monitor on node1
+  * Resource action: rsc3            delete on node3
+- * Resource action: rsc1            stop on node1
+- * Resource action: rsc2            delete on node2
+- * Resource action: rsc3            start on node3
+  * Cluster action:  do_shutdown on node1
+  * Pseudo action:   all_stopped
++ * Resource action: rsc2            delete on node2
++ * Resource action: rsc3            start on node3
+  * Resource action: rsc2            start on node2
+ 
+ Revised cluster status:
+diff --git a/pengine/test10/rec-rsc-1.dot b/pengine/test10/rec-rsc-1.dot
+index 9c44648..f3755dc 100644
+--- a/pengine/test10/rec-rsc-1.dot
++++ b/pengine/test10/rec-rsc-1.dot
+@@ -1,7 +1,6 @@
+  digraph "g" {
+ "all_stopped" [ style=bold color="green" fontcolor="orange" ]
+ "rsc1_monitor_0 node2" -> "rsc1_start_0 node2" [ style = bold]
+-"rsc1_monitor_0 node2" -> "rsc1_stop_0 node1" [ style = bold]
+ "rsc1_monitor_0 node2" [ style=bold color="green" fontcolor="black" ]
+ "rsc1_start_0 node2" [ style=bold color="green" fontcolor="black" ]
+ "rsc1_stop_0 node1" -> "all_stopped" [ style = bold]
+diff --git a/pengine/test10/rec-rsc-1.exp b/pengine/test10/rec-rsc-1.exp
+index f3db70c..32a3da6 100644
+--- a/pengine/test10/rec-rsc-1.exp
++++ b/pengine/test10/rec-rsc-1.exp
+@@ -31,11 +31,7 @@
+         <attributes CRM_meta_on_node="node1" CRM_meta_on_node_uuid="uuid1" CRM_meta_timeout="20000" />
+        </rsc_op>
+      </action_set>
+-     <inputs>
+-       <trigger>
+-        <rsc_op id="3" operation="monitor" operation_key="rsc1_monitor_0" on_node="node2" on_node_uuid="uuid2"/>
+-       </trigger>
+-     </inputs>
++    <inputs/>
+    </synapse>
+   <synapse id="3">
+      <action_set>
+diff --git a/pengine/test10/rec-rsc-2.dot b/pengine/test10/rec-rsc-2.dot
+index d26a4cb..88b09df 100644
+--- a/pengine/test10/rec-rsc-2.dot
++++ b/pengine/test10/rec-rsc-2.dot
+@@ -2,7 +2,6 @@
+ "Cancel rsc1_monitor_1 node1" [ style=bold color="green" fontcolor="black" ]
+ "all_stopped" [ style=bold color="green" fontcolor="orange" ]
+ "rsc1_monitor_0 node2" -> "rsc1_start_0 node1" [ style = bold]
+-"rsc1_monitor_0 node2" -> "rsc1_stop_0 node1" [ style = bold]
+ "rsc1_monitor_0 node2" [ style=bold color="green" fontcolor="black" ]
+ "rsc1_start_0 node1" [ style=bold color="green" fontcolor="black" ]
+ "rsc1_stop_0 node1" -> "Cancel rsc1_monitor_1 node1" [ style = bold]
+diff --git a/pengine/test10/rec-rsc-2.exp b/pengine/test10/rec-rsc-2.exp
+index 192b1ec..1d5bad7 100644
+--- a/pengine/test10/rec-rsc-2.exp
++++ b/pengine/test10/rec-rsc-2.exp
+@@ -31,11 +31,7 @@
+         <attributes CRM_meta_on_node="node1" CRM_meta_on_node_uuid="uuid1" CRM_meta_timeout="20000" />
+        </rsc_op>
+      </action_set>
+-     <inputs>
+-       <trigger>
+-        <rsc_op id="4" operation="monitor" operation_key="rsc1_monitor_0" on_node="node2" on_node_uuid="uuid2"/>
+-       </trigger>
+-     </inputs>
++    <inputs/>
+    </synapse>
+    <synapse id="3">
+      <action_set>
+diff --git a/pengine/test10/rec-rsc-5.dot b/pengine/test10/rec-rsc-5.dot
+index adc8b9f..7a20e74 100644
+--- a/pengine/test10/rec-rsc-5.dot
++++ b/pengine/test10/rec-rsc-5.dot
+@@ -2,7 +2,6 @@ digraph "g" {
+ "all_stopped" -> "stonith-1_start_0 node1" [ style = bold]
+ "all_stopped" [ style=bold color="green" fontcolor="orange" ]
+ "rsc1_monitor_0 node1" -> "rsc1_start_0 node1" [ style = bold]
+-"rsc1_monitor_0 node1" -> "rsc1_stop_0 node2" [ style = bold]
+ "rsc1_monitor_0 node1" [ style=bold color="green" fontcolor="black" ]
+ "rsc1_start_0 node1" [ style=bold color="green" fontcolor="black" ]
+ "rsc1_stop_0 node2" -> "all_stopped" [ style = bold]
+diff --git a/pengine/test10/rec-rsc-5.exp b/pengine/test10/rec-rsc-5.exp
+index b1f151b..3092adf 100644
+--- a/pengine/test10/rec-rsc-5.exp
++++ b/pengine/test10/rec-rsc-5.exp
+@@ -53,9 +53,6 @@
+       <trigger>
+         <crm_event id="1" operation="stonith" operation_key="stonith-node2-reboot" on_node="node2" on_node_uuid="uuid2"/>
+       </trigger>
+-      <trigger>
+-        <rsc_op id="4" operation="monitor" operation_key="rsc1_monitor_0" on_node="node1" on_node_uuid="uuid1"/>
+-      </trigger>
+     </inputs>
+   </synapse>
+   <synapse id="4">
+diff --git a/pengine/test10/target-1.dot b/pengine/test10/target-1.dot
+index 9d8e5bc..db6f64f 100644
+--- a/pengine/test10/target-1.dot
++++ b/pengine/test10/target-1.dot
+@@ -9,11 +9,8 @@
+ "rsc_c001n02_monitor_0 c001n01" [ style=bold color="green" fontcolor="black" ]
+ "rsc_c001n02_monitor_0 c001n03" [ style=bold color="green" fontcolor="black" ]
+ "rsc_c001n02_monitor_0 c001n08" [ style=bold color="green" fontcolor="black" ]
+-"rsc_c001n08_monitor_0 c001n01" -> "rsc_c001n08_stop_0 c001n08" [ style = bold]
+ "rsc_c001n08_monitor_0 c001n01" [ style=bold color="green" fontcolor="black" ]
+-"rsc_c001n08_monitor_0 c001n02" -> "rsc_c001n08_stop_0 c001n08" [ style = bold]
+ "rsc_c001n08_monitor_0 c001n02" [ style=bold color="green" fontcolor="black" ]
+-"rsc_c001n08_monitor_0 c001n03" -> "rsc_c001n08_stop_0 c001n08" [ style = bold]
+ "rsc_c001n08_monitor_0 c001n03" [ style=bold color="green" fontcolor="black" ]
+ "rsc_c001n08_stop_0 c001n08" -> "all_stopped" [ style = bold]
+ "rsc_c001n08_stop_0 c001n08" [ style=bold color="green" fontcolor="black" ]
+diff --git a/pengine/test10/target-1.exp b/pengine/test10/target-1.exp
+index 70d7f75..f4e79e7 100644
+--- a/pengine/test10/target-1.exp
++++ b/pengine/test10/target-1.exp
+@@ -33,17 +33,7 @@
+         <attributes CRM_meta_on_node="c001n08" CRM_meta_on_node_uuid="6427cb5a-c7a5-4bdf-9892-a04ce56f4e6b" CRM_meta_timeout="20000"  ip="127.0.0.11" target_role="Stopped"/>
+        </rsc_op>
+      </action_set>
+-    <inputs>
+-      <trigger>
+-        <rsc_op id="8" operation="monitor" operation_key="rsc_c001n08_monitor_0" on_node="c001n01" on_node_uuid="de937e3d-0309-4b5d-b85c-f96edc1ed8e3"/>
+-      </trigger>
+-      <trigger>
+-        <rsc_op id="10" operation="monitor" operation_key="rsc_c001n08_monitor_0" on_node="c001n02" on_node_uuid="e9bdfde9-01b0-421f-acd8-8a65a53e775f"/>
+-      </trigger>
+-      <trigger>
+-        <rsc_op id="13" operation="monitor" operation_key="rsc_c001n08_monitor_0" on_node="c001n03" on_node_uuid="5d9a8c11-8684-43ea-91.0.6e221530c193"/>
+-      </trigger>
+-    </inputs>
++    <inputs/>
+    </synapse>
+    <synapse id="4">
+      <action_set>
+diff --git a/pengine/test10/target-1.summary b/pengine/test10/target-1.summary
+index a94241e..12bbe4e 100644
+--- a/pengine/test10/target-1.summary
++++ b/pengine/test10/target-1.summary
+@@ -17,6 +17,7 @@ Executing cluster transition:
+  * Resource action: DcIPaddr        monitor on c001n08
+  * Resource action: DcIPaddr        monitor on c001n03
+  * Resource action: DcIPaddr        monitor on c001n01
++ * Resource action: rsc_c001n08     stop on c001n08
+  * Resource action: rsc_c001n08     monitor on c001n03
+  * Resource action: rsc_c001n08     monitor on c001n02
+  * Resource action: rsc_c001n08     monitor on c001n01
+@@ -26,7 +27,6 @@ Executing cluster transition:
+  * Resource action: rsc_c001n01     monitor on c001n08
+  * Resource action: rsc_c001n01     monitor on c001n03
+  * Resource action: rsc_c001n01     monitor on c001n02
+- * Resource action: rsc_c001n08     stop on c001n08
+  * Pseudo action:   all_stopped
+ 
+ Revised cluster status:
+diff --git a/pengine/test10/target-2.dot b/pengine/test10/target-2.dot
+index f151c43..55b9d85 100644
+--- a/pengine/test10/target-2.dot
++++ b/pengine/test10/target-2.dot
+@@ -12,11 +12,8 @@ digraph "g" {
+ "rsc_c001n03_monitor_0 c001n01" [ style=bold color="green" fontcolor="black" ]
+ "rsc_c001n03_monitor_0 c001n02" [ style=bold color="green" fontcolor="black" ]
+ "rsc_c001n03_monitor_0 c001n08" [ style=bold color="green" fontcolor="black" ]
+-"rsc_c001n08_monitor_0 c001n01" -> "rsc_c001n08_stop_0 c001n08" [ style = bold]
+ "rsc_c001n08_monitor_0 c001n01" [ style=bold color="green" fontcolor="black" ]
+-"rsc_c001n08_monitor_0 c001n02" -> "rsc_c001n08_stop_0 c001n08" [ style = bold]
+ "rsc_c001n08_monitor_0 c001n02" [ style=bold color="green" fontcolor="black" ]
+-"rsc_c001n08_monitor_0 c001n03" -> "rsc_c001n08_stop_0 c001n08" [ style = bold]
+ "rsc_c001n08_monitor_0 c001n03" [ style=bold color="green" fontcolor="black" ]
+ "rsc_c001n08_stop_0 c001n08" -> "all_stopped" [ style = bold]
+ "rsc_c001n08_stop_0 c001n08" [ style=bold color="green" fontcolor="black" ]
+diff --git a/pengine/test10/target-2.exp b/pengine/test10/target-2.exp
+index 63a8eec..6ced2e2 100644
+--- a/pengine/test10/target-2.exp
++++ b/pengine/test10/target-2.exp
+@@ -33,17 +33,7 @@
+         <attributes CRM_meta_on_node="c001n08" CRM_meta_on_node_uuid="6427cb5a-c7a5-4bdf-9892-a04ce56f4e6b" CRM_meta_timeout="20000"  ip="127.0.0.11" target_role="Stopped"/>
+       </rsc_op>
+     </action_set>
+-    <inputs>
+-      <trigger>
+-        <rsc_op id="8" operation="monitor" operation_key="rsc_c001n08_monitor_0" on_node="c001n01" on_node_uuid="de937e3d-0309-4b5d-b85c-f96edc1ed8e3"/>
+-      </trigger>
+-      <trigger>
+-        <rsc_op id="11" operation="monitor" operation_key="rsc_c001n08_monitor_0" on_node="c001n02" on_node_uuid="e9bdfde9-01b0-421f-acd8-8a65a53e775f"/>
+-      </trigger>
+-      <trigger>
+-        <rsc_op id="15" operation="monitor" operation_key="rsc_c001n08_monitor_0" on_node="c001n03" on_node_uuid="5d9a8c11-8684-43ea-91.0.6e221530c193"/>
+-      </trigger>
+-    </inputs>
++    <inputs/>
+   </synapse>
+   <synapse id="4">
+     <action_set>
+diff --git a/pengine/test10/target-2.summary b/pengine/test10/target-2.summary
+index bcefbef..a440494 100644
+--- a/pengine/test10/target-2.summary
++++ b/pengine/test10/target-2.summary
+@@ -16,6 +16,7 @@ Executing cluster transition:
+  * Resource action: DcIPaddr        monitor on c001n08
+  * Resource action: DcIPaddr        monitor on c001n03
+  * Resource action: DcIPaddr        monitor on c001n01
++ * Resource action: rsc_c001n08     stop on c001n08
+  * Resource action: rsc_c001n08     monitor on c001n03
+  * Resource action: rsc_c001n08     monitor on c001n02
+  * Resource action: rsc_c001n08     monitor on c001n01
+@@ -28,7 +29,6 @@ Executing cluster transition:
+  * Resource action: rsc_c001n01     monitor on c001n08
+  * Resource action: rsc_c001n01     monitor on c001n03
+  * Resource action: rsc_c001n01     monitor on c001n02
+- * Resource action: rsc_c001n08     stop on c001n08
+  * Pseudo action:   all_stopped
+ 
+ Revised cluster status:
+diff --git a/pengine/test10/unrunnable-1.dot b/pengine/test10/unrunnable-1.dot
+index 536864d..3e78165 100644
+--- a/pengine/test10/unrunnable-1.dot
++++ b/pengine/test10/unrunnable-1.dot
+@@ -12,7 +12,6 @@
+ "child_192.168.100.182_monitor_5000 c001n03" [ style=dashed color="red" fontcolor="black" ]
+ "child_192.168.100.183_monitor_0 c001n03" [ style=bold color="green" fontcolor="black" ]
+ "child_192.168.100.183_monitor_5000 c001n03" [ style=dashed color="red" fontcolor="black" ]
+-"child_DoFencing:1_monitor_0 c001n03" -> "child_DoFencing:1_stop_0 c001n02" [ style = dashed]
+ "child_DoFencing:1_monitor_0 c001n03" [ style=bold color="green" fontcolor="black" ]
+ "child_DoFencing:1_stop_0 c001n02" -> "DoFencing_stopped_0" [ style = dashed]
+ "child_DoFencing:1_stop_0 c001n02" -> "all_stopped" [ style = dashed]
+diff --git a/pengine/test10/whitebox-fail1.dot b/pengine/test10/whitebox-fail1.dot
+index 3cf4f76..bfff4bf 100644
+--- a/pengine/test10/whitebox-fail1.dot
++++ b/pengine/test10/whitebox-fail1.dot
+@@ -1,7 +1,6 @@
+ digraph "g" {
+ "A_monitor_0 lxc2" [ style=bold color="green" fontcolor="black"]
+ "B_monitor_0 lxc2" -> "B_start_0 lxc1" [ style = bold]
+-"B_monitor_0 lxc2" -> "B_stop_0 lxc1" [ style = bold]
+ "B_monitor_0 lxc2" [ style=bold color="green" fontcolor="black"]
+ "B_monitor_10000 lxc1" [ style=bold color="green" fontcolor="black"]
+ "B_start_0 lxc1" -> "B_monitor_10000 lxc1" [ style = bold]
+diff --git a/pengine/test10/whitebox-fail1.exp b/pengine/test10/whitebox-fail1.exp
+index ab739b5..901a1e3 100644
+--- a/pengine/test10/whitebox-fail1.exp
++++ b/pengine/test10/whitebox-fail1.exp
+@@ -196,9 +196,6 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="13" operation="monitor" operation_key="B_monitor_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node2"/>
+-      </trigger>
+-      <trigger>
+         <pseudo_event id="49" operation="stonith" operation_key="stonith-lxc1-reboot" on_node="lxc1" on_node_uuid="lxc1"/>
+       </trigger>
+     </inputs>
+diff --git a/pengine/test10/whitebox-fail2.dot b/pengine/test10/whitebox-fail2.dot
+index 3cf4f76..bfff4bf 100644
+--- a/pengine/test10/whitebox-fail2.dot
++++ b/pengine/test10/whitebox-fail2.dot
+@@ -1,7 +1,6 @@
+ digraph "g" {
+ "A_monitor_0 lxc2" [ style=bold color="green" fontcolor="black"]
+ "B_monitor_0 lxc2" -> "B_start_0 lxc1" [ style = bold]
+-"B_monitor_0 lxc2" -> "B_stop_0 lxc1" [ style = bold]
+ "B_monitor_0 lxc2" [ style=bold color="green" fontcolor="black"]
+ "B_monitor_10000 lxc1" [ style=bold color="green" fontcolor="black"]
+ "B_start_0 lxc1" -> "B_monitor_10000 lxc1" [ style = bold]
+diff --git a/pengine/test10/whitebox-fail2.exp b/pengine/test10/whitebox-fail2.exp
+index ab739b5..901a1e3 100644
+--- a/pengine/test10/whitebox-fail2.exp
++++ b/pengine/test10/whitebox-fail2.exp
+@@ -196,9 +196,6 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="13" operation="monitor" operation_key="B_monitor_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node2"/>
+-      </trigger>
+-      <trigger>
+         <pseudo_event id="49" operation="stonith" operation_key="stonith-lxc1-reboot" on_node="lxc1" on_node_uuid="lxc1"/>
+       </trigger>
+     </inputs>
+diff --git a/pengine/test10/whitebox-imply-stop-on-fence.dot b/pengine/test10/whitebox-imply-stop-on-fence.dot
+index 1c41ad2..7b536ea 100644
+--- a/pengine/test10/whitebox-imply-stop-on-fence.dot
++++ b/pengine/test10/whitebox-imply-stop-on-fence.dot
+@@ -24,9 +24,7 @@
+ "clvmd-clone_stop_0" [ style=bold color="green" fontcolor="orange"]
+ "clvmd-clone_stopped_0" -> "dlm-clone_stop_0" [ style = bold]
+ "clvmd-clone_stopped_0" [ style=bold color="green" fontcolor="orange"]
+-"clvmd_monitor_0 lxc-01_kiff-02" -> "clvmd_stop_0 kiff-01" [ style = bold]
+ "clvmd_monitor_0 lxc-01_kiff-02" [ style=bold color="green" fontcolor="black"]
+-"clvmd_monitor_0 lxc-02_kiff-02" -> "clvmd_stop_0 kiff-01" [ style = bold]
+ "clvmd_monitor_0 lxc-02_kiff-02" [ style=bold color="green" fontcolor="black"]
+ "clvmd_stop_0 kiff-01" -> "all_stopped" [ style = bold]
+ "clvmd_stop_0 kiff-01" -> "clvmd-clone_stopped_0" [ style = bold]
+@@ -36,9 +34,7 @@
+ "dlm-clone_stop_0" -> "dlm_stop_0 kiff-01" [ style = bold]
+ "dlm-clone_stop_0" [ style=bold color="green" fontcolor="orange"]
+ "dlm-clone_stopped_0" [ style=bold color="green" fontcolor="orange"]
+-"dlm_monitor_0 lxc-01_kiff-02" -> "dlm_stop_0 kiff-01" [ style = bold]
+ "dlm_monitor_0 lxc-01_kiff-02" [ style=bold color="green" fontcolor="black"]
+-"dlm_monitor_0 lxc-02_kiff-02" -> "dlm_stop_0 kiff-01" [ style = bold]
+ "dlm_monitor_0 lxc-02_kiff-02" [ style=bold color="green" fontcolor="black"]
+ "dlm_stop_0 kiff-01" -> "all_stopped" [ style = bold]
+ "dlm_stop_0 kiff-01" -> "dlm-clone_stopped_0" [ style = bold]
+@@ -70,9 +66,7 @@
+ "shared0-clone_stop_0" [ style=bold color="green" fontcolor="orange"]
+ "shared0-clone_stopped_0" -> "clvmd-clone_stop_0" [ style = bold]
+ "shared0-clone_stopped_0" [ style=bold color="green" fontcolor="orange"]
+-"shared0_monitor_0 lxc-01_kiff-02" -> "shared0_stop_0 kiff-01" [ style = bold]
+ "shared0_monitor_0 lxc-01_kiff-02" [ style=bold color="green" fontcolor="black"]
+-"shared0_monitor_0 lxc-02_kiff-02" -> "shared0_stop_0 kiff-01" [ style = bold]
+ "shared0_monitor_0 lxc-02_kiff-02" [ style=bold color="green" fontcolor="black"]
+ "shared0_stop_0 kiff-01" -> "all_stopped" [ style = bold]
+ "shared0_stop_0 kiff-01" -> "clvmd_stop_0 kiff-01" [ style = bold]
+@@ -105,10 +99,8 @@
+ "stonith_complete" -> "vm-fs_start_0 lxc-01_kiff-01" [ style = bold]
+ "stonith_complete" [ style=bold color="green" fontcolor="orange"]
+ "vm-fs_monitor_0 lxc-01_kiff-02" -> "vm-fs_start_0 lxc-01_kiff-01" [ style = bold]
+-"vm-fs_monitor_0 lxc-01_kiff-02" -> "vm-fs_stop_0 lxc-01_kiff-01" [ style = bold]
+ "vm-fs_monitor_0 lxc-01_kiff-02" [ style=bold color="green" fontcolor="black"]
+ "vm-fs_monitor_0 lxc-02_kiff-02" -> "vm-fs_start_0 lxc-01_kiff-01" [ style = bold]
+-"vm-fs_monitor_0 lxc-02_kiff-02" -> "vm-fs_stop_0 lxc-01_kiff-01" [ style = bold]
+ "vm-fs_monitor_0 lxc-02_kiff-02" [ style=bold color="green" fontcolor="black"]
+ "vm-fs_monitor_20000 lxc-01_kiff-01" [ style=bold color="green" fontcolor="black"]
+ "vm-fs_start_0 lxc-01_kiff-01" -> "vm-fs_monitor_20000 lxc-01_kiff-01" [ style = bold]
+diff --git a/pengine/test10/whitebox-imply-stop-on-fence.exp b/pengine/test10/whitebox-imply-stop-on-fence.exp
+index 9a469f2..f80dde1 100644
+--- a/pengine/test10/whitebox-imply-stop-on-fence.exp
++++ b/pengine/test10/whitebox-imply-stop-on-fence.exp
+@@ -47,12 +47,6 @@
+         <crm_event id="1" operation="stonith" operation_key="stonith-kiff-01-reboot" on_node="kiff-01" on_node_uuid="1"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="11" operation="monitor" operation_key="dlm_monitor_0" internal_operation_key="dlm:0_monitor_0" on_node="lxc-01_kiff-02" on_node_uuid="lxc-01_kiff-02" router_node="kiff-02"/>
+-      </trigger>
+-      <trigger>
+-        <rsc_op id="15" operation="monitor" operation_key="dlm_monitor_0" internal_operation_key="dlm:0_monitor_0" on_node="lxc-02_kiff-02" on_node_uuid="lxc-02_kiff-02" router_node="kiff-02"/>
+-      </trigger>
+-      <trigger>
+         <pseudo_event id="29" operation="stop" operation_key="dlm-clone_stop_0"/>
+       </trigger>
+       <trigger>
+@@ -119,12 +113,6 @@
+         <crm_event id="1" operation="stonith" operation_key="stonith-kiff-01-reboot" on_node="kiff-01" on_node_uuid="1"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="12" operation="monitor" operation_key="clvmd_monitor_0" internal_operation_key="clvmd:0_monitor_0" on_node="lxc-01_kiff-02" on_node_uuid="lxc-01_kiff-02" router_node="kiff-02"/>
+-      </trigger>
+-      <trigger>
+-        <rsc_op id="16" operation="monitor" operation_key="clvmd_monitor_0" internal_operation_key="clvmd:0_monitor_0" on_node="lxc-02_kiff-02" on_node_uuid="lxc-02_kiff-02" router_node="kiff-02"/>
+-      </trigger>
+-      <trigger>
+         <pseudo_event id="36" operation="stop" operation_key="clvmd-clone_stop_0"/>
+       </trigger>
+       <trigger>
+@@ -191,12 +179,6 @@
+         <crm_event id="1" operation="stonith" operation_key="stonith-kiff-01-reboot" on_node="kiff-01" on_node_uuid="1"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="13" operation="monitor" operation_key="shared0_monitor_0" internal_operation_key="shared0:0_monitor_0" on_node="lxc-01_kiff-02" on_node_uuid="lxc-01_kiff-02" router_node="kiff-02"/>
+-      </trigger>
+-      <trigger>
+-        <rsc_op id="17" operation="monitor" operation_key="shared0_monitor_0" internal_operation_key="shared0:0_monitor_0" on_node="lxc-02_kiff-02" on_node_uuid="lxc-02_kiff-02" router_node="kiff-02"/>
+-      </trigger>
+-      <trigger>
+         <pseudo_event id="43" operation="stop" operation_key="shared0-clone_stop_0"/>
+       </trigger>
+     </inputs>
+@@ -395,12 +377,6 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="14" operation="monitor" operation_key="vm-fs_monitor_0" on_node="lxc-01_kiff-02" on_node_uuid="lxc-01_kiff-02" router_node="kiff-02"/>
+-      </trigger>
+-      <trigger>
+-        <rsc_op id="18" operation="monitor" operation_key="vm-fs_monitor_0" on_node="lxc-02_kiff-02" on_node_uuid="lxc-02_kiff-02" router_node="kiff-02"/>
+-      </trigger>
+-      <trigger>
+         <pseudo_event id="69" operation="stonith" operation_key="stonith-lxc-01_kiff-01-reboot" on_node="lxc-01_kiff-01" on_node_uuid="lxc-01_kiff-01"/>
+       </trigger>
+     </inputs>
+diff --git a/pengine/test10/whitebox-ms-ordering.dot b/pengine/test10/whitebox-ms-ordering.dot
+index 84a0984..1f4d95b 100644
+--- a/pengine/test10/whitebox-ms-ordering.dot
++++ b/pengine/test10/whitebox-ms-ordering.dot
+@@ -47,13 +47,10 @@
+ "lxc-ms_demote_0 lxc1" -> "lxc-ms_stop_0 lxc1" [ style = bold]
+ "lxc-ms_demote_0 lxc1" [ style=bold color="green" fontcolor="orange"]
+ "lxc-ms_monitor_0 18node1" -> "lxc-ms-master_start_0" [ style = bold]
+-"lxc-ms_monitor_0 18node1" -> "lxc-ms_stop_0 lxc1" [ style = bold]
+ "lxc-ms_monitor_0 18node1" [ style=bold color="green" fontcolor="black"]
+ "lxc-ms_monitor_0 18node2" -> "lxc-ms-master_start_0" [ style = bold]
+-"lxc-ms_monitor_0 18node2" -> "lxc-ms_stop_0 lxc1" [ style = bold]
+ "lxc-ms_monitor_0 18node2" [ style=bold color="green" fontcolor="black"]
+ "lxc-ms_monitor_0 18node3" -> "lxc-ms-master_start_0" [ style = bold]
+-"lxc-ms_monitor_0 18node3" -> "lxc-ms_stop_0 lxc1" [ style = bold]
+ "lxc-ms_monitor_0 18node3" [ style=bold color="green" fontcolor="black"]
+ "lxc-ms_monitor_10000 lxc2" [ style=bold color="green" fontcolor="black"]
+ "lxc-ms_promote_0 lxc1" -> "lxc-ms-master_promoted_0" [ style = bold]
+diff --git a/pengine/test10/whitebox-ms-ordering.exp b/pengine/test10/whitebox-ms-ordering.exp
+index e5eb99c..c8fee5e 100644
+--- a/pengine/test10/whitebox-ms-ordering.exp
++++ b/pengine/test10/whitebox-ms-ordering.exp
+@@ -158,15 +158,6 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="5" operation="monitor" operation_key="lxc-ms_monitor_0" internal_operation_key="lxc-ms:0_monitor_0" on_node="18node1" on_node_uuid="1"/>
+-      </trigger>
+-      <trigger>
+-        <rsc_op id="10" operation="monitor" operation_key="lxc-ms_monitor_0" internal_operation_key="lxc-ms:0_monitor_0" on_node="18node2" on_node_uuid="2"/>
+-      </trigger>
+-      <trigger>
+-        <rsc_op id="15" operation="monitor" operation_key="lxc-ms_monitor_0" internal_operation_key="lxc-ms:0_monitor_0" on_node="18node3" on_node_uuid="3"/>
+-      </trigger>
+-      <trigger>
+         <pseudo_event id="22" operation="demote" operation_key="lxc-ms_demote_0" internal_operation_key="lxc-ms:0_demote_0"/>
+       </trigger>
+       <trigger>
+diff --git a/pengine/test10/whitebox-orphan-ms.dot b/pengine/test10/whitebox-orphan-ms.dot
+index 4e2e211..46b6cda 100644
+--- a/pengine/test10/whitebox-orphan-ms.dot
++++ b/pengine/test10/whitebox-orphan-ms.dot
+@@ -25,8 +25,6 @@
+ "container2_stop_0 18node1" -> "container2_delete_0 18node2" [ style = bold]
+ "container2_stop_0 18node1" -> "container2_delete_0 18node3" [ style = bold]
+ "container2_stop_0 18node1" [ style=bold color="green" fontcolor="black"]
+-"lsb-dummy_monitor_0 lxc1" [ style=dashed color="red" fontcolor="black"]
+-"lsb-dummy_monitor_0 lxc2" [ style=dashed color="red" fontcolor="black"]
+ "lxc-ms_clear_failcount_0 lxc1" -> "lxc-ms_stop_0 lxc1" [ style = dashed]
+ "lxc-ms_clear_failcount_0 lxc1" -> "lxc-ms_stop_0 lxc2" [ style = dashed]
+ "lxc-ms_clear_failcount_0 lxc1" [ style=dashed color="red" fontcolor="black"]
+@@ -71,20 +69,4 @@
+ "lxc2_stop_0 18node1" -> "lxc2_delete_0 18node2" [ style = bold]
+ "lxc2_stop_0 18node1" -> "lxc2_delete_0 18node3" [ style = bold]
+ "lxc2_stop_0 18node1" [ style=bold color="green" fontcolor="black"]
+-"migrator_monitor_0 lxc1" [ style=dashed color="red" fontcolor="black"]
+-"migrator_monitor_0 lxc2" [ style=dashed color="red" fontcolor="black"]
+-"ping-1_monitor_0 lxc1" [ style=dashed color="red" fontcolor="black"]
+-"ping-1_monitor_0 lxc2" [ style=dashed color="red" fontcolor="black"]
+-"r192.168.122.87_monitor_0 lxc1" [ style=dashed color="red" fontcolor="black"]
+-"r192.168.122.87_monitor_0 lxc2" [ style=dashed color="red" fontcolor="black"]
+-"r192.168.122.88_monitor_0 lxc1" [ style=dashed color="red" fontcolor="black"]
+-"r192.168.122.88_monitor_0 lxc2" [ style=dashed color="red" fontcolor="black"]
+-"r192.168.122.89_monitor_0 lxc1" [ style=dashed color="red" fontcolor="black"]
+-"r192.168.122.89_monitor_0 lxc2" [ style=dashed color="red" fontcolor="black"]
+-"rsc_18node1_monitor_0 lxc1" [ style=dashed color="red" fontcolor="black"]
+-"rsc_18node1_monitor_0 lxc2" [ style=dashed color="red" fontcolor="black"]
+-"rsc_18node2_monitor_0 lxc1" [ style=dashed color="red" fontcolor="black"]
+-"rsc_18node2_monitor_0 lxc2" [ style=dashed color="red" fontcolor="black"]
+-"rsc_18node3_monitor_0 lxc1" [ style=dashed color="red" fontcolor="black"]
+-"rsc_18node3_monitor_0 lxc2" [ style=dashed color="red" fontcolor="black"]
+ }
+diff --git a/pengine/test10/whitebox-orphan-ms.exp b/pengine/test10/whitebox-orphan-ms.exp
+index 564e92d..ef81317 100644
+--- a/pengine/test10/whitebox-orphan-ms.exp
++++ b/pengine/test10/whitebox-orphan-ms.exp
+@@ -1,20 +1,20 @@
+ <transition_graph cluster-delay="60s" stonith-timeout="60s" failed-stop-offset="INFINITY" failed-start-offset="1"  transition_id="0">
+   <synapse id="0">
+     <action_set>
+-      <rsc_op id="59" operation="start" operation_key="FencingFail_start_0" on_node="18node1" on_node_uuid="1">
++      <rsc_op id="41" operation="start" operation_key="FencingFail_start_0" on_node="18node1" on_node_uuid="1">
+         <primitive id="FencingFail" class="stonith" type="fence_dummy"/>
+         <attributes CRM_meta_on_node="18node1" CRM_meta_on_node_uuid="1" CRM_meta_timeout="90000"  delay="20" mode="fail" pcmk_host_list="18node1 18node3" random_sleep_range="30"/>
+       </rsc_op>
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="58" operation="stop" operation_key="FencingFail_stop_0" on_node="18node3" on_node_uuid="3"/>
++        <rsc_op id="40" operation="stop" operation_key="FencingFail_stop_0" on_node="18node3" on_node_uuid="3"/>
+       </trigger>
+     </inputs>
+   </synapse>
+   <synapse id="1">
+     <action_set>
+-      <rsc_op id="58" operation="stop" operation_key="FencingFail_stop_0" on_node="18node3" on_node_uuid="3">
++      <rsc_op id="40" operation="stop" operation_key="FencingFail_stop_0" on_node="18node3" on_node_uuid="3">
+         <primitive id="FencingFail" class="stonith" type="fence_dummy"/>
+         <attributes CRM_meta_on_node="18node3" CRM_meta_on_node_uuid="3" CRM_meta_timeout="90000"  delay="20" mode="fail" pcmk_host_list="18node1 18node3" random_sleep_range="30"/>
+       </rsc_op>
+@@ -23,14 +23,14 @@
+   </synapse>
+   <synapse id="2">
+     <action_set>
+-      <rsc_op id="106" operation="stop" operation_key="container2_stop_0" on_node="18node1" on_node_uuid="1">
++      <rsc_op id="88" operation="stop" operation_key="container2_stop_0" on_node="18node1" on_node_uuid="1">
+         <primitive id="container2" class="ocf" provider="heartbeat" type="VirtualDomain"/>
+         <attributes CRM_meta_on_node="18node1" CRM_meta_on_node_uuid="1" CRM_meta_timeout="90000" />
+       </rsc_op>
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="112" operation="stop" operation_key="lxc2_stop_0" on_node="18node1" on_node_uuid="1"/>
++        <rsc_op id="94" operation="stop" operation_key="lxc2_stop_0" on_node="18node1" on_node_uuid="1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+@@ -43,7 +43,7 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="106" operation="stop" operation_key="container2_stop_0" on_node="18node1" on_node_uuid="1"/>
++        <rsc_op id="88" operation="stop" operation_key="container2_stop_0" on_node="18node1" on_node_uuid="1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+@@ -56,7 +56,7 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="106" operation="stop" operation_key="container2_stop_0" on_node="18node1" on_node_uuid="1"/>
++        <rsc_op id="88" operation="stop" operation_key="container2_stop_0" on_node="18node1" on_node_uuid="1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+@@ -69,13 +69,13 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="106" operation="stop" operation_key="container2_stop_0" on_node="18node1" on_node_uuid="1"/>
++        <rsc_op id="88" operation="stop" operation_key="container2_stop_0" on_node="18node1" on_node_uuid="1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+   <synapse id="6">
+     <action_set>
+-      <rsc_op id="107" operation="stop" operation_key="lxc1_stop_0" on_node="18node1" on_node_uuid="1">
++      <rsc_op id="89" operation="stop" operation_key="lxc1_stop_0" on_node="18node1" on_node_uuid="1">
+         <primitive id="lxc1" class="ocf" provider="pacemaker" type="remote"/>
+         <attributes CRM_meta_container="container1" CRM_meta_on_node="18node1" CRM_meta_on_node_uuid="1" CRM_meta_timeout="90000" />
+         <downed>
+@@ -85,10 +85,10 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="108" operation="demote" operation_key="lxc-ms_demote_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node1"/>
++        <rsc_op id="90" operation="demote" operation_key="lxc-ms_demote_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node1"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="110" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node1"/>
++        <rsc_op id="92" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+@@ -101,7 +101,7 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="107" operation="stop" operation_key="lxc1_stop_0" on_node="18node1" on_node_uuid="1"/>
++        <rsc_op id="89" operation="stop" operation_key="lxc1_stop_0" on_node="18node1" on_node_uuid="1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+@@ -114,7 +114,7 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="107" operation="stop" operation_key="lxc1_stop_0" on_node="18node1" on_node_uuid="1"/>
++        <rsc_op id="89" operation="stop" operation_key="lxc1_stop_0" on_node="18node1" on_node_uuid="1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+@@ -127,45 +127,45 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="107" operation="stop" operation_key="lxc1_stop_0" on_node="18node1" on_node_uuid="1"/>
++        <rsc_op id="89" operation="stop" operation_key="lxc1_stop_0" on_node="18node1" on_node_uuid="1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+   <synapse id="10">
+     <action_set>
+-      <rsc_op id="111" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node1">
++      <rsc_op id="93" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node1">
+         <primitive id="lxc-ms" class="ocf" provider="pacemaker" type="Stateful"/>
+         <attributes CRM_meta_on_node="lxc2" CRM_meta_on_node_uuid="lxc2" CRM_meta_physical_host="18node1" CRM_meta_timeout="90000" />
+       </rsc_op>
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="108" operation="demote" operation_key="lxc-ms_demote_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node1"/>
++        <rsc_op id="90" operation="demote" operation_key="lxc-ms_demote_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node1"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="109" operation="demote" operation_key="lxc-ms_demote_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node1"/>
++        <rsc_op id="91" operation="demote" operation_key="lxc-ms_demote_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+   <synapse id="11">
+     <action_set>
+-      <rsc_op id="110" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node1">
++      <rsc_op id="92" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node1">
+         <primitive id="lxc-ms" class="ocf" provider="pacemaker" type="Stateful"/>
+         <attributes CRM_meta_on_node="lxc1" CRM_meta_on_node_uuid="lxc1" CRM_meta_physical_host="18node1" CRM_meta_timeout="90000" />
+       </rsc_op>
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="108" operation="demote" operation_key="lxc-ms_demote_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node1"/>
++        <rsc_op id="90" operation="demote" operation_key="lxc-ms_demote_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node1"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="109" operation="demote" operation_key="lxc-ms_demote_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node1"/>
++        <rsc_op id="91" operation="demote" operation_key="lxc-ms_demote_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+   <synapse id="12">
+     <action_set>
+-      <rsc_op id="109" operation="demote" operation_key="lxc-ms_demote_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node1">
++      <rsc_op id="91" operation="demote" operation_key="lxc-ms_demote_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node1">
+         <primitive id="lxc-ms" class="ocf" provider="pacemaker" type="Stateful"/>
+         <attributes CRM_meta_on_node="lxc2" CRM_meta_on_node_uuid="lxc2" CRM_meta_physical_host="18node1" CRM_meta_timeout="90000" />
+       </rsc_op>
+@@ -174,7 +174,7 @@
+   </synapse>
+   <synapse id="13">
+     <action_set>
+-      <rsc_op id="108" operation="demote" operation_key="lxc-ms_demote_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node1">
++      <rsc_op id="90" operation="demote" operation_key="lxc-ms_demote_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node1">
+         <primitive id="lxc-ms" class="ocf" provider="pacemaker" type="Stateful"/>
+         <attributes CRM_meta_on_node="lxc1" CRM_meta_on_node_uuid="lxc1" CRM_meta_physical_host="18node1" CRM_meta_timeout="90000" />
+       </rsc_op>
+@@ -190,10 +190,10 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="110" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node1"/>
++        <rsc_op id="92" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node1"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="111" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node1"/>
++        <rsc_op id="93" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+@@ -206,10 +206,10 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="110" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node1"/>
++        <rsc_op id="92" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node1"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="111" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node1"/>
++        <rsc_op id="93" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+@@ -222,16 +222,16 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="110" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node1"/>
++        <rsc_op id="92" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node1"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="111" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node1"/>
++        <rsc_op id="93" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+   <synapse id="17">
+     <action_set>
+-      <rsc_op id="112" operation="stop" operation_key="lxc2_stop_0" on_node="18node1" on_node_uuid="1">
++      <rsc_op id="94" operation="stop" operation_key="lxc2_stop_0" on_node="18node1" on_node_uuid="1">
+         <primitive id="lxc2" class="ocf" provider="pacemaker" type="remote"/>
+         <attributes CRM_meta_container="container2" CRM_meta_on_node="18node1" CRM_meta_on_node_uuid="1" CRM_meta_timeout="90000" />
+         <downed>
+@@ -241,10 +241,10 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="109" operation="demote" operation_key="lxc-ms_demote_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node1"/>
++        <rsc_op id="91" operation="demote" operation_key="lxc-ms_demote_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node1"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="111" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node1"/>
++        <rsc_op id="93" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+@@ -257,7 +257,7 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="112" operation="stop" operation_key="lxc2_stop_0" on_node="18node1" on_node_uuid="1"/>
++        <rsc_op id="94" operation="stop" operation_key="lxc2_stop_0" on_node="18node1" on_node_uuid="1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+@@ -270,7 +270,7 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="112" operation="stop" operation_key="lxc2_stop_0" on_node="18node1" on_node_uuid="1"/>
++        <rsc_op id="94" operation="stop" operation_key="lxc2_stop_0" on_node="18node1" on_node_uuid="1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+@@ -283,20 +283,20 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="112" operation="stop" operation_key="lxc2_stop_0" on_node="18node1" on_node_uuid="1"/>
++        <rsc_op id="94" operation="stop" operation_key="lxc2_stop_0" on_node="18node1" on_node_uuid="1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+   <synapse id="21">
+     <action_set>
+-      <rsc_op id="113" operation="stop" operation_key="container1_stop_0" on_node="18node1" on_node_uuid="1">
++      <rsc_op id="95" operation="stop" operation_key="container1_stop_0" on_node="18node1" on_node_uuid="1">
+         <primitive id="container1" class="ocf" provider="heartbeat" type="VirtualDomain"/>
+         <attributes CRM_meta_on_node="18node1" CRM_meta_on_node_uuid="1" CRM_meta_timeout="90000" />
+       </rsc_op>
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="107" operation="stop" operation_key="lxc1_stop_0" on_node="18node1" on_node_uuid="1"/>
++        <rsc_op id="89" operation="stop" operation_key="lxc1_stop_0" on_node="18node1" on_node_uuid="1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+@@ -309,7 +309,7 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="113" operation="stop" operation_key="container1_stop_0" on_node="18node1" on_node_uuid="1"/>
++        <rsc_op id="95" operation="stop" operation_key="container1_stop_0" on_node="18node1" on_node_uuid="1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+@@ -322,7 +322,7 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="113" operation="stop" operation_key="container1_stop_0" on_node="18node1" on_node_uuid="1"/>
++        <rsc_op id="95" operation="stop" operation_key="container1_stop_0" on_node="18node1" on_node_uuid="1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+@@ -335,7 +335,7 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="113" operation="stop" operation_key="container1_stop_0" on_node="18node1" on_node_uuid="1"/>
++        <rsc_op id="95" operation="stop" operation_key="container1_stop_0" on_node="18node1" on_node_uuid="1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+@@ -347,25 +347,25 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="58" operation="stop" operation_key="FencingFail_stop_0" on_node="18node3" on_node_uuid="3"/>
++        <rsc_op id="40" operation="stop" operation_key="FencingFail_stop_0" on_node="18node3" on_node_uuid="3"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="106" operation="stop" operation_key="container2_stop_0" on_node="18node1" on_node_uuid="1"/>
++        <rsc_op id="88" operation="stop" operation_key="container2_stop_0" on_node="18node1" on_node_uuid="1"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="107" operation="stop" operation_key="lxc1_stop_0" on_node="18node1" on_node_uuid="1"/>
++        <rsc_op id="89" operation="stop" operation_key="lxc1_stop_0" on_node="18node1" on_node_uuid="1"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="110" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node1"/>
++        <rsc_op id="92" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node1"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="111" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node1"/>
++        <rsc_op id="93" operation="stop" operation_key="lxc-ms_stop_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node1"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="112" operation="stop" operation_key="lxc2_stop_0" on_node="18node1" on_node_uuid="1"/>
++        <rsc_op id="94" operation="stop" operation_key="lxc2_stop_0" on_node="18node1" on_node_uuid="1"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="113" operation="stop" operation_key="container1_stop_0" on_node="18node1" on_node_uuid="1"/>
++        <rsc_op id="95" operation="stop" operation_key="container1_stop_0" on_node="18node1" on_node_uuid="1"/>
+       </trigger>
+     </inputs>
+   </synapse>
+diff --git a/pengine/test10/whitebox-orphaned.dot b/pengine/test10/whitebox-orphaned.dot
+index 4ef1f7e..48e167f 100644
+--- a/pengine/test10/whitebox-orphaned.dot
++++ b/pengine/test10/whitebox-orphaned.dot
+@@ -1,5 +1,4 @@
+  digraph "g" {
+-"A_monitor_0 lxc1" [ style=dashed color="red" fontcolor="black"]
+ "A_monitor_0 lxc2" [ style=bold color="green" fontcolor="black"]
+ "B_monitor_0 lxc2" -> "B_start_0 lxc2" [ style = bold]
+ "B_monitor_0 lxc2" -> "B_stop_0 lxc1" [ style = bold]
+@@ -11,8 +10,6 @@
+ "B_stop_0 lxc1" -> "all_stopped" [ style = bold]
+ "B_stop_0 lxc1" -> "lxc1_stop_0 18node2" [ style = bold]
+ "B_stop_0 lxc1" [ style=bold color="green" fontcolor="black"]
+-"C_monitor_0 lxc1" [ style=dashed color="red" fontcolor="black"]
+-"D_monitor_0 lxc1" [ style=dashed color="red" fontcolor="black"]
+ "D_monitor_0 lxc2" [ style=bold color="green" fontcolor="black"]
+ "M-clone_stop_0" -> "M-clone_stopped_0" [ style = bold]
+ "M-clone_stop_0" -> "M_stop_0 lxc1" [ style = bold]
+diff --git a/pengine/test10/whitebox-orphaned.exp b/pengine/test10/whitebox-orphaned.exp
+index 843f186..b267010 100644
+--- a/pengine/test10/whitebox-orphaned.exp
++++ b/pengine/test10/whitebox-orphaned.exp
+@@ -1,35 +1,35 @@
+ <transition_graph cluster-delay="60s" stonith-timeout="60s" failed-stop-offset="INFINITY" failed-start-offset="INFINITY"  transition_id="0">
+   <synapse id="0">
+     <action_set>
+-      <rsc_op id="39" operation="stop" operation_key="M_stop_0" internal_operation_key="M:4_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node2">
++      <rsc_op id="36" operation="stop" operation_key="M_stop_0" internal_operation_key="M:4_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node2">
+         <primitive id="M" long-id="M:4" class="ocf" provider="pacemaker" type="Dummy"/>
+         <attributes CRM_meta_clone="4" CRM_meta_clone_max="4" CRM_meta_clone_node_max="1" CRM_meta_globally_unique="false" CRM_meta_notify="false" CRM_meta_on_node="lxc1" CRM_meta_on_node_uuid="lxc1" CRM_meta_physical_host="18node2" CRM_meta_timeout="20000" />
+       </rsc_op>
+     </action_set>
+     <inputs>
+       <trigger>
+-        <pseudo_event id="42" operation="stop" operation_key="M-clone_stop_0"/>
++        <pseudo_event id="39" operation="stop" operation_key="M-clone_stop_0"/>
+       </trigger>
+     </inputs>
+   </synapse>
+   <synapse id="1" priority="1000000">
+     <action_set>
+-      <pseudo_event id="43" operation="stopped" operation_key="M-clone_stopped_0">
++      <pseudo_event id="40" operation="stopped" operation_key="M-clone_stopped_0">
+         <attributes CRM_meta_clone_max="4" CRM_meta_clone_node_max="1" CRM_meta_globally_unique="false" CRM_meta_notify="false" CRM_meta_timeout="20000" />
+       </pseudo_event>
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="39" operation="stop" operation_key="M_stop_0" internal_operation_key="M:4_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node2"/>
++        <rsc_op id="36" operation="stop" operation_key="M_stop_0" internal_operation_key="M:4_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node2"/>
+       </trigger>
+       <trigger>
+-        <pseudo_event id="42" operation="stop" operation_key="M-clone_stop_0"/>
++        <pseudo_event id="39" operation="stop" operation_key="M-clone_stop_0"/>
+       </trigger>
+     </inputs>
+   </synapse>
+   <synapse id="2">
+     <action_set>
+-      <pseudo_event id="42" operation="stop" operation_key="M-clone_stop_0">
++      <pseudo_event id="39" operation="stop" operation_key="M-clone_stop_0">
+         <attributes CRM_meta_clone_max="4" CRM_meta_clone_node_max="1" CRM_meta_globally_unique="false" CRM_meta_notify="false" CRM_meta_timeout="20000" />
+       </pseudo_event>
+     </action_set>
+@@ -37,7 +37,7 @@
+   </synapse>
+   <synapse id="3">
+     <action_set>
+-      <rsc_op id="22" operation="monitor" operation_key="A_monitor_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node2">
++      <rsc_op id="19" operation="monitor" operation_key="A_monitor_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node2">
+         <primitive id="A" class="ocf" provider="pacemaker" type="Dummy"/>
+         <attributes CRM_meta_on_node="lxc2" CRM_meta_on_node_uuid="lxc2" CRM_meta_op_target_rc="7" CRM_meta_physical_host="18node2" CRM_meta_timeout="20000" />
+       </rsc_op>
+@@ -46,49 +46,49 @@
+   </synapse>
+   <synapse id="4">
+     <action_set>
+-      <rsc_op id="48" operation="monitor" operation_key="B_monitor_10000" on_node="lxc2" on_node_uuid="lxc2" router_node="18node2">
++      <rsc_op id="45" operation="monitor" operation_key="B_monitor_10000" on_node="lxc2" on_node_uuid="lxc2" router_node="18node2">
+         <primitive id="B" class="ocf" provider="pacemaker" type="Dummy"/>
+         <attributes CRM_meta_interval="10000" CRM_meta_name="monitor" CRM_meta_on_node="lxc2" CRM_meta_on_node_uuid="lxc2" CRM_meta_physical_host="18node2" CRM_meta_timeout="20000" />
+       </rsc_op>
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="47" operation="start" operation_key="B_start_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node2"/>
++        <rsc_op id="44" operation="start" operation_key="B_start_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node2"/>
+       </trigger>
+     </inputs>
+   </synapse>
+   <synapse id="5">
+     <action_set>
+-      <rsc_op id="47" operation="start" operation_key="B_start_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node2">
++      <rsc_op id="44" operation="start" operation_key="B_start_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node2">
+         <primitive id="B" class="ocf" provider="pacemaker" type="Dummy"/>
+         <attributes CRM_meta_on_node="lxc2" CRM_meta_on_node_uuid="lxc2" CRM_meta_physical_host="18node2" CRM_meta_timeout="20000" />
+       </rsc_op>
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="23" operation="monitor" operation_key="B_monitor_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node2"/>
++        <rsc_op id="20" operation="monitor" operation_key="B_monitor_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node2"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="46" operation="stop" operation_key="B_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node2"/>
++        <rsc_op id="43" operation="stop" operation_key="B_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node2"/>
+       </trigger>
+     </inputs>
+   </synapse>
+   <synapse id="6">
+     <action_set>
+-      <rsc_op id="46" operation="stop" operation_key="B_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node2">
++      <rsc_op id="43" operation="stop" operation_key="B_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node2">
+         <primitive id="B" class="ocf" provider="pacemaker" type="Dummy"/>
+         <attributes CRM_meta_on_node="lxc1" CRM_meta_on_node_uuid="lxc1" CRM_meta_physical_host="18node2" CRM_meta_timeout="20000" />
+       </rsc_op>
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="23" operation="monitor" operation_key="B_monitor_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node2"/>
++        <rsc_op id="20" operation="monitor" operation_key="B_monitor_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node2"/>
+       </trigger>
+     </inputs>
+   </synapse>
+   <synapse id="7">
+     <action_set>
+-      <rsc_op id="23" operation="monitor" operation_key="B_monitor_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node2">
++      <rsc_op id="20" operation="monitor" operation_key="B_monitor_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node2">
+         <primitive id="B" class="ocf" provider="pacemaker" type="Dummy"/>
+         <attributes CRM_meta_on_node="lxc2" CRM_meta_on_node_uuid="lxc2" CRM_meta_op_target_rc="7" CRM_meta_physical_host="18node2" CRM_meta_timeout="20000" />
+       </rsc_op>
+@@ -97,7 +97,7 @@
+   </synapse>
+   <synapse id="8">
+     <action_set>
+-      <rsc_op id="24" operation="monitor" operation_key="D_monitor_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node2">
++      <rsc_op id="21" operation="monitor" operation_key="D_monitor_0" on_node="lxc2" on_node_uuid="lxc2" router_node="18node2">
+         <primitive id="D" class="ocf" provider="pacemaker" type="Dummy"/>
+         <attributes CRM_meta_on_node="lxc2" CRM_meta_on_node_uuid="lxc2" CRM_meta_op_target_rc="7" CRM_meta_physical_host="18node2" CRM_meta_timeout="20000" />
+       </rsc_op>
+@@ -106,23 +106,23 @@
+   </synapse>
+   <synapse id="9">
+     <action_set>
+-      <rsc_op id="55" operation="stop" operation_key="container1_stop_0" on_node="18node2" on_node_uuid="2">
++      <rsc_op id="52" operation="stop" operation_key="container1_stop_0" on_node="18node2" on_node_uuid="2">
+         <primitive id="container1" class="ocf" provider="heartbeat" type="VirtualDomain"/>
+         <attributes CRM_meta_on_node="18node2" CRM_meta_on_node_uuid="2" CRM_meta_timeout="20000" />
+       </rsc_op>
+     </action_set>
+     <inputs>
+       <trigger>
+-        <crm_event id="25" operation="clear_failcount" operation_key="container1_clear_failcount_0" on_node="18node2" on_node_uuid="2"/>
++        <crm_event id="22" operation="clear_failcount" operation_key="container1_clear_failcount_0" on_node="18node2" on_node_uuid="2"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="56" operation="stop" operation_key="lxc1_stop_0" on_node="18node2" on_node_uuid="2"/>
++        <rsc_op id="53" operation="stop" operation_key="lxc1_stop_0" on_node="18node2" on_node_uuid="2"/>
+       </trigger>
+     </inputs>
+   </synapse>
+   <synapse id="10">
+     <action_set>
+-      <crm_event id="25" operation="clear_failcount" operation_key="container1_clear_failcount_0" on_node="18node2" on_node_uuid="2">
++      <crm_event id="22" operation="clear_failcount" operation_key="container1_clear_failcount_0" on_node="18node2" on_node_uuid="2">
+         <primitive id="container1" class="ocf" provider="heartbeat" type="VirtualDomain"/>
+         <attributes CRM_meta_on_node="18node2" CRM_meta_on_node_uuid="2" CRM_meta_op_no_wait="true" CRM_meta_timeout="20000" />
+       </crm_event>
+@@ -138,7 +138,7 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="55" operation="stop" operation_key="container1_stop_0" on_node="18node2" on_node_uuid="2"/>
++        <rsc_op id="52" operation="stop" operation_key="container1_stop_0" on_node="18node2" on_node_uuid="2"/>
+       </trigger>
+     </inputs>
+   </synapse>
+@@ -151,7 +151,7 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="55" operation="stop" operation_key="container1_stop_0" on_node="18node2" on_node_uuid="2"/>
++        <rsc_op id="52" operation="stop" operation_key="container1_stop_0" on_node="18node2" on_node_uuid="2"/>
+       </trigger>
+     </inputs>
+   </synapse>
+@@ -164,13 +164,13 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="55" operation="stop" operation_key="container1_stop_0" on_node="18node2" on_node_uuid="2"/>
++        <rsc_op id="52" operation="stop" operation_key="container1_stop_0" on_node="18node2" on_node_uuid="2"/>
+       </trigger>
+     </inputs>
+   </synapse>
+   <synapse id="14">
+     <action_set>
+-      <rsc_op id="56" operation="stop" operation_key="lxc1_stop_0" on_node="18node2" on_node_uuid="2">
++      <rsc_op id="53" operation="stop" operation_key="lxc1_stop_0" on_node="18node2" on_node_uuid="2">
+         <primitive id="lxc1" class="ocf" provider="pacemaker" type="remote"/>
+         <attributes CRM_meta_container="container1" CRM_meta_on_node="18node2" CRM_meta_on_node_uuid="2" CRM_meta_timeout="20000" />
+         <downed>
+@@ -180,19 +180,19 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <crm_event id="26" operation="clear_failcount" operation_key="lxc1_clear_failcount_0" on_node="18node2" on_node_uuid="2"/>
++        <crm_event id="23" operation="clear_failcount" operation_key="lxc1_clear_failcount_0" on_node="18node2" on_node_uuid="2"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="39" operation="stop" operation_key="M_stop_0" internal_operation_key="M:4_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node2"/>
++        <rsc_op id="36" operation="stop" operation_key="M_stop_0" internal_operation_key="M:4_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node2"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="46" operation="stop" operation_key="B_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node2"/>
++        <rsc_op id="43" operation="stop" operation_key="B_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node2"/>
+       </trigger>
+     </inputs>
+   </synapse>
+   <synapse id="15">
+     <action_set>
+-      <crm_event id="26" operation="clear_failcount" operation_key="lxc1_clear_failcount_0" on_node="18node2" on_node_uuid="2">
++      <crm_event id="23" operation="clear_failcount" operation_key="lxc1_clear_failcount_0" on_node="18node2" on_node_uuid="2">
+         <primitive id="lxc1" class="ocf" provider="pacemaker" type="remote"/>
+         <attributes CRM_meta_container="container1" CRM_meta_on_node="18node2" CRM_meta_on_node_uuid="2" CRM_meta_op_no_wait="true" CRM_meta_timeout="20000" />
+       </crm_event>
+@@ -208,7 +208,7 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="56" operation="stop" operation_key="lxc1_stop_0" on_node="18node2" on_node_uuid="2"/>
++        <rsc_op id="53" operation="stop" operation_key="lxc1_stop_0" on_node="18node2" on_node_uuid="2"/>
+       </trigger>
+     </inputs>
+   </synapse>
+@@ -221,7 +221,7 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="56" operation="stop" operation_key="lxc1_stop_0" on_node="18node2" on_node_uuid="2"/>
++        <rsc_op id="53" operation="stop" operation_key="lxc1_stop_0" on_node="18node2" on_node_uuid="2"/>
+       </trigger>
+     </inputs>
+   </synapse>
+@@ -234,7 +234,7 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="56" operation="stop" operation_key="lxc1_stop_0" on_node="18node2" on_node_uuid="2"/>
++        <rsc_op id="53" operation="stop" operation_key="lxc1_stop_0" on_node="18node2" on_node_uuid="2"/>
+       </trigger>
+     </inputs>
+   </synapse>
+@@ -246,16 +246,16 @@
+     </action_set>
+     <inputs>
+       <trigger>
+-        <rsc_op id="39" operation="stop" operation_key="M_stop_0" internal_operation_key="M:4_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node2"/>
++        <rsc_op id="36" operation="stop" operation_key="M_stop_0" internal_operation_key="M:4_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node2"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="46" operation="stop" operation_key="B_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node2"/>
++        <rsc_op id="43" operation="stop" operation_key="B_stop_0" on_node="lxc1" on_node_uuid="lxc1" router_node="18node2"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="55" operation="stop" operation_key="container1_stop_0" on_node="18node2" on_node_uuid="2"/>
++        <rsc_op id="52" operation="stop" operation_key="container1_stop_0" on_node="18node2" on_node_uuid="2"/>
+       </trigger>
+       <trigger>
+-        <rsc_op id="56" operation="stop" operation_key="lxc1_stop_0" on_node="18node2" on_node_uuid="2"/>
++        <rsc_op id="53" operation="stop" operation_key="lxc1_stop_0" on_node="18node2" on_node_uuid="2"/>
+       </trigger>
+     </inputs>
+   </synapse>
+-- 
+1.8.3.1
+
+
+From 7bc58b42080989abd7080940f29543b09207f51f Mon Sep 17 00:00:00 2001
+From: Andrew Beekhof <andrew@beekhof.net>
+Date: Wed, 25 Oct 2017 13:59:53 +1100
+Subject: [PATCH 4/4] Fix: PE: Have bundles log to stderr so that 'docker logs'
+ works
+
+---
+ lib/pengine/container.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/lib/pengine/container.c b/lib/pengine/container.c
+index f1f66a5..affe5ea 100644
+--- a/lib/pengine/container.c
++++ b/lib/pengine/container.c
+@@ -215,6 +215,8 @@ create_docker_resource(
+                                data->prefix, tuple->offset);
+         }
+ 
++        offset += snprintf(buffer+offset, max-offset, " -e PCMK_stderr=1");
++
+         if(data->docker_network) {
+ //        offset += snprintf(buffer+offset, max-offset, " --link-local-ip=%s", tuple->ipaddr);
+             offset += snprintf(buffer+offset, max-offset, " --net=%s", data->docker_network);
+-- 
+1.8.3.1
+

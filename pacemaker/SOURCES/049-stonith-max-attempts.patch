@@ -1,0 +1,61 @@
+From 52153c502ad12c723231f5c7cb80d50a5d0691cd Mon Sep 17 00:00:00 2001
+From: aravind-kumar <karavindkumar1993@gmail.com>
+Date: Wed, 15 Mar 2017 22:46:42 +0530
+Subject: [PATCH] new cluster option stonith-max-attempts with default value
+ 10, number of retry attempts to be made before giving up
+
+---
+ crmd/te_callbacks.c    | 14 +++++++++++++-
+ crmd/te_callbacks.h    |  2 ++
+ 2 files changed, 31 insertions(+), 1 deletion(-)
+
+diff --git a/crmd/te_callbacks.c b/crmd/te_callbacks.c
+index 4c86bde..ff0a664 100644
+--- a/crmd/te_callbacks.c
++++ b/crmd/te_callbacks.c
+@@ -37,6 +37,8 @@ gboolean shuttingdown = FALSE;
+ crm_graph_t *transition_graph;
+ crm_trigger_t *transition_trigger = NULL;
+ 
++static unsigned long int stonith_max_attempts = 10;
++
+ /* #define rsc_op_template "//"XML_TAG_DIFF_ADDED"//"XML_TAG_CIB"//"XML_CIB_TAG_STATE"[@uname='%s']"//"XML_LRM_TAG_RSC_OP"[@id='%s]" */
+ #define rsc_op_template "//"XML_TAG_DIFF_ADDED"//"XML_TAG_CIB"//"XML_LRM_TAG_RSC_OP"[@id='%s']"
+ 
+@@ -53,6 +55,16 @@ get_node_id(xmlNode * rsc_op)
+     return ID(node);
+ }
+ 
++void
++update_stonith_max_attempts(const char* value)
++{
++    if (safe_str_eq(value, INFINITY_S)) {
++       stonith_max_attempts = node_score_infinity;
++    }
++    else {
++       stonith_max_attempts = crm_int_helper(value, NULL);
++    }
++}
+ static void
+ te_legacy_update_diff(const char *event, xmlNode * diff)
+ {
+@@ -637,7 +649,7 @@ too_many_st_failures(void)
+ 
+     g_hash_table_iter_init(&iter, stonith_failures);
+     while (g_hash_table_iter_next(&iter, (gpointer *) & key, (gpointer *) & value)) {
+-        if (value->count > 10) {
++        if (value->count > stonith_max_attempts ) {
+             crm_notice("Too many failures to fence %s (%d), giving up", key, value->count);
+             return TRUE;
+         }
+diff --git a/crmd/te_callbacks.h b/crmd/te_callbacks.h
+index a87d72c..64a5cf5 100644
+--- a/crmd/te_callbacks.h
++++ b/crmd/te_callbacks.h
+@@ -33,4 +33,6 @@ extern void te_update_diff(const char *event, xmlNode * msg);
+ 
+ extern void tengine_stonith_callback(stonith_t * stonith, stonith_callback_data_t * data);
+ 
++void update_stonith_max_attempts(const char* value);
++
+ #endif

@@ -1,0 +1,717 @@
+From 3d0b886202c155902470a0552d73343dbc0f0178 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Wed, 27 Sep 2017 12:05:50 -0500
+Subject: [PATCH 1/6] Log: attrd: "peer peer loss" -> "peer loss"
+
+---
+ attrd/commands.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/attrd/commands.c b/attrd/commands.c
+index dffbea3..27d0b73 100644
+--- a/attrd/commands.c
++++ b/attrd/commands.c
+@@ -919,7 +919,7 @@ attrd_peer_change_cb(enum crm_status_type kind, crm_node_t *peer, const void *da
+             }
+         } else {
+             /* Remove all attribute values associated with lost nodes */
+-            attrd_peer_remove(peer->uname, FALSE, "peer loss");
++            attrd_peer_remove(peer->uname, FALSE, "loss");
+             if (peer_writer && safe_str_eq(peer->uname, peer_writer)) {
+                 free(peer_writer);
+                 peer_writer = NULL;
+-- 
+1.8.3.1
+
+
+From 91105a32e24b5addaf281595c35892bd0ceb0e44 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Wed, 27 Sep 2017 12:11:49 -0500
+Subject: [PATCH 2/6] Refactor: pengine,libpe_status: prefix resource discovery
+ values
+
+now that they're publicly exposed
+---
+ include/crm/pengine/status.h | 9 ++++-----
+ lib/pengine/container.c      | 6 +++---
+ pengine/allocate.c           | 2 +-
+ pengine/clone.c              | 2 +-
+ pengine/native.c             | 8 ++++----
+ pengine/pengine.h            | 2 +-
+ pengine/utils.c              | 6 +++---
+ 7 files changed, 17 insertions(+), 18 deletions(-)
+
+diff --git a/include/crm/pengine/status.h b/include/crm/pengine/status.h
+index 16724a7..9b4e944 100644
+--- a/include/crm/pengine/status.h
++++ b/include/crm/pengine/status.h
+@@ -402,11 +402,10 @@ enum pe_link_state {
+     pe_link_dup,
+ };
+ 
+-
+-enum rsc_discover_e {
+-    discover_always = 0,
+-    discover_never,
+-    discover_exclusive,
++enum pe_discover_e {
++    pe_discover_always = 0,
++    pe_discover_never,
++    pe_discover_exclusive,
+ };
+ 
+ /* *INDENT-OFF* */
+diff --git a/lib/pengine/container.c b/lib/pengine/container.c
+index 15234e3..ccbbcb6 100644
+--- a/lib/pengine/container.c
++++ b/lib/pengine/container.c
+@@ -499,7 +499,7 @@ disallow_node(resource_t *rsc, const char *uname)
+ 
+     if (match) {
+         ((pe_node_t *) match)->weight = -INFINITY;
+-        ((pe_node_t *) match)->rsc_discover_mode = discover_never;
++        ((pe_node_t *) match)->rsc_discover_mode = pe_discover_never;
+     }
+     if (rsc->children) {
+         GListPtr child;
+@@ -573,7 +573,7 @@ create_remote_resource(
+         } else {
+             node->weight = -INFINITY;
+         }
+-        node->rsc_discover_mode = discover_never;
++        node->rsc_discover_mode = pe_discover_never;
+ 
+         /* unpack_remote_nodes() ensures that each remote node and guest node
+          * has a pe_node_t entry. Ideally, it would do the same for bundle nodes.
+@@ -598,7 +598,7 @@ create_remote_resource(
+ 
+         tuple->node = node_copy(node);
+         tuple->node->weight = 500;
+-        tuple->node->rsc_discover_mode = discover_exclusive;
++        tuple->node->rsc_discover_mode = pe_discover_exclusive;
+ 
+         /* Ensure the node shows up as allowed and with the correct discovery set */
+         g_hash_table_insert(tuple->child->allowed_nodes, (gpointer) tuple->node->details->id, node_copy(tuple->node));
+diff --git a/pengine/allocate.c b/pengine/allocate.c
+index eef9a44..2a80f32 100644
+--- a/pengine/allocate.c
++++ b/pengine/allocate.c
+@@ -956,7 +956,7 @@ rsc_discover_filter(resource_t *rsc, node_t *node)
+     }
+ 
+     match = g_hash_table_lookup(rsc->allowed_nodes, node->details->id);
+-    if (match && match->rsc_discover_mode != discover_exclusive) {
++    if (match && match->rsc_discover_mode != pe_discover_exclusive) {
+         match->weight = -INFINITY;
+     }
+ }
+diff --git a/pengine/clone.c b/pengine/clone.c
+index 41cb5cb..b10f0f3 100644
+--- a/pengine/clone.c
++++ b/pengine/clone.c
+@@ -1359,7 +1359,7 @@ clone_create_probe(resource_t * rsc, node_t * node, action_t * complete,
+ 
+     if (rsc->exclusive_discover) {
+         node_t *allowed = g_hash_table_lookup(rsc->allowed_nodes, node->details->id);
+-        if (allowed && allowed->rsc_discover_mode != discover_exclusive) {
++        if (allowed && allowed->rsc_discover_mode != pe_discover_exclusive) {
+             /* exclusive discover is enabled and this node is not marked
+              * as a node this resource should be discovered on
+              *
+diff --git a/pengine/native.c b/pengine/native.c
+index 3f52452..08f4c8a 100644
+--- a/pengine/native.c
++++ b/pengine/native.c
+@@ -2105,7 +2105,7 @@ native_rsc_location(resource_t * rsc, rsc_to_node_t * constraint)
+         }
+ 
+         if (other_node->rsc_discover_mode < constraint->discover_mode) {
+-            if (constraint->discover_mode == discover_exclusive) {
++            if (constraint->discover_mode == pe_discover_exclusive) {
+                 rsc->exclusive_discover = TRUE;
+             }
+             /* exclusive > never > always... always is default */
+@@ -2860,7 +2860,7 @@ native_create_probe(resource_t * rsc, node_t * node, action_t * complete,
+             /* exclusive discover is enabled and this node is not in the allowed list. */    
+             pe_rsc_trace(rsc, "Skipping probe for %s on node %s, A", rsc->id, node->details->id);
+             return FALSE;
+-        } else if (allowed->rsc_discover_mode != discover_exclusive) {
++        } else if (allowed->rsc_discover_mode != pe_discover_exclusive) {
+             /* exclusive discover is enabled and this node is not marked
+              * as a node this resource should be discovered on */ 
+             pe_rsc_trace(rsc, "Skipping probe for %s on node %s, B", rsc->id, node->details->id);
+@@ -2868,7 +2868,7 @@ native_create_probe(resource_t * rsc, node_t * node, action_t * complete,
+         }
+     }
+ 
+-    if(allowed == NULL && node->rsc_discover_mode == discover_never) {
++    if(allowed == NULL && node->rsc_discover_mode == pe_discover_never) {
+         /* If this node was allowed to host this resource it would
+          * have been explicitly added to the 'allowed_nodes' list.
+          * However it wasn't and the node has discovery disabled, so
+@@ -2878,7 +2878,7 @@ native_create_probe(resource_t * rsc, node_t * node, action_t * complete,
+         return FALSE;
+     }
+ 
+-    if (allowed && allowed->rsc_discover_mode == discover_never) {
++    if (allowed && allowed->rsc_discover_mode == pe_discover_never) {
+         /* this resource is marked as not needing to be discovered on this node */
+         pe_rsc_trace(rsc, "Skipping probe for %s on node %s, discovery mode", rsc->id, node->details->id);
+         return FALSE;
+diff --git a/pengine/pengine.h b/pengine/pengine.h
+index 2c13258..c88f5cf 100644
+--- a/pengine/pengine.h
++++ b/pengine/pengine.h
+@@ -80,7 +80,7 @@ struct rsc_to_node_s {
+     resource_t *rsc_lh;
+ 
+     enum rsc_role_e role_filter;
+-    enum rsc_discover_e discover_mode;
++    enum pe_discover_e discover_mode;
+     GListPtr node_list_rh;      /* node_t* */
+ };
+ 
+diff --git a/pengine/utils.c b/pengine/utils.c
+index 0cc6381..cae42a8 100644
+--- a/pengine/utils.c
++++ b/pengine/utils.c
+@@ -83,11 +83,11 @@ rsc2node_new(const char *id, resource_t * rsc,
+ 
+ 
+         if (discover_mode == NULL || safe_str_eq(discover_mode, "always")) {
+-            new_con->discover_mode = discover_always;
++            new_con->discover_mode = pe_discover_always;
+         } else if (safe_str_eq(discover_mode, "never")) {
+-            new_con->discover_mode = discover_never;
++            new_con->discover_mode = pe_discover_never;
+         } else if (safe_str_eq(discover_mode, "exclusive")) {
+-            new_con->discover_mode = discover_exclusive;
++            new_con->discover_mode = pe_discover_exclusive;
+             rsc->exclusive_discover = TRUE;
+         } else {
+             pe_err("Invalid %s value %s in location constraint", XML_LOCATION_ATTR_DISCOVERY, discover_mode);
+-- 
+1.8.3.1
+
+
+From 964b3fcfa90e1e1772476ee428c68f13057f7964 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Thu, 28 Sep 2017 17:47:16 -0500
+Subject: [PATCH 3/6] Refactor: pengine,libpe_status: prefix node attribute
+ functions
+
+since they're publicly exposed
+---
+ include/crm/pengine/internal.h |  4 ++--
+ lib/pengine/common.c           |  5 ++---
+ lib/pengine/unpack.c           | 22 +++++++++++-----------
+ lib/pengine/utils.c            |  4 ++--
+ pengine/allocate.c             |  2 +-
+ pengine/constraints.c          |  2 +-
+ pengine/master.c               |  6 +++---
+ pengine/native.c               | 16 ++++++++--------
+ tools/crm_mon.c                |  2 +-
+ 9 files changed, 31 insertions(+), 32 deletions(-)
+
+diff --git a/include/crm/pengine/internal.h b/include/crm/pengine/internal.h
+index d91f54a..70dd7c7 100644
+--- a/include/crm/pengine/internal.h
++++ b/include/crm/pengine/internal.h
+@@ -298,7 +298,7 @@ bool remote_id_conflict(const char *remote_name, pe_working_set_t *data);
+ void common_print(resource_t * rsc, const char *pre_text, const char *name, node_t *node, long options, void *print_data);
+ resource_t *find_container_child(const char *stem, resource_t * rsc, node_t *node);
+ bool fix_remote_addr(resource_t * rsc);
+-const char *node_attribute_calculated(pe_node_t *node, const char *name, resource_t *rsc);
+-const char *node_attribute_raw(pe_node_t *node, const char *name);
++const char *pe_node_attribute_calculated(pe_node_t *node, const char *name, resource_t *rsc);
++const char *pe_node_attribute_raw(pe_node_t *node, const char *name);
+ 
+ #endif
+diff --git a/lib/pengine/common.c b/lib/pengine/common.c
+index 0e21aaa..9dd2472 100644
+--- a/lib/pengine/common.c
++++ b/lib/pengine/common.c
+@@ -433,7 +433,7 @@ add_hash_param(GHashTable * hash, const char *name, const char *value)
+ }
+ 
+ const char *
+-node_attribute_calculated(pe_node_t *node, const char *name, resource_t *rsc) 
++pe_node_attribute_calculated(pe_node_t *node, const char *name, resource_t *rsc)
+ {
+     const char *source;
+ 
+@@ -471,11 +471,10 @@ node_attribute_calculated(pe_node_t *node, const char *name, resource_t *rsc)
+ }
+ 
+ const char *
+-node_attribute_raw(pe_node_t *node, const char *name) 
++pe_node_attribute_raw(pe_node_t *node, const char *name)
+ {
+     if(node == NULL) {
+         return NULL;
+     }
+     return g_hash_table_lookup(node->details->attrs, name);
+ }
+-
+diff --git a/lib/pengine/unpack.c b/lib/pengine/unpack.c
+index a41f35e..48f9368 100644
+--- a/lib/pengine/unpack.c
++++ b/lib/pengine/unpack.c
+@@ -1008,7 +1008,7 @@ unpack_handle_remote_attrs(node_t *this_node, xmlNode *state, pe_working_set_t *
+     attrs = find_xml_node(state, XML_TAG_TRANSIENT_NODEATTRS, FALSE);
+     add_node_attrs(attrs, this_node, TRUE, data_set);
+ 
+-    shutdown = node_attribute_raw(this_node, XML_CIB_ATTR_SHUTDOWN);
++    shutdown = pe_node_attribute_raw(this_node, XML_CIB_ATTR_SHUTDOWN);
+     if (shutdown != NULL && safe_str_neq("0", shutdown)) {
+         crm_info("Node %s is shutting down", this_node->details->uname);
+         this_node->details->shutdown = TRUE;
+@@ -1017,18 +1017,18 @@ unpack_handle_remote_attrs(node_t *this_node, xmlNode *state, pe_working_set_t *
+         }
+     }
+  
+-    if (crm_is_true(node_attribute_raw(this_node, "standby"))) {
++    if (crm_is_true(pe_node_attribute_raw(this_node, "standby"))) {
+         crm_info("Node %s is in standby-mode", this_node->details->uname);
+         this_node->details->standby = TRUE;
+     }
+ 
+-    if (crm_is_true(node_attribute_raw(this_node, "maintenance")) ||
++    if (crm_is_true(pe_node_attribute_raw(this_node, "maintenance")) ||
+         (rsc && !is_set(rsc->flags, pe_rsc_managed))) {
+         crm_info("Node %s is in maintenance-mode", this_node->details->uname);
+         this_node->details->maintenance = TRUE;
+     }
+ 
+-    resource_discovery_enabled = node_attribute_raw(this_node, XML_NODE_ATTR_RSC_DISCOVERY);
++    resource_discovery_enabled = pe_node_attribute_raw(this_node, XML_NODE_ATTR_RSC_DISCOVERY);
+     if (resource_discovery_enabled && !crm_is_true(resource_discovery_enabled)) {
+         if (is_baremetal_remote_node(this_node) && is_not_set(data_set->flags, pe_flag_stonith_enabled)) {
+             crm_warn("ignoring %s attribute on baremetal remote node %s, disabling resource discovery requires stonith to be enabled.",
+@@ -1184,17 +1184,17 @@ unpack_status(xmlNode * status, pe_working_set_t * data_set)
+             attrs = find_xml_node(state, XML_TAG_TRANSIENT_NODEATTRS, FALSE);
+             add_node_attrs(attrs, this_node, TRUE, data_set);
+ 
+-            if (crm_is_true(node_attribute_raw(this_node, "standby"))) {
++            if (crm_is_true(pe_node_attribute_raw(this_node, "standby"))) {
+                 crm_info("Node %s is in standby-mode", this_node->details->uname);
+                 this_node->details->standby = TRUE;
+             }
+ 
+-            if (crm_is_true(node_attribute_raw(this_node, "maintenance"))) {
++            if (crm_is_true(pe_node_attribute_raw(this_node, "maintenance"))) {
+                 crm_info("Node %s is in maintenance-mode", this_node->details->uname);
+                 this_node->details->maintenance = TRUE;
+             }
+ 
+-            resource_discovery_enabled = node_attribute_raw(this_node, XML_NODE_ATTR_RSC_DISCOVERY);
++            resource_discovery_enabled = pe_node_attribute_raw(this_node, XML_NODE_ATTR_RSC_DISCOVERY);
+             if (resource_discovery_enabled && !crm_is_true(resource_discovery_enabled)) {
+                 crm_warn("ignoring %s attribute on node %s, disabling resource discovery is not allowed on cluster nodes",
+                     XML_NODE_ATTR_RSC_DISCOVERY, this_node->details->uname);
+@@ -1280,7 +1280,7 @@ determine_online_status_fencing(pe_working_set_t * data_set, xmlNode * node_stat
+     const char *is_peer = crm_element_value(node_state, XML_NODE_IS_PEER);
+     const char *in_cluster = crm_element_value(node_state, XML_NODE_IN_CLUSTER);
+     const char *exp_state = crm_element_value(node_state, XML_NODE_EXPECTED);
+-    const char *terminate = node_attribute_raw(this_node, "terminate");
++    const char *terminate = pe_node_attribute_raw(this_node, "terminate");
+ 
+ /*
+   - XML_NODE_IN_CLUSTER    ::= true|false
+@@ -1454,7 +1454,7 @@ determine_online_status(xmlNode * node_state, node_t * this_node, pe_working_set
+ 
+     this_node->details->shutdown = FALSE;
+     this_node->details->expected_up = FALSE;
+-    shutdown = node_attribute_raw(this_node, XML_CIB_ATTR_SHUTDOWN);
++    shutdown = pe_node_attribute_raw(this_node, XML_CIB_ATTR_SHUTDOWN);
+ 
+     if (shutdown != NULL && safe_str_neq("0", shutdown)) {
+         this_node->details->shutdown = TRUE;
+@@ -3286,8 +3286,8 @@ add_node_attrs(xmlNode * xml_obj, node_t * node, gboolean overwrite, pe_working_
+     unpack_instance_attributes(data_set->input, xml_obj, XML_TAG_ATTR_SETS, NULL,
+                                node->details->attrs, NULL, overwrite, data_set->now);
+ 
+-    if (node_attribute_raw(node, "#site-name") == NULL) {
+-        const char *site_name = node_attribute_raw(node, "site-name");
++    if (pe_node_attribute_raw(node, "#site-name") == NULL) {
++        const char *site_name = pe_node_attribute_raw(node, "site-name");
+ 
+         if (site_name) {
+             /* Prefix '#' to the key */
+diff --git a/lib/pengine/utils.c b/lib/pengine/utils.c
+index e2a845d..b58f05a 100644
+--- a/lib/pengine/utils.c
++++ b/lib/pengine/utils.c
+@@ -1996,8 +1996,8 @@ fencing_action_digest_cmp(resource_t * rsc, node_t * node, pe_working_set_t * da
+     char *key = generate_op_key(rsc->id, STONITH_DIGEST_TASK, 0);
+     op_digest_cache_t *data = rsc_action_digest(rsc, STONITH_DIGEST_TASK, key, node, NULL, data_set);
+ 
+-    const char *digest_all = node_attribute_raw(node, CRM_ATTR_DIGESTS_ALL);
+-    const char *digest_secure = node_attribute_raw(node, CRM_ATTR_DIGESTS_SECURE);
++    const char *digest_all = pe_node_attribute_raw(node, CRM_ATTR_DIGESTS_ALL);
++    const char *digest_secure = pe_node_attribute_raw(node, CRM_ATTR_DIGESTS_SECURE);
+ 
+     /* No 'reloads' for fencing device changes
+      *
+diff --git a/pengine/allocate.c b/pengine/allocate.c
+index 2a80f32..62b141a 100644
+--- a/pengine/allocate.c
++++ b/pengine/allocate.c
+@@ -899,7 +899,7 @@ probe_resources(pe_working_set_t * data_set)
+ 
+     for (GListPtr gIter = data_set->nodes; gIter != NULL; gIter = gIter->next) {
+         node_t *node = (node_t *) gIter->data;
+-        const char *probed = node_attribute_raw(node, CRM_OP_PROBED);
++        const char *probed = pe_node_attribute_raw(node, CRM_OP_PROBED);
+ 
+         if (is_container_remote_node(node)) {
+             /* Guest node probes and their ordering requirements are now functional */
+diff --git a/pengine/constraints.c b/pengine/constraints.c
+index 9ee83af..aa204fe 100644
+--- a/pengine/constraints.c
++++ b/pengine/constraints.c
+@@ -968,7 +968,7 @@ get_node_score(const char *rule, const char *score, gboolean raw, node_t * node,
+         score_f = char2score(score);
+ 
+     } else {
+-        const char *attr_score = node_attribute_calculated(node, score, rsc);
++        const char *attr_score = pe_node_attribute_calculated(node, score, rsc);
+ 
+         if (attr_score == NULL) {
+             crm_debug("Rule %s: node %s did not have a value for %s",
+diff --git a/pengine/master.c b/pengine/master.c
+index 66a531f..ddb92bc 100644
+--- a/pengine/master.c
++++ b/pengine/master.c
+@@ -511,7 +457,7 @@ master_score(resource_t * rsc, node_t * node, int not_set_value)
+     attr_name = calloc(1, len);
+     sprintf(attr_name, "master-%s", name);
+ 
+-    attr_value = node_attribute_calculated(node, attr_name, rsc);
++    attr_value = pe_node_attribute_calculated(node, attr_name, rsc);
+     if (attr_value != NULL) {
+         score = char2score(attr_value);
+     }
+@@ -984,10 +984,10 @@ node_hash_update_one(GHashTable * hash, node_t * other, const char *attr, int sc
+         attr = "#" XML_ATTR_UNAME;
+     }
+  
+-    value = node_attribute_raw(other, attr);
++    value = pe_node_attribute_raw(other, attr);
+     g_hash_table_iter_init(&iter, hash);
+     while (g_hash_table_iter_next(&iter, NULL, (void **)&node)) {
+-        const char *tmp = node_attribute_raw(node, attr);
++        const char *tmp = pe_node_attribute_raw(node, attr);
+ 
+         if (safe_str_eq(value, tmp)) {
+             crm_trace("%s: %d + %d", node->details->uname, node->weight, other->weight);
+diff --git a/pengine/native.c b/pengine/native.c
+index 08f4c8a..c87127f 100644
+--- a/pengine/native.c
++++ b/pengine/native.c
+@@ -203,7 +203,7 @@ node_list_attr_score(GHashTable * list, const char *attr, const char *value)
+             weight = -INFINITY;
+         }
+         if (weight > best_score || best_node == NULL) {
+-            const char *tmp = node_attribute_raw(node, attr);
++            const char *tmp = pe_node_attribute_raw(node, attr);
+ 
+             if (safe_str_eq(value, tmp)) {
+                 best_score = weight;
+@@ -241,7 +241,7 @@ node_hash_update(GHashTable * list1, GHashTable * list2, const char *attr, float
+         CRM_LOG_ASSERT(node != NULL);
+         if(node == NULL) { continue; };
+ 
+-        score = node_list_attr_score(list2, attr, node_attribute_raw(node, attr));
++        score = node_list_attr_score(list2, attr, pe_node_attribute_raw(node, attr));
+         new_score = merge_weights(factor * score, node->weight);
+ 
+         if (factor < 0 && score < 0) {
+@@ -1640,8 +1640,8 @@ influence_priority(resource_t * rsc_lh, resource_t * rsc_rh, rsc_colocation_t *
+         return;
+     }
+ 
+-    lh_value = node_attribute_raw(rsc_lh->allocated_to, attribute);
+-    rh_value = node_attribute_raw(rsc_rh->allocated_to, attribute);
++    lh_value = pe_node_attribute_raw(rsc_lh->allocated_to, attribute);
++    rh_value = pe_node_attribute_raw(rsc_rh->allocated_to, attribute);
+ 
+     if (!safe_str_eq(lh_value, rh_value)) {
+         if(constraint->score == INFINITY && constraint->role_lh == RSC_ROLE_MASTER) {
+@@ -1679,7 +1679,7 @@ colocation_match(resource_t * rsc_lh, resource_t * rsc_rh, rsc_colocation_t * co
+     }
+ 
+     if (rsc_rh->allocated_to) {
+-        value = node_attribute_raw(rsc_rh->allocated_to, attribute);
++        value = pe_node_attribute_raw(rsc_rh->allocated_to, attribute);
+         do_check = TRUE;
+ 
+     } else if (constraint->score < 0) {
+@@ -1693,7 +1693,7 @@ colocation_match(resource_t * rsc_lh, resource_t * rsc_rh, rsc_colocation_t * co
+ 
+     g_hash_table_iter_init(&iter, work);
+     while (g_hash_table_iter_next(&iter, NULL, (void **)&node)) {
+-        tmp = node_attribute_raw(node, attribute);
++        tmp = pe_node_attribute_raw(node, attribute);
+         if (do_check && safe_str_eq(tmp, value)) {
+             if (constraint->score < INFINITY) {
+                 pe_rsc_trace(rsc_lh, "%s: %s.%s += %d", constraint->id, rsc_lh->id,
+@@ -2503,7 +2503,7 @@ StopRsc(resource_t * rsc, node_t * next, gboolean optional, pe_working_set_t * d
+ 
+         if(is_set(rsc->flags, pe_rsc_needs_unfencing)) {
+             action_t *unfence = pe_fence_op(current, "on", TRUE, NULL, data_set);
+-            const char *unfenced = node_attribute_raw(current, CRM_ATTR_UNFENCED);
++            const char *unfenced = pe_node_attribute_raw(current, CRM_ATTR_UNFENCED);
+ 
+             order_actions(stop, unfence, pe_order_implies_first);
+             if (unfenced == NULL || safe_str_eq("0", unfenced)) {
+@@ -2526,7 +2526,7 @@ StartRsc(resource_t * rsc, node_t * next, gboolean optional, pe_working_set_t *
+ 
+     if(is_set(rsc->flags, pe_rsc_needs_unfencing)) {
+         action_t *unfence = pe_fence_op(next, "on", TRUE, NULL, data_set);
+-        const char *unfenced = node_attribute_raw(next, CRM_ATTR_UNFENCED);
++        const char *unfenced = pe_node_attribute_raw(next, CRM_ATTR_UNFENCED);
+ 
+         order_actions(unfence, start, pe_order_implies_then);
+ 
+diff --git a/tools/crm_mon.c b/tools/crm_mon.c
+index cad468e..6a29115 100644
+--- a/tools/crm_mon.c
++++ b/tools/crm_mon.c
+@@ -1726,7 +1726,7 @@ print_node_attribute(gpointer name, gpointer user_data)
+     const char *value = NULL;
+     struct mon_attr_data *data = (struct mon_attr_data *) user_data;
+ 
+-    value = node_attribute_raw(data->node, name);
++    value = pe_node_attribute_raw(data->node, name);
+ 
+     /* Print attribute name and value */
+     switch (output_format) {
+-- 
+1.8.3.1
+
+
+From 1309e0ae0ab7bb7491c8c0e2149762b90bf45857 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Thu, 28 Sep 2017 17:52:32 -0500
+Subject: [PATCH 4/6] Low: pengine: don't assert for nodes without unames
+
+It's possible data_set->nodes has a node with only an ID.
+
+This also has minor refactoring to avoid unnecessary memory allocation.
+---
+ pengine/notif.c | 27 +++++++++++++++------------
+ 1 file changed, 15 insertions(+), 12 deletions(-)
+
+diff --git a/pengine/notif.c b/pengine/notif.c
+index 76c5a4a..39d8c72 100644
+--- a/pengine/notif.c
++++ b/pengine/notif.c
+@@ -103,7 +103,9 @@ expand_node_list(GListPtr list, char **uname, char **metal)
+         int existing_len = 0;
+         node_t *node = (node_t *) gIter->data;
+ 
+-        CRM_ASSERT(node->details->uname);
++        if (node->details->uname == NULL) {
++            continue;
++        }
+         len = 2 + strlen(node->details->uname);
+ 
+         if(node_list) {
+@@ -125,7 +127,9 @@ expand_node_list(GListPtr list, char **uname, char **metal)
+                 node = node->details->remote_rsc->container->running_on->data;
+             }
+ 
+-            CRM_ASSERT(node->details->uname);
++            if (node->details->uname == NULL) {
++                continue;
++            }
+             len = 2 + strlen(node->details->uname);
+             metal_list = realloc_safe(metal_list, len + existing_len);
+             sprintf(metal_list + existing_len, "%s%s", existing_len == 0 ? "":" ", node->details->uname);
+@@ -532,6 +536,7 @@ expand_notification_data(resource_t *rsc, notify_data_t * n_data, pe_working_set
+     char *rsc_list = NULL;
+     char *node_list = NULL;
+     char *metal_list = NULL;
++    const char *source = NULL;
+     GListPtr nodes = NULL;
+ 
+     if (n_data->stop) {
+@@ -609,17 +614,15 @@ expand_notification_data(resource_t *rsc, notify_data_t * n_data, pe_working_set
+     g_hash_table_insert(n_data->keys, strdup("notify_available_uname"), node_list);
+     g_list_free(nodes);
+ 
+-    expand_node_list(data_set->nodes, &node_list, &metal_list);
+-    g_hash_table_insert(n_data->keys, strdup("notify_all_uname"), node_list);
+-
+-    {
+-        const char *source = g_hash_table_lookup(rsc->meta, XML_RSC_ATTR_TARGET);
+-        if(safe_str_eq("host", source)) {
+-            g_hash_table_insert(n_data->keys, strdup("notify_all_hosts"), metal_list);
+-        } else {
+-            free(metal_list);
+-        }
++    source = g_hash_table_lookup(rsc->meta, XML_RSC_ATTR_TARGET);
++    if (safe_str_eq("host", source)) {
++        expand_node_list(data_set->nodes, &node_list, &metal_list);
++        g_hash_table_insert(n_data->keys, strdup("notify_all_hosts"),
++                            metal_list);
++    } else {
++        expand_node_list(data_set->nodes, &node_list, NULL);
+     }
++    g_hash_table_insert(n_data->keys, strdup("notify_all_uname"), node_list);
+ 
+     if (required && n_data->pre) {
+         update_action_flags(n_data->pre, pe_action_optional | pe_action_clear, __FUNCTION__, __LINE__);
+-- 
+1.8.3.1
+
+
+From 308387753ce8dd045a9c77fefc1ab2b36255c9bb Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Thu, 28 Sep 2017 17:54:40 -0500
+Subject: [PATCH 5/6] Low: pengine: don't move up to resource's parent if not
+ start action
+
+---
+ pengine/graph.c | 9 ++++-----
+ 1 file changed, 4 insertions(+), 5 deletions(-)
+
+diff --git a/pengine/graph.c b/pengine/graph.c
+index beaa077..8ee6aa8 100644
+--- a/pengine/graph.c
++++ b/pengine/graph.c
+@@ -441,17 +441,16 @@ update_colo_start_chain(action_t *action)
+ 
+     if (is_not_set(action->flags, pe_action_runnable) && safe_str_eq(action->task, RSC_START)) {
+         rsc = uber_parent(action->rsc);
++        if (rsc->parent) {
++            // This is a bundle (uber_parent() stops _before_ the bundle)
++            rsc = rsc->parent;
++        }
+     }
+ 
+     if (rsc == NULL || rsc->rsc_cons_lhs == NULL) {
+         return;
+     }
+ 
+-    if(rsc->parent) {
+-        /* uber_parent() stops _before_ the bundle */
+-        rsc = rsc->parent;
+-    }
+-
+     /* if rsc has children, all the children need to have start set to
+      * unrunnable before we follow the colo chain for the parent. */
+     for (gIter = rsc->children; gIter != NULL; gIter = gIter->next) {
+-- 
+1.8.3.1
+
+
+From 39d1bc68a63122cc42b2dc87bed60653171dcacc Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Thu, 28 Sep 2017 18:03:04 -0500
+Subject: [PATCH 6/6] Low: tools: partially revert ccbdb2a2 to avoid
+ attrd_updater needing libcrmcluster
+
+Both approaches have drawbacks when used on remote nodes.
+
+If we keep the get_local_node_name() calls, attrd_udpater needs libcrmcluster,
+which shouldn't be required on remote nodes. Also, on a corosync cluster for
+example, the call on a remote node will spend 10+ seconds trying to connect to
+corosync before finally using uname, which will be incorrect for remote nodes
+whose name known to the cluster is not the same as uname.
+
+If we avoid get_local_node_name() (the approach here), there is not a clear way
+to distinguish a query with a NULL node name meaning "let the remote proxy
+callback add the name" from "query all nodes". However, this likely exists
+already, and should be addressed separately.
+---
+ pacemaker.spec.in     | 4 +---
+ tools/Makefile.am     | 2 +-
+ tools/attrd_updater.c | 7 -------
+ 3 files changed, 2 insertions(+), 11 deletions(-)
+
+diff --git a/pacemaker.spec.in b/pacemaker.spec.in
+index d0bc2c3..642af74 100644
+--- a/pacemaker.spec.in
++++ b/pacemaker.spec.in
+@@ -601,7 +601,6 @@ exit 0
+ %exclude %{_sbindir}/pacemaker_remoted
+ %{_libexecdir}/pacemaker/*
+ 
+-%{_sbindir}/attrd_updater
+ %{_sbindir}/crm_attribute
+ %{_sbindir}/crm_master
+ %{_sbindir}/crm_node
+@@ -620,7 +619,6 @@ exit 0
+ %doc %{_mandir}/man7/ocf_pacemaker_o2cb.*
+ %doc %{_mandir}/man7/ocf_pacemaker_remote.*
+ %doc %{_mandir}/man8/crm_attribute.*
+-%doc %{_mandir}/man8/attrd_updater.*
+ %doc %{_mandir}/man8/crm_node.*
+ %doc %{_mandir}/man8/crm_master.*
+ %if %{with cman}
+@@ -670,6 +668,7 @@ exit 0
+ %config(noreplace) %{_sysconfdir}/init/crm_mon.conf
+ %endif
+ 
++%{_sbindir}/attrd_updater
+ %{_sbindir}/cibadmin
+ %{_sbindir}/crm_diff
+ %{_sbindir}/crm_error
+@@ -705,7 +704,6 @@ exit 0
+ %exclude %{_mandir}/man7/ocf_pacemaker_o2cb.*
+ %exclude %{_mandir}/man7/ocf_pacemaker_remote.*
+ %doc %{_mandir}/man8/*
+-%exclude %{_mandir}/man8/attrd_updater.*
+ %exclude %{_mandir}/man8/crm_attribute.*
+ %exclude %{_mandir}/man8/crm_node.*
+ %exclude %{_mandir}/man8/crm_master.*
+diff --git a/tools/Makefile.am b/tools/Makefile.am
+index a601b8d..3548035 100644
+--- a/tools/Makefile.am
++++ b/tools/Makefile.am
+@@ -121,7 +121,7 @@ iso8601_SOURCES		= test.iso8601.c
+ iso8601_LDADD		= $(COMMONLIBS)
+ 
+ attrd_updater_SOURCES	= attrd_updater.c
+-attrd_updater_LDADD	= $(top_builddir)/lib/cluster/libcrmcluster.la $(COMMONLIBS)
++attrd_updater_LDADD	= $(COMMONLIBS)
+ 
+ crm_ticket_SOURCES	= crm_ticket.c
+ crm_ticket_LDADD	= $(top_builddir)/lib/pengine/libpe_rules.la  \
+diff --git a/tools/attrd_updater.c b/tools/attrd_updater.c
+index 5e8b837..1da166b 100644
+--- a/tools/attrd_updater.c
++++ b/tools/attrd_updater.c
+@@ -32,7 +32,6 @@
+ #include <crm/common/ipc.h>
+ 
+ #include <crm/attrd.h>
+-#include <crm/cluster.h>
+ 
+ /* *INDENT-OFF* */
+ static struct crm_option long_options[] = {
+@@ -201,9 +200,6 @@ main(int argc, char **argv)
+     } else {
+ 
+         attr_node = attrd_get_target(attr_node);
+-        if (attr_node == NULL) {
+-            attr_node = get_local_node_name();
+-        }
+         crm_exit(do_update(command, attr_node, attr_name, attr_value,
+                            attr_section, attr_set, attr_dampen, attr_options));
+     }
+@@ -354,9 +350,6 @@ do_query(const char *attr_name, const char *attr_node, gboolean query_all)
+         attr_node = NULL;
+     } else {
+         attr_node = attrd_get_target(attr_node);
+-        if (attr_node == NULL) {
+-            attr_node = get_local_node_name();
+-        }
+     }
+ 
+     /* Build and send attrd request, and get XML reply */
+-- 
+1.8.3.1
+

@@ -1,0 +1,1020 @@
+From b005b4f2809020304862000326b22cded7b14377 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Thu, 6 Apr 2017 15:51:47 -0500
+Subject: [PATCH 01/13] Fix: libpe_status: guest nodes from bundles may have
+ attributes
+
+Previously, if a guest node created by a bundle had a node attribute,
+pe_create_node() would get called twice, once when parsing the <node> entry and
+once when parsing the <bundle>, resulting in any bundle primitive being unable
+to run.
+---
+ lib/pengine/container.c | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/lib/pengine/container.c b/lib/pengine/container.c
+index 127b144..054ef5f 100644
+--- a/lib/pengine/container.c
++++ b/lib/pengine/container.c
+@@ -390,9 +390,18 @@ create_remote_resource(
+ 
+         // tuple->docker->fillers = g_list_append(tuple->docker->fillers, child);
+ 
+-        // -INFINITY prevents anyone else from running here
+-        node = pe_create_node(strdup(nodeid), nodeid, "remote", "-INFINITY",
+-                              data_set);
++        /* Ensure a node has been created for the guest (it may have already
++         * been, if it has a permanent node attribute), and ensure its weight is
++         * -INFINITY so no other resources can run on it.
++         */
++        node = pe_find_node(data_set->nodes, nodeid);
++        if (node == NULL) {
++            node = pe_create_node(strdup(nodeid), nodeid, "remote", "-INFINITY",
++                                  data_set);
++        } else {
++            node->weight = -INFINITY;
++        }
++
+         tuple->node = node_copy(node);
+         tuple->node->weight = 500;
+         nodeid = NULL;
+-- 
+1.8.3.1
+
+
+From 7b89ff8b65fcdcad55676578361080eb23edb3e4 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Thu, 6 Apr 2017 16:56:52 -0500
+Subject: [PATCH 02/13] Low: fencing: ignore empty 'action' parameter in fence
+ devices
+
+This makes the fix in 9c0c3d6 more comprehensive.
+---
+ fencing/commands.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/fencing/commands.c b/fencing/commands.c
+index b4e6eb5..deec050 100644
+--- a/fencing/commands.c
++++ b/fencing/commands.c
+@@ -829,7 +829,10 @@ xml2device_params(const char *name, xmlNode *dev)
+         crm_warn("%s has '%s' parameter, which should never be specified in configuration",
+                  name, STONITH_ATTR_ACTION_OP);
+ 
+-        if (strcmp(value, "reboot") == 0) {
++        if (*value == '\0') {
++            crm_warn("Ignoring empty '%s' parameter", STONITH_ATTR_ACTION_OP);
++
++        } else if (strcmp(value, "reboot") == 0) {
+             crm_warn("Ignoring %s='reboot' (see stonith-action cluster property instead)",
+                      STONITH_ATTR_ACTION_OP);
+ 
+-- 
+1.8.3.1
+
+
+From 100dd5fda476ef526ac1964260252b30864d5ca7 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Fri, 7 Apr 2017 16:51:29 -0500
+Subject: [PATCH 03/13] Fix: crmd: check for too many stonith failures only
+ when aborting for that reason
+
+Previously, crmd would check for too many stonith failures whenever aborting
+a transition. This would lead to a new transition not being triggered when
+aborting for some other unrelated reason, such as a configuration change.
+
+Now, crmd checks for too many stonith failures only when aborting due to a new
+stonith failure.
+---
+ crmd/crmd_utils.h   |  2 +-
+ crmd/te_actions.c   | 12 ++++--------
+ crmd/te_callbacks.c | 24 ++++++++++++++++++++++--
+ crmd/te_utils.c     |  2 +-
+ 4 files changed, 28 insertions(+), 12 deletions(-)
+
+diff --git a/crmd/crmd_utils.h b/crmd/crmd_utils.h
+index a1aaad3..d2f8eb2 100644
+--- a/crmd/crmd_utils.h
++++ b/crmd/crmd_utils.h
+@@ -100,8 +100,8 @@ int crmd_join_phase_count(enum crm_join_phase phase);
+ void crmd_join_phase_log(int level);
+ 
+ const char *get_timer_desc(fsa_timer_t * timer);
+-gboolean too_many_st_failures(void);
+ void st_fail_count_reset(const char * target);
++void abort_for_stonith_failure(xmlNode *reason);
+ void crmd_peer_down(crm_node_t *peer, bool full);
+ 
+ /* Convenience macro for registering a CIB callback
+diff --git a/crmd/te_actions.c b/crmd/te_actions.c
+index a8ad86f..66dd16e 100644
+--- a/crmd/te_actions.c
++++ b/crmd/te_actions.c
+@@ -726,15 +726,11 @@ notify_crmd(crm_graph_t * graph)
+         case tg_restart:
+             type = "restart";
+             if (fsa_state == S_TRANSITION_ENGINE) {
+-                if (too_many_st_failures() == FALSE) {
+-                    if (transition_timer->period_ms > 0) {
+-                        crm_timer_stop(transition_timer);
+-                        crm_timer_start(transition_timer);
+-                    } else {
+-                        event = I_PE_CALC;
+-                    }
++                if (transition_timer->period_ms > 0) {
++                    crm_timer_stop(transition_timer);
++                    crm_timer_start(transition_timer);
+                 } else {
+-                    event = I_TE_SUCCESS;
++                    event = I_PE_CALC;
+                 }
+ 
+             } else if (fsa_state == S_POLICY_ENGINE) {
+diff --git a/crmd/te_callbacks.c b/crmd/te_callbacks.c
+index 6c0670c..a0aa081 100644
+--- a/crmd/te_callbacks.c
++++ b/crmd/te_callbacks.c
+@@ -635,7 +635,7 @@ struct st_fail_rec {
+     int count;
+ };
+ 
+-gboolean
++static gboolean
+ too_many_st_failures(void)
+ {
+     GHashTableIter iter;
+@@ -694,6 +694,26 @@ st_fail_count_increment(const char *target, int rc)
+     }
+ }
+ 
++/*!
++ * \internal
++ * \brief Abort transition due to stonith failure
++ *
++ * \param[in] reason  Failed stonith action XML, or NULL
++ */
++void
++abort_for_stonith_failure(xmlNode *reason)
++{
++    enum transition_action abort_action = tg_restart;
++
++    /* If stonith repeatedly fails, we eventually give up on starting a new
++     * transition for that reason.
++     */
++    if (too_many_st_failures()) {
++        abort_action = tg_stop;
++    }
++    abort_transition(INFINITY, abort_action, "Stonith failed", reason);
++}
++
+ void
+ tengine_stonith_callback(stonith_t * stonith, stonith_callback_data_t * data)
+ {
+@@ -759,7 +779,7 @@ tengine_stonith_callback(stonith_t * stonith, stonith_callback_data_t * data)
+         action->failed = TRUE;
+         crm_notice("Stonith operation %d for %s failed (%s): aborting transition.",
+                    call_id, target, pcmk_strerror(rc));
+-        abort_transition(INFINITY, tg_restart, "Stonith failed", NULL);
++        abort_for_stonith_failure(NULL);
+         st_fail_count_increment(target, rc);
+     }
+ 
+diff --git a/crmd/te_utils.c b/crmd/te_utils.c
+index 3b67afe..4603307 100644
+--- a/crmd/te_utils.c
++++ b/crmd/te_utils.c
+@@ -162,7 +162,7 @@ fail_incompletable_stonith(crm_graph_t * graph)
+ 
+     if (last_action != NULL) {
+         crm_warn("STONITHd failure resulted in un-runnable actions");
+-        abort_transition(INFINITY, tg_restart, "Stonith failure", last_action);
++        abort_for_stonith_failure(last_action);
+         return TRUE;
+     }
+ 
+-- 
+1.8.3.1
+
+
+From 3c49a1cf86cb819eca18c841661d90fa65bcb185 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Fri, 7 Apr 2017 21:03:31 -0500
+Subject: [PATCH 04/13] Low: crmd: consider target when checking stonith
+ failures
+
+Previously, if the crmd aborted a transition due to failure to fence a
+particular node, a new transition would not be started if *any* node had
+been fenced too many times. Now, only failures of the particular target are
+checked in that situation.
+---
+ crmd/crmd_utils.h   |  2 +-
+ crmd/te_callbacks.c | 33 +++++++++++++++++++++++----------
+ crmd/te_utils.c     |  2 +-
+ 3 files changed, 25 insertions(+), 12 deletions(-)
+
+diff --git a/crmd/crmd_utils.h b/crmd/crmd_utils.h
+index d2f8eb2..f0289d4 100644
+--- a/crmd/crmd_utils.h
++++ b/crmd/crmd_utils.h
+@@ -101,7 +101,7 @@ void crmd_join_phase_log(int level);
+ 
+ const char *get_timer_desc(fsa_timer_t * timer);
+ void st_fail_count_reset(const char * target);
+-void abort_for_stonith_failure(xmlNode *reason);
++void abort_for_stonith_failure(const char *target, xmlNode *reason);
+ void crmd_peer_down(crm_node_t *peer, bool full);
+ 
+ /* Convenience macro for registering a CIB callback
+diff --git a/crmd/te_callbacks.c b/crmd/te_callbacks.c
+index a0aa081..6e306fd 100644
+--- a/crmd/te_callbacks.c
++++ b/crmd/te_callbacks.c
+@@ -636,7 +636,7 @@ struct st_fail_rec {
+ };
+ 
+ static gboolean
+-too_many_st_failures(void)
++too_many_st_failures(const char *target)
+ {
+     GHashTableIter iter;
+     const char *key = NULL;
+@@ -646,14 +646,26 @@ too_many_st_failures(void)
+         return FALSE;
+     }
+ 
+-    g_hash_table_iter_init(&iter, stonith_failures);
+-    while (g_hash_table_iter_next(&iter, (gpointer *) & key, (gpointer *) & value)) {
+-        if (value->count > stonith_max_attempts ) {
+-            crm_notice("Too many failures to fence %s (%d), giving up", key, value->count);
+-            return TRUE;
++    if (target == NULL) {
++        g_hash_table_iter_init(&iter, stonith_failures);
++        while (g_hash_table_iter_next(&iter, (gpointer *) & key, (gpointer *) & value)) {
++            if (value->count > stonith_max_attempts) {
++                target = (const char*)key;
++                goto too_many;
++            }
++        }
++    } else {
++        value = g_hash_table_lookup(stonith_failures, target);
++        if ((value != NULL) && (value->count > stonith_max_attempts)) {
++            goto too_many;
+         }
+     }
+     return FALSE;
++
++too_many:
++    crm_warn("Too many failures (%d) to fence %s, giving up",
++             value->count, target);
++    return TRUE;
+ }
+ 
+ void
+@@ -698,17 +710,18 @@ st_fail_count_increment(const char *target, int rc)
+  * \internal
+  * \brief Abort transition due to stonith failure
+  *
+- * \param[in] reason  Failed stonith action XML, or NULL
++ * \param[in] target  Don't restart if this (NULL for any) has too many failures
++ * \param[in] reason  Log this stonith action XML as abort reason (or NULL)
+  */
+ void
+-abort_for_stonith_failure(xmlNode *reason)
++abort_for_stonith_failure(const char *target, xmlNode *reason)
+ {
+     enum transition_action abort_action = tg_restart;
+ 
+     /* If stonith repeatedly fails, we eventually give up on starting a new
+      * transition for that reason.
+      */
+-    if (too_many_st_failures()) {
++    if (too_many_st_failures(target)) {
+         abort_action = tg_stop;
+     }
+     abort_transition(INFINITY, abort_action, "Stonith failed", reason);
+@@ -779,7 +792,7 @@ tengine_stonith_callback(stonith_t * stonith, stonith_callback_data_t * data)
+         action->failed = TRUE;
+         crm_notice("Stonith operation %d for %s failed (%s): aborting transition.",
+                    call_id, target, pcmk_strerror(rc));
+-        abort_for_stonith_failure(NULL);
++        abort_for_stonith_failure(target, NULL);
+         st_fail_count_increment(target, rc);
+     }
+ 
+diff --git a/crmd/te_utils.c b/crmd/te_utils.c
+index 4603307..66b0883 100644
+--- a/crmd/te_utils.c
++++ b/crmd/te_utils.c
+@@ -162,7 +162,7 @@ fail_incompletable_stonith(crm_graph_t * graph)
+ 
+     if (last_action != NULL) {
+         crm_warn("STONITHd failure resulted in un-runnable actions");
+-        abort_for_stonith_failure(last_action);
++        abort_for_stonith_failure(NULL, last_action);
+         return TRUE;
+     }
+ 
+-- 
+1.8.3.1
+
+
+From 0c43785dad9be38566cccce677c54da42ff2c691 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 10 Apr 2017 14:22:45 -0500
+Subject: [PATCH 05/13] Fix: crmd: forget stonith failures when forgetting node
+
+---
+ crmd/messages.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/crmd/messages.c b/crmd/messages.c
+index c79d96e..4307fca 100644
+--- a/crmd/messages.c
++++ b/crmd/messages.c
+@@ -870,6 +870,12 @@ handle_request(xmlNode * stored_msg, enum crmd_fsa_cause cause)
+ 
+         } else {
+             reap_crm_member(id, name);
++
++            /* If we're forgetting this node, also forget any failures to fence
++             * it, so we don't carry that over to any node added later with the
++             * same name.
++             */
++            st_fail_count_reset(name);
+         }
+ 
+     } else if (strcmp(op, CRM_OP_MAINTENANCE_NODES) == 0) {
+-- 
+1.8.3.1
+
+
+From 515424f01b8ac5eb8705cecb26a60e17de3a7df6 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 10 Apr 2017 15:23:46 -0500
+Subject: [PATCH 06/13] Fix: crmd: track stonith fail counts on all nodes
+
+Previously, the stonith fail count was incremented in
+tengine_stonith_callback(), which is called only on the DC. Now, it is
+incremented in tengine_stonith_notify() instead, which is called on all nodes,
+ensuring the count is correct when a new node takes over DC.
+---
+ crmd/crmd_utils.h   | 1 +
+ crmd/te_callbacks.c | 5 ++---
+ crmd/te_utils.c     | 9 ++++++---
+ 3 files changed, 9 insertions(+), 6 deletions(-)
+
+diff --git a/crmd/crmd_utils.h b/crmd/crmd_utils.h
+index f0289d4..fd8fe76 100644
+--- a/crmd/crmd_utils.h
++++ b/crmd/crmd_utils.h
+@@ -101,6 +101,7 @@ void crmd_join_phase_log(int level);
+ 
+ const char *get_timer_desc(fsa_timer_t * timer);
+ void st_fail_count_reset(const char * target);
++void st_fail_count_increment(const char *target);
+ void abort_for_stonith_failure(const char *target, xmlNode *reason);
+ void crmd_peer_down(crm_node_t *peer, bool full);
+ 
+diff --git a/crmd/te_callbacks.c b/crmd/te_callbacks.c
+index 6e306fd..aa4a141 100644
+--- a/crmd/te_callbacks.c
++++ b/crmd/te_callbacks.c
+@@ -682,8 +682,8 @@ st_fail_count_reset(const char *target)
+     }
+ }
+ 
+-static void
+-st_fail_count_increment(const char *target, int rc)
++void
++st_fail_count_increment(const char *target)
+ {
+     struct st_fail_rec *rec = NULL;
+ 
+@@ -793,7 +793,6 @@ tengine_stonith_callback(stonith_t * stonith, stonith_callback_data_t * data)
+         crm_notice("Stonith operation %d for %s failed (%s): aborting transition.",
+                    call_id, target, pcmk_strerror(rc));
+         abort_for_stonith_failure(target, NULL);
+-        st_fail_count_increment(target, rc);
+     }
+ 
+     update_graph(transition_graph, action);
+diff --git a/crmd/te_utils.c b/crmd/te_utils.c
+index 66b0883..32ddae1 100644
+--- a/crmd/te_utils.c
++++ b/crmd/te_utils.c
+@@ -259,9 +259,12 @@ tengine_stonith_notify(stonith_t * st, stonith_event_t * st_event)
+         return;
+     }
+ 
+-    if (st_event->result == pcmk_ok &&
+-        safe_str_eq(st_event->operation, T_STONITH_NOTIFY_FENCE)) {
+-        st_fail_count_reset(st_event->target);
++    if (safe_str_eq(st_event->operation, T_STONITH_NOTIFY_FENCE)) {
++        if (st_event->result == pcmk_ok) {
++            st_fail_count_reset(st_event->target);
++        } else {
++            st_fail_count_increment(st_event->target);
++        }
+     }
+ 
+     crm_notice("Peer %s was%s terminated (%s) by %s for %s: %s (ref=%s) by client %s",
+-- 
+1.8.3.1
+
+
+From 714a8d07a500675d84e6ef779ba21e6c23e27853 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 10 Apr 2017 17:20:08 -0500
+Subject: [PATCH 07/13] Low: crmd: allow clearing all stonith fail counts
+
+for future improvements
+---
+ crmd/te_callbacks.c | 29 ++++++++++++++++++++++++-----
+ 1 file changed, 24 insertions(+), 5 deletions(-)
+
+diff --git a/crmd/te_callbacks.c b/crmd/te_callbacks.c
+index aa4a141..4f896ee 100644
+--- a/crmd/te_callbacks.c
++++ b/crmd/te_callbacks.c
+@@ -668,17 +668,36 @@ too_many:
+     return TRUE;
+ }
+ 
++/*!
++ * \internal
++ * \brief Reset a stonith fail count
++ *
++ * \param[in] target  Name of node to reset, or NULL for all
++ */
+ void
+ st_fail_count_reset(const char *target)
+ {
+-    struct st_fail_rec *rec = NULL;
++    if (stonith_failures == NULL) {
++        return;
++    }
++
++    if (target) {
++        struct st_fail_rec *rec = NULL;
+ 
+-    if (stonith_failures) {
+         rec = g_hash_table_lookup(stonith_failures, target);
+-    }
++        if (rec) {
++            rec->count = 0;
++        }
++    } else {
++        GHashTableIter iter;
++        const char *key = NULL;
++        struct st_fail_rec *rec = NULL;
+ 
+-    if (rec) {
+-        rec->count = 0;
++        g_hash_table_iter_init(&iter, stonith_failures);
++        while (g_hash_table_iter_next(&iter, (gpointer *) &key,
++                                      (gpointer *) &rec)) {
++            rec->count = 0;
++        }
+     }
+ }
+ 
+-- 
+1.8.3.1
+
+
+From 8fd6691558d94a8294f3d860cc9451c1a8e0c7a1 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 17 Apr 2017 13:55:19 -0500
+Subject: [PATCH 08/13] Low: crmd: skip restart at (not above)
+ stonith-max-attempts
+
+---
+ crmd/te_callbacks.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/crmd/te_callbacks.c b/crmd/te_callbacks.c
+index 4f896ee..b4d8713 100644
+--- a/crmd/te_callbacks.c
++++ b/crmd/te_callbacks.c
+@@ -649,14 +649,14 @@ too_many_st_failures(const char *target)
+     if (target == NULL) {
+         g_hash_table_iter_init(&iter, stonith_failures);
+         while (g_hash_table_iter_next(&iter, (gpointer *) & key, (gpointer *) & value)) {
+-            if (value->count > stonith_max_attempts) {
++            if (value->count >= stonith_max_attempts) {
+                 target = (const char*)key;
+                 goto too_many;
+             }
+         }
+     } else {
+         value = g_hash_table_lookup(stonith_failures, target);
+-        if ((value != NULL) && (value->count > stonith_max_attempts)) {
++        if ((value != NULL) && (value->count >= stonith_max_attempts)) {
+             goto too_many;
+         }
+     }
+-- 
+1.8.3.1
+
+
+From 9e9a271fd666ff371487f22c28ba9e420a22434c Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 17 Apr 2017 18:18:42 -0500
+Subject: [PATCH 09/13] Fix: crmd: don't restart transition if no fence devices
+
+This restores the behavior removed by ff881376, but more precisely where it's
+needed.
+---
+ crmd/crmd_utils.h        |  4 +++-
+ crmd/te_callbacks.c      | 21 ++++++++++++++++-----
+ crmd/te_utils.c          |  2 +-
+ include/crm/transition.h |  4 ++++
+ 4 files changed, 24 insertions(+), 7 deletions(-)
+
+diff --git a/crmd/crmd_utils.h b/crmd/crmd_utils.h
+index fd8fe76..9a09340 100644
+--- a/crmd/crmd_utils.h
++++ b/crmd/crmd_utils.h
+@@ -19,6 +19,7 @@
+ #  define CRMD_UTILS__H
+ 
+ #  include <crm/crm.h>
++#  include <crm/transition.h>
+ #  include <crm/common/xml.h>
+ #  include <crm/cib/internal.h> /* For CIB_OP_MODIFY */
+ #  include "notify.h"
+@@ -102,7 +103,8 @@ void crmd_join_phase_log(int level);
+ const char *get_timer_desc(fsa_timer_t * timer);
+ void st_fail_count_reset(const char * target);
+ void st_fail_count_increment(const char *target);
+-void abort_for_stonith_failure(const char *target, xmlNode *reason);
++void abort_for_stonith_failure(enum transition_action abort_action,
++                               const char *target, xmlNode *reason);
+ void crmd_peer_down(crm_node_t *peer, bool full);
+ 
+ /* Convenience macro for registering a CIB callback
+diff --git a/crmd/te_callbacks.c b/crmd/te_callbacks.c
+index b4d8713..c2b0c0d 100644
+--- a/crmd/te_callbacks.c
++++ b/crmd/te_callbacks.c
+@@ -729,18 +729,18 @@ st_fail_count_increment(const char *target)
+  * \internal
+  * \brief Abort transition due to stonith failure
+  *
++ * \param[in] abort_action  Whether to restart or stop transition
+  * \param[in] target  Don't restart if this (NULL for any) has too many failures
+  * \param[in] reason  Log this stonith action XML as abort reason (or NULL)
+  */
+ void
+-abort_for_stonith_failure(const char *target, xmlNode *reason)
++abort_for_stonith_failure(enum transition_action abort_action,
++                          const char *target, xmlNode *reason)
+ {
+-    enum transition_action abort_action = tg_restart;
+-
+     /* If stonith repeatedly fails, we eventually give up on starting a new
+      * transition for that reason.
+      */
+-    if (too_many_st_failures(target)) {
++    if ((abort_action != tg_stop) && too_many_st_failures(target)) {
+         abort_action = tg_stop;
+     }
+     abort_transition(INFINITY, abort_action, "Stonith failed", reason);
+@@ -807,11 +807,22 @@ tengine_stonith_callback(stonith_t * stonith, stonith_callback_data_t * data)
+ 
+     } else {
+         const char *target = crm_element_value_const(action->xml, XML_LRM_ATTR_TARGET);
++        enum transition_action abort_action = tg_restart;
+ 
+         action->failed = TRUE;
+         crm_notice("Stonith operation %d for %s failed (%s): aborting transition.",
+                    call_id, target, pcmk_strerror(rc));
+-        abort_for_stonith_failure(target, NULL);
++
++        /* If no fence devices were available, there's no use in immediately
++         * checking again, so don't start a new transition in that case.
++         */
++        if (rc == -ENODEV) {
++            crm_warn("No devices found in cluster to fence %s, giving up",
++                     target);
++            abort_action = tg_stop;
++        }
++
++        abort_for_stonith_failure(abort_action, target, NULL);
+     }
+ 
+     update_graph(transition_graph, action);
+diff --git a/crmd/te_utils.c b/crmd/te_utils.c
+index 32ddae1..dcfbb3b 100644
+--- a/crmd/te_utils.c
++++ b/crmd/te_utils.c
+@@ -162,7 +162,7 @@ fail_incompletable_stonith(crm_graph_t * graph)
+ 
+     if (last_action != NULL) {
+         crm_warn("STONITHd failure resulted in un-runnable actions");
+-        abort_for_stonith_failure(NULL, last_action);
++        abort_for_stonith_failure(tg_restart, NULL, last_action);
+         return TRUE;
+     }
+ 
+diff --git a/include/crm/transition.h b/include/crm/transition.h
+index f2069cc..21f7c55 100644
+--- a/include/crm/transition.h
++++ b/include/crm/transition.h
+@@ -15,6 +15,8 @@
+  * License along with this library; if not, write to the Free Software
+  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+  */
++#ifndef CRM_TRANSITION__H
++#  define CRM_TRANSITION__H
+ 
+ #include <crm/crm.h>
+ #include <crm/msg_xml.h>
+@@ -147,3 +149,5 @@ bool update_abort_priority(crm_graph_t * graph, int priority,
+ const char *actiontype2text(action_type_e type);
+ lrmd_event_data_t *convert_graph_action(xmlNode * resource, crm_action_t * action, int status,
+                                         int rc);
++
++#endif
+-- 
+1.8.3.1
+
+
+From 268f70f9ab644783a8038aa82bcca3628cc942dc Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 17 Apr 2017 14:39:19 -0500
+Subject: [PATCH 10/13] Low: crmd: avoid DC sending offer to itself twice
+
+---
+ crmd/join_dc.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/crmd/join_dc.c b/crmd/join_dc.c
+index 71311de..999996d 100644
+--- a/crmd/join_dc.c
++++ b/crmd/join_dc.c
+@@ -242,8 +242,10 @@ do_dc_join_offer_one(long long action,
+     /* always offer to the DC (ourselves)
+      * this ensures the correct value for max_generation_from
+      */
+-    member = crm_get_peer(0, fsa_our_uname);
+-    join_make_offer(NULL, member, NULL);
++    if (strcmp(join_to, fsa_our_uname) != 0) {
++        member = crm_get_peer(0, fsa_our_uname);
++        join_make_offer(NULL, member, NULL);
++    }
+ 
+     /* this was a genuine join request, cancel any existing
+      * transition and invoke the PE
+-- 
+1.8.3.1
+
+
+From 249c7c9a83371a67e573276a285697994fe66fed Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 17 Apr 2017 15:41:18 -0500
+Subject: [PATCH 11/13] Fix: crmd: don't fence old DC if it's shutting down as
+ soon-to-be DC joins
+
+Existing peers of a DC that is shutting down can avoid fencing it (by updating
+its expected state) because it broadcasts its shutdown request. However, a
+newly joining node won't get that broadcast.
+
+Previously, if the joining node became the new DC, it would fence the old one.
+Now, the DC notifies joining nodes (via a join message field) whether it is
+shutting down, and joining nodes update its expected state accordingly.
+---
+ crmd/join_client.c    | 24 ++++++++++++++++++++++++
+ crmd/join_dc.c        | 32 ++++++++++++++++++++++++++------
+ include/crm/msg_xml.h |  1 +
+ 3 files changed, 51 insertions(+), 6 deletions(-)
+
+diff --git a/crmd/join_client.c b/crmd/join_client.c
+index 319272d..4510483 100644
+--- a/crmd/join_client.c
++++ b/crmd/join_client.c
+@@ -30,6 +30,26 @@ void join_query_callback(xmlNode * msg, int call_id, int rc, xmlNode * output, v
+ 
+ extern ha_msg_input_t *copy_ha_msg_input(ha_msg_input_t * orig);
+ 
++/*!
++ * \internal
++ * \brief Remember if DC is shutting down as we join
++ *
++ * If we're joining while the current DC is shutting down, update its expected
++ * state, so we don't fence it if we become the new DC. (We weren't a peer
++ * when it broadcast its shutdown request.)
++ *
++ * \param[in] msg  A join message from the DC
++ */
++static void
++update_dc_expected(xmlNode *msg)
++{
++    if (fsa_our_dc && crm_is_true(crm_element_value(msg, F_CRM_DC_LEAVING))) {
++        crm_node_t *dc_node = crm_get_peer(0, fsa_our_dc);
++
++        crm_update_peer_expected(__FUNCTION__, dc_node, CRMD_JOINSTATE_DOWN);
++    }
++}
++
+ /*	A_CL_JOIN_QUERY		*/
+ /* is there a DC out there? */
+ void
+@@ -128,6 +148,8 @@ do_cl_join_offer_respond(long long action,
+         return;
+     }
+ 
++    update_dc_expected(input->msg);
++
+     CRM_LOG_ASSERT(input != NULL);
+     query_call_id =
+         fsa_cib_conn->cmds->query(fsa_cib_conn, NULL, NULL, cib_scope_local | cib_no_children);
+@@ -250,6 +272,8 @@ do_cl_join_finalize_respond(long long action,
+         return;
+     }
+ 
++    update_dc_expected(input->msg);
++
+     /* send our status section to the DC */
+     tmp1 = do_lrm_query(TRUE, fsa_our_uname);
+     if (tmp1 != NULL) {
+diff --git a/crmd/join_dc.c b/crmd/join_dc.c
+index 999996d..ebb5059 100644
+--- a/crmd/join_dc.c
++++ b/crmd/join_dc.c
+@@ -106,6 +106,30 @@ initialize_join(gboolean before)
+     }
+ }
+ 
++/*!
++ * \internal
++ * \brief Create a join message from the DC
++ *
++ * \param[in] join_op  Join operation name
++ * \param[in] host_to  Recipient of message
++ */
++static xmlNode *
++create_dc_message(const char *join_op, const char *host_to)
++{
++    xmlNode *msg = create_request(join_op, NULL, host_to, CRM_SYSTEM_CRMD,
++                                  CRM_SYSTEM_DC, NULL);
++
++    /* Identify which election this is a part of */
++    crm_xml_add_int(msg, F_CRM_JOIN_ID, current_join_id);
++
++    /* Add a field specifying whether the DC is shutting down. This keeps the
++     * joining node from fencing the old DC if it becomes the new DC.
++     */
++    crm_xml_add_boolean(msg, F_CRM_DC_LEAVING,
++                        is_set(fsa_input_register, R_SHUTDOWN));
++    return msg;
++}
++
+ static void
+ join_make_offer(gpointer key, gpointer value, gpointer user_data)
+ {
+@@ -147,10 +171,8 @@ join_make_offer(gpointer key, gpointer value, gpointer user_data)
+ 
+     crm_update_peer_join(__FUNCTION__, (crm_node_t*)member, crm_join_none);
+ 
+-    offer = create_request(CRM_OP_JOIN_OFFER, NULL, member->uname,
+-                           CRM_SYSTEM_CRMD, CRM_SYSTEM_DC, NULL);
++    offer = create_dc_message(CRM_OP_JOIN_OFFER, member->uname);
+ 
+-    crm_xml_add_int(offer, F_CRM_JOIN_ID, current_join_id);
+     /* send the welcome */
+     crm_info("join-%d: Sending offer to %s", current_join_id, member->uname);
+ 
+@@ -588,9 +610,7 @@ finalize_join_for(gpointer key, gpointer value, gpointer user_data)
+     }
+ 
+     /* send the ack/nack to the node */
+-    acknak = create_request(CRM_OP_JOIN_ACKNAK, NULL, join_to,
+-                            CRM_SYSTEM_CRMD, CRM_SYSTEM_DC, NULL);
+-    crm_xml_add_int(acknak, F_CRM_JOIN_ID, current_join_id);
++    acknak = create_dc_message(CRM_OP_JOIN_ACKNAK, join_to);
+ 
+     crm_debug("join-%d: ACK'ing join request from %s",
+               current_join_id, join_to);
+diff --git a/include/crm/msg_xml.h b/include/crm/msg_xml.h
+index 7198fe5..7504744 100644
+--- a/include/crm/msg_xml.h
++++ b/include/crm/msg_xml.h
+@@ -64,6 +64,7 @@
+ #  define F_CRM_ORIGIN			"origin"
+ #  define F_CRM_USER			"crm_user"
+ #  define F_CRM_JOIN_ID			"join_id"
++#  define F_CRM_DC_LEAVING      "dc-leaving"
+ #  define F_CRM_ELECTION_ID		"election-id"
+ #  define F_CRM_ELECTION_AGE_S		"election-age-sec"
+ #  define F_CRM_ELECTION_AGE_US		"election-age-nano-sec"
+-- 
+1.8.3.1
+
+
+From 9fe47194b7636bfe3aebdeece0ec89a7f588d77d Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 17 Apr 2017 19:03:03 -0500
+Subject: [PATCH 12/13] Refactor: extra: use whitespace consistently in Dummy
+
+to make changes easier
+---
+ extra/resources/Dummy | 102 +++++++++++++++++++++++++-------------------------
+ 1 file changed, 51 insertions(+), 51 deletions(-)
+
+diff --git a/extra/resources/Dummy b/extra/resources/Dummy
+index 1fd6156..bab56e4 100644
+--- a/extra/resources/Dummy
++++ b/extra/resources/Dummy
+@@ -1,8 +1,8 @@
+ #!/bin/sh
+ #
+ #
+-#	Dummy OCF RA. Does nothing but wait a few seconds, can be
+-#	configured to fail occassionally.
++# Dummy OCF RA. Does nothing but wait a few seconds, can be
++# configured to fail occassionally.
+ #
+ # Copyright (c) 2004 SUSE LINUX AG, Lars Marowsky-Brée
+ #                    All Rights Reserved.
+@@ -37,7 +37,7 @@
+ #######################################################################
+ 
+ meta_data() {
+-	cat <<END
++    cat <<END
+ <?xml version="1.0"?>
+ <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
+ <resource-agent name="Dummy" version="1.0">
+@@ -130,12 +130,12 @@ END
+ # don't exit on TERM, to test that lrmd makes sure that we do exit
+ trap sigterm_handler TERM
+ sigterm_handler() {
+-	ocf_log info "They use TERM to bring us down. No such luck."
+-	return
++    ocf_log info "They use TERM to bring us down. No such luck."
++    return
+ }
+ 
+ dummy_usage() {
+-	cat <<END
++    cat <<END
+ usage: $0 {start|stop|monitor|migrate_to|migrate_from|validate-all|meta-data}
+ 
+ Expects to have a fully populated OCF RA-compliant environment set.
+@@ -174,34 +174,34 @@ dummy_start() {
+ dummy_stop() {
+     dummy_monitor
+     if [ $? -eq $OCF_SUCCESS ]; then
+-	rm ${OCF_RESKEY_state}
++        rm ${OCF_RESKEY_state}
+     fi
+     rm -f "${VERIFY_SERIALIZED_FILE}"
+     return $OCF_SUCCESS
+ }
+ 
+ dummy_monitor() {
+-	# Monitor _MUST!_ differentiate correctly between running
+-	# (SUCCESS), failed (ERROR) or _cleanly_ stopped (NOT RUNNING).
+-	# That is THREE states, not just yes/no.
+-
+-	if [ $OCF_RESKEY_op_sleep -ne 0 ]; then
+-		if [ -f "${VERIFY_SERIALIZED_FILE}" ]; then
+-			# two monitor ops have occurred at the same time.
+-			# this is to verify a condition in the lrmd regression tests.
+-			ocf_log err "$VERIFY_SERIALIZED_FILE exists already"
+-			return $OCF_ERR_GENERIC
+-		fi
+-
+-		touch "${VERIFY_SERIALIZED_FILE}"
+-		sleep ${OCF_RESKEY_op_sleep}
+-		rm "${VERIFY_SERIALIZED_FILE}"
+-	fi
+-	
+-	if [ -f "${OCF_RESKEY_state}" ]; then
+-		return $OCF_SUCCESS
+-	fi
+-	return $OCF_NOT_RUNNING
++    # Monitor _MUST!_ differentiate correctly between running
++    # (SUCCESS), failed (ERROR) or _cleanly_ stopped (NOT RUNNING).
++    # That is THREE states, not just yes/no.
++
++    if [ $OCF_RESKEY_op_sleep -ne 0 ]; then
++        if [ -f "${VERIFY_SERIALIZED_FILE}" ]; then
++            # two monitor ops have occurred at the same time.
++            # this is to verify a condition in the lrmd regression tests.
++            ocf_log err "$VERIFY_SERIALIZED_FILE exists already"
++            return $OCF_ERR_GENERIC
++        fi
++
++        touch "${VERIFY_SERIALIZED_FILE}"
++        sleep ${OCF_RESKEY_op_sleep}
++        rm "${VERIFY_SERIALIZED_FILE}"
++    fi
++    
++    if [ -f "${OCF_RESKEY_state}" ]; then
++        return $OCF_SUCCESS
++    fi
++    return $OCF_NOT_RUNNING
+ }
+ 
+ dummy_validate() {
+@@ -210,7 +210,7 @@ dummy_validate() {
+     state_dir=`dirname "$OCF_RESKEY_state"`
+     touch "$state_dir/$$"
+     if [ $? -ne 0 ]; then
+-	return $OCF_ERR_ARGS
++        return $OCF_ERR_ARGS
+     fi
+     rm "$state_dir/$$"
+ 
+@@ -235,28 +235,28 @@ VERIFY_SERIALIZED_FILE="${OCF_RESKEY_state}.serialized"
+ dump_env
+ 
+ case $__OCF_ACTION in
+-meta-data)	meta_data
+-		exit $OCF_SUCCESS
+-		;;
+-start)		dummy_start;;
+-stop)		dummy_stop;;
+-monitor)	dummy_monitor;;
+-migrate_to)	ocf_log info "Migrating ${OCF_RESOURCE_INSTANCE} to ${OCF_RESKEY_CRM_meta_migrate_target}."
+-	        dummy_stop
+-		;;
+-migrate_from)	ocf_log info "Migrating ${OCF_RESOURCE_INSTANCE} from ${OCF_RESKEY_CRM_meta_migrate_source}."
+-	        dummy_start
+-		;;
+-reload)		ocf_log err "Reloading..."
+-	        dummy_start
+-		;;
+-validate-all)	dummy_validate;;
+-usage|help)	dummy_usage
+-		exit $OCF_SUCCESS
+-		;;
+-*)		dummy_usage
+-		exit $OCF_ERR_UNIMPLEMENTED
+-		;;
++meta-data)      meta_data
++                exit $OCF_SUCCESS
++                ;;
++start)          dummy_start;;
++stop)           dummy_stop;;
++monitor)        dummy_monitor;;
++migrate_to)     ocf_log info "Migrating ${OCF_RESOURCE_INSTANCE} to ${OCF_RESKEY_CRM_meta_migrate_target}."
++                dummy_stop
++                ;;
++migrate_from)   ocf_log info "Migrating ${OCF_RESOURCE_INSTANCE} from ${OCF_RESKEY_CRM_meta_migrate_source}."
++                dummy_start
++                ;;
++reload)         ocf_log err "Reloading..."
++                dummy_start
++                ;;
++validate-all)   dummy_validate;;
++usage|help)     dummy_usage
++                exit $OCF_SUCCESS
++                ;;
++*)              dummy_usage
++                exit $OCF_ERR_UNIMPLEMENTED
++                ;;
+ esac
+ rc=$?
+ ocf_log debug "${OCF_RESOURCE_INSTANCE} $__OCF_ACTION : $rc"
+-- 
+1.8.3.1
+
+
+From 14d5eb9bcf1a00612fbe952d945b07bbe3c44844 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 17 Apr 2017 19:04:58 -0500
+Subject: [PATCH 13/13] Test: extra: Dummy stop shouldn't fail if monitor is in
+ progress
+
+---
+ extra/resources/Dummy | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/extra/resources/Dummy b/extra/resources/Dummy
+index bab56e4..4a6884c 100644
+--- a/extra/resources/Dummy
++++ b/extra/resources/Dummy
+@@ -172,7 +172,7 @@ dummy_start() {
+ }
+ 
+ dummy_stop() {
+-    dummy_monitor
++    dummy_monitor --force
+     if [ $? -eq $OCF_SUCCESS ]; then
+         rm ${OCF_RESKEY_state}
+     fi
+@@ -186,7 +186,7 @@ dummy_monitor() {
+     # That is THREE states, not just yes/no.
+ 
+     if [ $OCF_RESKEY_op_sleep -ne 0 ]; then
+-        if [ -f "${VERIFY_SERIALIZED_FILE}" ]; then
++        if [ "$1" = "" -a -f "${VERIFY_SERIALIZED_FILE}" ]; then
+             # two monitor ops have occurred at the same time.
+             # this is to verify a condition in the lrmd regression tests.
+             ocf_log err "$VERIFY_SERIALIZED_FILE exists already"
+-- 
+1.8.3.1
+

@@ -1,0 +1,200 @@
+From 55c9b5ef9c6f531ea808926abaaea5c7c8890dad Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Fri, 8 Dec 2017 17:31:23 -0600
+Subject: [PATCH 1/3] Doc: PE: update remote stop ordering comments for recent
+ changes
+
+---
+ pengine/allocate.c | 13 +++++++------
+ 1 file changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/pengine/allocate.c b/pengine/allocate.c
+index 481a0ec..7ae4e02 100644
+--- a/pengine/allocate.c
++++ b/pengine/allocate.c
+@@ -2058,9 +2058,6 @@ apply_remote_ordering(action_t *action, pe_working_set_t *data_set)
+             break;
+ 
+         case stop_rsc:
+-            /* Handle special case with remote node where stop actions need to be
+-             * ordered after the connection resource starts somewhere else.
+-             */
+             if(state == remote_state_alive) {
+                 order_action_then_stop(action, remote_rsc,
+                                        pe_order_implies_first, data_set);
+@@ -2076,14 +2073,18 @@ apply_remote_ordering(action_t *action, pe_working_set_t *data_set)
+                                        pe_order_implies_first, data_set);
+ 
+             } else if(remote_rsc->next_role == RSC_ROLE_STOPPED) {
+-                /* If its not coming back up, better do what we need first */
++                /* State must be remote_state_unknown or remote_state_stopped.
++                 * Since the connection is not coming back up in this
++                 * transition, stop this resource first.
++                 */
+                 order_action_then_stop(action, remote_rsc,
+                                        pe_order_implies_first, data_set);
+ 
+             } else {
+-                /* Wait for the connection resource to be up and assume everything is as we left it */
++                /* The connection is going to be started somewhere else, so
++                 * stop this resource after that completes.
++                 */
+                 order_start_then_action(remote_rsc, action, pe_order_none, data_set);
+-
+             }
+             break;
+ 
+-- 
+1.8.3.1
+
+
+From 39441fa1dfe625cf00af463269052d4c2dafaa16 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Fri, 8 Dec 2017 17:16:55 -0600
+Subject: [PATCH 2/3] Low: libpe_status: limit resource type check to
+ primitives
+
+---
+ lib/pengine/complex.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/lib/pengine/complex.c b/lib/pengine/complex.c
+index d58d6be..86f290c 100644
+--- a/lib/pengine/complex.c
++++ b/lib/pengine/complex.c
+@@ -784,7 +784,9 @@ common_unpack(xmlNode * xml_obj, resource_t ** rsc,
+         if(is_set((*rsc)->flags, pe_rsc_fence_device)) {
+             value = "quorum";
+ 
+-        } else if (safe_str_eq(crm_element_value((*rsc)->xml, XML_AGENT_ATTR_CLASS), "ocf")
++        } else if (((*rsc)->variant == pe_native)
++                   && safe_str_eq(crm_element_value((*rsc)->xml, XML_AGENT_ATTR_CLASS),
++                                  PCMK_RESOURCE_CLASS_OCF)
+                    && safe_str_eq(crm_element_value((*rsc)->xml, XML_AGENT_ATTR_PROVIDER), "pacemaker")
+                    && safe_str_eq(crm_element_value((*rsc)->xml, XML_ATTR_TYPE), "remote")
+             ) {
+-- 
+1.8.3.1
+
+
+From 68438917c3b1ed305af6da2acd23454cd777e1d1 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Fri, 8 Dec 2017 18:00:12 -0600
+Subject: [PATCH 3/3] Fix: lrmd: always use most recent remote proxy
+
+Any working proxy is sufficient, but the newest connection is the most likely
+to be working. We want to avoid using an old proxy that has failed but whose
+TCP connection has not yet timed out.
+---
+ lrmd/ipc_proxy.c | 41 +++++++++++++----------------------------
+ 1 file changed, 13 insertions(+), 28 deletions(-)
+
+diff --git a/lrmd/ipc_proxy.c b/lrmd/ipc_proxy.c
+index 5d6ab34..4d1ee01 100644
+--- a/lrmd/ipc_proxy.c
++++ b/lrmd/ipc_proxy.c
+@@ -42,7 +42,7 @@ static qb_ipcs_service_t *crmd_ipcs = NULL;
+ static qb_ipcs_service_t *stonith_ipcs = NULL;
+ 
+ /* ipc providers == crmd clients connecting from cluster nodes */
+-static GHashTable *ipc_providers = NULL;
++static GList *ipc_providers = NULL;
+ /* ipc clients == things like cibadmin, crm_resource, connecting locally */
+ static GHashTable *ipc_clients = NULL;
+ 
+@@ -52,24 +52,14 @@ static GHashTable *ipc_clients = NULL;
+  *
+  * \return Pointer to a provider if one exists, NULL otherwise
+  *
+- * \note Grab the first provider available; any provider will work, and usually
+- *       there will be only one. These are client connections originating from a
+- *       cluster node's crmd.
++ * \note Grab the first provider, which is the most recent connection. That way,
++ *       if we haven't yet timed out an old, failed connection, we don't try to
++ *       use it.
+  */
+ crm_client_t *
+ ipc_proxy_get_provider()
+ {
+-    if (ipc_providers) {
+-        GHashTableIter iter;
+-        gpointer key = NULL;
+-        gpointer value = NULL;
+-
+-        g_hash_table_iter_init(&iter, ipc_providers);
+-        if (g_hash_table_iter_next(&iter, &key, &value)) {
+-            return (crm_client_t*)value;
+-        }
+-    }
+-    return NULL;
++    return ipc_providers? (crm_client_t*) (ipc_providers->data) : NULL;
+ }
+ 
+ static int32_t
+@@ -378,10 +368,8 @@ static struct qb_ipcs_service_handlers cib_proxy_callbacks_rw = {
+ void
+ ipc_proxy_add_provider(crm_client_t *ipc_proxy)
+ {
+-    if (ipc_providers == NULL) {
+-        return;
+-    }
+-    g_hash_table_insert(ipc_providers, ipc_proxy->id, ipc_proxy);
++    // Prepending ensures the most recent connection is always first
++    ipc_providers = g_list_prepend(ipc_providers, ipc_proxy);
+ }
+ 
+ void
+@@ -393,11 +381,7 @@ ipc_proxy_remove_provider(crm_client_t *ipc_proxy)
+     GList *remove_these = NULL;
+     GListPtr gIter = NULL;
+ 
+-    if (ipc_providers == NULL) {
+-        return;
+-    }
+-
+-    g_hash_table_remove(ipc_providers, ipc_proxy->id);
++    ipc_providers = g_list_remove(ipc_providers, ipc_proxy);
+ 
+     g_hash_table_iter_init(&iter, ipc_clients);
+     while (g_hash_table_iter_next(&iter, (gpointer *) & key, (gpointer *) & ipc_client)) {
+@@ -413,6 +397,8 @@ ipc_proxy_remove_provider(crm_client_t *ipc_proxy)
+ 
+     for (gIter = remove_these; gIter != NULL; gIter = gIter->next) {
+         ipc_client = gIter->data;
++
++        // Disconnection callback will free the client here
+         qb_ipcs_disconnect(ipc_client->ipcs);
+     }
+ 
+@@ -424,7 +410,6 @@ void
+ ipc_proxy_init(void)
+ {
+     ipc_clients = g_hash_table_new_full(crm_str_hash, g_str_equal, NULL, NULL);
+-    ipc_providers = g_hash_table_new_full(crm_str_hash, g_str_equal, NULL, NULL);
+ 
+     cib_ipc_servers_init(&cib_ro,
+                          &cib_rw,
+@@ -446,10 +431,12 @@ void
+ ipc_proxy_cleanup(void)
+ {
+     if (ipc_providers) {
+-        g_hash_table_destroy(ipc_providers);
++        g_list_free(ipc_providers);
++        ipc_providers = NULL;
+     }
+     if (ipc_clients) {
+         g_hash_table_destroy(ipc_clients);
++        ipc_clients = NULL;
+     }
+     cib_ipc_servers_destroy(cib_ro, cib_rw, cib_shm);
+     qb_ipcs_destroy(attrd_ipcs);
+@@ -458,6 +445,4 @@ ipc_proxy_cleanup(void)
+     cib_ro = NULL;
+     cib_rw = NULL;
+     cib_shm = NULL;
+-    ipc_providers = NULL;
+-    ipc_clients = NULL;
+ }
+-- 
+1.8.3.1
+

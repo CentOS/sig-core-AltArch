@@ -1,0 +1,316 @@
+From cef0ff51879e965c3b7d214a23b61e6bf61aa33d Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Thu, 17 Aug 2017 15:53:27 -0500
+Subject: [PATCH 1/3] Refactor: crmd,pengine: prefix internal node attributes
+ with '#'
+
+so crm_mon will hide them. Also, define constants for them.
+
+As a positive side effect, node_unfenced is no longer added as a
+meta-attribute to stonith "on" operations.
+---
+ crmd/te_callbacks.c                             | 14 +++++---------
+ include/crm/crm.h                               |  5 +++++
+ include/crm/msg_xml.h                           |  3 ++-
+ lib/pengine/utils.c                             | 12 ++++++++----
+ pengine/native.c                                |  4 ++--
+ pengine/test10/start-then-stop-with-unfence.xml |  2 +-
+ pengine/test10/unfence-definition.exp           |  2 +-
+ pengine/test10/unfence-definition.xml           |  4 ++--
+ pengine/test10/unfence-parameters.exp           |  2 +-
+ pengine/test10/unfence-parameters.xml           |  4 ++--
+ pengine/test10/unfence-startup.xml              |  4 ++--
+ 11 files changed, 31 insertions(+), 25 deletions(-)
+
+diff --git a/crmd/te_callbacks.c b/crmd/te_callbacks.c
+index 4476d4a..2273b86 100644
+--- a/crmd/te_callbacks.c
++++ b/crmd/te_callbacks.c
+@@ -798,21 +797,17 @@ tengine_stonith_callback(stonith_t * stonith, stonith_callback_data_t * data)
+         if (action->confirmed == FALSE) {
+             te_action_confirmed(action);
+             if (safe_str_eq("on", op)) {
+-                const char *key = NULL;
+                 const char *value = NULL;
+                 char *now = crm_itoa(time(NULL));
+ 
+-                key = XML_NODE_IS_UNFENCED;
+-                update_attrd(target, key, now, NULL, FALSE);
++                update_attrd(target, CRM_ATTR_UNFENCED, now, NULL, FALSE);
+                 free(now);
+ 
+-                key = "digests-all";
+-                value = crm_meta_value(action->params, key);
+-                update_attrd(target, key, value, NULL, FALSE);
++                value = crm_meta_value(action->params, XML_OP_ATTR_DIGESTS_ALL);
++                update_attrd(target, CRM_ATTR_DIGESTS_ALL, value, NULL, FALSE);
+ 
+-                key = "digests-secure";
+-                value = crm_meta_value(action->params, key);
+-                update_attrd(target, key, value, NULL, FALSE);
++                value = crm_meta_value(action->params, XML_OP_ATTR_DIGESTS_SECURE);
++                update_attrd(target, CRM_ATTR_DIGESTS_SECURE, value, NULL, FALSE);
+ 
+             } else if (action->sent_update == FALSE) {
+                 send_stonith_update(action, target, uuid);
+diff --git a/include/crm/crm.h b/include/crm/crm.h
+index 0da6bfe..35ab6ca 100644
+--- a/include/crm/crm.h
++++ b/include/crm/crm.h
+@@ -94,6 +94,11 @@ extern char *crm_system_name;
+ #  define CRM_SYSTEM_STONITHD	"stonithd"
+ #  define CRM_SYSTEM_MCP	"pacemakerd"
+ 
++// Names of internally generated node attributes
++#  define CRM_ATTR_UNFENCED         "#node-unfenced"
++#  define CRM_ATTR_DIGESTS_ALL      "#digests-all"
++#  define CRM_ATTR_DIGESTS_SECURE   "#digests-secure"
++
+ /* Valid operations */
+ #  define CRM_OP_NOOP		"noop"
+ 
+diff --git a/include/crm/msg_xml.h b/include/crm/msg_xml.h
+index 8cf22f3..38183b5 100644
+--- a/include/crm/msg_xml.h
++++ b/include/crm/msg_xml.h
+@@ -228,6 +234,8 @@
+ #  define XML_OP_ATTR_DEPENDENT "dependent-on"
+ #  define XML_OP_ATTR_ORIGIN		"interval-origin"
+ #  define XML_OP_ATTR_PENDING		"record-pending"
++#  define XML_OP_ATTR_DIGESTS_ALL       "digests-all"
++#  define XML_OP_ATTR_DIGESTS_SECURE    "digests-secure"
+ 
+ #  define XML_CIB_TAG_LRM		"lrm"
+ #  define XML_LRM_TAG_RESOURCES     	"lrm_resources"
+@@ -254,7 +264,6 @@
+ #  define XML_NODE_IS_PEER    	"crmd"
+ #  define XML_NODE_IS_REMOTE    	"remote_node"
+ #  define XML_NODE_IS_FENCED		"node_fenced"
+-#  define XML_NODE_IS_UNFENCED	    	"node_unfenced"
+ #  define XML_NODE_IS_MAINTENANCE   "node_in_maintenance"
+ 
+ #  define XML_CIB_ATTR_SHUTDOWN       	"shutdown"
+diff --git a/lib/pengine/utils.c b/lib/pengine/utils.c
+index cb1ed08..848b311 100644
+--- a/lib/pengine/utils.c
++++ b/lib/pengine/utils.c
+@@ -2115,8 +1987,10 @@ fencing_action_digest_cmp(resource_t * rsc, node_t * node, pe_working_set_t * da
+     char *key = generate_op_key(rsc->id, STONITH_DIGEST_TASK, 0);
+     op_digest_cache_t *data = rsc_action_digest(rsc, STONITH_DIGEST_TASK, key, node, NULL, data_set);
+ 
+-    const char *digest_all = g_hash_table_lookup(node->details->attrs, "digests-all");
+-    const char *digest_secure = g_hash_table_lookup(node->details->attrs, "digests-secure");
++    const char *digest_all = g_hash_table_lookup(node->details->attrs,
++                                                 CRM_ATTR_DIGESTS_ALL);
++    const char *digest_secure = g_hash_table_lookup(node->details->attrs,
++                                                    CRM_ATTR_DIGESTS_SECURE);
+ 
+     /* No 'reloads' for fencing device changes
+      *
+@@ -2269,8 +2146,10 @@ pe_fence_op(node_t * node, const char *op, bool optional, const char *reason, pe
+                     digests_secure+digests_secure_offset, max-digests_secure_offset,
+                     "%s:%s:%s,", match->id, (const char*)g_hash_table_lookup(match->meta, XML_ATTR_TYPE), data->digest_secure_calc);
+             }
+-            add_hash_param(stonith_op->meta, strdup("digests-all"), digests_all);
+-            add_hash_param(stonith_op->meta, strdup("digests-secure"), digests_secure);
++            add_hash_param(stonith_op->meta, strdup(XML_OP_ATTR_DIGESTS_ALL),
++                           digests_all);
++            add_hash_param(stonith_op->meta, strdup(XML_OP_ATTR_DIGESTS_SECURE),
++                           digests_secure);
+         }
+ 
+     } else {
+diff --git a/pengine/native.c b/pengine/native.c
+index fdbbf0c..18efa1d 100644
+--- a/pengine/native.c
++++ b/pengine/native.c
+@@ -2490,7 +2501,7 @@ StopRsc(resource_t * rsc, node_t * next, gboolean optional, pe_working_set_t * d
+ 
+         if(is_set(rsc->flags, pe_rsc_needs_unfencing)) {
+             action_t *unfence = pe_fence_op(current, "on", TRUE, NULL, data_set);
+-            const char *unfenced = g_hash_table_lookup(current->details->attrs, XML_NODE_IS_UNFENCED);
++            const char *unfenced = g_hash_table_lookup(current->details->attrs, CRM_ATTR_UNFENCED);
+ 
+             order_actions(stop, unfence, pe_order_implies_first);
+             if (unfenced == NULL || safe_str_eq("0", unfenced)) {
+@@ -2513,7 +2524,7 @@ StartRsc(resource_t * rsc, node_t * next, gboolean optional, pe_working_set_t *
+ 
+     if(is_set(rsc->flags, pe_rsc_needs_unfencing)) {
+         action_t *unfence = pe_fence_op(next, "on", TRUE, NULL, data_set);
+-        const char *unfenced = g_hash_table_lookup(next->details->attrs, XML_NODE_IS_UNFENCED);
++        const char *unfenced = g_hash_table_lookup(next->details->attrs, CRM_ATTR_UNFENCED);
+ 
+         order_actions(unfence, start, pe_order_implies_then);
+ 
+diff --git a/pengine/test10/start-then-stop-with-unfence.xml b/pengine/test10/start-then-stop-with-unfence.xml
+index b856250..587b05a 100644
+--- a/pengine/test10/start-then-stop-with-unfence.xml
++++ b/pengine/test10/start-then-stop-with-unfence.xml
+@@ -95,7 +95,7 @@
+         <instance_attributes id="status-2">
+           <nvpair id="status-2-shutdown" name="shutdown" value="0"/>
+           <nvpair id="status-2-probe_complete" name="probe_complete" value="true"/>
+-	  <nvpair id="status-2-unfenced" name="node_unfenced" value="1234567"/>
++	  <nvpair id="status-2-unfenced" name="#node-unfenced" value="1234567"/>
+         </instance_attributes>
+       </transient_attributes>
+       <lrm id="2">
+diff --git a/pengine/test10/unfence-definition.exp b/pengine/test10/unfence-definition.exp
+index f9ad4c1..4e619fe 100644
+--- a/pengine/test10/unfence-definition.exp
++++ b/pengine/test10/unfence-definition.exp
+@@ -389,7 +389,7 @@
+   <synapse id="25">
+     <action_set>
+       <crm_event id="2" operation="stonith" operation_key="stonith-virt-1-on" on_node="virt-1" on_node_uuid="1">
+-        <attributes CRM_meta_node_unfenced="1234567" CRM_meta_on_node="virt-1" CRM_meta_on_node_uuid="1" CRM_meta_stonith_action="on" />
++        <attributes CRM_meta_on_node="virt-1" CRM_meta_on_node_uuid="1" CRM_meta_stonith_action="on" />
+       </crm_event>
+     </action_set>
+     <inputs>
+diff --git a/pengine/test10/unfence-definition.xml b/pengine/test10/unfence-definition.xml
+index cb189cd..90aa3da 100644
+--- a/pengine/test10/unfence-definition.xml
++++ b/pengine/test10/unfence-definition.xml
+@@ -43,7 +43,7 @@
+     <node_state id="1" uname="virt-1" in_ccm="true" crmd="online" crm-debug-origin="do_state_transition" join="member" expected="member">
+       <transient_attributes id="virt-1">
+         <instance_attributes id="status-virt-1">
+-          <nvpair id="status-virt-1" name="node_unfenced" value="1234567"/>
++          <nvpair id="status-virt-1" name="#node-unfenced" value="1234567"/>
+         </instance_attributes>
+       </transient_attributes>
+       <lrm id="1">
+@@ -63,7 +63,7 @@
+     <node_state id="2" uname="virt-2" in_ccm="true" crmd="online" crm-debug-origin="do_state_transition" join="member" expected="member">
+       <transient_attributes id="virt-2">
+         <instance_attributes id="status-virt-2">
+-          <nvpair id="unfenced-virt-2" name="node_unfenced" value="1234567"/>
++          <nvpair id="unfenced-virt-2" name="#node-unfenced" value="1234567"/>
+         </instance_attributes>
+       </transient_attributes>
+       <lrm id="2">
+diff --git a/pengine/test10/unfence-parameters.exp b/pengine/test10/unfence-parameters.exp
+index 64286a8..8022591 100644
+--- a/pengine/test10/unfence-parameters.exp
++++ b/pengine/test10/unfence-parameters.exp
+@@ -373,7 +373,7 @@
+   <synapse id="24">
+     <action_set>
+       <crm_event id="2" operation="stonith" operation_key="stonith-virt-1-on" on_node="virt-1" on_node_uuid="1">
+-        <attributes CRM_meta_node_unfenced="1234567" CRM_meta_on_node="virt-1" CRM_meta_on_node_uuid="1" CRM_meta_stonith_action="on" />
++        <attributes CRM_meta_on_node="virt-1" CRM_meta_on_node_uuid="1" CRM_meta_stonith_action="on" />
+       </crm_event>
+     </action_set>
+     <inputs>
+diff --git a/pengine/test10/unfence-parameters.xml b/pengine/test10/unfence-parameters.xml
+index 26588bf..e1975b9 100644
+--- a/pengine/test10/unfence-parameters.xml
++++ b/pengine/test10/unfence-parameters.xml
+@@ -43,7 +43,7 @@
+     <node_state id="1" uname="virt-1" in_ccm="true" crmd="online" crm-debug-origin="do_state_transition" join="member" expected="member">
+       <transient_attributes id="virt-1">
+         <instance_attributes id="status-virt-1">
+-          <nvpair id="status-virt-1" name="node_unfenced" value="1234567"/>
++          <nvpair id="status-virt-1" name="#node-unfenced" value="1234567"/>
+         </instance_attributes>
+       </transient_attributes>
+       <lrm id="1">
+@@ -63,7 +63,7 @@
+     <node_state id="2" uname="virt-2" in_ccm="true" crmd="online" crm-debug-origin="do_state_transition" join="member" expected="member">
+       <transient_attributes id="virt-2">
+         <instance_attributes id="status-virt-2">
+-          <nvpair id="status-virt-2" name="node_unfenced" value="1234567"/>
++          <nvpair id="status-virt-2" name="#node-unfenced" value="1234567"/>
+ 	</instance_attributes>
+       </transient_attributes>
+       <lrm id="2">
+diff --git a/pengine/test10/unfence-startup.xml b/pengine/test10/unfence-startup.xml
+index 28637e3..69e2df7 100644
+--- a/pengine/test10/unfence-startup.xml
++++ b/pengine/test10/unfence-startup.xml
+@@ -43,7 +43,7 @@
+     <node_state id="1" uname="virt-1" in_ccm="true" crmd="online" crm-debug-origin="do_state_transition" join="member" expected="member">
+       <transient_attributes id="virt-1">
+         <instance_attributes id="status-virt-1">
+-          <nvpair id="status-virt-1" name="node_unfenced" value="1234567"/>
++          <nvpair id="status-virt-1" name="#node-unfenced" value="1234567"/>
+         </instance_attributes>
+       </transient_attributes>
+       <lrm id="1">
+@@ -63,7 +63,7 @@
+     <node_state id="2" uname="virt-2" in_ccm="true" crmd="online" crm-debug-origin="do_state_transition" join="member" expected="member">
+       <transient_attributes id="virt-2">
+         <instance_attributes id="status-virt-2">
+-          <nvpair id="status-virt-2" name="node_unfenced" value="1234567"/>
++          <nvpair id="status-virt-2" name="#node-unfenced" value="1234567"/>
+         </instance_attributes>
+       </transient_attributes>
+       <lrm id="2">
+-- 
+1.8.3.1
+
+
+From 8440151215e39a69eea55aae996329a11d7800a5 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Thu, 17 Aug 2017 17:38:30 -0500
+Subject: [PATCH 2/3] Refactor: libpe_status: remove redundant constant
+ definition
+
+---
+ lib/pengine/utils.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/lib/pengine/utils.c b/lib/pengine/utils.c
+index 848b311..b5794fb 100644
+--- a/lib/pengine/utils.c
++++ b/lib/pengine/utils.c
+@@ -2211,8 +2083,6 @@ find_unfencing_devices(GListPtr candidates, GListPtr matches)
+ }
+ 
+ 
+-#define STONITH_DIGEST_TASK "stonith-on"
+-
+ action_t *
+ pe_fence_op(node_t * node, const char *op, bool optional, const char *reason, pe_working_set_t * data_set)
+ {
+-- 
+1.8.3.1
+
+
+From 04656184bcd4598a9b9d83b344c6f9f9cafe4df7 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Thu, 17 Aug 2017 17:42:55 -0500
+Subject: [PATCH 3/3] Refactor: libpe_status: preserve backward API
+ compatibility
+
+There isn't a well-defined line in the pengine libraries as to what's part of
+the public API, but be on the safe side ...
+---
+ include/crm/pengine/status.h | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/include/crm/pengine/status.h b/include/crm/pengine/status.h
+index fcd5226..b1f4d30 100644
+--- a/include/crm/pengine/status.h
++++ b/include/crm/pengine/status.h
+@@ -329,7 +329,6 @@ struct pe_action_s {
+ 
+     char *task;
+     char *uuid;
+-    char *reason;
+     char *cancel_task;
+ 
+     enum pe_action_flags flags;
+@@ -374,6 +373,8 @@ struct pe_action_s {
+ 
+     GListPtr actions_before;    /* action_wrapper_t* */
+     GListPtr actions_after;     /* action_wrapper_t* */
++
++    char *reason;
+ };
+ 
+ struct ticket_s {
+-- 
+1.8.3.1
+

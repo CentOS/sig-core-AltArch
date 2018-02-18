@@ -1,0 +1,77 @@
+From fd59ef09fbaaabe2763eb9c5524de47e5662de86 Mon Sep 17 00:00:00 2001
+From: Hayley Swimelar <hayley@linbit.com>
+Date: Tue, 28 Feb 2017 08:40:02 -0800
+Subject: [PATCH] collect drbd status information into drbd_info.txt
+
+---
+ tools/report.collector | 34 ++++++++++++++++++++++++++++++++++
+ tools/report.common.in |  1 +
+ 2 files changed, 35 insertions(+)
+
+diff --git a/tools/report.collector b/tools/report.collector
+index 83218ee..0130a2b 100644
+--- a/tools/report.collector
++++ b/tools/report.collector
+@@ -543,6 +543,39 @@ dlm_dump() {
+     fi
+ }
+ 
++drbd_info() {
++    test -f /proc/drbd && {
++        echo "--- /proc/drbd:"
++        cat /proc/drbd 2>&1
++        echo
++    }
++
++    if which drbd-overview >/dev/null 2>&1; then
++        echo "--- drbd-overview:"
++        drbd-overview 2>&1
++        echo
++    fi
++
++    if which drbdsetup >/dev/null 2>&1; then
++        echo "--- drbdsetup status:"
++        drbdsetup status --verbose --statistics 2>&1
++        echo
++
++        echo "--- drbdsetup events2:"
++        drbdsetup events2 --timestamps --statistics --now 2>&1
++        echo
++    fi
++
++    if which drbdadm >/dev/null 2>&1; then
++        echo "--- drbdadm show-gi:"
++        for res in $(drbdsetup status | grep -e ^\\S | awk '{ print $1 }'); do
++            echo "$res:"
++            drbdadm show-gi $res 2>&1
++            echo
++        done
++    fi
++}
++
+ iscfvarset() {
+     test "`getcfvar $1 $2`"
+ }
+@@ -730,6 +763,7 @@ fi
+ 
+ dlm_dump  > $DLM_DUMP_F 2>&1
+ sys_stats > $SYSSTATS_F 2>&1
++drbd_info > $DRBD_INFO_F 2>&1
+ 
+ debug "Sanitizing files: $SANITIZE"
+ #
+diff --git a/tools/report.common.in b/tools/report.common.in
+index 70c920c..4682da5 100644
+--- a/tools/report.common.in
++++ b/tools/report.common.in
+@@ -42,6 +42,7 @@ CRM_VERIFY_F=crm_verify.txt
+ PERMISSIONS_F=permissions.txt
+ CIB_F=cib.xml
+ CIB_TXT_F=cib.txt
++DRBD_INFO_F=drbd_info.txt
+ 
+ EVENT_PATTERNS="
+ state		do_state_transition
+-- 
+1.8.3.1
+

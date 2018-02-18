@@ -1,0 +1,92 @@
+From 5c25d7cae4de3d66792d90178c8b1f57a9cddf12 Mon Sep 17 00:00:00 2001
+From: Andrew Beekhof <andrew@beekhof.net>
+Date: Fri, 31 Mar 2017 11:41:52 +1100
+Subject: [PATCH] PE: Containers: Allow custom docker run commands
+
+---
+ lib/pengine/container.c | 18 +++++++++++-------
+ lib/pengine/variant.h   |  1 +
+ xml/resources-2.8.rng   |  2 +-
+ 3 files changed, 13 insertions(+), 8 deletions(-)
+
+diff --git a/lib/pengine/container.c b/lib/pengine/container.c
+index ed63b80..388dd88 100644
+--- a/lib/pengine/container.c
++++ b/lib/pengine/container.c
+@@ -222,6 +209,12 @@ create_docker_resource(
+             offset += snprintf(buffer+offset, max-offset, " --net=%s", data->docker_network);
+         }
+ 
++        if(data->control_port) {
++            offset += snprintf(buffer+offset, max-offset, " -e PCMK_remote_port=%s", data->control_port);
++        } else {
++            offset += snprintf(buffer+offset, max-offset, " -e PCMK_remote_port=%d", DEFAULT_REMOTE_PORT);
++        }
++
+         for(GListPtr pIter = data->mounts; pIter != NULL; pIter = pIter->next) {
+             container_mount_t *mount = pIter->data;
+ 
+@@ -276,15 +263,11 @@ create_docker_resource(
+         free(dbuffer);
+ 
+         if(tuple->child) {
+-            char *command = NULL;
+-
+-            if(data->control_port) {
+-                command = crm_strdup_printf(SBIN_DIR"/pacemaker_remoted -p %s", data->control_port);
++            if(data->docker_run_command) {
++                create_nvp(xml_obj, "run_cmd", data->docker_run_command);
+             } else {
+-                command = crm_strdup_printf(SBIN_DIR"/pacemaker_remoted -p %d", DEFAULT_REMOTE_PORT);
++                create_nvp(xml_obj, "run_cmd", SBIN_DIR"/pacemaker_remoted");
+             }
+-            create_nvp(xml_obj, "run_cmd", command);
+-            free(command);
+ 
+             /* TODO: Allow users to specify their own?
+              *
+@@ -486,6 +470,7 @@ container_unpack(resource_t * rsc, pe_working_set_t * data_set)
+         clear_bit(rsc->flags, pe_rsc_unique);
+     }
+ 
++    container_data->docker_run_command = crm_element_value_copy(xml_obj, "run-command");
+     container_data->docker_run_options = crm_element_value_copy(xml_obj, "options");
+     container_data->image = crm_element_value_copy(xml_obj, "image");
+     container_data->docker_network = crm_element_value_copy(xml_obj, "network");
+@@ -886,6 +863,7 @@ container_free(resource_t * rsc)
+     free(container_data->ip_range_start);
+     free(container_data->docker_network);
+     free(container_data->docker_run_options);
++    free(container_data->docker_run_command);
+     free(container_data->docker_host_options);
+ 
+     g_list_free_full(container_data->tuples, (GDestroyNotify)tuple_free);
+diff --git a/lib/pengine/variant.h b/lib/pengine/variant.h
+index aa2a1b7..c8fe159 100644
+--- a/lib/pengine/variant.h
++++ b/lib/pengine/variant.h
+@@ -99,6 +99,7 @@ typedef struct container_variant_data_s {
+         char *ip_range_start;
+         char *docker_host_options;
+         char *docker_run_options;
++        char *docker_run_command;
+ 
+         resource_t *child;
+ 
+diff --git a/xml/resources-2.8.rng b/xml/resources-2.8.rng
+index 870e804..5c83e07 100644
+--- a/xml/resources-2.8.rng
++++ b/xml/resources-2.8.rng
+@@ -84,6 +84,9 @@
+           <optional>
+             <attribute name="masters"><data type="integer"/></attribute>
+           </optional>
++	      <optional>
++		<attribute name="run-command"> <text/></attribute>
++	      </optional>
+           <optional>
+             <attribute name="network"><text/></attribute>
+           </optional>
+-- 
+1.8.3.1
+

@@ -1,0 +1,106 @@
+From fefd8cc479b11d87fb4c4db69465de977fa94984 Mon Sep 17 00:00:00 2001
+From: HideoYamauchi <renayama19661014@ybb.ne.jp>
+Date: Tue, 20 Dec 2016 08:31:59 +0900
+Subject: [PATCH] Mid: Alert: Set SNMP_PERSISTENT_DIR directory for the
+ snmp-trap tool.
+
+---
+ extra/alerts/alert_snmp.sh.sample | 31 +++++++++++++++++++++++++------
+ 1 file changed, 25 insertions(+), 6 deletions(-)
+
+diff --git a/extra/alerts/alert_snmp.sh.sample b/extra/alerts/alert_snmp.sh.sample
+index fcdcd7e..48a2fe3 100644
+--- a/extra/alerts/alert_snmp.sh.sample
++++ b/extra/alerts/alert_snmp.sh.sample
+@@ -62,6 +62,7 @@ trap_fencing_tasks_default="all"
+ trap_resource_tasks_default="all"
+ trap_monitor_success_default="false"
+ trap_add_hires_timestamp_oid_default="true"
++trap_snmp_persistent_dir_default="/var/lib/pacemaker/snmp"
+ 
+ : ${trap_binary=${trap_binary_default}}
+ : ${trap_version=${trap_version_default}}
+@@ -72,6 +73,7 @@ trap_add_hires_timestamp_oid_default="true"
+ : ${trap_resource_tasks=${trap_resource_tasks_default}}
+ : ${trap_monitor_success=${trap_monitor_success_default}}
+ : ${trap_add_hires_timestamp_oid=${trap_add_hires_timestamp_oid_default}}
++: ${trap_snmp_persistent_dir=${trap_snmp_persistent_dir_default}}
+ 
+ if [ "${trap_add_hires_timestamp_oid}" = "true" ]; then
+     hires_timestamp="HOST-RESOURCES-MIB::hrSystemDate s ${CRM_alert_timestamp}"
+@@ -93,30 +95,41 @@ is_in_list() {
+     return 1
+ }
+ 
++if [ -z ${SNMP_PERSISTENT_DIR} ]; then
++    export SNMP_PERSISTENT_DIR="${trap_snmp_persistent_dir}"
++    # mkdir for snmp trap tools.
++    if [ ! -d ${SNMP_PERSISTENT_DIR} ]; then
++        mkdir -p ${SNMP_PERSISTENT_DIR}
++    fi
++fi
++
++rc=0
+ case "$CRM_alert_kind" in
+     node)
+         is_in_list "${trap_node_states}" "${CRM_alert_desc}"
+         [ $? -ne 0 ] && exit 0
+ 
+-        "${trap_binary}" -v "${trap_version}" ${trap_options} \
++        output=`"${trap_binary}" -v "${trap_version}" ${trap_options} \
+         -c "${trap_community}" "${CRM_alert_recipient}" "" \
+         PACEMAKER-MIB::pacemakerNotificationTrap \
+         PACEMAKER-MIB::pacemakerNotificationNode s "${CRM_alert_node}" \
+         PACEMAKER-MIB::pacemakerNotificationDescription s "${CRM_alert_desc}" \
+-        ${hires_timestamp}
++        ${hires_timestamp} 2>&1`
++        rc=$?
+         ;;
+     fencing)
+         is_in_list "${trap_fencing_tasks}" "${CRM_alert_task}"
+         [ $? -ne 0 ] && exit 0
+ 
+-        "${trap_binary}" -v "${trap_version}" ${trap_options} \
++        output=`"${trap_binary}" -v "${trap_version}" ${trap_options} \
+         -c "${trap_community}" "${CRM_alert_recipient}" "" \
+         PACEMAKER-MIB::pacemakerNotificationTrap \
+         PACEMAKER-MIB::pacemakerNotificationNode s "${CRM_alert_node}" \
+         PACEMAKER-MIB::pacemakerNotificationOperation s "${CRM_alert_task}" \
+         PACEMAKER-MIB::pacemakerNotificationDescription s "${CRM_alert_desc}" \
+         PACEMAKER-MIB::pacemakerNotificationReturnCode i ${CRM_alert_rc} \
+-        ${hires_timestamp}
++        ${hires_timestamp} 2>&1`
++        rc=$?
+         ;;
+     resource)
+         is_in_list "${trap_resource_tasks}" "${CRM_alert_task}"
+@@ -131,7 +144,7 @@ case "$CRM_alert_kind" in
+                     exit
+             fi
+ 
+-            "${trap_binary}" -v "${trap_version}" ${trap_options} \
++            output=`"${trap_binary}" -v "${trap_version}" ${trap_options} \
+             -c "${trap_community}" "${CRM_alert_recipient}" "" \
+             PACEMAKER-MIB::pacemakerNotificationTrap \
+             PACEMAKER-MIB::pacemakerNotificationNode s "${CRM_alert_node}" \
+@@ -141,10 +154,16 @@ case "$CRM_alert_kind" in
+             PACEMAKER-MIB::pacemakerNotificationStatus i ${CRM_alert_status} \
+             PACEMAKER-MIB::pacemakerNotificationReturnCode i ${CRM_alert_rc} \
+             PACEMAKER-MIB::pacemakerNotificationTargetReturnCode i ${CRM_alert_target_rc} \
+-            ${hires_timestamp}
++            ${hires_timestamp} 2>&1`
++            rc=$?
+             ;;
+         esac
+         ;;
+     *)
+         ;;
+ esac
++
++if [ $rc -ne 0 ]; then
++    echo "${trap_binary} returned error : rc=${rc} ${output}"
++fi
++
+-- 
+1.8.3.1
+

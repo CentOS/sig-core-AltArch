@@ -1,0 +1,202 @@
+From c0ddb31cd04837216e36768f027cc1b1b3ac95a3 Mon Sep 17 00:00:00 2001
+From: Andrew Beekhof <andrew@beekhof.net>
+Date: Fri, 5 May 2017 18:02:32 +1000
+Subject: [PATCH 1/4] lrmd: Ensure verbosity options are handled after
+ crm_log_init()
+
+---
+ lrmd/main.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/lrmd/main.c b/lrmd/main.c
+index 412ce24..110bef5 100644
+--- a/lrmd/main.c
++++ b/lrmd/main.c
+@@ -532,6 +532,7 @@ main(int argc, char **argv, char **envp)
+ {
+     int flag = 0;
+     int index = 0;
++    int bump_log_num = 0;
+     const char *option = NULL;
+ 
+     /* If necessary, create PID1 now before any FDs are opened */
+@@ -563,7 +564,7 @@ main(int argc, char **argv, char **envp)
+                 setenv("PCMK_remote_port", optarg, 1);
+                 break;
+             case 'V':
+-                crm_bump_log_level(argc, argv);
++                bump_log_num++;
+                 break;
+             case '?':
+             case '$':
+@@ -577,6 +578,11 @@ main(int argc, char **argv, char **envp)
+ 
+     crm_log_init(NULL, LOG_INFO, TRUE, FALSE, argc, argv, FALSE);
+ 
++    while (bump_log_num > 0) {
++        crm_bump_log_level(argc, argv);
++        bump_log_num--;
++    }
++
+     option = daemon_option("logfacility");
+     if(option && safe_str_neq(option, "none")) {
+         setenv("HA_LOGFACILITY", option, 1);  /* Used by the ocf_log/ha_log OCF macro */
+-- 
+1.8.3.1
+
+
+From 4d19e6e14d0b4a95673bfc3f04cacaae1fa8bae0 Mon Sep 17 00:00:00 2001
+From: Andrew Beekhof <andrew@beekhof.net>
+Date: Fri, 5 May 2017 18:03:00 +1000
+Subject: [PATCH 2/4] Containers: Remove redundant constraint
+
+---
+ pengine/container.c | 6 ++----
+ 1 file changed, 2 insertions(+), 4 deletions(-)
+
+diff --git a/pengine/container.c b/pengine/container.c
+index 8c70f54..49b288a 100644
+--- a/pengine/container.c
++++ b/pengine/container.c
+@@ -188,10 +188,8 @@ container_internal_constraints(resource_t * rsc, pe_working_set_t * data_set)
+                 id = crm_strdup_printf("%s-remote-with-ip-%d", rsc->id, tuple->offset);
+                 rsc_colocation_new(id, NULL, INFINITY, tuple->remote, tuple->ip, NULL, NULL, data_set);
+                 free(id);
+-            } else {
+-                id = crm_strdup_printf("%s-remote-with-docker-%d", rsc->id, tuple->offset);
+-                rsc_colocation_new(id, NULL, INFINITY, tuple->remote, tuple->docker, NULL, NULL, data_set);
+-                free(id);
++//            } else {
++                // remote-with-docker is already handled in native_internal_constraints() by 'resource-with-container'
+             }
+         }
+ 
+-- 
+1.8.3.1
+
+
+From 42f9f877c0745697de144d55a93297e570ace7a6 Mon Sep 17 00:00:00 2001
+From: Andrew Beekhof <andrew@beekhof.net>
+Date: Fri, 5 May 2017 18:04:32 +1000
+Subject: [PATCH 3/4] Containers: Ensure remote resources are only allocated to
+ full cluster nodes
+
+---
+ lib/pengine/container.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/lib/pengine/container.c b/lib/pengine/container.c
+index 45eadea..a7aeb43 100644
+--- a/lib/pengine/container.c
++++ b/lib/pengine/container.c
+@@ -342,6 +342,7 @@ create_remote_resource(
+     pe_working_set_t * data_set) 
+ {
+     if (tuple->child && valid_network(data)) {
++        GHashTableIter gIter;
+         node_t *node = NULL;
+         xmlNode *xml_obj = NULL;
+         xmlNode *xml_remote = NULL;
+@@ -412,6 +413,14 @@ create_remote_resource(
+             return FALSE;
+         }
+ 
++        g_hash_table_iter_init(&gIter, tuple->remote->allowed_nodes);
++        while (g_hash_table_iter_next(&gIter, NULL, (void **)&node)) {
++            if(is_remote_node(node)) {
++                /* Remote resources can only run on 'normal' cluster node */
++                node->weight = -INFINITY;
++            }
++        }
++
+         tuple->node->details->remote_rsc = tuple->remote;
+         parent->children = g_list_append(parent->children, tuple->remote);
+     }
+-- 
+1.8.3.1
+
+
+From b71a458dbd2ae06a86c5f99cbdd1e8010094e22d Mon Sep 17 00:00:00 2001
+From: Andrew Beekhof <andrew@beekhof.net>
+Date: Fri, 5 May 2017 18:05:14 +1000
+Subject: [PATCH 4/4] Containers: Relax docker/remote colocation constraint
+ when appropriate
+
+We prefer the remote resource to be allocated to the same node as the
+corresponding container, but there are situations where it is safe to
+allow it to run elsewhere.
+
+We may want to expand this capability to other scenarios in the future,
+but for now limit it to bundle resources since we generate the resources
+for those and know they are safe.
+---
+ include/crm/pengine/status.h |  2 ++
+ lib/pengine/container.c      | 13 +++++++++++++
+ pengine/native.c             |  7 +++++--
+ 3 files changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/include/crm/pengine/status.h b/include/crm/pengine/status.h
+index 4cc3919..b9032b5 100644
+--- a/include/crm/pengine/status.h
++++ b/include/crm/pengine/status.h
+@@ -192,6 +192,8 @@ struct node_s {
+ #  define pe_rsc_try_reload     0x00001000ULL
+ #  define pe_rsc_reload         0x00002000ULL
+ 
++#  define pe_rsc_allow_remote_remotes 0x00004000ULL
++
+ #  define pe_rsc_failed		0x00010000ULL
+ #  define pe_rsc_shutdown	0x00020000ULL
+ #  define pe_rsc_runnable	0x00040000ULL
+diff --git a/lib/pengine/container.c b/lib/pengine/container.c
+index a7aeb43..1280227 100644
+--- a/lib/pengine/container.c
++++ b/lib/pengine/container.c
+@@ -446,6 +446,19 @@ create_container(
+         add_hash_param(tuple->child->meta, "external-ip", tuple->ipaddr);
+     }
+ 
++    if(tuple->remote) {
++        /*
++         * Allow the remote connection resource to be allocated to a
++         * different node than the one on which the docker container
++         * is active.
++         *
++         * Makes it possible to have remote nodes, running docker
++         * containers with pacemaker_remoted inside in order to start
++         * services inside those containers.
++         */
++        set_bit(tuple->remote->flags, pe_rsc_allow_remote_remotes);
++    }
++
+     return FALSE;
+ }
+ 
+diff --git a/pengine/native.c b/pengine/native.c
+index d0cebb3..f3ea1c5 100644
+--- a/pengine/native.c
++++ b/pengine/native.c
+@@ -1466,7 +1466,7 @@ native_internal_constraints(resource_t * rsc, pe_working_set_t * data_set)
+                 }
+             }
+         } else {
+-
++            int score = 10000; /* Highly preferred but not essential */
+             crm_trace("Generating order and colocation rules for rsc %s with container %s", rsc->id, rsc->container->id);
+             custom_action_order(rsc->container, generate_op_key(rsc->container->id, RSC_START, 0), NULL,
+                                 rsc, generate_op_key(rsc->id, RSC_START, 0), NULL,
+@@ -1476,7 +1476,10 @@ native_internal_constraints(resource_t * rsc, pe_working_set_t * data_set)
+                                 rsc->container, generate_op_key(rsc->container->id, RSC_STOP, 0), NULL,
+                                 pe_order_implies_first, data_set);
+ 
+-            rsc_colocation_new("resource-with-container", NULL, INFINITY, rsc, rsc->container, NULL,
++            if(is_not_set(rsc->flags, pe_rsc_allow_remote_remotes)) {
++                score = INFINITY; /* Force them to run on the same host */ 
++            }
++            rsc_colocation_new("resource-with-container", NULL, score, rsc, rsc->container, NULL,
+                                NULL, data_set);
+         }
+     }
+-- 
+1.8.3.1
+

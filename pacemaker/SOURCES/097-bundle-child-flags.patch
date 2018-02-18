@@ -1,0 +1,539 @@
+From 4ee68a2cd2c9c8b0adf63f8fd267c1590820abe6 Mon Sep 17 00:00:00 2001
+From: Andrew Beekhof <andrew@beekhof.net>
+Date: Tue, 10 Oct 2017 22:55:16 +1100
+Subject: [PATCH 1/2] Fix: PE: Only pass requests for promote/demote flags onto
+ the bundle's child
+
+Otherwise the whole bundle gets stopped if the child is unrunnable.
+---
+ pengine/container.c | 26 +++++++++++++++++++-------
+ 1 file changed, 19 insertions(+), 7 deletions(-)
+
+diff --git a/pengine/container.c b/pengine/container.c
+index a205c53..df5a238 100644
+--- a/pengine/container.c
++++ b/pengine/container.c
+@@ -495,18 +495,30 @@ container_rsc_colocation_rh(resource_t * rsc_lh, resource_t * rsc, rsc_colocatio
+ enum pe_action_flags
+ container_action_flags(action_t * action, node_t * node)
+ {
++    GListPtr containers = NULL;
+     enum pe_action_flags flags = 0;
+     container_variant_data_t *data = NULL;
+ 
+     get_container_variant_data(data, action->rsc);
+     if(data->child) {
+-        flags = summary_action_flags(action, data->child->children, node);
+-
+-    } else {
+-        GListPtr containers = get_container_list(action->rsc);
+-        flags = summary_action_flags(action, containers, node);
+-        g_list_free(containers);
+-    }
++        enum action_tasks task = get_complex_task(data->child, action->task, TRUE);
++        switch(task) {
++            case no_action:
++            case action_notify:
++            case action_notified:
++            case action_promote:
++            case action_promoted:
++            case action_demote:
++            case action_demoted:
++                return summary_action_flags(action, data->child->children, node);
++            default:
++                break;
++        }
++    }
++
++    containers = get_container_list(action->rsc);
++    flags = summary_action_flags(action, containers, node);
++    g_list_free(containers);
+     return flags;
+ }
+ 
+-- 
+1.8.3.1
+
+
+From c0180b4e8b6490798ea0388a1dab95836aac5b29 Mon Sep 17 00:00:00 2001
+From: Andrew Beekhof <andrew@beekhof.net>
+Date: Tue, 10 Oct 2017 23:01:55 +1100
+Subject: [PATCH 2/2] Test: PE: Only pass requests for promote/demote flags
+ onto the bundle's child
+
+---
+ pengine/test10/bundle-nested-colocation.dot        |  8 ++++
+ pengine/test10/bundle-nested-colocation.exp        | 48 +++++++++++++++++++---
+ pengine/test10/bundle-nested-colocation.summary    | 10 +++--
+ pengine/test10/bundle-order-partial-start-2.dot    |  5 +++
+ pengine/test10/bundle-order-partial-start-2.exp    | 34 +++++++++++++--
+ .../test10/bundle-order-partial-start-2.summary    |  2 +
+ pengine/test10/bundle-order-partial-stop.dot       | 15 -------
+ pengine/test10/bundle-order-stop.dot               | 15 -------
+ 8 files changed, 94 insertions(+), 43 deletions(-)
+
+diff --git a/pengine/test10/bundle-nested-colocation.dot b/pengine/test10/bundle-nested-colocation.dot
+index baa80e2..21c9700 100644
+--- a/pengine/test10/bundle-nested-colocation.dot
++++ b/pengine/test10/bundle-nested-colocation.dot
+@@ -84,6 +84,7 @@ digraph "g" {
+ "rabbitmq-bundle-docker-0_start_0 overcloud-rabbit-0" [ style=bold color="green" fontcolor="black"]
+ "rabbitmq-bundle-docker-0_stop_0 overcloud-rabbit-0" -> "all_stopped" [ style = bold]
+ "rabbitmq-bundle-docker-0_stop_0 overcloud-rabbit-0" -> "rabbitmq-bundle-docker-0_start_0 overcloud-rabbit-0" [ style = bold]
++"rabbitmq-bundle-docker-0_stop_0 overcloud-rabbit-0" -> "rabbitmq-bundle_stopped_0" [ style = bold]
+ "rabbitmq-bundle-docker-0_stop_0 overcloud-rabbit-0" [ style=bold color="green" fontcolor="black"]
+ "rabbitmq-bundle-docker-1_monitor_60000 overcloud-rabbit-1" [ style=bold color="green" fontcolor="black"]
+ "rabbitmq-bundle-docker-1_start_0 overcloud-rabbit-1" -> "rabbitmq-bundle-1_start_0 overcloud-controller-1" [ style = bold]
+@@ -93,6 +94,7 @@ digraph "g" {
+ "rabbitmq-bundle-docker-1_start_0 overcloud-rabbit-1" [ style=bold color="green" fontcolor="black"]
+ "rabbitmq-bundle-docker-1_stop_0 overcloud-rabbit-1" -> "all_stopped" [ style = bold]
+ "rabbitmq-bundle-docker-1_stop_0 overcloud-rabbit-1" -> "rabbitmq-bundle-docker-1_start_0 overcloud-rabbit-1" [ style = bold]
++"rabbitmq-bundle-docker-1_stop_0 overcloud-rabbit-1" -> "rabbitmq-bundle_stopped_0" [ style = bold]
+ "rabbitmq-bundle-docker-1_stop_0 overcloud-rabbit-1" [ style=bold color="green" fontcolor="black"]
+ "rabbitmq-bundle-docker-2_monitor_60000 overcloud-rabbit-2" [ style=bold color="green" fontcolor="black"]
+ "rabbitmq-bundle-docker-2_start_0 overcloud-rabbit-2" -> "rabbitmq-bundle-2_start_0 overcloud-controller-2" [ style = bold]
+@@ -102,6 +104,7 @@ digraph "g" {
+ "rabbitmq-bundle-docker-2_start_0 overcloud-rabbit-2" [ style=bold color="green" fontcolor="black"]
+ "rabbitmq-bundle-docker-2_stop_0 overcloud-rabbit-2" -> "all_stopped" [ style = bold]
+ "rabbitmq-bundle-docker-2_stop_0 overcloud-rabbit-2" -> "rabbitmq-bundle-docker-2_start_0 overcloud-rabbit-2" [ style = bold]
++"rabbitmq-bundle-docker-2_stop_0 overcloud-rabbit-2" -> "rabbitmq-bundle_stopped_0" [ style = bold]
+ "rabbitmq-bundle-docker-2_stop_0 overcloud-rabbit-2" [ style=bold color="green" fontcolor="black"]
+ "rabbitmq-bundle_running_0" [ style=bold color="green" fontcolor="orange"]
+ "rabbitmq-bundle_start_0" -> "rabbitmq-bundle-clone_start_0" [ style = bold]
+@@ -109,6 +112,11 @@ digraph "g" {
+ "rabbitmq-bundle_start_0" -> "rabbitmq-bundle-docker-1_start_0 overcloud-rabbit-1" [ style = bold]
+ "rabbitmq-bundle_start_0" -> "rabbitmq-bundle-docker-2_start_0 overcloud-rabbit-2" [ style = bold]
+ "rabbitmq-bundle_start_0" [ style=bold color="green" fontcolor="orange"]
++"rabbitmq-bundle_stop_0" -> "rabbitmq-bundle-docker-0_stop_0 overcloud-rabbit-0" [ style = bold]
++"rabbitmq-bundle_stop_0" -> "rabbitmq-bundle-docker-1_stop_0 overcloud-rabbit-1" [ style = bold]
++"rabbitmq-bundle_stop_0" -> "rabbitmq-bundle-docker-2_stop_0 overcloud-rabbit-2" [ style = bold]
++"rabbitmq-bundle_stop_0" [ style=bold color="green" fontcolor="orange"]
++"rabbitmq-bundle_stopped_0" [ style=bold color="green" fontcolor="orange"]
+ "rabbitmq:0_monitor_0 rabbitmq-bundle-0" -> "rabbitmq-bundle-clone_start_0" [ style = bold]
+ "rabbitmq:0_monitor_0 rabbitmq-bundle-0" [ style=bold color="green" fontcolor="black"]
+ "rabbitmq:0_monitor_10000 rabbitmq-bundle-0" [ style=bold color="green" fontcolor="black"]
+diff --git a/pengine/test10/bundle-nested-colocation.exp b/pengine/test10/bundle-nested-colocation.exp
+index 266d4c0..1f2396e 100644
+--- a/pengine/test10/bundle-nested-colocation.exp
++++ b/pengine/test10/bundle-nested-colocation.exp
+@@ -305,7 +305,11 @@
+         <attributes CRM_meta_on_node="overcloud-rabbit-0" CRM_meta_on_node_uuid="overcloud-rabbit-0" CRM_meta_timeout="20000" allow_pull="true"  force_kill="false" image="192.168.24.1:8787/tripleoupstream/centos-binary-rabbitmq:latest" monitor_cmd="/bin/true" mount_points="/var/log/pacemaker/bundles/rabbitmq-bundle-0" reuse="false" run_cmd="/bin/bash /usr/local/bin/kolla_start" run_opts=" --restart=no --net=host -e PCMK_remote_port=3121 -v /var/lib/kolla/config_files/rabbitmq.json:/var/lib/kolla/config_files/config.json:ro -v /var/lib/config-data/puppet-generated/rabbitmq/:/var/lib/kolla/config_files/src:ro -v /etc/hosts:/etc/hosts:ro -v /etc/localtime:/etc/localtime:ro -v /var/lib/rabbitmq:/var/lib/rabbitmq:rw -v /etc/pki/ca-trust/extracted:/etc/pki/ca-trust/extracted:ro -v /etc/pki/tls/certs/ca-bundle.crt:/etc/pki/tls/certs/ca-bundle.crt:ro -v /etc/pki/tls/certs/ca-bundle.trust.crt:/etc/pki/tls/certs/ca-bundle.trust.crt:ro -v /etc/pki/tls/cert.pem:/etc/pki/tls/cert.pem:ro -v /dev/log:/dev/log:rw -v /etc/pacemaker/authkey:/etc/pacemaker/authkey -v /var/log/pacemaker/bundles/rabbitmq-bundle-0:/var/log -p 3121:3121 --user=root --log-driver=journald -e KOLLA_CONFIG_STRATEGY=COPY_ALWAYS "/>
+       </rsc_op>
+     </action_set>
+-    <inputs/>
++    <inputs>
++      <trigger>
++        <pseudo_event id="52" operation="stop" operation_key="rabbitmq-bundle_stop_0"/>
++      </trigger>
++    </inputs>
+   </synapse>
+   <synapse id="19">
+     <action_set>
+@@ -441,7 +445,11 @@
+         <attributes CRM_meta_on_node="overcloud-rabbit-1" CRM_meta_on_node_uuid="overcloud-rabbit-1" CRM_meta_timeout="20000" allow_pull="true"  force_kill="false" image="192.168.24.1:8787/tripleoupstream/centos-binary-rabbitmq:latest" monitor_cmd="/bin/true" mount_points="/var/log/pacemaker/bundles/rabbitmq-bundle-1" reuse="false" run_cmd="/bin/bash /usr/local/bin/kolla_start" run_opts=" --restart=no --net=host -e PCMK_remote_port=3121 -v /var/lib/kolla/config_files/rabbitmq.json:/var/lib/kolla/config_files/config.json:ro -v /var/lib/config-data/puppet-generated/rabbitmq/:/var/lib/kolla/config_files/src:ro -v /etc/hosts:/etc/hosts:ro -v /etc/localtime:/etc/localtime:ro -v /var/lib/rabbitmq:/var/lib/rabbitmq:rw -v /etc/pki/ca-trust/extracted:/etc/pki/ca-trust/extracted:ro -v /etc/pki/tls/certs/ca-bundle.crt:/etc/pki/tls/certs/ca-bundle.crt:ro -v /etc/pki/tls/certs/ca-bundle.trust.crt:/etc/pki/tls/certs/ca-bundle.trust.crt:ro -v /etc/pki/tls/cert.pem:/etc/pki/tls/cert.pem:ro -v /dev/log:/dev/log:rw -v /etc/pacemaker/authkey:/etc/pacemaker/authkey -v /var/log/pacemaker/bundles/rabbitmq-bundle-1:/var/log -p 3121:3121 --user=root --log-driver=journald -e KOLLA_CONFIG_STRATEGY=COPY_ALWAYS "/>
+       </rsc_op>
+     </action_set>
+-    <inputs/>
++    <inputs>
++      <trigger>
++        <pseudo_event id="52" operation="stop" operation_key="rabbitmq-bundle_stop_0"/>
++      </trigger>
++    </inputs>
+   </synapse>
+   <synapse id="30">
+     <action_set>
+@@ -577,7 +585,11 @@
+         <attributes CRM_meta_on_node="overcloud-rabbit-2" CRM_meta_on_node_uuid="overcloud-rabbit-2" CRM_meta_timeout="20000" allow_pull="true"  force_kill="false" image="192.168.24.1:8787/tripleoupstream/centos-binary-rabbitmq:latest" monitor_cmd="/bin/true" mount_points="/var/log/pacemaker/bundles/rabbitmq-bundle-2" reuse="false" run_cmd="/bin/bash /usr/local/bin/kolla_start" run_opts=" --restart=no --net=host -e PCMK_remote_port=3121 -v /var/lib/kolla/config_files/rabbitmq.json:/var/lib/kolla/config_files/config.json:ro -v /var/lib/config-data/puppet-generated/rabbitmq/:/var/lib/kolla/config_files/src:ro -v /etc/hosts:/etc/hosts:ro -v /etc/localtime:/etc/localtime:ro -v /var/lib/rabbitmq:/var/lib/rabbitmq:rw -v /etc/pki/ca-trust/extracted:/etc/pki/ca-trust/extracted:ro -v /etc/pki/tls/certs/ca-bundle.crt:/etc/pki/tls/certs/ca-bundle.crt:ro -v /etc/pki/tls/certs/ca-bundle.trust.crt:/etc/pki/tls/certs/ca-bundle.trust.crt:ro -v /etc/pki/tls/cert.pem:/etc/pki/tls/cert.pem:ro -v /dev/log:/dev/log:rw -v /etc/pacemaker/authkey:/etc/pacemaker/authkey -v /var/log/pacemaker/bundles/rabbitmq-bundle-2:/var/log -p 3121:3121 --user=root --log-driver=journald -e KOLLA_CONFIG_STRATEGY=COPY_ALWAYS "/>
+       </rsc_op>
+     </action_set>
+-    <inputs/>
++    <inputs>
++      <trigger>
++        <pseudo_event id="52" operation="stop" operation_key="rabbitmq-bundle_stop_0"/>
++      </trigger>
++    </inputs>
+   </synapse>
+   <synapse id="41">
+     <action_set>
+@@ -708,6 +720,32 @@
+   </synapse>
+   <synapse id="51" priority="1000000">
+     <action_set>
++      <pseudo_event id="53" operation="stopped" operation_key="rabbitmq-bundle_stopped_0">
++        <attributes CRM_meta_timeout="20000" />
++      </pseudo_event>
++    </action_set>
++    <inputs>
++      <trigger>
++        <rsc_op id="41" operation="stop" operation_key="rabbitmq-bundle-docker-0_stop_0" on_node="overcloud-rabbit-0" on_node_uuid="overcloud-rabbit-0" router_node="overcloud-controller-0"/>
++      </trigger>
++      <trigger>
++        <rsc_op id="44" operation="stop" operation_key="rabbitmq-bundle-docker-1_stop_0" on_node="overcloud-rabbit-1" on_node_uuid="overcloud-rabbit-1" router_node="overcloud-controller-1"/>
++      </trigger>
++      <trigger>
++        <rsc_op id="47" operation="stop" operation_key="rabbitmq-bundle-docker-2_stop_0" on_node="overcloud-rabbit-2" on_node_uuid="overcloud-rabbit-2" router_node="overcloud-controller-2"/>
++      </trigger>
++    </inputs>
++  </synapse>
++  <synapse id="52">
++    <action_set>
++      <pseudo_event id="52" operation="stop" operation_key="rabbitmq-bundle_stop_0">
++        <attributes CRM_meta_timeout="20000" />
++      </pseudo_event>
++    </action_set>
++    <inputs/>
++  </synapse>
++  <synapse id="53" priority="1000000">
++    <action_set>
+       <pseudo_event id="51" operation="running" operation_key="rabbitmq-bundle_running_0">
+         <attributes CRM_meta_timeout="20000" />
+       </pseudo_event>
+@@ -727,7 +765,7 @@
+       </trigger>
+     </inputs>
+   </synapse>
+-  <synapse id="52">
++  <synapse id="54">
+     <action_set>
+       <pseudo_event id="50" operation="start" operation_key="rabbitmq-bundle_start_0">
+         <attributes CRM_meta_timeout="20000" />
+@@ -735,7 +773,7 @@
+     </action_set>
+     <inputs/>
+   </synapse>
+-  <synapse id="53">
++  <synapse id="55">
+     <action_set>
+       <pseudo_event id="10" operation="all_stopped" operation_key="all_stopped">
+         <attributes />
+diff --git a/pengine/test10/bundle-nested-colocation.summary b/pengine/test10/bundle-nested-colocation.summary
+index 2cc1c7c..1986763 100644
+--- a/pengine/test10/bundle-nested-colocation.summary
++++ b/pengine/test10/bundle-nested-colocation.summary
+@@ -29,39 +29,41 @@ Transition Summary:
+ 
+ Executing cluster transition:
+  * Pseudo action:   rabbitmq-bundle-clone_pre_notify_start_0
+- * Resource action: rabbitmq-bundle-docker-0 stop on overcloud-rabbit-0
+  * Resource action: rabbitmq-bundle-0 monitor on overcloud-galera-2
+  * Resource action: rabbitmq-bundle-0 monitor on overcloud-galera-1
+  * Resource action: rabbitmq-bundle-0 monitor on overcloud-galera-0
+  * Resource action: rabbitmq-bundle-0 monitor on overcloud-controller-2
+  * Resource action: rabbitmq-bundle-0 monitor on overcloud-controller-1
+  * Resource action: rabbitmq-bundle-0 monitor on overcloud-controller-0
+- * Resource action: rabbitmq-bundle-docker-1 stop on overcloud-rabbit-1
+  * Resource action: rabbitmq-bundle-1 monitor on overcloud-galera-2
+  * Resource action: rabbitmq-bundle-1 monitor on overcloud-galera-1
+  * Resource action: rabbitmq-bundle-1 monitor on overcloud-galera-0
+  * Resource action: rabbitmq-bundle-1 monitor on overcloud-controller-2
+  * Resource action: rabbitmq-bundle-1 monitor on overcloud-controller-1
+  * Resource action: rabbitmq-bundle-1 monitor on overcloud-controller-0
+- * Resource action: rabbitmq-bundle-docker-2 stop on overcloud-rabbit-2
+  * Resource action: rabbitmq-bundle-2 monitor on overcloud-galera-2
+  * Resource action: rabbitmq-bundle-2 monitor on overcloud-galera-1
+  * Resource action: rabbitmq-bundle-2 monitor on overcloud-galera-0
+  * Resource action: rabbitmq-bundle-2 monitor on overcloud-controller-2
+  * Resource action: rabbitmq-bundle-2 monitor on overcloud-controller-1
+  * Resource action: rabbitmq-bundle-2 monitor on overcloud-controller-0
++ * Pseudo action:   rabbitmq-bundle_stop_0
+  * Pseudo action:   rabbitmq-bundle_start_0
+- * Pseudo action:   all_stopped
+  * Pseudo action:   rabbitmq-bundle-clone_confirmed-pre_notify_start_0
++ * Resource action: rabbitmq-bundle-docker-0 stop on overcloud-rabbit-0
+  * Resource action: rabbitmq-bundle-docker-0 start on overcloud-rabbit-0
+  * Resource action: rabbitmq-bundle-docker-0 monitor=60000 on overcloud-rabbit-0
+  * Resource action: rabbitmq-bundle-0 start on overcloud-controller-0
++ * Resource action: rabbitmq-bundle-docker-1 stop on overcloud-rabbit-1
+  * Resource action: rabbitmq-bundle-docker-1 start on overcloud-rabbit-1
+  * Resource action: rabbitmq-bundle-docker-1 monitor=60000 on overcloud-rabbit-1
+  * Resource action: rabbitmq-bundle-1 start on overcloud-controller-1
++ * Resource action: rabbitmq-bundle-docker-2 stop on overcloud-rabbit-2
+  * Resource action: rabbitmq-bundle-docker-2 start on overcloud-rabbit-2
+  * Resource action: rabbitmq-bundle-docker-2 monitor=60000 on overcloud-rabbit-2
+  * Resource action: rabbitmq-bundle-2 start on overcloud-controller-2
++ * Pseudo action:   rabbitmq-bundle_stopped_0
++ * Pseudo action:   all_stopped
+  * Resource action: rabbitmq:0      monitor on rabbitmq-bundle-0
+  * Resource action: rabbitmq:1      monitor on rabbitmq-bundle-1
+  * Resource action: rabbitmq:2      monitor on rabbitmq-bundle-2
+diff --git a/pengine/test10/bundle-order-partial-start-2.dot b/pengine/test10/bundle-order-partial-start-2.dot
+index d6608bb..08c768d 100644
+--- a/pengine/test10/bundle-order-partial-start-2.dot
++++ b/pengine/test10/bundle-order-partial-start-2.dot
+@@ -19,6 +19,7 @@ digraph "g" {
+ "galera-bundle-docker-0_start_0 undercloud" [ style=bold color="green" fontcolor="black"]
+ "galera-bundle-docker-0_stop_0 undercloud" -> "all_stopped" [ style = bold]
+ "galera-bundle-docker-0_stop_0 undercloud" -> "galera-bundle-docker-0_start_0 undercloud" [ style = bold]
++"galera-bundle-docker-0_stop_0 undercloud" -> "galera-bundle_stopped_0" [ style = bold]
+ "galera-bundle-docker-0_stop_0 undercloud" [ style=bold color="green" fontcolor="black"]
+ "galera-bundle-master_running_0" -> "galera-bundle_running_0" [ style = bold]
+ "galera-bundle-master_running_0" [ style=bold color="green" fontcolor="orange"]
+@@ -29,6 +30,10 @@ digraph "g" {
+ "galera-bundle_start_0" -> "galera-bundle-docker-0_start_0 undercloud" [ style = bold]
+ "galera-bundle_start_0" -> "galera-bundle-master_start_0" [ style = bold]
+ "galera-bundle_start_0" [ style=bold color="green" fontcolor="orange"]
++"galera-bundle_stop_0" -> "galera-bundle-docker-0_stop_0 undercloud" [ style = bold]
++"galera-bundle_stop_0" [ style=bold color="green" fontcolor="orange"]
++"galera-bundle_stopped_0" -> "galera-bundle_start_0" [ style = bold]
++"galera-bundle_stopped_0" [ style=bold color="green" fontcolor="orange"]
+ "galera:0_monitor_0 galera-bundle-0" -> "galera-bundle-master_start_0" [ style = bold]
+ "galera:0_monitor_0 galera-bundle-0" [ style=bold color="green" fontcolor="black"]
+ "galera:0_monitor_20000 galera-bundle-0" [ style=bold color="green" fontcolor="black"]
+diff --git a/pengine/test10/bundle-order-partial-start-2.exp b/pengine/test10/bundle-order-partial-start-2.exp
+index d17819c..1be25f6 100644
+--- a/pengine/test10/bundle-order-partial-start-2.exp
++++ b/pengine/test10/bundle-order-partial-start-2.exp
+@@ -254,6 +254,9 @@
+       <trigger>
+         <rsc_op id="42" operation="stop" operation_key="galera-bundle-0_stop_0" on_node="undercloud" on_node_uuid="1"/>
+       </trigger>
++      <trigger>
++        <pseudo_event id="46" operation="stop" operation_key="galera-bundle_stop_0"/>
++      </trigger>
+     </inputs>
+   </synapse>
+   <synapse id="18">
+@@ -525,6 +528,26 @@
+   </synapse>
+   <synapse id="39" priority="1000000">
+     <action_set>
++      <pseudo_event id="47" operation="stopped" operation_key="galera-bundle_stopped_0">
++        <attributes CRM_meta_timeout="20000" />
++      </pseudo_event>
++    </action_set>
++    <inputs>
++      <trigger>
++        <rsc_op id="40" operation="stop" operation_key="galera-bundle-docker-0_stop_0" on_node="undercloud" on_node_uuid="1"/>
++      </trigger>
++    </inputs>
++  </synapse>
++  <synapse id="40">
++    <action_set>
++      <pseudo_event id="46" operation="stop" operation_key="galera-bundle_stop_0">
++        <attributes CRM_meta_timeout="20000" />
++      </pseudo_event>
++    </action_set>
++    <inputs/>
++  </synapse>
++  <synapse id="41" priority="1000000">
++    <action_set>
+       <pseudo_event id="45" operation="running" operation_key="galera-bundle_running_0">
+         <attributes CRM_meta_timeout="20000" />
+       </pseudo_event>
+@@ -538,7 +561,7 @@
+       </trigger>
+     </inputs>
+   </synapse>
+-  <synapse id="40">
++  <synapse id="42">
+     <action_set>
+       <pseudo_event id="44" operation="start" operation_key="galera-bundle_start_0">
+         <attributes CRM_meta_timeout="20000" />
+@@ -549,6 +572,9 @@
+         <pseudo_event id="23" operation="running" operation_key="rabbitmq-bundle_running_0"/>
+       </trigger>
+       <trigger>
++        <pseudo_event id="47" operation="stopped" operation_key="galera-bundle_stopped_0"/>
++      </trigger>
++      <trigger>
+         <pseudo_event id="100" operation="promoted" operation_key="redis-bundle_promoted_0"/>
+       </trigger>
+       <trigger>
+@@ -556,7 +582,7 @@
+       </trigger>
+     </inputs>
+   </synapse>
+-  <synapse id="41" priority="1000000">
++  <synapse id="43" priority="1000000">
+     <action_set>
+       <pseudo_event id="23" operation="running" operation_key="rabbitmq-bundle_running_0">
+         <attributes CRM_meta_timeout="20000" />
+@@ -568,7 +594,7 @@
+       </trigger>
+     </inputs>
+   </synapse>
+-  <synapse id="42">
++  <synapse id="44">
+     <action_set>
+       <pseudo_event id="22" operation="start" operation_key="rabbitmq-bundle_start_0">
+         <attributes CRM_meta_timeout="20000" />
+@@ -576,7 +602,7 @@
+     </action_set>
+     <inputs/>
+   </synapse>
+-  <synapse id="43">
++  <synapse id="45">
+     <action_set>
+       <pseudo_event id="14" operation="all_stopped" operation_key="all_stopped">
+         <attributes />
+diff --git a/pengine/test10/bundle-order-partial-start-2.summary b/pengine/test10/bundle-order-partial-start-2.summary
+index f9748d2..2e88bee 100644
+--- a/pengine/test10/bundle-order-partial-start-2.summary
++++ b/pengine/test10/bundle-order-partial-start-2.summary
+@@ -36,6 +36,7 @@ Executing cluster transition:
+  * Resource action: haproxy-bundle-docker-0 monitor on undercloud
+  * Pseudo action:   haproxy-bundle_start_0
+  * Pseudo action:   redis-bundle_promote_0
++ * Pseudo action:   galera-bundle_stop_0
+  * Pseudo action:   rabbitmq-bundle_start_0
+  * Pseudo action:   rabbitmq-bundle-clone_confirmed-pre_notify_start_0
+  * Pseudo action:   rabbitmq-bundle-clone_start_0
+@@ -45,6 +46,7 @@ Executing cluster transition:
+  * Pseudo action:   redis-bundle-master_promote_0
+  * Resource action: haproxy-bundle-docker-0 start on undercloud
+  * Pseudo action:   haproxy-bundle_running_0
++ * Pseudo action:   galera-bundle_stopped_0
+  * Pseudo action:   all_stopped
+  * Resource action: rabbitmq:0      start on rabbitmq-bundle-0
+  * Pseudo action:   rabbitmq-bundle-clone_running_0
+diff --git a/pengine/test10/bundle-order-partial-stop.dot b/pengine/test10/bundle-order-partial-stop.dot
+index 3fade95..5d0c039 100644
+--- a/pengine/test10/bundle-order-partial-stop.dot
++++ b/pengine/test10/bundle-order-partial-stop.dot
+@@ -20,7 +20,6 @@ digraph "g" {
+ "galera-bundle-master_demoted_0" -> "galera-bundle-master_stop_0" [ style = bold]
+ "galera-bundle-master_demoted_0" -> "galera-bundle_demoted_0" [ style = bold]
+ "galera-bundle-master_demoted_0" [ style=bold color="green" fontcolor="orange"]
+-"galera-bundle-master_running_0" -> "galera-bundle_running_0" [ style = dashed]
+ "galera-bundle-master_running_0" [ style=dashed color="red" fontcolor="orange"]
+ "galera-bundle-master_start_0" -> "galera-bundle-master_running_0" [ style = dashed]
+ "galera-bundle-master_start_0" -> "galera_start_0 galera-bundle-0" [ style = dashed]
+@@ -34,17 +33,12 @@ digraph "g" {
+ "galera-bundle_demote_0" -> "galera-bundle-master_demote_0" [ style = bold]
+ "galera-bundle_demote_0" -> "galera-bundle_demoted_0" [ style = bold]
+ "galera-bundle_demote_0" [ style=bold color="green" fontcolor="orange"]
+-"galera-bundle_demoted_0" -> "galera-bundle_start_0" [ style = dashed]
+ "galera-bundle_demoted_0" -> "galera-bundle_stop_0" [ style = bold]
+ "galera-bundle_demoted_0" [ style=bold color="green" fontcolor="orange"]
+-"galera-bundle_running_0" [ style=dashed color="red" fontcolor="orange"]
+-"galera-bundle_start_0" -> "galera-bundle-master_start_0" [ style = dashed]
+-"galera-bundle_start_0" [ style=dashed color="red" fontcolor="orange"]
+ "galera-bundle_stop_0" -> "galera-bundle-docker-0_stop_0 undercloud" [ style = bold]
+ "galera-bundle_stop_0" -> "galera-bundle-master_stop_0" [ style = bold]
+ "galera-bundle_stop_0" -> "galera_stop_0 galera-bundle-0" [ style = bold]
+ "galera-bundle_stop_0" [ style=bold color="green" fontcolor="orange"]
+-"galera-bundle_stopped_0" -> "galera-bundle_start_0" [ style = dashed]
+ "galera-bundle_stopped_0" -> "redis-bundle_stop_0" [ style = bold]
+ "galera-bundle_stopped_0" [ style=bold color="green" fontcolor="orange"]
+ "galera_demote_0 galera-bundle-0" -> "galera-bundle-0_stop_0 undercloud" [ style = bold]
+@@ -118,7 +112,6 @@ digraph "g" {
+ "rabbitmq-bundle-0_stop_0 undercloud" -> "do_shutdown undercloud" [ style = bold]
+ "rabbitmq-bundle-0_stop_0 undercloud" -> "rabbitmq-bundle-docker-0_stop_0 undercloud" [ style = bold]
+ "rabbitmq-bundle-0_stop_0 undercloud" [ style=bold color="green" fontcolor="black"]
+-"rabbitmq-bundle-clone_confirmed-post_notify_running_0" -> "rabbitmq-bundle_running_0" [ style = dashed]
+ "rabbitmq-bundle-clone_confirmed-post_notify_running_0" -> "rabbitmq_monitor_10000 rabbitmq-bundle-0" [ style = dashed]
+ "rabbitmq-bundle-clone_confirmed-post_notify_running_0" [ style=dashed color="red" fontcolor="orange"]
+ "rabbitmq-bundle-clone_confirmed-post_notify_stopped_0" -> "all_stopped" [ style = bold]
+@@ -155,7 +148,6 @@ digraph "g" {
+ "rabbitmq-bundle-docker-0_stop_0 undercloud" -> "do_shutdown undercloud" [ style = bold]
+ "rabbitmq-bundle-docker-0_stop_0 undercloud" -> "rabbitmq-bundle_stopped_0" [ style = bold]
+ "rabbitmq-bundle-docker-0_stop_0 undercloud" [ style=bold color="green" fontcolor="black"]
+-"rabbitmq-bundle_running_0" [ style=dashed color="red" fontcolor="orange"]
+ "rabbitmq-bundle_stop_0" -> "rabbitmq-bundle-clone_stop_0" [ style = bold]
+ "rabbitmq-bundle_stop_0" -> "rabbitmq-bundle-docker-0_stop_0 undercloud" [ style = bold]
+ "rabbitmq-bundle_stop_0" -> "rabbitmq_stop_0 rabbitmq-bundle-0" [ style = bold]
+@@ -186,7 +178,6 @@ digraph "g" {
+ "redis-bundle-master_confirmed-post_notify_demoted_0" -> "redis_monitor_45000 redis-bundle-0" [ style = dashed]
+ "redis-bundle-master_confirmed-post_notify_demoted_0" -> "redis_monitor_60000 redis-bundle-0" [ style = dashed]
+ "redis-bundle-master_confirmed-post_notify_demoted_0" [ style=bold color="green" fontcolor="orange"]
+-"redis-bundle-master_confirmed-post_notify_running_0" -> "redis-bundle_running_0" [ style = dashed]
+ "redis-bundle-master_confirmed-post_notify_running_0" -> "redis_monitor_45000 redis-bundle-0" [ style = dashed]
+ "redis-bundle-master_confirmed-post_notify_running_0" -> "redis_monitor_60000 redis-bundle-0" [ style = dashed]
+ "redis-bundle-master_confirmed-post_notify_running_0" [ style=dashed color="red" fontcolor="orange"]
+@@ -239,19 +230,13 @@ digraph "g" {
+ "redis-bundle_demote_0" -> "redis-bundle-master_demote_0" [ style = bold]
+ "redis-bundle_demote_0" -> "redis-bundle_demoted_0" [ style = bold]
+ "redis-bundle_demote_0" [ style=bold color="green" fontcolor="orange"]
+-"redis-bundle_demoted_0" -> "redis-bundle_start_0" [ style = dashed]
+ "redis-bundle_demoted_0" -> "redis-bundle_stop_0" [ style = bold]
+ "redis-bundle_demoted_0" [ style=bold color="green" fontcolor="orange"]
+-"redis-bundle_running_0" -> "galera-bundle_start_0" [ style = dashed]
+-"redis-bundle_running_0" [ style=dashed color="red" fontcolor="orange"]
+-"redis-bundle_start_0" -> "redis-bundle-master_start_0" [ style = dashed]
+-"redis-bundle_start_0" [ style=dashed color="red" fontcolor="orange"]
+ "redis-bundle_stop_0" -> "redis-bundle-docker-0_stop_0 undercloud" [ style = bold]
+ "redis-bundle_stop_0" -> "redis-bundle-master_stop_0" [ style = bold]
+ "redis-bundle_stop_0" -> "redis_stop_0 redis-bundle-0" [ style = bold]
+ "redis-bundle_stop_0" [ style=bold color="green" fontcolor="orange"]
+ "redis-bundle_stopped_0" -> "haproxy-bundle_stop_0" [ style = bold]
+-"redis-bundle_stopped_0" -> "redis-bundle_start_0" [ style = dashed]
+ "redis-bundle_stopped_0" [ style=bold color="green" fontcolor="orange"]
+ "redis_demote_0 redis-bundle-0" -> "redis-bundle-0_stop_0 undercloud" [ style = bold]
+ "redis_demote_0 redis-bundle-0" -> "redis-bundle-master_demoted_0" [ style = bold]
+diff --git a/pengine/test10/bundle-order-stop.dot b/pengine/test10/bundle-order-stop.dot
+index 3fade95..5d0c039 100644
+--- a/pengine/test10/bundle-order-stop.dot
++++ b/pengine/test10/bundle-order-stop.dot
+@@ -20,7 +20,6 @@ digraph "g" {
+ "galera-bundle-master_demoted_0" -> "galera-bundle-master_stop_0" [ style = bold]
+ "galera-bundle-master_demoted_0" -> "galera-bundle_demoted_0" [ style = bold]
+ "galera-bundle-master_demoted_0" [ style=bold color="green" fontcolor="orange"]
+-"galera-bundle-master_running_0" -> "galera-bundle_running_0" [ style = dashed]
+ "galera-bundle-master_running_0" [ style=dashed color="red" fontcolor="orange"]
+ "galera-bundle-master_start_0" -> "galera-bundle-master_running_0" [ style = dashed]
+ "galera-bundle-master_start_0" -> "galera_start_0 galera-bundle-0" [ style = dashed]
+@@ -34,17 +33,12 @@ digraph "g" {
+ "galera-bundle_demote_0" -> "galera-bundle-master_demote_0" [ style = bold]
+ "galera-bundle_demote_0" -> "galera-bundle_demoted_0" [ style = bold]
+ "galera-bundle_demote_0" [ style=bold color="green" fontcolor="orange"]
+-"galera-bundle_demoted_0" -> "galera-bundle_start_0" [ style = dashed]
+ "galera-bundle_demoted_0" -> "galera-bundle_stop_0" [ style = bold]
+ "galera-bundle_demoted_0" [ style=bold color="green" fontcolor="orange"]
+-"galera-bundle_running_0" [ style=dashed color="red" fontcolor="orange"]
+-"galera-bundle_start_0" -> "galera-bundle-master_start_0" [ style = dashed]
+-"galera-bundle_start_0" [ style=dashed color="red" fontcolor="orange"]
+ "galera-bundle_stop_0" -> "galera-bundle-docker-0_stop_0 undercloud" [ style = bold]
+ "galera-bundle_stop_0" -> "galera-bundle-master_stop_0" [ style = bold]
+ "galera-bundle_stop_0" -> "galera_stop_0 galera-bundle-0" [ style = bold]
+ "galera-bundle_stop_0" [ style=bold color="green" fontcolor="orange"]
+-"galera-bundle_stopped_0" -> "galera-bundle_start_0" [ style = dashed]
+ "galera-bundle_stopped_0" -> "redis-bundle_stop_0" [ style = bold]
+ "galera-bundle_stopped_0" [ style=bold color="green" fontcolor="orange"]
+ "galera_demote_0 galera-bundle-0" -> "galera-bundle-0_stop_0 undercloud" [ style = bold]
+@@ -118,7 +112,6 @@ digraph "g" {
+ "rabbitmq-bundle-0_stop_0 undercloud" -> "do_shutdown undercloud" [ style = bold]
+ "rabbitmq-bundle-0_stop_0 undercloud" -> "rabbitmq-bundle-docker-0_stop_0 undercloud" [ style = bold]
+ "rabbitmq-bundle-0_stop_0 undercloud" [ style=bold color="green" fontcolor="black"]
+-"rabbitmq-bundle-clone_confirmed-post_notify_running_0" -> "rabbitmq-bundle_running_0" [ style = dashed]
+ "rabbitmq-bundle-clone_confirmed-post_notify_running_0" -> "rabbitmq_monitor_10000 rabbitmq-bundle-0" [ style = dashed]
+ "rabbitmq-bundle-clone_confirmed-post_notify_running_0" [ style=dashed color="red" fontcolor="orange"]
+ "rabbitmq-bundle-clone_confirmed-post_notify_stopped_0" -> "all_stopped" [ style = bold]
+@@ -155,7 +148,6 @@ digraph "g" {
+ "rabbitmq-bundle-docker-0_stop_0 undercloud" -> "do_shutdown undercloud" [ style = bold]
+ "rabbitmq-bundle-docker-0_stop_0 undercloud" -> "rabbitmq-bundle_stopped_0" [ style = bold]
+ "rabbitmq-bundle-docker-0_stop_0 undercloud" [ style=bold color="green" fontcolor="black"]
+-"rabbitmq-bundle_running_0" [ style=dashed color="red" fontcolor="orange"]
+ "rabbitmq-bundle_stop_0" -> "rabbitmq-bundle-clone_stop_0" [ style = bold]
+ "rabbitmq-bundle_stop_0" -> "rabbitmq-bundle-docker-0_stop_0 undercloud" [ style = bold]
+ "rabbitmq-bundle_stop_0" -> "rabbitmq_stop_0 rabbitmq-bundle-0" [ style = bold]
+@@ -186,7 +178,6 @@ digraph "g" {
+ "redis-bundle-master_confirmed-post_notify_demoted_0" -> "redis_monitor_45000 redis-bundle-0" [ style = dashed]
+ "redis-bundle-master_confirmed-post_notify_demoted_0" -> "redis_monitor_60000 redis-bundle-0" [ style = dashed]
+ "redis-bundle-master_confirmed-post_notify_demoted_0" [ style=bold color="green" fontcolor="orange"]
+-"redis-bundle-master_confirmed-post_notify_running_0" -> "redis-bundle_running_0" [ style = dashed]
+ "redis-bundle-master_confirmed-post_notify_running_0" -> "redis_monitor_45000 redis-bundle-0" [ style = dashed]
+ "redis-bundle-master_confirmed-post_notify_running_0" -> "redis_monitor_60000 redis-bundle-0" [ style = dashed]
+ "redis-bundle-master_confirmed-post_notify_running_0" [ style=dashed color="red" fontcolor="orange"]
+@@ -239,19 +230,13 @@ digraph "g" {
+ "redis-bundle_demote_0" -> "redis-bundle-master_demote_0" [ style = bold]
+ "redis-bundle_demote_0" -> "redis-bundle_demoted_0" [ style = bold]
+ "redis-bundle_demote_0" [ style=bold color="green" fontcolor="orange"]
+-"redis-bundle_demoted_0" -> "redis-bundle_start_0" [ style = dashed]
+ "redis-bundle_demoted_0" -> "redis-bundle_stop_0" [ style = bold]
+ "redis-bundle_demoted_0" [ style=bold color="green" fontcolor="orange"]
+-"redis-bundle_running_0" -> "galera-bundle_start_0" [ style = dashed]
+-"redis-bundle_running_0" [ style=dashed color="red" fontcolor="orange"]
+-"redis-bundle_start_0" -> "redis-bundle-master_start_0" [ style = dashed]
+-"redis-bundle_start_0" [ style=dashed color="red" fontcolor="orange"]
+ "redis-bundle_stop_0" -> "redis-bundle-docker-0_stop_0 undercloud" [ style = bold]
+ "redis-bundle_stop_0" -> "redis-bundle-master_stop_0" [ style = bold]
+ "redis-bundle_stop_0" -> "redis_stop_0 redis-bundle-0" [ style = bold]
+ "redis-bundle_stop_0" [ style=bold color="green" fontcolor="orange"]
+ "redis-bundle_stopped_0" -> "haproxy-bundle_stop_0" [ style = bold]
+-"redis-bundle_stopped_0" -> "redis-bundle_start_0" [ style = dashed]
+ "redis-bundle_stopped_0" [ style=bold color="green" fontcolor="orange"]
+ "redis_demote_0 redis-bundle-0" -> "redis-bundle-0_stop_0 undercloud" [ style = bold]
+ "redis_demote_0 redis-bundle-0" -> "redis-bundle-master_demoted_0" [ style = bold]
+-- 
+1.8.3.1
+

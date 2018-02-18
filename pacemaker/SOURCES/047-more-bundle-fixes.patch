@@ -1,0 +1,492 @@
+From a30e9fa6c209ad310bddc079c4afd14fb4876f4f Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 3 Apr 2017 15:33:24 -0500
+Subject: [PATCH 1/8] Fix: libpe_status: avoid memory leak when bundle resource
+ fails to unpack
+
+---
+ lib/pengine/container.c | 31 ++++++++++++++++---------------
+ 1 file changed, 16 insertions(+), 15 deletions(-)
+
+diff --git a/lib/pengine/container.c b/lib/pengine/container.c
+index 09113ae..cae62f0 100644
+--- a/lib/pengine/container.c
++++ b/lib/pengine/container.c
+@@ -599,10 +599,22 @@ container_unpack(resource_t * rsc, pe_working_set_t * data_set)
+         GListPtr childIter = NULL;
+         resource_t *new_rsc = NULL;
+         container_mount_t *mount = NULL;
+-        container_port_t *port = calloc(1, sizeof(container_port_t));
++        container_port_t *port = NULL;
+ 
+         int offset = 0, max = 1024;
+-        char *buffer = calloc(1, max+1);
++        char *buffer = NULL;
++
++        if (common_unpack(xml_resource, &new_rsc, rsc, data_set) == FALSE) {
++            pe_err("Failed unpacking resource %s", ID(rsc->xml));
++            if (new_rsc != NULL && new_rsc->fns != NULL) {
++                new_rsc->fns->free(new_rsc);
++            }
++            return FALSE;
++        }
++
++        container_data->child = new_rsc;
++        container_data->child->orig_xml = xml_obj; // Also the trigger for common_free()
++                                                   // to free xml_resource as container_data->child->xml
+ 
+         mount = calloc(1, sizeof(container_mount_t));
+         mount->source = strdup(DEFAULT_REMOTE_KEY_LOCATION);
+@@ -618,27 +630,16 @@ container_unpack(resource_t * rsc, pe_working_set_t * data_set)
+         mount->flags = 1;
+         container_data->mounts = g_list_append(container_data->mounts, mount);
+ 
++        port = calloc(1, sizeof(container_port_t));
+         if(container_data->control_port) {
+             port->source = strdup(container_data->control_port);
+         } else {
+             port->source = crm_itoa(DEFAULT_REMOTE_PORT);
+         }
+-
+         port->target = strdup(port->source);
+         container_data->ports = g_list_append(container_data->ports, port);
+ 
+-        if (common_unpack(xml_resource, &new_rsc, rsc, data_set) == FALSE) {
+-            pe_err("Failed unpacking resource %s", crm_element_value(rsc->xml, XML_ATTR_ID));
+-            if (new_rsc != NULL && new_rsc->fns != NULL) {
+-                new_rsc->fns->free(new_rsc);
+-            }
+-            return FALSE;
+-        }
+-
+-        container_data->child = new_rsc;
+-        container_data->child->orig_xml = xml_obj; // Also the trigger for common_free()
+-                                                   // to free xml_resource as container_data->child->xml
+-
++        buffer = calloc(1, max+1);
+         for(childIter = container_data->child->children; childIter != NULL; childIter = childIter->next) {
+             container_grouping_t *tuple = calloc(1, sizeof(container_grouping_t));
+             tuple->child = childIter->data;
+-- 
+1.8.3.1
+
+
+From 21ed491adc82fd04b39bc2d6035527b1514e99f4 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 3 Apr 2017 15:40:56 -0500
+Subject: [PATCH 2/8] Refactor: libpe_status: remove dead code
+
+died in 09f233dd
+---
+ lib/pengine/unpack.c | 5 -----
+ 1 file changed, 5 deletions(-)
+
+diff --git a/lib/pengine/unpack.c b/lib/pengine/unpack.c
+index ef51cd5..6aa51dd 100644
+--- a/lib/pengine/unpack.c
++++ b/lib/pengine/unpack.c
+@@ -637,7 +637,6 @@ gboolean
+ unpack_remote_nodes(xmlNode * xml_resources, pe_working_set_t * data_set)
+ {
+     xmlNode *xml_obj = NULL;
+-    GHashTable *rsc_name_check = NULL;
+ 
+     /* generate remote nodes from resource config before unpacking resources */
+     for (xml_obj = __xml_first_child(xml_resources); xml_obj != NULL; xml_obj = __xml_next_element(xml_obj)) {
+@@ -691,10 +690,6 @@ unpack_remote_nodes(xmlNode * xml_resources, pe_working_set_t * data_set)
+             }
+         }
+     }
+-    if (rsc_name_check) {
+-        g_hash_table_destroy(rsc_name_check);
+-    }
+-
+     return TRUE;
+ }
+ 
+-- 
+1.8.3.1
+
+
+From 3093687bc307b0a554ba5837d28ca1fc11f22935 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 3 Apr 2017 15:43:55 -0500
+Subject: [PATCH 3/8] Low: pengine: ensure other container in constraint has
+ Docker info
+
+Not really necessary, but makes static analysis happy
+---
+ pengine/container.c | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/pengine/container.c b/pengine/container.c
+index 1623861..3da19aa 100644
+--- a/pengine/container.c
++++ b/pengine/container.c
+@@ -313,13 +313,16 @@ container_create_probe(resource_t * rsc, node_t * node, action_t * complete,
+                  * Partly this is to ensure that replicas_per_host is
+                  * observed, but also to ensure that the containers
+                  * don't fail to start because the necessary port
+-                 * mappings (which wont include an IP for uniqueness)
++                 * mappings (which won't include an IP for uniqueness)
+                  * are already taken
+                  */
+ 
+                 for (GListPtr tIter = container_data->tuples; tIter != NULL && container_data->replicas_per_host == 1; tIter = tIter->next) {
+                     container_grouping_t *other = (container_grouping_t *)tIter->data;
+-                    if(other != tuple) {
++
++                    if ((other != tuple) && (other != NULL)
++                        && (other->docker != NULL)) {
++
+                         custom_action_order(tuple->docker, generate_op_key(tuple->docker->id, RSC_STATUS, 0), NULL,
+                                             other->docker, generate_op_key(other->docker->id, RSC_START, 0), NULL,
+                                             pe_order_optional, data_set);
+-- 
+1.8.3.1
+
+
+From 50399650dbd6425218638cef32c77f02a0807472 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 3 Apr 2017 15:46:01 -0500
+Subject: [PATCH 4/8] Low: libpe_status: ensure resource is not NULL
+
+not really necessary, but makes static analysis happy
+---
+ lib/pengine/container.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/lib/pengine/container.c b/lib/pengine/container.c
+index cae62f0..2a60e4c 100644
+--- a/lib/pengine/container.c
++++ b/lib/pengine/container.c
+@@ -440,6 +440,7 @@ container_unpack(resource_t * rsc, pe_working_set_t * data_set)
+     xmlNode *xml_resource = NULL;
+     container_variant_data_t *container_data = NULL;
+ 
++    CRM_ASSERT(rsc != NULL);
+     pe_rsc_trace(rsc, "Processing resource %s...", rsc->id);
+ 
+     container_data = calloc(1, sizeof(container_variant_data_t));
+-- 
+1.8.3.1
+
+
+From a755fb0a64873c16aac9924d95b0c2bdb13f5065 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 3 Apr 2017 16:52:54 -0500
+Subject: [PATCH 5/8] Low: libpe_status: improve container print functions
+
+---
+ lib/pengine/container.c | 92 ++++++++++++++++++++++++++++++-------------------
+ 1 file changed, 56 insertions(+), 36 deletions(-)
+
+diff --git a/lib/pengine/container.c b/lib/pengine/container.c
+index 2a60e4c..2af2558 100644
+--- a/lib/pengine/container.c
++++ b/lib/pengine/container.c
+@@ -716,6 +716,21 @@ find_container_child(const char *stem, resource_t * rsc, node_t *node)
+ }
+ 
+ static void
++print_rsc_in_list(resource_t *rsc, const char *pre_text, long options,
++                  void *print_data)
++{
++    if (rsc != NULL) {
++        if (options & pe_print_html) {
++            status_print("<li>");
++        }
++        rsc->fns->print(rsc, pre_text, options, print_data);
++        if (options & pe_print_html) {
++            status_print("</li>\n");
++        }
++    }
++}
++
++static void
+ container_print_xml(resource_t * rsc, const char *pre_text, long options, void *print_data)
+ {
+     container_variant_data_t *container_data = NULL;
+@@ -725,39 +740,31 @@ container_print_xml(resource_t * rsc, const char *pre_text, long options, void *
+     if (pre_text == NULL) {
+         pre_text = "";
+     }
+-    child_text = crm_concat(pre_text, "   ", ' ');
++    child_text = crm_concat(pre_text, "       ", ' ');
+ 
+-    status_print("%s<container ", pre_text);
++    get_container_variant_data(container_data, rsc);
++
++    status_print("%s<bundle ", pre_text);
+     status_print("id=\"%s\" ", rsc->id);
++    status_print("type=\"docker\" ");
++    status_print("image=\"%s\" ", container_data->image);
++    status_print("unique=\"%s\" ", is_set(rsc->flags, pe_rsc_unique)? "true" : "false");
+     status_print("managed=\"%s\" ", is_set(rsc->flags, pe_rsc_managed) ? "true" : "false");
+     status_print("failed=\"%s\" ", is_set(rsc->flags, pe_rsc_failed) ? "true" : "false");
+     status_print(">\n");
+ 
+-    get_container_variant_data(container_data, rsc);
+-
+-    status_print("%sDocker container: %s [%s]%s%s",
+-                 pre_text, rsc->id, container_data->image,
+-                 is_set(rsc->flags, pe_rsc_unique) ? " (unique)" : "",
+-                 is_set(rsc->flags, pe_rsc_managed) ? "" : " (unmanaged)");
+-
+     for (GListPtr gIter = container_data->tuples; gIter != NULL; gIter = gIter->next) {
+         container_grouping_t *tuple = (container_grouping_t *)gIter->data;
+ 
+         CRM_ASSERT(tuple);
+-        if(tuple->ip) {
+-            tuple->ip->fns->print(tuple->ip, child_text, options, print_data);
+-        }
+-        if(tuple->child) {
+-            tuple->child->fns->print(tuple->child, child_text, options, print_data);
+-        }
+-        if(tuple->docker) {
+-            tuple->docker->fns->print(tuple->docker, child_text, options, print_data);
+-        }
+-        if(tuple->remote) {
+-            tuple->remote->fns->print(tuple->remote, child_text, options, print_data);
+-        }
+-    }
+-    status_print("%s</container>\n", pre_text);
++        status_print("%s    <replica id=\"%d\">\n", pre_text, tuple->offset);
++        print_rsc_in_list(tuple->ip, child_text, options, print_data);
++        print_rsc_in_list(tuple->child, child_text, options, print_data);
++        print_rsc_in_list(tuple->docker, child_text, options, print_data);
++        print_rsc_in_list(tuple->remote, child_text, options, print_data);
++        status_print("%s    </replica>\n", pre_text);
++    }
++    status_print("%s</bundle>\n", pre_text);
+     free(child_text);
+ }
+ 
+@@ -809,37 +816,50 @@ container_print(resource_t * rsc, const char *pre_text, long options, void *prin
+         pre_text = " ";
+     }
+ 
+-    child_text = crm_strdup_printf("     %s", pre_text);
+     status_print("%sDocker container%s: %s [%s]%s%s\n",
+                  pre_text, container_data->replicas>1?" set":"", rsc->id, container_data->image,
+                  is_set(rsc->flags, pe_rsc_unique) ? " (unique)" : "",
+                  is_set(rsc->flags, pe_rsc_managed) ? "" : " (unmanaged)");
++    if (options & pe_print_html) {
++        status_print("<br />\n<ul>\n");
++    }
++
+ 
+     for (GListPtr gIter = container_data->tuples; gIter != NULL; gIter = gIter->next) {
+         container_grouping_t *tuple = (container_grouping_t *)gIter->data;
+ 
+         CRM_ASSERT(tuple);
++        if (options & pe_print_html) {
++            status_print("<li>");
++        }
++
+         if(is_set(options, pe_print_clone_details)) {
++            child_text = crm_strdup_printf("     %s", pre_text);
+             if(g_list_length(container_data->tuples) > 1) {
+                 status_print("  %sReplica[%d]\n", pre_text, tuple->offset);
+             }
+-
+-            if(tuple->ip) {
+-                tuple->ip->fns->print(tuple->ip, child_text, options, print_data);
+-            }
+-            if(tuple->docker) {
+-                tuple->docker->fns->print(tuple->docker, child_text, options, print_data);
+-            }
+-            if(tuple->remote) {
+-                tuple->remote->fns->print(tuple->remote, child_text, options, print_data);
++            if (options & pe_print_html) {
++                status_print("<br />\n<ul>\n");
+             }
+-            if(tuple->child) {
+-                tuple->child->fns->print(tuple->child, child_text, options, print_data);
++            print_rsc_in_list(tuple->ip, child_text, options, print_data);
++            print_rsc_in_list(tuple->docker, child_text, options, print_data);
++            print_rsc_in_list(tuple->remote, child_text, options, print_data);
++            print_rsc_in_list(tuple->child, child_text, options, print_data);
++            if (options & pe_print_html) {
++                status_print("</ul>\n");
+             }
+         } else {
+-            char *child_text = crm_strdup_printf("%s  ", pre_text);
++            child_text = crm_strdup_printf("%s  ", pre_text);
+             tuple_print(tuple, child_text, options, print_data);
+         }
++        free(child_text);
++
++        if (options & pe_print_html) {
++            status_print("</li>\n");
++        }
++    }
++    if (options & pe_print_html) {
++        status_print("</ul>\n");
+     }
+ }
+ 
+-- 
+1.8.3.1
+
+
+From 1302b775b8bc4913b894081707f9ad386402d25d Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 3 Apr 2017 17:06:06 -0500
+Subject: [PATCH 6/8] Low: tools: update crm_mon RNG schema for bundles
+
+---
+ xml/crm_mon.rng | 26 ++++++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)
+
+diff --git a/xml/crm_mon.rng b/xml/crm_mon.rng
+index 653c15e..731c118 100644
+--- a/xml/crm_mon.rng
++++ b/xml/crm_mon.rng
+@@ -241,6 +241,9 @@
+             <zeroOrMore>
+                 <ref name="element-clone" />
+             </zeroOrMore>
++            <zeroOrMore>
++                <ref name="element-bundle" />
++            </zeroOrMore>
+         </interleave>
+     </define>
+ 
+@@ -298,4 +301,27 @@
+         </element>
+     </define>
+ 
++    <define name="element-bundle">
++        <element name="bundle">
++            <attribute name="id"> <text/> </attribute>
++            <attribute name="type">
++                <choice>
++                    <value>docker</value>
++                </choice>
++            </attribute>
++            <attribute name="image"> <text/> </attribute>
++            <attribute name="unique"> <data type="boolean" /> </attribute>
++            <attribute name="managed"> <data type="boolean" /> </attribute>
++            <attribute name="failed"> <data type="boolean" /> </attribute>
++            <zeroOrMore>
++                <element name="replica">
++                    <attribute name="id"> <data type="int" /> </attribute>
++                    <zeroOrMore>
++                        <ref name="element-resource" />
++                    </zeroOrMore>
++                </element>
++            </zeroOrMore>
++        </element>
++    </define>
++
+ </grammar>
+-- 
+1.8.3.1
+
+
+From 3b5f0f58bae3b2764222eede878da5801336b2c9 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 3 Apr 2017 18:21:19 -0500
+Subject: [PATCH 7/8] Fix: libpe_status: run-command should apply even without
+ a primitive
+
+---
+ lib/pengine/container.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/lib/pengine/container.c b/lib/pengine/container.c
+index 2af2558..9c59be6 100644
+--- a/lib/pengine/container.c
++++ b/lib/pengine/container.c
+@@ -301,6 +301,10 @@ create_docker_resource(
+          *     create_nvp(xml_obj, "monitor_cmd", "/usr/libexec/pacemaker/lrmd_internal_ctl -c poke");
+          */
+         } else {
++            if(data->docker_run_command) {
++                create_nvp(xml_obj, "run_cmd", data->docker_run_command);
++            }
++
+             /* TODO: Allow users to specify their own?
+              *
+              * We don't know what's in the container, so we just want
+-- 
+1.8.3.1
+
+
+From 75b29dee7fa4adf0141f8932b060392a238adbc7 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 3 Apr 2017 17:44:03 -0500
+Subject: [PATCH 8/8] Fix: libpe_status: implement active check for bundles
+
+---
+ lib/pengine/container.c | 50 ++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 49 insertions(+), 1 deletion(-)
+
+diff --git a/lib/pengine/container.c b/lib/pengine/container.c
+index 9c59be6..b93d98f 100644
+--- a/lib/pengine/container.c
++++ b/lib/pengine/container.c
+@@ -683,10 +683,58 @@ container_unpack(resource_t * rsc, pe_working_set_t * data_set)
+     return TRUE;
+ }
+ 
++static int
++tuple_rsc_active(resource_t *rsc, gboolean all)
++{
++    if (rsc) {
++        gboolean child_active = rsc->fns->active(rsc, all);
++
++        if (child_active && !all) {
++            return TRUE;
++        } else if (!child_active && all) {
++            return FALSE;
++        }
++    }
++    return -1;
++}
++
+ gboolean
+ container_active(resource_t * rsc, gboolean all)
+ {
+-    return TRUE;
++    container_variant_data_t *container_data = NULL;
++    GListPtr iter = NULL;
++
++    get_container_variant_data(container_data, rsc);
++    for (iter = container_data->tuples; iter != NULL; iter = iter->next) {
++        container_grouping_t *tuple = (container_grouping_t *)(iter->data);
++        int rsc_active;
++
++        rsc_active = tuple_rsc_active(tuple->ip, all);
++        if (rsc_active >= 0) {
++            return (gboolean) rsc_active;
++        }
++
++        rsc_active = tuple_rsc_active(tuple->child, all);
++        if (rsc_active >= 0) {
++            return (gboolean) rsc_active;
++        }
++
++        rsc_active = tuple_rsc_active(tuple->docker, all);
++        if (rsc_active >= 0) {
++            return (gboolean) rsc_active;
++        }
++
++        rsc_active = tuple_rsc_active(tuple->remote, all);
++        if (rsc_active >= 0) {
++            return (gboolean) rsc_active;
++        }
++    }
++
++    /* If "all" is TRUE, we've already checked that no resources were inactive,
++     * so return TRUE; if "all" is FALSE, we didn't find any active resources,
++     * so return FALSE.
++     */
++    return all;
+ }
+ 
+ resource_t *
+-- 
+1.8.3.1
+

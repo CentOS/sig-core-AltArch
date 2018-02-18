@@ -1,0 +1,209 @@
+From ee02f542f8ea6e411a1802b3181735aad29b7e29 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Tue, 28 Mar 2017 19:48:29 -0500
+Subject: [PATCH 1/5] Test: tools: suppress valgrind warning for crm_failcount
+
+memory leak in bash
+---
+ valgrind-pcmk.suppressions | 26 ++++++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)
+
+diff --git a/valgrind-pcmk.suppressions b/valgrind-pcmk.suppressions
+index a942f30..48eec9e 100644
+--- a/valgrind-pcmk.suppressions
++++ b/valgrind-pcmk.suppressions
+@@ -29,6 +29,32 @@
+ }
+ 
+ {
++   Bash leak in cli regression testing
++   Memcheck:Leak
++   match-leak-kinds: definite
++   fun:malloc
++   fun:xmalloc
++   obj:/usr/bin/bash
++   fun:execute_command_internal
++   obj:/usr/bin/bash
++   fun:execute_command_internal
++   fun:parse_and_execute
++   fun:command_substitute
++   obj:/usr/bin/bash
++   obj:/usr/bin/bash
++   obj:/usr/bin/bash
++   fun:expand_string_assignment
++   obj:/usr/bin/bash
++   obj:/usr/bin/bash
++   obj:/usr/bin/bash
++   obj:/usr/bin/bash
++   fun:execute_command_internal
++   fun:execute_command_internal
++   fun:execute_command
++   fun:execute_command_internal
++}
++
++{
+    Ignore option parsing
+    Memcheck:Leak
+    fun:realloc
+-- 
+1.8.3.1
+
+
+From 4b08e8fc208bd1da2c0ce6d018ad32bb7e23f151 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Wed, 29 Mar 2017 17:34:08 -0500
+Subject: [PATCH 2/5] Fix: libpe_status: set id on correct tag for bundle clone
+ resource
+
+---
+ lib/pengine/container.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/pengine/container.c b/lib/pengine/container.c
+index 7e99e68..722e534 100644
+--- a/lib/pengine/container.c
++++ b/lib/pengine/container.c
+@@ -558,7 +558,7 @@ container_unpack(resource_t * rsc, pe_working_set_t * data_set)
+         crm_xml_set_id(xml_resource, "%s-%s", container_data->prefix, xml_resource->name);
+ 
+         xml_set = create_xml_node(xml_resource, XML_TAG_META_SETS);
+-        crm_xml_set_id(xml_resource, "%s-%s-meta", container_data->prefix, xml_resource->name);
++        crm_xml_set_id(xml_set, "%s-%s-meta", container_data->prefix, xml_resource->name);
+ 
+         create_nvp(xml_set, XML_RSC_ATTR_ORDERED, "true");
+ 
+-- 
+1.8.3.1
+
+
+From 4427c95a37da16128d1bf45c81c081ac2bde1250 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Thu, 30 Mar 2017 12:42:04 -0500
+Subject: [PATCH 3/5] Low: build: define constant for log directory
+
+This defines CRM_LOG_DIR for (by default) /var/log/pacemaker. This will be used
+as the location for container logs, and (when we are ready to make a
+significant user-visible change) eventually for the main pacemaker log.
+---
+ configure.ac            | 4 ++++
+ include/crm_config.h.in | 3 +++
+ lib/common/logging.c    | 4 ++++
+ mcp/corosync.c          | 7 +++++++
+ 4 files changed, 18 insertions(+)
+
+diff --git a/configure.ac b/configure.ac
+index 8ef503c..ee98f9b 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -1076,6 +1076,10 @@ CRM_STATE_DIR=${localstatedir}/run/crm
+ AC_DEFINE_UNQUOTED(CRM_STATE_DIR,"$CRM_STATE_DIR", Where to keep state files and sockets)
+ AC_SUBST(CRM_STATE_DIR)
+ 
++CRM_LOG_DIR="${localstatedir}/log/pacemaker"
++AC_DEFINE_UNQUOTED(CRM_LOG_DIR,"$CRM_LOG_DIR", Where Pacemaker can store log files)
++AC_SUBST(CRM_LOG_DIR)
++
+ CRM_PACEMAKER_DIR=${localstatedir}/lib/pacemaker
+ AC_DEFINE_UNQUOTED(CRM_PACEMAKER_DIR,"$CRM_PACEMAKER_DIR", Location to store directory produced by Pacemaker daemons)
+ AC_SUBST(CRM_PACEMAKER_DIR)
+diff --git a/include/crm_config.h.in b/include/crm_config.h.in
+index 30cec80..7eb01d4 100755
+--- a/include/crm_config.h.in
++++ b/include/crm_config.h.in
+@@ -43,6 +43,9 @@
+ 
+ /****** Directories ******/
+ 
++/* Where Pacemaker can store log files */
++#undef CRM_LOG_DIR
++
+ /* Location for Pacemaker daemons */
+ #undef CRM_DAEMON_DIR
+ 
+diff --git a/lib/common/logging.c b/lib/common/logging.c
+index b608143..b9a1c80 100644
+--- a/lib/common/logging.c
++++ b/lib/common/logging.c
+@@ -223,6 +223,10 @@ crm_add_logfile(const char *filename)
+     bool is_default = false;
+     static int default_fd = -1;
+     static gboolean have_logfile = FALSE;
++
++    /* @COMPAT This should be CRM_LOG_DIR "/pacemaker.log". We aren't changing
++     * it yet because it will be a significant user-visible change to publicize.
++     */
+     const char *default_logfile = "/var/log/pacemaker.log";
+ 
+     struct stat parent;
+diff --git a/mcp/corosync.c b/mcp/corosync.c
+index 975b93c..7502da7 100644
+--- a/mcp/corosync.c
++++ b/mcp/corosync.c
+@@ -394,6 +394,13 @@ mcp_read_config(void)
+         free(debug_enabled);
+     }
+ 
++    /* If the user didn't explicitly configure a Pacemaker log file, check
++     * whether they configured a heartbeat or corosync log file, and use that.
++     *
++     * @COMPAT This should all go away, and we should just rely on the logging
++     * set up by crm_log_init(). We aren't doing this yet because it is a
++     * significant user-visible change that will need to be publicized.
++     */
+     const_value = daemon_option("debugfile");
+     if (daemon_option("logfile")) {
+         /* File logging is already setup by crm_log_init() */
+-- 
+1.8.3.1
+
+
+From eaa2f881fd7d52dd369a8daa1837a0977fa40d38 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Thu, 30 Mar 2017 15:05:24 -0500
+Subject: [PATCH 4/5] Low: libpe_status: change directory used for container
+ logs
+
+---
+ lib/pengine/container.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/pengine/container.c b/lib/pengine/container.c
+index 722e534..e052879 100644
+--- a/lib/pengine/container.c
++++ b/lib/pengine/container.c
+@@ -609,7 +609,7 @@ container_unpack(resource_t * rsc, pe_working_set_t * data_set)
+         container_data->mounts = g_list_append(container_data->mounts, mount);
+ 
+         mount = calloc(1, sizeof(container_mount_t));
+-        mount->source = strdup("/var/log/containers");
++        mount->source = strdup(CRM_LOG_DIR "/bundles");
+         mount->target = strdup("/var/log");
+         mount->options = NULL;
+         mount->flags = 1;
+-- 
+1.8.3.1
+
+
+From c1eb528bc077839148405cd0cca08e8b6f20b98a Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Thu, 30 Mar 2017 15:05:37 -0500
+Subject: [PATCH 5/5] Low: logrotate: rotate pacemaker logs inside bundled
+ containers
+
+---
+ extra/logrotate/pacemaker.in | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/extra/logrotate/pacemaker.in b/extra/logrotate/pacemaker.in
+index d382433..2fae2bf 100644
+--- a/extra/logrotate/pacemaker.in
++++ b/extra/logrotate/pacemaker.in
+@@ -1,4 +1,4 @@
+-@localstatedir@/log/pacemaker.log {
++@localstatedir@/log/pacemaker.log @CRM_LOG_DIR@/bundles/*/pacemaker.log {
+     compress
+     dateext
+     weekly
+-- 
+1.8.3.1
+

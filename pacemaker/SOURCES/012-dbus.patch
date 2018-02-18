@@ -1,0 +1,133 @@
+From 07c645f1d568b51dc5ae4566dcb7456daba6934c Mon Sep 17 00:00:00 2001
+From: "Gao,Yan" <ygao@suse.com>
+Date: Wed, 14 Dec 2016 16:08:38 +0100
+Subject: [PATCH] Fix: dbus: Prevent lrmd from hanging on dbus calls
+
+With "service" class of resources, by chance, lrmd hangs on futex()
+syscall:
+
+root@node2:~ # cat /proc/2503/stack
+[<ffffffff810fa0c0>] futex_wait_queue_me+0xc0/0x130
+[<ffffffff810faf23>] futex_wait+0x163/0x250
+[<ffffffff810fc870>] do_futex+0xe0/0x540
+[<ffffffff810fcd3e>] SyS_futex+0x6e/0x140
+[<ffffffff815e142e>] entry_SYSCALL_64_fastpath+0x12/0x6d
+[<ffffffffffffffff>] 0xffffffffffffffff
+
+Cluster no longer behaves and cannot recover from the situation.
+
+According to the backtrace, it seems due to the reentrancy of
+dbus_connection_dispatch():
+
+ (gdb) bt
+ #0  0x00007f07f7d2e0af in pthread_cond_wait@@GLIBC_2.3.2 () from /lib64/libpthread.so.0
+ #1  0x00007f07f6c29925 in _dbus_connection_acquire_dispatch (connection=0x13411f0) at dbus-connection.c:4142
+ #2  0x00007f07f6c2b3bc in dbus_connection_dispatch (connection=connection@entry=0x13411f0) at dbus-connection.c:4577
+ #3  0x00007f07f8d88e50 in pcmk_dbus_connection_dispatch (connection=connection@entry=0x13411f0, new_status=new_status@entry=DBUS_DISPATCH_DATA_REMAINS, data=data@entry=0x0) at dbus.c:410
+ #4  0x00007f07f6c29b70 in _dbus_connection_update_dispatch_status_and_unlock (connection=0x13411f0, new_status=DBUS_DISPATCH_DATA_REMAINS) at dbus-connection.c:4346
+ #5  0x00007f07f6c29f79 in check_for_reply_and_update_dispatch_unlocked (connection=connection@entry=0x13411f0, pending=pending@entry=0x135a8b0) at dbus-connection.c:2355
+ #6  0x00007f07f6c2a08b in _dbus_connection_block_pending_call (pending=0x135a8b0) at dbus-connection.c:2461
+ #7  0x00007f07f6c396ba in dbus_pending_call_block (pending=<optimized out>) at dbus-pending-call.c:741
+ #8  0x00007f07f8d8929c in pcmk_dbus_send_recv (msg=msg@entry=0x1340940, connection=0x13411f0, error=error@entry=0x7ffc5d148fc0, timeout=-1) at dbus.c:141
+ #9  0x00007f07f8d8d2d7 in systemd_unit_by_name (arg_name=arg_name@entry=0x133dcb0 "service", op=op@entry=0x0) at systemd.c:296
+ #10 0x00007f07f8d8d45b in systemd_unit_exists (name=name@entry=0x133dcb0 "service") at systemd.c:416
+ #11 0x00007f07f8d83dc5 in resources_find_service_class (agent=0x133dcb0 "service") at services.c:88
+ #12 0x0000000000405b05 in action_complete (action=0x134e0b0) at lrmd.c:876
+ #13 0x00007f07f8d867e3 in operation_finalize (op=0x134e0b0) at services_linux.c:257
+ #14 0x00007f07f8d899d8 in pcmk_dbus_lookup_result (reply=reply@entry=0x135cc80, data=data@entry=0x1355e30) at dbus.c:289
+ #15 0x00007f07f8d89ba4 in pcmk_dbus_lookup_cb (pending=<optimized out>, user_data=0x1355e30) at dbus.c:334
+ #16 0x00007f07f6c28032 in complete_pending_call_and_unlock (connection=0x13411f0, pending=0x135a2c0, message=<optimized out>) at dbus-connection.c:2331
+ #17 0x00007f07f6c2b401 in dbus_connection_dispatch (connection=connection@entry=0x13411f0) at dbus-connection.c:4626
+ #18 0x00007f07f8d88e50 in pcmk_dbus_connection_dispatch (connection=connection@entry=0x13411f0, new_status=new_status@entry=DBUS_DISPATCH_DATA_REMAINS, data=data@entry=0x0) at dbus.c:410
+ #19 0x00007f07f6c29b70 in _dbus_connection_update_dispatch_status_and_unlock (connection=0x13411f0, new_status=DBUS_DISPATCH_DATA_REMAINS) at dbus-connection.c:4346
+ #20 0x00007f07f6c29ca6 in _dbus_connection_handle_watch (watch=<optimized out>, condition=1, data=0x13411f0) at dbus-connection.c:1520
+ #21 0x00007f07f6c40f2a in dbus_watch_handle (watch=watch@entry=0x133d6a0, flags=flags@entry=1) at dbus-watch.c:722
+ #22 0x00007f07f8d887da in pcmk_dbus_watch_dispatch (userdata=0x133d6a0) at dbus.c:448
+ #23 0x00007f07f8fcfef7 in mainloop_gio_callback (gio=<optimized out>, condition=G_IO_IN, data=0x133f210) at mainloop.c:673
+ #24 0x00007f07f82a0015 in g_main_context_dispatch () from /usr/lib64/libglib-2.0.so.0
+ #25 0x00007f07f82a0388 in ?? () from /usr/lib64/libglib-2.0.so.0
+ #26 0x00007f07f82a064a in g_main_loop_run () from /usr/lib64/libglib-2.0.so.0
+ #27 0x0000000000402c0e in main (argc=<optimized out>, argv=0x7ffc5d149818) at main.c:476
+
+As described in:
+https://dbus.freedesktop.org/doc/api/html/group__DBusConnection.html#ga55ff88cd22c0672441c7deffbfb68fbf
+
+, dbus_connection_dispatch() MUST NOT BE CALLED from inside the
+DBusDispatchStatusFunction. It seems that pcmk_dbus_watch_dispatch() is
+an appropriate place to do it instead.
+---
+ lib/services/dbus.c | 30 +++++++++++++++++++++++++-----
+ 1 file changed, 25 insertions(+), 5 deletions(-)
+
+diff --git a/lib/services/dbus.c b/lib/services/dbus.c
+index 4ce7dfe..0748c86 100644
+--- a/lib/services/dbus.c
++++ b/lib/services/dbus.c
+@@ -13,6 +13,8 @@
+ 
+ #define BUS_PROPERTY_IFACE "org.freedesktop.DBus.Properties"
+ 
++static GList *conn_dispatches = NULL;
++
+ struct db_getall_data {
+     char *name;
+     char *target;
+@@ -445,17 +447,31 @@ pcmk_dbus_get_property(DBusConnection *connection, const char *target,
+ }
+ 
+ static void
+-pcmk_dbus_connection_dispatch(DBusConnection *connection,
++pcmk_dbus_connection_dispatch_status(DBusConnection *connection,
+                               DBusDispatchStatus new_status, void *data)
+ {
+-    crm_trace("status %d for %p", new_status, data);
++    crm_trace("New status %d for connection %p", new_status, connection);
+     if (new_status == DBUS_DISPATCH_DATA_REMAINS){
+-        dbus_connection_dispatch(connection);
++        conn_dispatches = g_list_prepend(conn_dispatches, connection);
++    }
++}
++
++static void
++pcmk_dbus_connections_dispatch()
++{
++    GList *gIter = NULL;
++
++    for (gIter = conn_dispatches; gIter != NULL; gIter = gIter->next) {
++        DBusConnection *connection = gIter->data;
+ 
+         while (dbus_connection_get_dispatch_status(connection) == DBUS_DISPATCH_DATA_REMAINS) {
++            crm_trace("Dispatching for connection %p", connection);
+             dbus_connection_dispatch(connection);
+         }
+     }
++
++    g_list_free(conn_dispatches);
++    conn_dispatches = NULL;
+ }
+ 
+ /* Copied from dbus-watch.c */
+@@ -506,7 +522,11 @@ pcmk_dbus_watch_dispatch(gpointer userdata)
+     if(oom) {
+         crm_err("DBus encountered OOM while attempting to dispatch %p (%s)",
+                 client, dbus_watch_flags_to_string(flags));
++
++    } else {
++        pcmk_dbus_connections_dispatch();
+     }
++
+     return 0;
+ }
+ 
+@@ -616,6 +636,6 @@ pcmk_dbus_connection_setup_with_select(DBusConnection *c)
+     dbus_connection_set_watch_functions(c, pcmk_dbus_watch_add,
+                                         pcmk_dbus_watch_remove,
+                                         pcmk_dbus_watch_toggle, NULL, NULL);
+-    dbus_connection_set_dispatch_status_function(c, pcmk_dbus_connection_dispatch, NULL, NULL);
+-    pcmk_dbus_connection_dispatch(c, dbus_connection_get_dispatch_status(c), NULL);
++    dbus_connection_set_dispatch_status_function(c, pcmk_dbus_connection_dispatch_status, NULL, NULL);
++    pcmk_dbus_connection_dispatch_status(c, dbus_connection_get_dispatch_status(c), NULL);
+ }
+-- 
+1.8.3.1
+

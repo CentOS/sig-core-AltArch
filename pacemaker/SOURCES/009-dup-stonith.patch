@@ -1,0 +1,96 @@
+From 969bbfd06476a71f66882964e5ea92b0bebbcc5b Mon Sep 17 00:00:00 2001
+From: Nate Clark <nate@neworld.us>
+Date: Thu, 1 Dec 2016 11:00:38 -0500
+Subject: [PATCH] stonith: Check for missing params in new device and dup
+
+device_has_duplicate would return a dup if all params in device where in dup with the same value but
+if dup had a param that device did not the dup would still be considered a duplicate. This updates
+the duplicate check to make sure that all keys and values overlap in both device and dup params.
+---
+ fencing/commands.c | 51 +++++++++++++++++++++++++++++++++------------------
+ 1 file changed, 33 insertions(+), 18 deletions(-)
+
+diff --git a/fencing/commands.c b/fencing/commands.c
+index a4699ee..d21e5a8 100644
+--- a/fencing/commands.c
++++ b/fencing/commands.c
+@@ -988,27 +988,15 @@ dynamic_list_search_cb(GPid pid, int rc, const char *output, gpointer user_data)
+ 
+ /*!
+  * \internal
+- * \brief Checks to see if an identical device already exists in the device_list
++ * \brief Returns true if any key in first is not is second or second has a different value for key
+  */
+-static stonith_device_t *
+-device_has_duplicate(stonith_device_t * device)
+-{
++static int
++device_params_diff(GHashTable *first, GHashTable *second) {
+     char *key = NULL;
+     char *value = NULL;
+     GHashTableIter gIter;
+-    stonith_device_t *dup = g_hash_table_lookup(device_list, device->id);
+ 
+-    if (!dup) {
+-        crm_trace("No match for %s", device->id);
+-        return NULL;
+-
+-    } else if (safe_str_neq(dup->agent, device->agent)) {
+-        crm_trace("Different agent: %s != %s", dup->agent, device->agent);
+-        return NULL;
+-    }
+-
+-    /* Use calculate_operation_digest() here? */
+-    g_hash_table_iter_init(&gIter, device->params);
++    g_hash_table_iter_init(&gIter, first);
+     while (g_hash_table_iter_next(&gIter, (void **)&key, (void **)&value)) {
+ 
+         if(strstr(key, "CRM_meta") == key) {
+@@ -1016,15 +1004,42 @@ device_has_duplicate(stonith_device_t * device)
+         } else if(strcmp(key, "crm_feature_set") == 0) {
+             continue;
+         } else {
+-            char *other_value = g_hash_table_lookup(dup->params, key);
++            char *other_value = g_hash_table_lookup(second, key);
+ 
+             if (!other_value || safe_str_neq(other_value, value)) {
+                 crm_trace("Different value for %s: %s != %s", key, other_value, value);
+-                return NULL;
++                return 1;
+             }
+         }
+     }
+ 
++    return 0;
++}
++
++/*!
++ * \internal
++ * \brief Checks to see if an identical device already exists in the device_list
++ */
++static stonith_device_t *
++device_has_duplicate(stonith_device_t * device)
++{
++    stonith_device_t *dup = g_hash_table_lookup(device_list, device->id);
++
++    if (!dup) {
++        crm_trace("No match for %s", device->id);
++        return NULL;
++
++    } else if (safe_str_neq(dup->agent, device->agent)) {
++        crm_trace("Different agent: %s != %s", dup->agent, device->agent);
++        return NULL;
++    }
++
++    /* Use calculate_operation_digest() here? */
++    if (device_params_diff(device->params, dup->params) ||
++        device_params_diff(dup->params, device->params)) {
++        return NULL;
++    }
++
+     crm_trace("Match");
+     return dup;
+ }
+-- 
+1.8.3.1
+

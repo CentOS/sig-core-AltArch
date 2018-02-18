@@ -1,0 +1,72 @@
+From ffba43cf28cecf1860242dc7cce2e14ba4288a10 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Ferenc=20W=C3=A1gner?= <wferi@debian.org>
+Date: Mon, 21 Nov 2016 15:20:35 +0100
+Subject: [PATCH 1/2] crm_perror appends a colon to its fmt argument
+
+---
+ lib/common/strings.c | 2 +-
+ lib/common/xml.c     | 4 ++--
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/lib/common/strings.c b/lib/common/strings.c
+index 67cee12..298a237 100644
+--- a/lib/common/strings.c
++++ b/lib/common/strings.c
+@@ -109,7 +109,7 @@ crm_int_helper(const char *text, char **end_text)
+             crm_err("Conversion of %s was clipped: %lld", text, result);
+ 
+         } else if (errno != 0) {
+-            crm_perror(LOG_ERR, "Conversion of %s failed:", text);
++            crm_perror(LOG_ERR, "Conversion of %s failed", text);
+         }
+ 
+         if (local_end_text != NULL && local_end_text[0] != '\0') {
+diff --git a/lib/common/xml.c b/lib/common/xml.c
+index a6a6d0a..3bdc519 100644
+--- a/lib/common/xml.c
++++ b/lib/common/xml.c
+@@ -3022,12 +3022,12 @@ write_xml_stream(xmlNode * xml_node, const char *filename, FILE * stream, gboole
+   bail:
+ 
+     if (fflush(stream) != 0) {
+-        crm_perror(LOG_ERR, "fflush for %s failed:", filename);
++        crm_perror(LOG_ERR, "fflush for %s failed", filename);
+         res = -1;
+     }
+ 
+     if (fsync(fileno(stream)) < 0) {
+-        crm_perror(LOG_ERR, "fsync for %s failed:", filename);
++        crm_perror(LOG_ERR, "fsync for %s failed", filename);
+         res = -1;
+     }
+ 
+-- 
+1.8.3.1
+
+
+From 8c4d81a2a8fb9fc7db9d73a0482e81c64368ad28 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Ferenc=20W=C3=A1gner?= <wferi@debian.org>
+Date: Mon, 21 Nov 2016 15:25:31 +0100
+Subject: [PATCH 2/2] Don't report error if the output file isn't syncable
+
+---
+ lib/common/xml.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/lib/common/xml.c b/lib/common/xml.c
+index 3bdc519..65237c8 100644
+--- a/lib/common/xml.c
++++ b/lib/common/xml.c
+@@ -3026,7 +3026,8 @@ write_xml_stream(xmlNode * xml_node, const char *filename, FILE * stream, gboole
+         res = -1;
+     }
+ 
+-    if (fsync(fileno(stream)) < 0) {
++    /* Don't report error if the file does not support synchronization */
++    if (fsync(fileno(stream)) < 0 && errno != EROFS  && errno != EINVAL) {
+         crm_perror(LOG_ERR, "fsync for %s failed", filename);
+         res = -1;
+     }
+-- 
+1.8.3.1
+

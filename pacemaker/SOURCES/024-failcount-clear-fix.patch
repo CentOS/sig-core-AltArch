@@ -1,0 +1,168 @@
+From 357cd703e99fbcf1a371f34966accaf5322b1c50 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Wed, 22 Feb 2017 14:14:48 -0600
+Subject: [PATCH 1/2] Fix: pengine,libpe_status: don't clear same fail-count
+ twice
+
+Previously, pengine and libpe_status were inconsistent when generating
+a key to use for a fail-count op. This could lead to two identical ops
+being scheduled, one of which would timeout (during which time the resource
+would not be recovered). Now, they consistently use generate_op_key().
+---
+ lib/pengine/unpack.c | 6 +++---
+ pengine/allocate.c   | 9 ++++-----
+ 2 files changed, 7 insertions(+), 8 deletions(-)
+
+diff --git a/lib/pengine/unpack.c b/lib/pengine/unpack.c
+index 6737273..a357643 100644
+--- a/lib/pengine/unpack.c
++++ b/lib/pengine/unpack.c
+@@ -2934,10 +2934,10 @@ static bool check_operation_expiry(resource_t *rsc, node_t *node, int rc, xmlNod
+     }
+ 
+     if (clear_failcount) {
+-        action_t *clear_op = NULL;
++        char *key = generate_op_key(rsc->id, CRM_OP_CLEAR_FAILCOUNT, 0);
++        action_t *clear_op = custom_action(rsc, key, CRM_OP_CLEAR_FAILCOUNT,
++                                           node, FALSE, TRUE, data_set);
+ 
+-        clear_op = custom_action(rsc, crm_concat(rsc->id, CRM_OP_CLEAR_FAILCOUNT, '_'),
+-                                 CRM_OP_CLEAR_FAILCOUNT, node, FALSE, TRUE, data_set);
+         add_hash_param(clear_op->meta, XML_ATTR_TE_NOWAIT, XML_BOOLEAN_TRUE);
+     }
+ 
+diff --git a/pengine/allocate.c b/pengine/allocate.c
+index 74b57fb..4e8d68d 100644
+--- a/pengine/allocate.c
++++ b/pengine/allocate.c
+@@ -596,7 +596,7 @@ static gboolean
+ failcount_clear_action_exists(node_t * node, resource_t * rsc)
+ {
+     gboolean rc = FALSE;
+-    char *key = crm_concat(rsc->id, CRM_OP_CLEAR_FAILCOUNT, '_');
++    char *key = generate_op_key(rsc->id, CRM_OP_CLEAR_FAILCOUNT, 0);
+     GListPtr list = find_actions_exact(rsc->actions, key, node);
+ 
+     if (list) {
+@@ -1195,10 +1195,9 @@ cleanup_orphans(resource_t * rsc, pe_working_set_t * data_set)
+         node_t *node = (node_t *) gIter->data;
+ 
+         if (node->details->online && get_failcount(node, rsc, NULL, data_set)) {
+-            action_t *clear_op = NULL;
+-
+-            clear_op = custom_action(rsc, crm_concat(rsc->id, CRM_OP_CLEAR_FAILCOUNT, '_'),
+-                                     CRM_OP_CLEAR_FAILCOUNT, node, FALSE, TRUE, data_set);
++            char *key = generate_op_key(rsc->id, CRM_OP_CLEAR_FAILCOUNT, 0);
++            action_t *clear_op = custom_action(rsc, key, CRM_OP_CLEAR_FAILCOUNT,
++                                               node, FALSE, TRUE, data_set);
+ 
+             add_hash_param(clear_op->meta, XML_ATTR_TE_NOWAIT, XML_BOOLEAN_TRUE);
+             pe_rsc_info(rsc, "Clearing failcount (%d) for orphaned resource %s on %s (%s)",
+-- 
+1.8.3.1
+
+
+From da8f425a37b844676ca468676b07e61c05ff2843 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Wed, 22 Feb 2017 14:33:28 -0600
+Subject: [PATCH 2/2] Log: pengine,libpe_status: make failcount clearing
+ messages more helpful
+
+---
+ lib/pengine/unpack.c | 17 ++++++++---------
+ pengine/allocate.c   | 12 +++++++++---
+ 2 files changed, 17 insertions(+), 12 deletions(-)
+
+diff --git a/lib/pengine/unpack.c b/lib/pengine/unpack.c
+index a357643..e0a3452 100644
+--- a/lib/pengine/unpack.c
++++ b/lib/pengine/unpack.c
+@@ -2851,11 +2851,11 @@ static bool check_operation_expiry(resource_t *rsc, node_t *node, int rc, xmlNod
+ {
+     bool expired = FALSE;
+     time_t last_failure = 0;
+-    int clear_failcount = 0;
+     int interval = 0;
+     int failure_timeout = rsc->failure_timeout;
+     const char *key = get_op_key(xml_op);
+     const char *task = crm_element_value(xml_op, XML_LRM_ATTR_TASK);
++    const char *clear_reason = NULL;
+ 
+     /* clearing recurring monitor operation failures automatically
+      * needs to be carefully considered */
+@@ -2903,15 +2903,14 @@ static bool check_operation_expiry(resource_t *rsc, node_t *node, int rc, xmlNod
+             int fc = get_failcount_full(node, rsc, &last_failure, FALSE, xml_op, data_set);
+             if(fc) {
+                 if (get_failcount_full(node, rsc, &last_failure, TRUE, xml_op, data_set) == 0) {
+-                    clear_failcount = 1;
+-                    crm_notice("Clearing expired failcount for %s on %s", rsc->id, node->details->uname);
++                    clear_reason = "it expired";
+ 
+                 } else {
+                     expired = FALSE;
+                 }
+             } else if (rsc->remote_reconnect_interval && strstr(ID(xml_op), "last_failure")) {
+                 /* always clear last failure when reconnect interval is set */
+-                clear_failcount = 1;
++                clear_reason = "reconnect interval is set";
+             }
+         }
+ 
+@@ -2926,19 +2925,19 @@ static bool check_operation_expiry(resource_t *rsc, node_t *node, int rc, xmlNod
+             crm_trace("rsc op %s/%s on node %s does not have a op digest to compare against", rsc->id,
+                       key, node->details->id);
+         } else if (digest_data->rc != RSC_DIGEST_MATCH) {
+-            clear_failcount = 1;
+-            crm_info
+-                ("Clearing failcount for %s on %s, %s failed and now resource parameters have changed.",
+-                 task, rsc->id, node->details->uname);
++            clear_reason = "resource parameters have changed";
+         }
+     }
+ 
+-    if (clear_failcount) {
++    if (clear_reason != NULL) {
+         char *key = generate_op_key(rsc->id, CRM_OP_CLEAR_FAILCOUNT, 0);
+         action_t *clear_op = custom_action(rsc, key, CRM_OP_CLEAR_FAILCOUNT,
+                                            node, FALSE, TRUE, data_set);
+ 
+         add_hash_param(clear_op->meta, XML_ATTR_TE_NOWAIT, XML_BOOLEAN_TRUE);
++
++        crm_notice("Clearing failure of %s on %s because %s " CRM_XS " %s",
++                   rsc->id, node->details->uname, clear_reason, clear_op->uuid);
+     }
+ 
+     crm_element_value_int(xml_op, XML_LRM_ATTR_INTERVAL, &interval);
+diff --git a/pengine/allocate.c b/pengine/allocate.c
+index 4e8d68d..9a87816 100644
+--- a/pengine/allocate.c
++++ b/pengine/allocate.c
+@@ -449,6 +449,10 @@ check_actions_for(xmlNode * rsc_entry, resource_t * rsc, node_t * node, pe_worki
+             action_clear =
+                 custom_action(rsc, key, CRM_OP_CLEAR_FAILCOUNT, node, FALSE, TRUE, data_set);
+             set_bit(action_clear->flags, pe_action_runnable);
++
++            crm_notice("Clearing failure of %s on %s "
++                       "because action definition changed " CRM_XS " %s",
++                       rsc->id, node->details->uname, action_clear->uuid);
+         }
+     }
+ 
+@@ -1200,9 +1204,11 @@ cleanup_orphans(resource_t * rsc, pe_working_set_t * data_set)
+                                                node, FALSE, TRUE, data_set);
+ 
+             add_hash_param(clear_op->meta, XML_ATTR_TE_NOWAIT, XML_BOOLEAN_TRUE);
+-            pe_rsc_info(rsc, "Clearing failcount (%d) for orphaned resource %s on %s (%s)",
+-                        get_failcount(node, rsc, NULL, data_set), rsc->id, node->details->uname,
+-                        clear_op->uuid);
++
++            pe_rsc_info(rsc,
++                        "Clearing failure of %s on %s because it is orphaned "
++                        CRM_XS " %s",
++                        rsc->id, node->details->uname, clear_op->uuid);
+ 
+             custom_action_order(rsc, NULL, clear_op,
+                             rsc, generate_op_key(rsc->id, RSC_STOP, 0), NULL,
+-- 
+1.8.3.1
+

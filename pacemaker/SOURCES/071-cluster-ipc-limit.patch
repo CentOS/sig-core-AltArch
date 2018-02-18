@@ -1,0 +1,517 @@
+From ae780515cd4db1e6f23db9f75a628ce9c39bdd49 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Fri, 9 Jun 2017 12:35:36 -0500
+Subject: [PATCH 1/8] Refactor: libcrmcommon: remember when IPC client is root
+ or cluster user
+
+will allow using a different eviction threshold
+---
+ include/crm/common/ipcs.h |  3 ++-
+ lib/common/ipc.c          | 13 ++++++++++---
+ 2 files changed, 12 insertions(+), 4 deletions(-)
+
+diff --git a/include/crm/common/ipcs.h b/include/crm/common/ipcs.h
+index 52338e3..43b7b60 100644
+--- a/include/crm/common/ipcs.h
++++ b/include/crm/common/ipcs.h
+@@ -60,7 +60,8 @@ struct crm_remote_s {
+ 
+ enum crm_client_flags
+ {
+-    crm_client_flag_ipc_proxied = 0x00001, /* ipc_proxy code only */
++    crm_client_flag_ipc_proxied    = 0x00001, /* ipc_proxy code only */
++    crm_client_flag_ipc_privileged = 0x00002, /* root or cluster user */
+ };
+ 
+ struct crm_client_s {
+diff --git a/lib/common/ipc.c b/lib/common/ipc.c
+index 50980ec..e0a7a5c 100644
+--- a/lib/common/ipc.c
++++ b/lib/common/ipc.c
+@@ -314,6 +314,7 @@ crm_client_alloc(void *key)
+ crm_client_t *
+ crm_client_new(qb_ipcs_connection_t * c, uid_t uid_client, gid_t gid_client)
+ {
++    static gid_t uid_cluster = 0;
+     static gid_t gid_cluster = 0;
+ 
+     crm_client_t *client = NULL;
+@@ -323,11 +324,12 @@ crm_client_new(qb_ipcs_connection_t * c, uid_t uid_client, gid_t gid_client)
+         return NULL;
+     }
+ 
+-    if (gid_cluster == 0) {
+-        if(crm_user_lookup(CRM_DAEMON_USER, NULL, &gid_cluster) < 0) {
++    if (uid_cluster == 0) {
++        if (crm_user_lookup(CRM_DAEMON_USER, &uid_cluster, &gid_cluster) < 0) {
+             static bool have_error = FALSE;
+             if(have_error == FALSE) {
+-                crm_warn("Could not find group for user %s", CRM_DAEMON_USER);
++                crm_warn("Could not find user and group IDs for user %s",
++                         CRM_DAEMON_USER);
+                 have_error = TRUE;
+             }
+         }
+@@ -347,6 +349,11 @@ crm_client_new(qb_ipcs_connection_t * c, uid_t uid_client, gid_t gid_client)
+     client->kind = CRM_CLIENT_IPC;
+     client->pid = crm_ipcs_client_pid(c);
+ 
++    if ((uid_client == 0) || (uid_client == uid_cluster)) {
++        /* Remember when a connection came from root or hacluster */
++        set_bit(client->flags, crm_client_flag_ipc_privileged);
++    }
++
+     crm_debug("Connecting %p for uid=%d gid=%d pid=%u id=%s", c, uid_client, gid_client, client->pid, client->id);
+ 
+ #if ENABLE_ACL
+-- 
+1.8.3.1
+
+
+From f93ce6bdd6be5d2670ab0cd8dd10d3b8b9972a65 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Fri, 9 Jun 2017 14:46:16 -0500
+Subject: [PATCH 2/8] Low: libcrmcommon: add function for testing daemon name
+
+---
+ include/crm/common/util.h |  2 ++
+ lib/common/utils.c        | 21 +++++++++++++++++++++
+ 2 files changed, 23 insertions(+)
+
+diff --git a/include/crm/common/util.h b/include/crm/common/util.h
+index 682b346..aa192f9 100644
+--- a/include/crm/common/util.h
++++ b/include/crm/common/util.h
+@@ -26,6 +26,7 @@
+ 
+ #  include <sys/types.h>
+ #  include <stdlib.h>
++#  include <stdbool.h>
+ #  include <limits.h>
+ #  include <signal.h>
+ #  include <sysexits.h>
+@@ -127,6 +128,7 @@ gboolean did_rsc_op_fail(lrmd_event_data_t * event, int target_rc);
+ char *crm_md5sum(const char *buffer);
+ 
+ char *crm_generate_uuid(void);
++bool crm_is_daemon_name(const char *name);
+ 
+ int crm_user_lookup(const char *name, uid_t * uid, gid_t * gid);
+ 
+diff --git a/lib/common/utils.c b/lib/common/utils.c
+index 27ed60d..a652197 100644
+--- a/lib/common/utils.c
++++ b/lib/common/utils.c
+@@ -1959,6 +1959,27 @@ crm_generate_uuid(void)
+     return buffer;
+ }
+ 
++/*!
++ * \brief Check whether a string represents a cluster daemon name
++ *
++ * \param[in] name  String to check
++ *
++ * \return TRUE if name is standard client name used by daemons, FALSE otherwise
++ */
++bool
++crm_is_daemon_name(const char *name)
++{
++    return (name &&
++            (!strcmp(name, CRM_SYSTEM_CRMD)
++            || !strcmp(name, CRM_SYSTEM_STONITHD)
++            || !strcmp(name, T_ATTRD)
++            || !strcmp(name, CRM_SYSTEM_CIB)
++            || !strcmp(name, CRM_SYSTEM_MCP)
++            || !strcmp(name, CRM_SYSTEM_DC)
++            || !strcmp(name, CRM_SYSTEM_TENGINE)
++            || !strcmp(name, CRM_SYSTEM_LRMD)));
++}
++
+ #include <md5.h>
+ 
+ char *
+-- 
+1.8.3.1
+
+
+From 19497fa9785c854084253167b7dc54a8c026e1ad Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Fri, 9 Jun 2017 11:11:50 -0500
+Subject: [PATCH 3/8] Low: libcrmcommon: support setting max queue length per
+ IPC client
+
+---
+ include/crm/common/ipcs.h |  3 +++
+ lib/common/ipc.c          | 39 ++++++++++++++++++++++++++-------------
+ 2 files changed, 29 insertions(+), 13 deletions(-)
+
+diff --git a/include/crm/common/ipcs.h b/include/crm/common/ipcs.h
+index 43b7b60..d2db212 100644
+--- a/include/crm/common/ipcs.h
++++ b/include/crm/common/ipcs.h
+@@ -19,6 +19,7 @@
+ #ifndef CRM_COMMON_IPCS__H
+ #  define CRM_COMMON_IPCS__H
+ 
++#  include <stdbool.h>
+ #  include <qb/qbipcs.h>
+ #  ifdef HAVE_GNUTLS_GNUTLS_H
+ #    undef KEYFILE
+@@ -95,6 +96,7 @@ struct crm_client_s {
+     struct crm_remote_s *remote;        /* TCP/TLS */
+ 
+     unsigned int queue_backlog; /* IPC queue length after last flush */
++    unsigned int queue_max;     /* Evict client whose queue grows this big */
+ };
+ 
+ extern GHashTable *client_connections;
+@@ -110,6 +112,7 @@ crm_client_t *crm_client_alloc(void *key);
+ crm_client_t *crm_client_new(qb_ipcs_connection_t * c, uid_t uid, gid_t gid);
+ void crm_client_destroy(crm_client_t * c);
+ void crm_client_disconnect_all(qb_ipcs_service_t *s);
++bool crm_set_client_queue_max(crm_client_t *client, const char *qmax);
+ 
+ void crm_ipcs_send_ack(crm_client_t * c, uint32_t request, uint32_t flags,
+                        const char *tag, const char *function, int line);
+diff --git a/lib/common/ipc.c b/lib/common/ipc.c
+index e0a7a5c..3110334 100644
+--- a/lib/common/ipc.c
++++ b/lib/common/ipc.c
+@@ -37,8 +37,9 @@
+ 
+ #define PCMK_IPC_VERSION 1
+ 
+-/* Evict clients whose event queue grows this large */
+-#define PCMK_IPC_MAX_QUEUE 500
++/* Evict clients whose event queue grows this large (by default) */
++#define PCMK_IPC_DEFAULT_QUEUE_MAX 500
++#define PCMK_IPC_DEFAULT_QUEUE_MAX_S "500"
+ 
+ struct crm_ipc_response_header {
+     struct qb_ipc_response_header qb;
+@@ -409,6 +410,24 @@ crm_client_destroy(crm_client_t * c)
+     free(c);
+ }
+ 
++/*!
++ * \brief Raise IPC eviction threshold for a client, if allowed
++ *
++ * \param[in,out] client     Client to modify
++ * \param[in]     queue_max  New threshold (as string)
++ *
++ * \return TRUE if change was allowed, FALSE otherwise
++ */
++bool
++crm_set_client_queue_max(crm_client_t *client, const char *qmax)
++{
++    if (is_set(client->flags, crm_client_flag_ipc_privileged)) {
++        client->queue_max = crm_parse_int(qmax, PCMK_IPC_DEFAULT_QUEUE_MAX_S);
++        return TRUE;
++    }
++    return FALSE;
++}
++
+ int
+ crm_ipcs_client_pid(qb_ipcs_connection_t * c)
+ {
+@@ -553,18 +572,12 @@ crm_ipcs_flush_events(crm_client_t * c)
+     }
+ 
+     if (queue_len) {
+-        /* We want to allow clients to briefly fall behind on processing
+-         * incoming messages, but drop completely unresponsive clients so the
+-         * connection doesn't consume resources indefinitely.
+-         *
+-         * @TODO It is possible that the queue could reasonably grow large in a
+-         * short time. An example is a reprobe of hundreds of resources on many
+-         * nodes resulting in a surge of CIB replies to the crmd. We could
+-         * possibly give cluster daemons a higher threshold here, and/or prevent
+-         * such a surge by throttling LRM history writes in the crmd.
+-         */
+ 
+-        if (queue_len > PCMK_IPC_MAX_QUEUE) {
++        /* Allow clients to briefly fall behind on processing incoming messages,
++         * but drop completely unresponsive clients so the connection doesn't
++         * consume resources indefinitely.
++         */
++        if (queue_len > QB_MAX(c->queue_max, PCMK_IPC_DEFAULT_QUEUE_MAX)) {
+             if ((c->queue_backlog <= 1) || (queue_len < c->queue_backlog)) {
+                 /* Don't evict for a new or shrinking backlog */
+                 crm_warn("Client with process ID %u has a backlog of %u messages "
+-- 
+1.8.3.1
+
+
+From 324e241d9d9666dfe6543ddf88d965b12d5a164f Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 12 Jun 2017 17:47:12 -0500
+Subject: [PATCH 4/8] Low: libcib: always use current values when unpacking
+ config
+
+Previously, cib_read_config() called unpack_instance_attributes() with
+overwrite=FALSE. This meant that changes to an option would not take effect
+unless the option was not set before.
+
+The only significant use of cib_read_config() was in cib_acl_enabled(), which
+used a new, empty hash table for every call, so the issue didn't matter.
+
+The cib daemon also used cib_read_config() to maintain a global config_hash,
+which was affected by the issue, but didn't matter because it was never used.
+This change will allow config_hash to be used.
+---
+ lib/cib/cib_utils.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/cib/cib_utils.c b/lib/cib/cib_utils.c
+index ab48f16..8aeed67 100644
+--- a/lib/cib/cib_utils.c
++++ b/lib/cib/cib_utils.c
+@@ -743,7 +743,7 @@ cib_read_config(GHashTable * options, xmlNode * current_cib)
+     config = get_object_root(XML_CIB_TAG_CRMCONFIG, current_cib);
+     if (config) {
+         unpack_instance_attributes(current_cib, config, XML_CIB_TAG_PROPSET, NULL, options,
+-                                   CIB_OPTIONS_FIRST, FALSE, now);
++                                   CIB_OPTIONS_FIRST, TRUE, now);
+     }
+ 
+     verify_cib_options(options);
+-- 
+1.8.3.1
+
+
+From b986acbe131216aaa372681e97dfc0f2ef8f70ad Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Tue, 13 Jun 2017 16:03:36 -0500
+Subject: [PATCH 5/8] Low: libcib: correctly search for v2 patchset changes
+
+cib_internal_config_changed() was never updated for v2 patch format
+---
+ lib/cib/cib_utils.c | 23 ++++++++++++-----------
+ 1 file changed, 12 insertions(+), 11 deletions(-)
+
+diff --git a/lib/cib/cib_utils.c b/lib/cib/cib_utils.c
+index 8aeed67..f639ada 100644
+--- a/lib/cib/cib_utils.c
++++ b/lib/cib/cib_utils.c
+@@ -794,23 +794,24 @@ cib_apply_patch_event(xmlNode * event, xmlNode * input, xmlNode ** output, int l
+     return rc;
+ }
+ 
++/* v2 and v2 patch formats */
++#define XPATH_CONFIG_CHANGE \
++    "//" XML_CIB_TAG_CRMCONFIG " | " \
++    "//" XML_DIFF_CHANGE "[contains(@" XML_DIFF_PATH ",'/" XML_CIB_TAG_CRMCONFIG "/')]"
++
+ gboolean
+-cib_internal_config_changed(xmlNode * diff)
++cib_internal_config_changed(xmlNode *diff)
+ {
+     gboolean changed = FALSE;
+-    xmlXPathObject *xpathObj = NULL;
+ 
+-    if (diff == NULL) {
+-        return FALSE;
+-    }
++    if (diff) {
++        xmlXPathObject *xpathObj = xpath_search(diff, XPATH_CONFIG_CHANGE);
+ 
+-    xpathObj = xpath_search(diff, "//" XML_CIB_TAG_CRMCONFIG);
+-    if (numXpathResults(xpathObj) > 0) {
+-        changed = TRUE;
++        if (numXpathResults(xpathObj) > 0) {
++            changed = TRUE;
++        }
++        freeXpathObject(xpathObj);
+     }
+-
+-    freeXpathObject(xpathObj);
+-
+     return changed;
+ }
+ 
+-- 
+1.8.3.1
+
+
+From 3e5cdd9b329b3328a88912db48c4e4a4d6f94563 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Fri, 9 Jun 2017 15:33:27 -0500
+Subject: [PATCH 6/8] Feature: cib,libcib: support option for IPC eviction
+ threshold
+
+Only the cib utilizes the option currently, but the other daemons
+could easily do the same, if they are subject to large IPC bursts.
+---
+ cib/callbacks.c     | 13 +++++++++++++
+ cib/callbacks.h     | 10 ++++++++++
+ lib/cib/cib_utils.c | 24 ++++++++++++++++++++----
+ 3 files changed, 43 insertions(+), 4 deletions(-)
+
+diff --git a/cib/callbacks.c b/cib/callbacks.c
+index 4708f10..544a920 100644
+--- a/cib/callbacks.c
++++ b/cib/callbacks.c
+@@ -281,6 +281,19 @@ cib_common_callback(qb_ipcs_connection_t * c, void *data, size_t size, gboolean
+             cib_client->name = crm_itoa(cib_client->pid);
+         } else {
+             cib_client->name = strdup(value);
++            if (crm_is_daemon_name(value)) {
++                set_bit(cib_client->options, cib_is_daemon);
++            }
++        }
++    }
++
++    /* Allow cluster daemons more leeway before being evicted */
++    if (is_set(cib_client->options, cib_is_daemon)) {
++        const char *qmax = cib_config_lookup("cluster-ipc-limit");
++
++        if (crm_set_client_queue_max(cib_client, qmax)) {
++            crm_trace("IPC threshold for %s[%u] is now %u",
++                      cib_client->name, cib_client->pid, cib_client->queue_max);
+         }
+     }
+ 
+diff --git a/cib/callbacks.h b/cib/callbacks.h
+index b4d48d6..bddff09 100644
+--- a/cib/callbacks.h
++++ b/cib/callbacks.h
+@@ -19,6 +19,7 @@
+ #include <stdio.h>
+ #include <sys/types.h>
+ #include <unistd.h>
++#include <glib.h>
+ 
+ #include <crm/crm.h>
+ #include <crm/cib.h>
+@@ -43,6 +44,9 @@ enum cib_notifications
+     cib_notify_replace = 0x0004,
+     cib_notify_confirm = 0x0008,
+     cib_notify_diff    = 0x0010,
++
++    /* not a notification, but uses the same IPC bitmask */
++    cib_is_daemon      = 0x1000, /* whether client is another cluster daemon */
+ };
+ /* *INDENT-ON* */
+ 
+@@ -80,3 +84,9 @@ extern void cib_ha_peer_callback(HA_Message * msg, void *private_data);
+ extern int cib_ccm_dispatch(gpointer user_data);
+ extern void cib_ccm_msg_callback(oc_ed_t event, void *cookie, size_t size, const void *data);
+ #endif
++
++static inline const char *
++cib_config_lookup(const char *opt)
++{
++    return g_hash_table_lookup(config_hash, opt);
++}
+diff --git a/lib/cib/cib_utils.c b/lib/cib/cib_utils.c
+index f639ada..adbf9c8 100644
+--- a/lib/cib/cib_utils.c
++++ b/lib/cib/cib_utils.c
+@@ -699,10 +699,26 @@ cib_native_notify(gpointer data, gpointer user_data)
+ }
+ 
+ pe_cluster_option cib_opts[] = {
+-    /* name, old-name, validate, default, description */
+-    {"enable-acl", NULL, "boolean", NULL, "false", &check_boolean,
+-     "Enable CIB ACL", NULL}
+-    ,
++    /*
++     * name, legacy name,
++     * type, allowed values, default, validator,
++     * short description,
++     * long description
++     */
++    {
++        "enable-acl", NULL,
++        "boolean", NULL, "false", &check_boolean,
++        "Enable CIB ACL",
++        NULL
++    },
++    {
++        "cluster-ipc-limit", NULL,
++        "integer", NULL, "500", &check_positive_number,
++        "Maximum IPC message backlog before disconnecting a cluster daemon",
++        "Raise this if log has \"Evicting client\" messages for cluster daemon"
++            " PIDs (a good value is the number of resources in the cluster"
++            " multiplied by the number of nodes)"
++    },
+ };
+ 
+ void
+-- 
+1.8.3.1
+
+
+From 3f855794adbe9ad46aaca3848d591f5dc26d3371 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Tue, 13 Jun 2017 18:07:45 -0500
+Subject: [PATCH 7/8] Doc: Pacemaker Explained: document cluster-ipc-limit
+
+---
+ doc/Pacemaker_Explained/en-US/Ch-Options.txt | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/doc/Pacemaker_Explained/en-US/Ch-Options.txt b/doc/Pacemaker_Explained/en-US/Ch-Options.txt
+index f4e1af7..ec0c6b9 100644
+--- a/doc/Pacemaker_Explained/en-US/Ch-Options.txt
++++ b/doc/Pacemaker_Explained/en-US/Ch-Options.txt
+@@ -267,6 +267,15 @@ take effect, we can optionally poll the cluster's status for changes. A value
+ of 0 disables polling. Positive values are an interval (in seconds unless other
+ SI units are specified, e.g. 5min).
+ 
++| cluster-ipc-limit | 500 |
++indexterm:[cluster-ipc-limit,Cluster Option]
++indexterm:[Cluster,Option,cluster-ipc-limit]
++The maximum IPC message backlog before one cluster daemon will disconnect
++another. This is of use in large clusters, for which a good value is the number
++of resources in the cluster multiplied by the number of nodes. The default of
++500 is also the minimum. Raise this if you see "Evicting client" messages for
++cluster daemon PIDs in the logs.
++
+ | pe-error-series-max | -1 |
+ indexterm:[pe-error-series-max,Cluster Option]
+ indexterm:[Cluster,Option,pe-error-series-max]
+-- 
+1.8.3.1
+
+
+From bc6d723a94221419b15650a52e8ed1d843a32ff1 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Thu, 15 Jun 2017 14:20:27 -0500
+Subject: [PATCH 8/8] Refactor: libcrmcommon: avoid redundant constant
+ definitions
+
+---
+ lib/common/ipc.c | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/lib/common/ipc.c b/lib/common/ipc.c
+index 3110334..c238bca 100644
+--- a/lib/common/ipc.c
++++ b/lib/common/ipc.c
+@@ -39,7 +39,6 @@
+ 
+ /* Evict clients whose event queue grows this large (by default) */
+ #define PCMK_IPC_DEFAULT_QUEUE_MAX 500
+-#define PCMK_IPC_DEFAULT_QUEUE_MAX_S "500"
+ 
+ struct crm_ipc_response_header {
+     struct qb_ipc_response_header qb;
+@@ -422,8 +421,12 @@ bool
+ crm_set_client_queue_max(crm_client_t *client, const char *qmax)
+ {
+     if (is_set(client->flags, crm_client_flag_ipc_privileged)) {
+-        client->queue_max = crm_parse_int(qmax, PCMK_IPC_DEFAULT_QUEUE_MAX_S);
+-        return TRUE;
++        int qmax_int = crm_int_helper(qmax, NULL);
++
++        if ((errno == 0) && (qmax_int > 0)) {
++            client->queue_max = qmax_int;
++            return TRUE;
++        }
+     }
+     return FALSE;
+ }
+-- 
+1.8.3.1
+

@@ -1,0 +1,752 @@
+From 73d3531f313e7ff77b524d27c9f0f6012e8fabdd Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Tue, 21 Mar 2017 09:32:27 -0500
+Subject: [PATCH 01/10] Refactor: libcrmcommon: avoid duplicate variable for
+ /usr/sbin
+
+---
+ lib/common/Makefile.am | 3 +--
+ lib/common/watchdog.c  | 2 +-
+ 2 files changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/lib/common/Makefile.am b/lib/common/Makefile.am
+index 05a0d74..7a68d1f 100644
+--- a/lib/common/Makefile.am
++++ b/lib/common/Makefile.am
+@@ -17,8 +17,7 @@
+ #
+ include $(top_srcdir)/Makefile.common
+ 
+-AM_CPPFLAGS		+= -I$(top_builddir)/lib/gnu -I$(top_srcdir)/lib/gnu \
+-			-DSBINDIR=\"$(sbindir)\"
++AM_CPPFLAGS		+= -I$(top_builddir)/lib/gnu -I$(top_srcdir)/lib/gnu
+ 
+ ## libraries
+ lib_LTLIBRARIES	= libcrmcommon.la
+diff --git a/lib/common/watchdog.c b/lib/common/watchdog.c
+index a171721..4c4abc1 100644
+--- a/lib/common/watchdog.c
++++ b/lib/common/watchdog.c
+@@ -216,7 +216,7 @@ pcmk_locate_sbd(void)
+ 
+     /* Look for the pid file */
+     pidfile = crm_strdup_printf("%s/sbd.pid", HA_STATE_DIR);
+-    sbd_path = crm_strdup_printf("%s/sbd", SBINDIR);
++    sbd_path = crm_strdup_printf("%s/sbd", SBIN_DIR);
+ 
+     /* Read the pid file */
+     CRM_ASSERT(pidfile);
+-- 
+1.8.3.1
+
+
+From 7642b2c27d074078326b8cc90ed99f1910900a2d Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Tue, 21 Mar 2017 09:49:22 -0500
+Subject: [PATCH 02/10] Low: libpe_status: use new ID generation functions
+
+Ensures values are sanitized, and fixes a memory leak
+---
+ lib/pengine/container.c | 41 ++++++++++++++++++++---------------------
+ 1 file changed, 20 insertions(+), 21 deletions(-)
+
+diff --git a/lib/pengine/container.c b/lib/pengine/container.c
+index d7d47ad..801d94a 100644
+--- a/lib/pengine/container.c
++++ b/lib/pengine/container.c
+@@ -88,10 +88,9 @@ create_resource(const char *name, const char *provider, const char *kind)
+ static void
+ create_nvp(xmlNode *parent, const char *name, const char *value) 
+ {
+-    char *id = crm_strdup_printf("%s-%s", ID(parent), name);
+     xmlNode *xml_nvp = create_xml_node(parent, XML_CIB_TAG_NVPAIR);
+ 
+-    crm_xml_add(xml_nvp, XML_ATTR_ID, id); free(id);
++    crm_xml_set_id(xml_nvp, "%s-%s", ID(parent), name);
+     crm_xml_add(xml_nvp, XML_NVPAIR_ATTR_NAME, name);
+     crm_xml_add(xml_nvp, XML_NVPAIR_ATTR_VALUE, value);
+ }
+@@ -99,10 +98,9 @@ create_nvp(xmlNode *parent, const char *name, const char *value)
+ static void
+ create_op(xmlNode *parent, const char *prefix, const char *task, const char *interval) 
+ {
+-    char *id = crm_strdup_printf("%s-%s-%s", prefix, task, interval);
+     xmlNode *xml_op = create_xml_node(parent, "op");
+ 
+-    crm_xml_add(xml_op, XML_ATTR_ID, id); free(id);
++    crm_xml_set_id(xml_op, "%s-%s-%s", prefix, task, interval);
+     crm_xml_add(xml_op, XML_LRM_ATTR_INTERVAL, interval);
+     crm_xml_add(xml_op, "name", task);
+ }
+@@ -113,13 +111,16 @@ create_ip_resource(
+     pe_working_set_t * data_set) 
+ {
+     if(data->ip_range_start) {
+-        char *id = crm_strdup_printf("%s-ip-%s", data->prefix, tuple->ipaddr);
+-        xmlNode *xml_ip = create_resource(id, "heartbeat", "IPaddr2");
++        char *id = NULL;
++        xmlNode *xml_ip = NULL;
+         xmlNode *xml_obj = NULL;
+ 
+-        id = crm_strdup_printf("%s-attributes-%d", data->prefix, tuple->offset);
++        id = crm_strdup_printf("%s-ip-%s", data->prefix, tuple->ipaddr);
++        crm_xml_sanitize_id(id);
++        xml_ip = create_resource(id, "heartbeat", "IPaddr2");
++
+         xml_obj = create_xml_node(xml_ip, XML_TAG_ATTR_SETS);
+-        crm_xml_add(xml_obj, XML_ATTR_ID, id); free(id);
++        crm_xml_set_id(xml_obj, "%s-attributes-%d", data->prefix, tuple->offset);
+ 
+         create_nvp(xml_obj, "ip", tuple->ipaddr);
+         if(data->host_network) {
+@@ -158,13 +159,16 @@ create_docker_resource(
+         int doffset = 0, dmax = 1024;
+         char *dbuffer = calloc(1, dmax+1);
+ 
+-        char *id = crm_strdup_printf("%s-docker-%d", data->prefix, tuple->offset);
+-        xmlNode *xml_docker = create_resource(id, "heartbeat", "docker");
++        char *id = NULL;
++        xmlNode *xml_docker = NULL;
+         xmlNode *xml_obj = NULL;
+ 
+-        id = crm_strdup_printf("%s-attributes-%d", data->prefix, tuple->offset);
++        id = crm_strdup_printf("%s-docker-%d", data->prefix, tuple->offset);
++        crm_xml_sanitize_id(id);
++        xml_docker = create_resource(id, "heartbeat", "docker");
++
+         xml_obj = create_xml_node(xml_docker, XML_TAG_ATTR_SETS);
+-        crm_xml_add(xml_obj, XML_ATTR_ID, id); free(id);
++        crm_xml_set_id(xml_obj, "%s-attributes-%d", data->prefix, tuple->offset);
+ 
+         create_nvp(xml_obj, "image", data->image);
+         create_nvp(xml_obj, "allow_pull", "true");
+@@ -288,16 +292,14 @@ create_remote_resource(
+         xml_obj = create_xml_node(xml_remote, "operations");
+         create_op(xml_obj, ID(xml_remote), "monitor", "60s");
+ 
+-        id = crm_strdup_printf("%s-attributes-%d", data->prefix, tuple->offset);
+         xml_obj = create_xml_node(xml_remote, XML_TAG_ATTR_SETS);
+-        crm_xml_add(xml_obj, XML_ATTR_ID, id); free(id);
++        crm_xml_set_id(xml_obj, "%s-attributes-%d", data->prefix, tuple->offset);
+ 
+         create_nvp(xml_obj, "addr", tuple->ipaddr);
+         create_nvp(xml_obj, "port", crm_itoa(DEFAULT_REMOTE_PORT));
+ 
+-        id = crm_strdup_printf("%s-meta-%d", data->prefix, tuple->offset);
+         xml_obj = create_xml_node(xml_remote, XML_TAG_META_SETS);
+-        crm_xml_add(xml_obj, XML_ATTR_ID, id); free(id);
++        crm_xml_set_id(xml_obj, "%s-meta-%d", data->prefix, tuple->offset);
+ 
+         create_nvp(xml_obj, XML_OP_ATTR_ALLOW_MIGRATE, "false");
+ 
+@@ -458,13 +460,10 @@ container_unpack(resource_t * rsc, pe_working_set_t * data_set)
+             xml_resource = create_xml_node(NULL, XML_CIB_TAG_INCARNATION);
+         }
+ 
+-        value = crm_strdup_printf("%s-%s", container_data->prefix, xml_resource->name);
+-        crm_xml_add(xml_resource, XML_ATTR_ID, value);
+-        free(value);
++        crm_xml_set_id(xml_resource, "%s-%s", container_data->prefix, xml_resource->name);
+ 
+-        value = crm_strdup_printf("%s-%s-meta", container_data->prefix, xml_resource->name);
+         xml_set = create_xml_node(xml_resource, XML_TAG_META_SETS);
+-        free(value);
++        crm_xml_set_id(xml_resource, "%s-%s-meta", container_data->prefix, xml_resource->name);
+ 
+         create_nvp(xml_set, XML_RSC_ATTR_ORDERED, "true");
+ 
+-- 
+1.8.3.1
+
+
+From 0e42b7427e71a8336b2b8d3fb3ec4d9470cad1e3 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Tue, 21 Mar 2017 09:56:58 -0500
+Subject: [PATCH 03/10] Refactor: crmd,lrmd,liblrmd: pass pointer rather than
+ structure
+
+---
+ crmd/lrm_state.c        | 3 ++-
+ include/crm_internal.h  | 2 +-
+ lib/lrmd/proxy_common.c | 4 ++--
+ lrmd/remote_ctl.c       | 2 +-
+ 4 files changed, 6 insertions(+), 5 deletions(-)
+
+diff --git a/crmd/lrm_state.c b/crmd/lrm_state.c
+index 83532a5..9a810df 100644
+--- a/crmd/lrm_state.c
++++ b/crmd/lrm_state.c
+@@ -408,7 +408,8 @@ crmd_remote_proxy_new(lrmd_t *lrmd, const char *node_name, const char *session_i
+         .dispatch = remote_proxy_dispatch,
+         .destroy = remote_proxy_disconnected
+     };
+-    remote_proxy_t *proxy = remote_proxy_new(lrmd, proxy_callbacks, node_name, session_id, channel);
++    remote_proxy_t *proxy = remote_proxy_new(lrmd, &proxy_callbacks, node_name,
++                                             session_id, channel);
+ 
+     if (safe_str_eq(channel, CRM_SYSTEM_CRMD)) {
+         proxy->is_local = TRUE;
+diff --git a/include/crm_internal.h b/include/crm_internal.h
+index 206ec5f..d2f2f07 100644
+--- a/include/crm_internal.h
++++ b/include/crm_internal.h
+@@ -380,7 +380,7 @@ typedef struct remote_proxy_s {
+ } remote_proxy_t;
+ 
+ remote_proxy_t *remote_proxy_new(
+-    lrmd_t *lrmd, struct ipc_client_callbacks proxy_callbacks,
++    lrmd_t *lrmd, struct ipc_client_callbacks *proxy_callbacks,
+     const char *node_name, const char *session_id, const char *channel);
+ 
+ int  remote_proxy_check(lrmd_t *lrmd, GHashTable *hash);
+diff --git a/lib/lrmd/proxy_common.c b/lib/lrmd/proxy_common.c
+index 2e9d963..e0f3d87 100644
+--- a/lib/lrmd/proxy_common.c
++++ b/lib/lrmd/proxy_common.c
+@@ -172,7 +172,7 @@ remote_proxy_disconnected(gpointer userdata)
+ }
+ 
+ remote_proxy_t *
+-remote_proxy_new(lrmd_t *lrmd, struct ipc_client_callbacks proxy_callbacks,
++remote_proxy_new(lrmd_t *lrmd, struct ipc_client_callbacks *proxy_callbacks,
+                  const char *node_name, const char *session_id, const char *channel)
+ {
+     remote_proxy_t *proxy = NULL;
+@@ -188,7 +188,7 @@ remote_proxy_new(lrmd_t *lrmd, struct ipc_client_callbacks proxy_callbacks,
+     proxy->node_name = strdup(node_name);
+     proxy->session_id = strdup(session_id);
+ 
+-    proxy->source = mainloop_add_ipc_client(channel, G_PRIORITY_LOW, 0, proxy, &proxy_callbacks);
++    proxy->source = mainloop_add_ipc_client(channel, G_PRIORITY_LOW, 0, proxy, proxy_callbacks);
+     proxy->ipc = mainloop_get_ipc_client(proxy->source);
+     proxy->lrm = lrmd;
+ 
+diff --git a/lrmd/remote_ctl.c b/lrmd/remote_ctl.c
+index f3fc24f..4afa337 100644
+--- a/lrmd/remote_ctl.c
++++ b/lrmd/remote_ctl.c
+@@ -259,7 +259,7 @@ ctl_remote_proxy_cb(lrmd_t *lrmd, void *userdata, xmlNode *msg)
+             .destroy = remote_proxy_disconnected
+         };
+ 
+-        remote_proxy_new(lrmd, proxy_callbacks, options.node_name, session, channel);
++        remote_proxy_new(lrmd, &proxy_callbacks, options.node_name, session, channel);
+ 
+     } else {
+         remote_proxy_cb(lrmd, options.node_name, msg);
+-- 
+1.8.3.1
+
+
+From 6e0782767bd8b057a363e6bb32327d6881699aae Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Tue, 21 Mar 2017 10:50:30 -0500
+Subject: [PATCH 04/10] Low: crmd,liblrmd: handle crmd-local proxy requests
+ properly
+
+---
+ crmd/lrm_state.c        | 14 ++++++++------
+ lib/lrmd/proxy_common.c | 28 ++++++++++++++++++++--------
+ 2 files changed, 28 insertions(+), 14 deletions(-)
+
+diff --git a/crmd/lrm_state.c b/crmd/lrm_state.c
+index 9a810df..86cedd8 100644
+--- a/crmd/lrm_state.c
++++ b/crmd/lrm_state.c
+@@ -410,10 +410,6 @@ crmd_remote_proxy_new(lrmd_t *lrmd, const char *node_name, const char *session_i
+     };
+     remote_proxy_t *proxy = remote_proxy_new(lrmd, &proxy_callbacks, node_name,
+                                              session_id, channel);
+-
+-    if (safe_str_eq(channel, CRM_SYSTEM_CRMD)) {
+-        proxy->is_local = TRUE;
+-    }
+     return proxy;
+ }
+ 
+@@ -526,7 +522,7 @@ crmd_remote_proxy_cb(lrmd_t *lrmd, void *userdata, xmlNode *msg)
+         }
+         return;
+ 
+-    } else if (safe_str_eq(op, LRMD_IPC_OP_REQUEST) && proxy->is_local) {
++    } else if (safe_str_eq(op, LRMD_IPC_OP_REQUEST) && proxy && proxy->is_local) {
+         /* this is for the crmd, which we are, so don't try
+          * and connect/send to ourselves over ipc. instead
+          * do it directly.
+@@ -534,9 +530,15 @@ crmd_remote_proxy_cb(lrmd_t *lrmd, void *userdata, xmlNode *msg)
+         int flags = 0;
+         xmlNode *request = get_message_xml(msg, F_LRMD_IPC_MSG);
+ 
++        CRM_CHECK(request != NULL, return);
++#if ENABLE_ACL
++        CRM_CHECK(lrm_state->node_name, return);
++        crm_xml_add(request, XML_ACL_TAG_ROLE, "pacemaker-remote");
++        crm_acl_get_set_user(request, F_LRMD_IPC_USER, lrm_state->node_name);
++#endif
+         crmd_proxy_dispatch(session, request);
+-        crm_element_value_int(msg, F_LRMD_IPC_MSG_FLAGS, &flags);
+ 
++        crm_element_value_int(msg, F_LRMD_IPC_MSG_FLAGS, &flags);
+         if (flags & crm_ipc_client_response) {
+             int msg_id = 0;
+             xmlNode *op_reply = create_xml_node(NULL, "ack");
+diff --git a/lib/lrmd/proxy_common.c b/lib/lrmd/proxy_common.c
+index e0f3d87..81796d4 100644
+--- a/lib/lrmd/proxy_common.c
++++ b/lib/lrmd/proxy_common.c
+@@ -187,15 +187,21 @@ remote_proxy_new(lrmd_t *lrmd, struct ipc_client_callbacks *proxy_callbacks,
+ 
+     proxy->node_name = strdup(node_name);
+     proxy->session_id = strdup(session_id);
+-
+-    proxy->source = mainloop_add_ipc_client(channel, G_PRIORITY_LOW, 0, proxy, proxy_callbacks);
+-    proxy->ipc = mainloop_get_ipc_client(proxy->source);
+     proxy->lrm = lrmd;
+ 
+-    if (proxy->source == NULL) {
+-        remote_proxy_free(proxy);
+-        remote_proxy_notify_destroy(lrmd, session_id);
+-        return NULL;
++    if (safe_str_eq(crm_system_name, CRM_SYSTEM_CRMD)
++        && safe_str_eq(channel, CRM_SYSTEM_CRMD)) {
++        /* The crmd doesn't need to connect to itself */
++        proxy->is_local = TRUE;
++
++    } else {
++        proxy->source = mainloop_add_ipc_client(channel, G_PRIORITY_LOW, 0, proxy, proxy_callbacks);
++        proxy->ipc = mainloop_get_ipc_client(proxy->source);
++        if (proxy->source == NULL) {
++            remote_proxy_free(proxy);
++            remote_proxy_notify_destroy(lrmd, session_id);
++            return NULL;
++        }
+     }
+ 
+     crm_trace("new remote proxy client established to %s on %s, session id %s",
+@@ -237,7 +243,13 @@ remote_proxy_cb(lrmd_t *lrmd, const char *node_name, xmlNode *msg)
+             /* proxy connection no longer exists */
+             remote_proxy_notify_destroy(lrmd, session);
+             return;
+-        } else if ((proxy->is_local == FALSE) && (crm_ipc_connected(proxy->ipc) == FALSE)) {
++        }
++
++        /* crmd requests MUST be handled by the crmd, not us */
++        CRM_CHECK(proxy->is_local == FALSE,
++                  remote_proxy_end_session(proxy); return);
++
++        if (crm_ipc_connected(proxy->ipc) == FALSE) {
+             remote_proxy_end_session(proxy);
+             return;
+         }
+-- 
+1.8.3.1
+
+
+From c76c85f7ca5d5fe2127473f13516694882fda603 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Tue, 21 Mar 2017 10:51:22 -0500
+Subject: [PATCH 05/10] Refactor: libcrmcommon: remove dead code
+
+---
+ include/crm_internal.h | 8 --------
+ 1 file changed, 8 deletions(-)
+
+diff --git a/include/crm_internal.h b/include/crm_internal.h
+index d2f2f07..cf0f32d 100644
+--- a/include/crm_internal.h
++++ b/include/crm_internal.h
+@@ -162,10 +162,6 @@ crm_clear_bit(const char *function, int line, const char *target, long long word
+ {
+     long long rc = (word & ~bit);
+ 
+-    /* if(bit == 0x00002) { */
+-    /*     crm_err("Bit 0x%.8llx for %s cleared by %s:%d", bit, target, function, line); */
+-    /* } */
+-
+     if (rc == word) {
+         /* Unchanged */
+     } else if (target) {
+@@ -182,10 +178,6 @@ crm_set_bit(const char *function, int line, const char *target, long long word,
+ {
+     long long rc = (word | bit);
+ 
+-    /* if(bit == 0x00002) { */
+-    /*     crm_err("Bit 0x%.8llx for %s set by %s:%d", bit, target, function, line); */
+-    /* } */
+-
+     if (rc == word) {
+         /* Unchanged */
+     } else if (target) {
+-- 
+1.8.3.1
+
+
+From 23cd184c09f2bdb19b9b5d34b8a091cd52d9d142 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Tue, 21 Mar 2017 10:58:09 -0500
+Subject: [PATCH 06/10] Low: libpe_status: allow more than 254 containers in a
+ bundle
+
+---
+ lib/pengine/container.c | 22 +++++++++++++++-------
+ 1 file changed, 15 insertions(+), 7 deletions(-)
+
+diff --git a/lib/pengine/container.c b/lib/pengine/container.c
+index 801d94a..1c70f02 100644
+--- a/lib/pengine/container.c
++++ b/lib/pengine/container.c
+@@ -32,20 +32,28 @@ void tuple_free(container_grouping_t *tuple);
+ static char *
+ next_ip(const char *last_ip)
+ {
+-    int oct1 = 0;
+-    int oct2 = 0;
+-    int oct3 = 0;
+-    int oct4 = 0;
++    unsigned int oct1 = 0;
++    unsigned int oct2 = 0;
++    unsigned int oct3 = 0;
++    unsigned int oct4 = 0;
++    int rc = sscanf(last_ip, "%u.%u.%u.%u", &oct1, &oct2, &oct3, &oct4);
+ 
+-    int rc = sscanf(last_ip, "%d.%d.%d.%d", &oct1, &oct2, &oct3, &oct4);
+     if (rc != 4) {
++        /*@ TODO check for IPv6 */
+         return NULL;
+ 
+-    } else if(oct4 > 255) {
++    } else if (oct3 > 253) {
+         return NULL;
++
++    } else if (oct4 > 253) {
++        ++oct3;
++        oct4 = 1;
++
++    } else {
++        ++oct4;
+     }
+ 
+-    return crm_strdup_printf("%d.%d.%d.%d", oct1, oct2, oct3, oct4+1);
++    return crm_strdup_printf("%u.%u.%u.%u", oct1, oct2, oct3, oct4);
+ }
+ 
+ static int
+-- 
+1.8.3.1
+
+
+From 4751d74fbfb1be557fb2d4fca9db2c4a2b896950 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Tue, 21 Mar 2017 11:10:54 -0500
+Subject: [PATCH 07/10] Low: libpe_status: avoid memory leaks in bundle
+ handling
+
+---
+ lib/pengine/container.c | 16 +++++++++++-----
+ 1 file changed, 11 insertions(+), 5 deletions(-)
+
+diff --git a/lib/pengine/container.c b/lib/pengine/container.c
+index 1c70f02..816e96a 100644
+--- a/lib/pengine/container.c
++++ b/lib/pengine/container.c
+@@ -88,7 +88,7 @@ create_resource(const char *name, const char *provider, const char *kind)
+     crm_xml_add(rsc, XML_ATTR_ID, name);
+     crm_xml_add(rsc, XML_AGENT_ATTR_CLASS, "ocf");
+     crm_xml_add(rsc, XML_AGENT_ATTR_PROVIDER, provider);
+-    crm_xml_add(rsc, "type", kind);
++    crm_xml_add(rsc, XML_ATTR_TYPE, kind);
+ 
+     return rsc;
+ }
+@@ -126,6 +126,7 @@ create_ip_resource(
+         id = crm_strdup_printf("%s-ip-%s", data->prefix, tuple->ipaddr);
+         crm_xml_sanitize_id(id);
+         xml_ip = create_resource(id, "heartbeat", "IPaddr2");
++        free(id);
+ 
+         xml_obj = create_xml_node(xml_ip, XML_TAG_ATTR_SETS);
+         crm_xml_set_id(xml_obj, "%s-attributes-%d", data->prefix, tuple->offset);
+@@ -174,6 +175,7 @@ create_docker_resource(
+         id = crm_strdup_printf("%s-docker-%d", data->prefix, tuple->offset);
+         crm_xml_sanitize_id(id);
+         xml_docker = create_resource(id, "heartbeat", "docker");
++        free(id);
+ 
+         xml_obj = create_xml_node(xml_docker, XML_TAG_ATTR_SETS);
+         crm_xml_set_id(xml_obj, "%s-attributes-%d", data->prefix, tuple->offset);
+@@ -203,6 +205,7 @@ create_docker_resource(
+                 }
+                 doffset += snprintf(dbuffer+doffset, dmax-doffset, "%s", source);
+                 offset += snprintf(buffer+offset, max-offset, " -v %s:%s", source, mount->target);
++                free(source);
+ 
+             } else {
+                 offset += snprintf(buffer+offset, max-offset, " -v %s:%s", mount->source, mount->target);
+@@ -287,16 +290,19 @@ create_remote_resource(
+         xmlNode *xml_obj = NULL;
+         xmlNode *xml_remote = NULL;
+         char *nodeid = crm_strdup_printf("%s-%d", data->prefix, tuple->offset);
+-        char *id = strdup(nodeid);
++        char *id = NULL;
+ 
+-        if(remote_id_conflict(id, data_set)) {
++        if (remote_id_conflict(nodeid, data_set)) {
+             // The biggest hammer we have
+             id = crm_strdup_printf("pcmk-internal-%s-remote-%d", tuple->child->id, tuple->offset);
++            CRM_ASSERT(remote_id_conflict(id, data_set) == FALSE);
++        } else {
++            id = strdup(nodeid);
+         }
+ 
+-        CRM_ASSERT(remote_id_conflict(id, data_set) == FALSE);
+-
+         xml_remote = create_resource(id, "pacemaker", "remote");
++        free(id);
++
+         xml_obj = create_xml_node(xml_remote, "operations");
+         create_op(xml_obj, ID(xml_remote), "monitor", "60s");
+ 
+-- 
+1.8.3.1
+
+
+From ef2cd27bf68b9950cb67872b72c878c995fac479 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Tue, 21 Mar 2017 11:14:41 -0500
+Subject: [PATCH 08/10] Refactor: libpe_status: rename newly exposed function
+ with pe_ prefix
+
+---
+ fencing/main.c                 |  1 -
+ include/crm/pengine/internal.h |  3 ++-
+ lib/pengine/container.c        |  3 ++-
+ lib/pengine/unpack.c           | 19 ++++++++++++-------
+ 4 files changed, 16 insertions(+), 10 deletions(-)
+
+diff --git a/fencing/main.c b/fencing/main.c
+index 437c31f..1c61d8b 100644
+--- a/fencing/main.c
++++ b/fencing/main.c
+@@ -710,7 +710,6 @@ update_done:
+ }
+ 
+ extern xmlNode *do_calculations(pe_working_set_t * data_set, xmlNode * xml_input, crm_time_t * now);
+-extern node_t *create_node(const char *id, const char *uname, const char *type, const char *score, pe_working_set_t * data_set);
+ 
+ /*!
+  * \internal
+diff --git a/include/crm/pengine/internal.h b/include/crm/pengine/internal.h
+index adafefd..0da02cc 100644
+--- a/include/crm/pengine/internal.h
++++ b/include/crm/pengine/internal.h
+@@ -286,7 +286,8 @@ void print_rscs_brief(GListPtr rsc_list, const char * pre_text, long options,
+                       void * print_data, gboolean print_all);
+ void pe_fence_node(pe_working_set_t * data_set, node_t * node, const char *reason);
+ 
+-node_t *create_node(const char *id, const char *uname, const char *type, const char *score, pe_working_set_t * data_set);
++node_t *pe_create_node(const char *id, const char *uname, const char *type,
++                       const char *score, pe_working_set_t * data_set);
+ bool remote_id_conflict(const char *remote_name, pe_working_set_t *data);
+ void common_print(resource_t * rsc, const char *pre_text, const char *name, node_t *node, long options, void *print_data);
+ resource_t *find_container_child(const char *stem, resource_t * rsc, node_t *node);
+diff --git a/lib/pengine/container.c b/lib/pengine/container.c
+index 816e96a..4dc7594 100644
+--- a/lib/pengine/container.c
++++ b/lib/pengine/container.c
+@@ -326,7 +326,8 @@ create_remote_resource(
+         // tuple->docker->fillers = g_list_append(tuple->docker->fillers, child);
+ 
+         // -INFINITY prevents anyone else from running here
+-        node = create_node(strdup(nodeid), nodeid, "remote", "-INFINITY", data_set);
++        node = pe_create_node(strdup(nodeid), nodeid, "remote", "-INFINITY",
++                              data_set);
+         tuple->node = node_copy(node);
+         tuple->node->weight = 500;
+         nodeid = NULL;
+diff --git a/lib/pengine/unpack.c b/lib/pengine/unpack.c
+index 2f03493..ef51cd5 100644
+--- a/lib/pengine/unpack.c
++++ b/lib/pengine/unpack.c
+@@ -303,7 +303,8 @@ destroy_digest_cache(gpointer ptr)
+ }
+ 
+ node_t *
+-create_node(const char *id, const char *uname, const char *type, const char *score, pe_working_set_t * data_set)
++pe_create_node(const char *id, const char *uname, const char *type,
++               const char *score, pe_working_set_t * data_set)
+ {
+     node_t *new_node = NULL;
+ 
+@@ -571,7 +572,7 @@ unpack_nodes(xmlNode * xml_nodes, pe_working_set_t * data_set)
+                 crm_config_err("Must specify id tag in <node>");
+                 continue;
+             }
+-            new_node = create_node(id, uname, type, score, data_set);
++            new_node = pe_create_node(id, uname, type, score, data_set);
+ 
+             if (new_node == NULL) {
+                 return FALSE;
+@@ -595,7 +596,8 @@ unpack_nodes(xmlNode * xml_nodes, pe_working_set_t * data_set)
+ 
+     if (data_set->localhost && pe_find_node(data_set->nodes, data_set->localhost) == NULL) {
+         crm_info("Creating a fake local node");
+-        create_node(data_set->localhost, data_set->localhost, NULL, 0, data_set);
++        pe_create_node(data_set->localhost, data_set->localhost, NULL, 0,
++                       data_set);
+     }
+ 
+     return TRUE;
+@@ -649,7 +651,8 @@ unpack_remote_nodes(xmlNode * xml_resources, pe_working_set_t * data_set)
+              * an expanded node that has already been added to the node list. */
+             if (new_node_id && pe_find_node(data_set->nodes, new_node_id) == NULL) {
+                 crm_trace("Found baremetal remote node %s in container resource %s", new_node_id, ID(xml_obj));
+-                create_node(new_node_id, new_node_id, "remote", NULL, data_set);
++                pe_create_node(new_node_id, new_node_id, "remote", NULL,
++                               data_set);
+             }
+             continue;
+         }
+@@ -668,7 +671,8 @@ unpack_remote_nodes(xmlNode * xml_resources, pe_working_set_t * data_set)
+ 
+             if (new_node_id && pe_find_node(data_set->nodes, new_node_id) == NULL) {
+                 crm_trace("Found guest remote node %s in container resource %s", new_node_id, ID(xml_obj));
+-                create_node(new_node_id, new_node_id, "remote", NULL, data_set);
++                pe_create_node(new_node_id, new_node_id, "remote", NULL,
++                               data_set);
+             }
+             continue;
+ 
+@@ -681,7 +685,8 @@ unpack_remote_nodes(xmlNode * xml_resources, pe_working_set_t * data_set)
+ 
+                 if (new_node_id && pe_find_node(data_set->nodes, new_node_id) == NULL) {
+                     crm_trace("Found guest remote node %s in container resource %s which is in group %s", new_node_id, ID(xml_obj2), ID(xml_obj));
+-                    create_node(new_node_id, new_node_id, "remote", NULL, data_set);
++                    pe_create_node(new_node_id, new_node_id, "remote", NULL,
++                                   data_set);
+                 }
+             }
+         }
+@@ -1661,7 +1666,7 @@ create_fake_resource(const char *rsc_id, xmlNode * rsc_entry, pe_working_set_t *
+         rsc->is_remote_node = TRUE;
+         node = pe_find_node(data_set->nodes, rsc_id);
+         if (node == NULL) {
+-	        node = create_node(rsc_id, rsc_id, "remote", NULL, data_set);
++	        node = pe_create_node(rsc_id, rsc_id, "remote", NULL, data_set);
+         }
+         link_rsc2remotenode(data_set, rsc);
+ 
+-- 
+1.8.3.1
+
+
+From b12bb91ab10166fa20f7ebcc7e48972688c3e8f8 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Tue, 21 Mar 2017 11:20:49 -0500
+Subject: [PATCH 09/10] Low: xml: rename bucket to bundle here, too
+
+---
+ xml/resources-2.8.rng | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/xml/resources-2.8.rng b/xml/resources-2.8.rng
+index f41f84d..2e69aba 100644
+--- a/xml/resources-2.8.rng
++++ b/xml/resources-2.8.rng
+@@ -14,7 +14,7 @@
+           <ref name="element-group"/>
+           <ref name="element-clone"/>
+           <ref name="element-master"/>
+-          <ref name="element-bucket"/>
++          <ref name="element-bundle"/>
+         </choice>
+       </zeroOrMore>
+     </element>
+@@ -66,8 +66,8 @@
+   </define>
+ 
+ 
+-  <define name="element-bucket">
+-    <element name="bucket">
++  <define name="element-bundle">
++    <element name="bundle">
+ 	<attribute name="id"><data type="ID"/></attribute>
+ 	<optional>
+           <attribute name="description"><text/></attribute>
+-- 
+1.8.3.1
+
+
+From 5e00b0b0d9df6cc8288f6368ffb1bce1ee24468a Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Tue, 21 Mar 2017 13:57:10 -0500
+Subject: [PATCH 10/10] Low: tools: update validity regression tests for 2.8
+ schema
+
+---
+ tools/regression.validity.exp | 22 ++++++++++++++++++----
+ 1 file changed, 18 insertions(+), 4 deletions(-)
+
+diff --git a/tools/regression.validity.exp b/tools/regression.validity.exp
+index 1278a09..8fcfcb2 100644
+--- a/tools/regression.validity.exp
++++ b/tools/regression.validity.exp
+@@ -62,7 +62,11 @@ element rsc_order: Relax-NG validity error : Element constraints has extra conte
+ element rsc_order: Relax-NG validity error : Invalid attribute first-action for element rsc_order
+ element rsc_order: Relax-NG validity error : Element constraints has extra content: rsc_order
+ (   schemas.c:NNN   )   trace: update_validation:	pacemaker-2.7 validation failed
+-Your current configuration pacemaker-1.2 could not validate with any schema in range [pacemaker-1.2, pacemaker-2.7], cannot upgrade to pacemaker-2.0.
++(   schemas.c:NNN   )   debug: update_validation:	Testing 'pacemaker-2.8' validation (14 of X)
++element rsc_order: Relax-NG validity error : Invalid attribute first-action for element rsc_order
++element rsc_order: Relax-NG validity error : Element constraints has extra content: rsc_order
++(   schemas.c:NNN   )   trace: update_validation:	pacemaker-2.8 validation failed
++Your current configuration pacemaker-1.2 could not validate with any schema in range [pacemaker-1.2, pacemaker-2.8], cannot upgrade to pacemaker-2.0.
+ =#=#=#= End test: Run crm_simulate with invalid CIB (enum violation) - Required key not available (126) =#=#=#=
+ * Passed: crm_simulate   - Run crm_simulate with invalid CIB (enum violation)
+ =#=#=#= Begin test: Try to make resulting CIB invalid (unrecognized validate-with) =#=#=#=
+@@ -136,7 +140,10 @@ element cib: Relax-NG validity error : Invalid attribute validate-with for eleme
+ (   schemas.c:NNN   )   debug: update_validation:	Testing 'pacemaker-2.7' validation (13 of X)
+ element cib: Relax-NG validity error : Invalid attribute validate-with for element cib
+ (   schemas.c:NNN   )   trace: update_validation:	pacemaker-2.7 validation failed
+-Your current configuration pacemaker-9999.0 could not validate with any schema in range [unknown, pacemaker-2.7], cannot upgrade to pacemaker-2.0.
++(   schemas.c:NNN   )   debug: update_validation:	Testing 'pacemaker-2.8' validation (14 of X)
++element cib: Relax-NG validity error : Invalid attribute validate-with for element cib
++(   schemas.c:NNN   )   trace: update_validation:	pacemaker-2.8 validation failed
++Your current configuration pacemaker-9999.0 could not validate with any schema in range [unknown, pacemaker-2.8], cannot upgrade to pacemaker-2.0.
+ =#=#=#= End test: Run crm_simulate with invalid CIB (unrecognized validate-with) - Required key not available (126) =#=#=#=
+ * Passed: crm_simulate   - Run crm_simulate with invalid CIB (unrecognized validate-with)
+ =#=#=#= Begin test: Try to make resulting CIB invalid, but possibly recoverable (valid with X.Y+1) =#=#=#=
+@@ -187,8 +194,11 @@ element tags: Relax-NG validity error : Element configuration has extra content:
+ (   schemas.c:NNN   )   debug: update_validation:	pacemaker-2.6-style configuration is also valid for pacemaker-2.7
+ (   schemas.c:NNN   )   debug: update_validation:	Testing 'pacemaker-2.7' validation (13 of X)
+ (   schemas.c:NNN   )   debug: update_validation:	Configuration valid for schema: pacemaker-2.7
+-(   schemas.c:NNN   )   trace: update_validation:	Stopping at pacemaker-2.7
+-(   schemas.c:NNN   )    info: update_validation:	Transformed the configuration from pacemaker-1.2 to pacemaker-2.7
++(   schemas.c:NNN   )   debug: update_validation:	pacemaker-2.7-style configuration is also valid for pacemaker-2.8
++(   schemas.c:NNN   )   debug: update_validation:	Testing 'pacemaker-2.8' validation (14 of X)
++(   schemas.c:NNN   )   debug: update_validation:	Configuration valid for schema: pacemaker-2.8
++(   schemas.c:NNN   )   trace: update_validation:	Stopping at pacemaker-2.8
++(   schemas.c:NNN   )    info: update_validation:	Transformed the configuration from pacemaker-1.2 to pacemaker-2.8
+ error: unpack_resources:	Resource start-up disabled since no STONITH resources have been defined
+ error: unpack_resources:	Either configure some or disable STONITH with the stonith-enabled option
+ error: unpack_resources:	NOTE: Clusters with shared data need STONITH to ensure data integrity
+@@ -314,6 +324,8 @@ element rsc_order: Relax-NG validity error : Invalid attribute first-action for
+ element rsc_order: Relax-NG validity error : Element constraints has extra content: rsc_order
+ element rsc_order: Relax-NG validity error : Invalid attribute first-action for element rsc_order
+ element rsc_order: Relax-NG validity error : Element constraints has extra content: rsc_order
++element rsc_order: Relax-NG validity error : Invalid attribute first-action for element rsc_order
++element rsc_order: Relax-NG validity error : Element constraints has extra content: rsc_order
+ =#=#=#= Current cib after: Make resulting CIB invalid, and without validate-with attribute =#=#=#=
+ <cib epoch="31" num_updates="0" admin_epoch="0" validate-with="none">
+   <configuration>
+@@ -371,6 +383,8 @@ bad-1.2.xml:10: element rsc_order: Relax-NG validity error : Invalid attribute f
+ bad-1.2.xml:10: element rsc_order: Relax-NG validity error : Element constraints has extra content: rsc_order
+ bad-1.2.xml:10: element rsc_order: Relax-NG validity error : Invalid attribute first-action for element rsc_order
+ bad-1.2.xml:10: element rsc_order: Relax-NG validity error : Element constraints has extra content: rsc_order
++bad-1.2.xml:10: element rsc_order: Relax-NG validity error : Invalid attribute first-action for element rsc_order
++bad-1.2.xml:10: element rsc_order: Relax-NG validity error : Element constraints has extra content: rsc_order
+ error: unpack_resources:	Resource start-up disabled since no STONITH resources have been defined
+ error: unpack_resources:	Either configure some or disable STONITH with the stonith-enabled option
+ error: unpack_resources:	NOTE: Clusters with shared data need STONITH to ensure data integrity
+-- 
+1.8.3.1
+
