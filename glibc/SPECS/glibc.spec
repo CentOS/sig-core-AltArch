@@ -259,6 +259,9 @@ Patch0066: glibc-rh1227699.patch
 # CVE-2015-7547
 Patch0067: glibc-rh1296031.patch
 
+# Armhfp build issue
+Patch0068: glibc-rh1256317-armhfp-build-issue.patch
+
 ##############################################################################
 #
 # Patches from upstream
@@ -1573,6 +1576,7 @@ package or when debugging this package.
 %patch0035 -p1
 %patch0036 -p1
 %patch0037 -p1
+%patch0068 -p1
 %patch1000 -p1
 %patch0038 -p1
 %patch1052 -p1
@@ -3299,6 +3303,9 @@ rm -f *.filelist*
 %endif
 
 %changelog
+* Wed Aug 2 2017 Fabian Arrotin <arrfab@centos.org> - 2.17-196.2
+- Added patch for armhfp build issue (jacco@redsleeve.org)
+
 * Wed Nov 22 2017 Carlos O'Donell <carlos@redhat.com> - 2.17-196.2
 - Update HWCAP bits for IBM POWER9 DD2.1 (#1515114)
 - Improve memcpy performance for POWER9 DD2.1 (#1516402)
