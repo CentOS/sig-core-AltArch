@@ -389,7 +389,7 @@ export CXXFLAGS="$RPM_OPT_FLAGS -fno-rtti -fno-exceptions"
     --enable-dri \
 %if %{with_hardware}
     %{?with_vmware:--enable-xa} \
-    --with-gallium-drivers=%{?with_vmware:svga,}%{?with_radeonsi:radeonsi,}%{?with_llvm:swrast,r600,r300}%{?with_freedreno:freedreno,},nouveau,virgl \
+    --with-gallium-drivers=%{?with_vmware:svga,}%{?with_radeonsi:radeonsi,}%{?with_llvm:swrast,r600,r300,}%{?with_freedreno:freedreno,},nouveau,virgl \
 %else
     --with-gallium-drivers=%{?with_llvm:swrast} \
 %endif
@@ -513,6 +513,7 @@ rm -rf $RPM_BUILD_ROOT
 %endif
 %if 0%{?with_freedreno}
 %{_libdir}/dri/kgsl_dri.so
+%{_libdir}/dri/msm_dri.so
 %endif
 %{_libdir}/dri/nouveau_dri.so
 %{_libdir}/dri/virtio_gpu_dri.so
@@ -654,6 +655,10 @@ rm -rf $RPM_BUILD_ROOT
 %endif
 
 %changelog
+* Tue Aug 08 2017 Fabian Arrotin <arrfab@centos.org> - 17.0.1-6.20170307
+- Fixed typo for missing "," for with-gallium-drivers (affecting armhfp)
+- Added the msm_dri.so in the files section (thanks to Henrik Andersson - https://lists.centos.org/pipermail/arm-dev/2016-March/001704.html)
+
 * Thu May 11 2017 Dave Airlie <airlied@redhat.com> - 17.0.1-6.20170307
 - enable VDPAU drivers (#1297276)
 
