@@ -1,0 +1,88 @@
+From 9aca538a8ae017222aded41bc530fef150db351c Mon Sep 17 00:00:00 2001
+From: Tom Stellard <tstellar@redhat.com>
+Date: Fri, 5 May 2017 01:07:00 +0000
+Subject: [PATCH] gallivm: Make sure module has the correct data layout when
+ pass manager runs
+
+The datalayout for modules was purposely not being set in order to work around
+the fact that the ExecutionEngine requires that the module's datalayout
+matches the datalayout of the TargetMachine that the ExecutionEngine is
+using.
+
+When the pass manager runs on a module with no datalayout, it uses
+the default datalayout which is little-endian.  This causes problems
+on big-endian targets, because some optimizations that are legal on
+little-endian or illegal on big-endian.
+
+To resolve this, we set the datalayout prior to running the pass
+manager, and then clear it before creating the ExectionEngine.
+
+This patch fixes a lot of piglit tests on big-endian ppc64.
+
+Cc: mesa-stable@lists.freedesktop.org
+---
+ src/gallium/auxiliary/gallivm/lp_bld_init.c | 34 +++++++++++++++--------------
+ 1 file changed, 18 insertions(+), 16 deletions(-)
+
+diff --git a/src/gallium/auxiliary/gallivm/lp_bld_init.c b/src/gallium/auxiliary/gallivm/lp_bld_init.c
+index ef2580e..9f1ade6 100644
+--- a/src/gallium/auxiliary/gallivm/lp_bld_init.c
++++ b/src/gallium/auxiliary/gallivm/lp_bld_init.c
+@@ -125,19 +125,6 @@ create_pass_manager(struct gallivm_state *gallivm)
+    LLVMAddTargetData(gallivm->target, gallivm->passmgr);
+ #endif
+ 
+-   /* Setting the module's DataLayout to an empty string will cause the
+-    * ExecutionEngine to copy to the DataLayout string from its target
+-    * machine to the module.  As of LLVM 3.8 the module and the execution
+-    * engine are required to have the same DataLayout.
+-    *
+-    * TODO: This is just a temporary work-around.  The correct solution is
+-    * for gallivm_init_state() to create a TargetMachine and pull the
+-    * DataLayout from there.  Currently, the TargetMachine used by llvmpipe
+-    * is being implicitly created by the EngineBuilder in
+-    * lp_build_create_jit_compiler_for_module()
+-    */
+-
+-#if HAVE_LLVM < 0x0308
+    {
+       char *td_str;
+       // New ones from the Module.
+@@ -145,9 +132,6 @@ create_pass_manager(struct gallivm_state *gallivm)
+       LLVMSetDataLayout(gallivm->module, td_str);
+       free(td_str);
+    }
+-#else
+-   LLVMSetDataLayout(gallivm->module, "");
+-#endif
+ 
+    if ((gallivm_debug & GALLIVM_DEBUG_NO_OPT) == 0) {
+       /* These are the passes currently listed in llvm-c/Transforms/Scalar.h,
+@@ -628,6 +612,24 @@ gallivm_compile_module(struct gallivm_state *gallivm)
+    }
+ 
+    if (use_mcjit) {
++      /* Setting the module's DataLayout to an empty string will cause the
++       * ExecutionEngine to copy to the DataLayout string from its target
++       * machine to the module.  As of LLVM 3.8 the module and the execution
++       * engine are required to have the same DataLayout.
++       *
++       * We must make sure we do this after running the optimization passes,
++       * because those passes need a correct datalayout string.  For example,
++       * if those optimization passes see an empty datalayout, they will assume
++       * this is a little endian target and will do optimizations that break big
++       * endian machines.
++       *
++       * TODO: This is just a temporary work-around.  The correct solution is
++       * for gallivm_init_state() to create a TargetMachine and pull the
++       * DataLayout from there.  Currently, the TargetMachine used by llvmpipe
++       * is being implicitly created by the EngineBuilder in
++       * lp_build_create_jit_compiler_for_module()
++       */
++      LLVMSetDataLayout(gallivm->module, "");
+       assert(!gallivm->engine);
+       if (!init_gallivm_engine(gallivm)) {
+          assert(0);
+-- 
+2.9.3
+

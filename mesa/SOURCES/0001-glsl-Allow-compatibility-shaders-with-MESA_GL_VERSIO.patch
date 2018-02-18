@@ -1,0 +1,114 @@
+From d7a0486a9e4e71d98c694872815909b8f8c0d3ac Mon Sep 17 00:00:00 2001
+From: Matt Turner <mattst88@gmail.com>
+Date: Tue, 31 Jan 2017 15:41:52 -0800
+Subject: [PATCH] glsl: Allow compatibility shaders with
+ MESA_GL_VERSION_OVERRIDE=...
+
+Previously if you used MESA_GL_VERSION_OVERRIDE=3.3COMPAT, Mesa exposed
+an OpenGL 3.3 compatibility profile context (with various unimplemented
+features and bugs), but still refused to compile shaders with
+
+   #version 330 compatibility
+
+This patch simply adds a small bit of plumbing to let that through.
+
+Of course the same caveats apply: compatibility profile is still not
+supported (and will not be supported), so there are no guarantees that
+anything will work.
+
+Tested-by: Dylan Baker <dylan@pnwbakers.com>
+Reviewed-by: Anuj Phogat <anuj.phogat@gmail.com>
+Reviewed-by: Ian Romanick <ian.d.romanick@intel.com>
+---
+ src/compiler/glsl/builtin_types.cpp      |  2 +-
+ src/compiler/glsl/builtin_variables.cpp  |  2 +-
+ src/compiler/glsl/glsl_parser_extras.cpp | 13 +++++++++++--
+ src/compiler/glsl/glsl_parser_extras.h   |  1 +
+ 4 files changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/src/compiler/glsl/builtin_types.cpp b/src/compiler/glsl/builtin_types.cpp
+index a63d736..cae972b 100644
+--- a/src/compiler/glsl/builtin_types.cpp
++++ b/src/compiler/glsl/builtin_types.cpp
+@@ -288,7 +288,7 @@ _mesa_glsl_initialize_types(struct _mesa_glsl_parse_state *state)
+    /* Add deprecated structure types.  While these were deprecated in 1.30,
+     * they're still present.  We've removed them in 1.40+ (OpenGL 3.1+).
+     */
+-   if (!state->es_shader && state->language_version < 140) {
++   if (state->compat_shader) {
+       for (unsigned i = 0; i < ARRAY_SIZE(deprecated_types); i++) {
+          add_type(symbols, deprecated_types[i]);
+       }
+diff --git a/src/compiler/glsl/builtin_variables.cpp b/src/compiler/glsl/builtin_variables.cpp
+index 4eb275e..be593e9 100644
+--- a/src/compiler/glsl/builtin_variables.cpp
++++ b/src/compiler/glsl/builtin_variables.cpp
+@@ -444,7 +444,7 @@ private:
+ builtin_variable_generator::builtin_variable_generator(
+    exec_list *instructions, struct _mesa_glsl_parse_state *state)
+    : instructions(instructions), state(state), symtab(state->symbols),
+-     compatibility(!state->is_version(140, 100)),
++     compatibility(state->compat_shader || !state->is_version(140, 100)),
+      bool_t(glsl_type::bool_type), int_t(glsl_type::int_type),
+      uint_t(glsl_type::uint_type),
+      float_t(glsl_type::float_type), vec2_t(glsl_type::vec2_type),
+diff --git a/src/compiler/glsl/glsl_parser_extras.cpp b/src/compiler/glsl/glsl_parser_extras.cpp
+index 6fe1dd9..c4da79a 100644
+--- a/src/compiler/glsl/glsl_parser_extras.cpp
++++ b/src/compiler/glsl/glsl_parser_extras.cpp
+@@ -83,6 +83,7 @@ _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
+    this->forced_language_version = ctx->Const.ForceGLSLVersion;
+    this->zero_init = ctx->Const.GLSLZeroInit;
+    this->gl_version = 20;
++   this->compat_shader = true;
+    this->es_shader = false;
+    this->ARB_texture_rectangle_enable = true;
+ 
+@@ -370,6 +371,7 @@ _mesa_glsl_parse_state::process_version_directive(YYLTYPE *locp, int version,
+                                                   const char *ident)
+ {
+    bool es_token_present = false;
++   bool compat_token_present = false;
+    if (ident) {
+       if (strcmp(ident, "es") == 0) {
+          es_token_present = true;
+@@ -379,8 +381,12 @@ _mesa_glsl_parse_state::process_version_directive(YYLTYPE *locp, int version,
+              * a core profile shader since that's the only profile we support.
+              */
+          } else if (strcmp(ident, "compatibility") == 0) {
+-            _mesa_glsl_error(locp, this,
+-                             "the compatibility profile is not supported");
++            compat_token_present = true;
++
++            if (this->ctx->API != API_OPENGL_COMPAT) {
++               _mesa_glsl_error(locp, this,
++                                "the compatibility profile is not supported");
++            }
+          } else {
+             _mesa_glsl_error(locp, this,
+                              "\"%s\" is not a valid shading language profile; "
+@@ -412,6 +418,9 @@ _mesa_glsl_parse_state::process_version_directive(YYLTYPE *locp, int version,
+    else
+       this->language_version = version;
+ 
++   this->compat_shader = compat_token_present ||
++                         (!this->es_shader && this->language_version < 140);
++
+    bool supported = false;
+    for (unsigned i = 0; i < this->num_supported_versions; i++) {
+       if (this->supported_versions[i].ver == this->language_version
+diff --git a/src/compiler/glsl/glsl_parser_extras.h b/src/compiler/glsl/glsl_parser_extras.h
+index 424cab5..66a954f 100644
+--- a/src/compiler/glsl/glsl_parser_extras.h
++++ b/src/compiler/glsl/glsl_parser_extras.h
+@@ -348,6 +348,7 @@ struct _mesa_glsl_parse_state {
+    } supported_versions[16];
+ 
+    bool es_shader;
++   bool compat_shader;
+    unsigned language_version;
+    unsigned forced_language_version;
+    bool zero_init;
+-- 
+2.9.3
+

@@ -1,0 +1,328 @@
+diff -up mesa-20160225/src/gallium/drivers/r600/evergreen_state.c.egbe mesa-20160225/src/gallium/drivers/r600/evergreen_state.c
+--- mesa-20160225/src/gallium/drivers/r600/evergreen_state.c.egbe	2016-02-22 21:42:41.000000000 +1000
++++ mesa-20160225/src/gallium/drivers/r600/evergreen_state.c	2016-02-25 13:06:47.351154059 +1000
+@@ -219,7 +219,7 @@ static bool r600_is_sampler_format_suppo
+ static bool r600_is_colorbuffer_format_supported(enum chip_class chip, enum pipe_format format)
+ {
+ 	return r600_translate_colorformat(chip, format) != ~0U &&
+-		r600_translate_colorswap(format) != ~0U;
++		r600_translate_colorswap(chip, format) != ~0U;
+ }
+ 
+ static bool r600_is_zs_format_supported(enum pipe_format format)
+@@ -982,7 +982,8 @@ void evergreen_init_color_surface_rat(st
+ 	unsigned format = r600_translate_colorformat(rctx->b.chip_class,
+ 						     surf->base.format);
+ 	unsigned endian = r600_colorformat_endian_swap(format);
+-	unsigned swap = r600_translate_colorswap(surf->base.format);
++	unsigned swap = r600_translate_colorswap(rctx->b.chip_class,
++						 surf->base.format);
+ 	unsigned block_size =
+ 		align(util_format_get_blocksize(pipe_buffer->format), 4);
+ 	unsigned pitch_alignment =
+@@ -1143,7 +1144,7 @@ void evergreen_init_color_surface(struct
+ 	format = r600_translate_colorformat(rctx->b.chip_class, surf->base.format);
+ 	assert(format != ~0);
+ 
+-	swap = r600_translate_colorswap(surf->base.format);
++	swap = r600_translate_colorswap(rctx->b.chip_class, surf->base.format);
+ 	assert(swap != ~0);
+ 
+ 	if (rtex->resource.b.b.usage == PIPE_USAGE_STAGING) {
+diff -up mesa-20160225/src/gallium/drivers/r600/r600_state.c.egbe mesa-20160225/src/gallium/drivers/r600/r600_state.c
+--- mesa-20160225/src/gallium/drivers/r600/r600_state.c.egbe	2016-02-22 21:42:41.000000000 +1000
++++ mesa-20160225/src/gallium/drivers/r600/r600_state.c	2016-02-25 13:06:47.351154059 +1000
+@@ -149,7 +149,7 @@ static bool r600_is_sampler_format_suppo
+ static bool r600_is_colorbuffer_format_supported(enum chip_class chip, enum pipe_format format)
+ {
+ 	return r600_translate_colorformat(chip, format) != ~0U &&
+-	       r600_translate_colorswap(format) != ~0U;
++	       r600_translate_colorswap(chip, format) != ~0U;
+ }
+ 
+ static bool r600_is_zs_format_supported(enum pipe_format format)
+@@ -927,7 +927,7 @@ static void r600_init_color_surface(stru
+ 	format = r600_translate_colorformat(rctx->b.chip_class, surf->base.format);
+ 	assert(format != ~0);
+ 
+-	swap = r600_translate_colorswap(surf->base.format);
++	swap = r600_translate_colorswap(rctx->b.chip_class, surf->base.format);
+ 	assert(swap != ~0);
+ 
+ 	if (rtex->resource.b.b.usage == PIPE_USAGE_STAGING) {
+diff -up mesa-20160225/src/gallium/drivers/r600/r600_state_common.c.egbe mesa-20160225/src/gallium/drivers/r600/r600_state_common.c
+--- mesa-20160225/src/gallium/drivers/r600/r600_state_common.c.egbe	2016-02-22 21:42:41.000000000 +1000
++++ mesa-20160225/src/gallium/drivers/r600/r600_state_common.c	2016-02-25 13:06:47.352154086 +1000
+@@ -2704,7 +2704,7 @@ uint32_t r600_translate_colorformat(enum
+ 
+ uint32_t r600_colorformat_endian_swap(uint32_t colorformat)
+ {
+-	if (R600_BIG_ENDIAN) {
++	if (0 && R600_BIG_ENDIAN) {
+ 		switch(colorformat) {
+ 		/* 8-bit buffers. */
+ 		case V_0280A0_COLOR_4_4:
+diff -up mesa-20160225/src/gallium/drivers/radeon/r600_pipe_common.h.egbe mesa-20160225/src/gallium/drivers/radeon/r600_pipe_common.h
+--- mesa-20160225/src/gallium/drivers/radeon/r600_pipe_common.h.egbe	2016-02-22 21:42:41.000000000 +1000
++++ mesa-20160225/src/gallium/drivers/radeon/r600_pipe_common.h	2016-02-25 13:06:47.352154086 +1000
+@@ -576,7 +576,7 @@ struct pipe_surface *r600_create_surface
+ 						struct pipe_resource *texture,
+ 						const struct pipe_surface *templ,
+ 						unsigned width, unsigned height);
+-unsigned r600_translate_colorswap(enum pipe_format format);
++unsigned r600_translate_colorswap(enum chip_class chip, enum pipe_format format);
+ void evergreen_do_fast_color_clear(struct r600_common_context *rctx,
+ 				   struct pipe_framebuffer_state *fb,
+ 				   struct r600_atom *fb_state,
+diff -up mesa-20160225/src/gallium/drivers/radeon/r600_texture.c.egbe mesa-20160225/src/gallium/drivers/radeon/r600_texture.c
+--- mesa-20160225/src/gallium/drivers/radeon/r600_texture.c.egbe	2016-02-22 21:42:41.000000000 +1000
++++ mesa-20160225/src/gallium/drivers/radeon/r600_texture.c	2016-02-25 13:07:22.903127421 +1000
+@@ -1252,10 +1252,215 @@ static void r600_surface_destroy(struct
+ 	FREE(surface);
+ }
+ 
+-unsigned r600_translate_colorswap(enum pipe_format format)
++static uint32_t evergreen_translate_colorswap(enum pipe_format format)
++{
++	switch (format) {
++	/* 8-bit buffers. */
++	case PIPE_FORMAT_A8_UNORM:
++	case PIPE_FORMAT_A8_SNORM:
++	case PIPE_FORMAT_A8_UINT:
++	case PIPE_FORMAT_A8_SINT:
++	case PIPE_FORMAT_A16_UNORM:
++	case PIPE_FORMAT_A16_SNORM:
++	case PIPE_FORMAT_A16_UINT:
++	case PIPE_FORMAT_A16_SINT:
++	case PIPE_FORMAT_A16_FLOAT:
++	case PIPE_FORMAT_A32_UINT:
++	case PIPE_FORMAT_A32_SINT:
++	case PIPE_FORMAT_A32_FLOAT:
++	case PIPE_FORMAT_R4A4_UNORM:
++		return V_0280A0_SWAP_ALT_REV;
++	case PIPE_FORMAT_I8_UNORM:
++	case PIPE_FORMAT_I8_SNORM:
++	case PIPE_FORMAT_I8_UINT:
++	case PIPE_FORMAT_I8_SINT:
++	case PIPE_FORMAT_L8_UNORM:
++	case PIPE_FORMAT_L8_SNORM:
++	case PIPE_FORMAT_L8_UINT:
++	case PIPE_FORMAT_L8_SINT:
++	case PIPE_FORMAT_L8_SRGB:
++	case PIPE_FORMAT_L16_UNORM:
++	case PIPE_FORMAT_L16_SNORM:
++	case PIPE_FORMAT_L16_UINT:
++	case PIPE_FORMAT_L16_SINT:
++	case PIPE_FORMAT_L16_FLOAT:
++	case PIPE_FORMAT_L32_UINT:
++	case PIPE_FORMAT_L32_SINT:
++	case PIPE_FORMAT_L32_FLOAT:
++	case PIPE_FORMAT_I16_UNORM:
++	case PIPE_FORMAT_I16_SNORM:
++	case PIPE_FORMAT_I16_UINT:
++	case PIPE_FORMAT_I16_SINT:
++	case PIPE_FORMAT_I16_FLOAT:
++	case PIPE_FORMAT_I32_UINT:
++	case PIPE_FORMAT_I32_SINT:
++	case PIPE_FORMAT_I32_FLOAT:
++	case PIPE_FORMAT_R8_UNORM:
++	case PIPE_FORMAT_R8_SNORM:
++	case PIPE_FORMAT_R8_UINT:
++	case PIPE_FORMAT_R8_SINT:
++		return V_0280A0_SWAP_STD;
++
++	case PIPE_FORMAT_L4A4_UNORM:
++	case PIPE_FORMAT_A4R4_UNORM:
++		return V_0280A0_SWAP_ALT;
++
++	/* 16-bit buffers. */
++	case PIPE_FORMAT_B5G6R5_UNORM:
++		return V_0280A0_SWAP_STD_REV;
++
++	case PIPE_FORMAT_B5G5R5A1_UNORM:
++	case PIPE_FORMAT_B5G5R5X1_UNORM:
++		return V_0280A0_SWAP_ALT;
++
++	case PIPE_FORMAT_B4G4R4A4_UNORM:
++	case PIPE_FORMAT_B4G4R4X4_UNORM:
++		return V_0280A0_SWAP_ALT;
++
++	case PIPE_FORMAT_Z16_UNORM:
++		return V_0280A0_SWAP_STD;
++
++	case PIPE_FORMAT_L8A8_UNORM:
++	case PIPE_FORMAT_L8A8_SNORM:
++	case PIPE_FORMAT_L8A8_UINT:
++	case PIPE_FORMAT_L8A8_SINT:
++	case PIPE_FORMAT_L8A8_SRGB:
++	case PIPE_FORMAT_L16A16_UNORM:
++	case PIPE_FORMAT_L16A16_SNORM:
++	case PIPE_FORMAT_L16A16_UINT:
++	case PIPE_FORMAT_L16A16_SINT:
++	case PIPE_FORMAT_L16A16_FLOAT:
++	case PIPE_FORMAT_L32A32_UINT:
++	case PIPE_FORMAT_L32A32_SINT:
++	case PIPE_FORMAT_L32A32_FLOAT:
++        case PIPE_FORMAT_R8A8_UNORM:
++	case PIPE_FORMAT_R8A8_SNORM:
++	case PIPE_FORMAT_R8A8_UINT:
++	case PIPE_FORMAT_R8A8_SINT:
++	case PIPE_FORMAT_R16A16_UNORM:
++	case PIPE_FORMAT_R16A16_SNORM:
++	case PIPE_FORMAT_R16A16_UINT:
++	case PIPE_FORMAT_R16A16_SINT:
++	case PIPE_FORMAT_R16A16_FLOAT:
++	case PIPE_FORMAT_R32A32_UINT:
++	case PIPE_FORMAT_R32A32_SINT:
++	case PIPE_FORMAT_R32A32_FLOAT:
++		return V_0280A0_SWAP_ALT;
++	case PIPE_FORMAT_R8G8_UNORM:
++	case PIPE_FORMAT_R8G8_SNORM:
++	case PIPE_FORMAT_R8G8_UINT:
++	case PIPE_FORMAT_R8G8_SINT:
++		return V_0280A0_SWAP_STD;
++
++	case PIPE_FORMAT_R16_UNORM:
++	case PIPE_FORMAT_R16_SNORM:
++	case PIPE_FORMAT_R16_UINT:
++	case PIPE_FORMAT_R16_SINT:
++	case PIPE_FORMAT_R16_FLOAT:
++		return V_0280A0_SWAP_STD;
++
++	/* 32-bit buffers. */
++
++	case PIPE_FORMAT_A8B8G8R8_SRGB:
++		return V_0280A0_SWAP_STD_REV;
++	case PIPE_FORMAT_B8G8R8A8_SRGB:
++		return V_0280A0_SWAP_ALT;
++
++	case PIPE_FORMAT_B8G8R8A8_UNORM:
++	case PIPE_FORMAT_B8G8R8X8_UNORM:
++		return V_0280A0_SWAP_ALT;
++
++	case PIPE_FORMAT_A8R8G8B8_UNORM:
++	case PIPE_FORMAT_X8R8G8B8_UNORM:
++		return V_0280A0_SWAP_ALT_REV;
++	case PIPE_FORMAT_R8G8B8A8_SNORM:
++	case PIPE_FORMAT_R8G8B8A8_UNORM:
++	case PIPE_FORMAT_R8G8B8X8_UNORM:
++	case PIPE_FORMAT_R8G8B8X8_SNORM:
++	case PIPE_FORMAT_R8G8B8X8_SRGB:
++	case PIPE_FORMAT_R8G8B8X8_UINT:
++	case PIPE_FORMAT_R8G8B8X8_SINT:
++	case PIPE_FORMAT_R8G8B8A8_SINT:
++	case PIPE_FORMAT_R8G8B8A8_UINT:
++		return V_0280A0_SWAP_STD;
++
++	case PIPE_FORMAT_A8B8G8R8_UNORM:
++	case PIPE_FORMAT_X8B8G8R8_UNORM:
++	/* case PIPE_FORMAT_R8SG8SB8UX8U_NORM: */
++		return V_0280A0_SWAP_STD_REV;
++
++	case PIPE_FORMAT_Z24X8_UNORM:
++	case PIPE_FORMAT_Z24_UNORM_S8_UINT:
++		return V_0280A0_SWAP_STD;
++
++	case PIPE_FORMAT_R10G10B10A2_UNORM:
++	case PIPE_FORMAT_R10G10B10X2_SNORM:
++	case PIPE_FORMAT_R10SG10SB10SA2U_NORM:
++	case PIPE_FORMAT_R10G10B10A2_UINT:
++		return V_0280A0_SWAP_STD;
++
++	case PIPE_FORMAT_B10G10R10A2_UNORM:
++	case PIPE_FORMAT_B10G10R10A2_UINT:
++	case PIPE_FORMAT_B10G10R10X2_UNORM:
++		return V_0280A0_SWAP_ALT;
++
++	case PIPE_FORMAT_R11G11B10_FLOAT:
++	case PIPE_FORMAT_R16G16_UNORM:
++	case PIPE_FORMAT_R16G16_SNORM:
++	case PIPE_FORMAT_R16G16_FLOAT:
++	case PIPE_FORMAT_R16G16_UINT:
++	case PIPE_FORMAT_R16G16_SINT:
++	case PIPE_FORMAT_R32_UINT:
++	case PIPE_FORMAT_R32_SINT:
++	case PIPE_FORMAT_R32_FLOAT:
++	case PIPE_FORMAT_Z32_FLOAT:
++		return V_0280A0_SWAP_STD;
++
++	/* 64-bit buffers. */
++	case PIPE_FORMAT_R32G32_FLOAT:
++	case PIPE_FORMAT_R32G32_UINT:
++	case PIPE_FORMAT_R32G32_SINT:
++	case PIPE_FORMAT_R16G16B16A16_UNORM:
++	case PIPE_FORMAT_R16G16B16A16_SNORM:
++	case PIPE_FORMAT_R16G16B16A16_UINT:
++	case PIPE_FORMAT_R16G16B16A16_SINT:
++	case PIPE_FORMAT_R16G16B16A16_FLOAT:
++	case PIPE_FORMAT_R16G16B16X16_UNORM:
++	case PIPE_FORMAT_R16G16B16X16_SNORM:
++	case PIPE_FORMAT_R16G16B16X16_FLOAT:
++	case PIPE_FORMAT_R16G16B16X16_UINT:
++	case PIPE_FORMAT_R16G16B16X16_SINT:
++	case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
++
++	/* 128-bit buffers. */
++	case PIPE_FORMAT_R32G32B32A32_FLOAT:
++	case PIPE_FORMAT_R32G32B32A32_SNORM:
++	case PIPE_FORMAT_R32G32B32A32_UNORM:
++	case PIPE_FORMAT_R32G32B32A32_SINT:
++	case PIPE_FORMAT_R32G32B32A32_UINT:
++	case PIPE_FORMAT_R32G32B32X32_FLOAT:
++	case PIPE_FORMAT_R32G32B32X32_UINT:
++	case PIPE_FORMAT_R32G32B32X32_SINT:
++		return V_0280A0_SWAP_STD;
++	default:
++		R600_ERR("unsupported colorswap format %d\n", format);
++		return ~0U;
++	}
++	return ~0U;
++}
++
++unsigned r600_translate_colorswap(enum chip_class chip, enum pipe_format format)
+ {
+ 	const struct util_format_description *desc = util_format_description(format);
+ 
++#ifdef PIPE_ARCH_BIG_ENDIAN
++	if (chip == EVERGREEN) {
++	    unsigned ret = evergreen_translate_colorswap(format);
++	    if (ret != ~0U)
++		return ret;
++	}
++#endif
++
+ #define HAS_SWIZZLE(chan,swz) (desc->swizzle[chan] == UTIL_FORMAT_SWIZZLE_##swz)
+ 
+ 	if (format == PIPE_FORMAT_R11G11B10_FLOAT) /* isn't plain */
+@@ -1411,6 +1616,10 @@ void evergreen_do_fast_color_clear(struc
+ 	if (rctx->render_cond)
+ 		return;
+ 
++#ifdef PIPE_ARCH_BIG_ENDIAN
++	return false; /* broken; overkill to just disable them, but */
++#endif
++
+ 	for (i = 0; i < fb->nr_cbufs; i++) {
+ 		struct r600_texture *tex;
+ 		unsigned clear_bit = PIPE_CLEAR_COLOR0 << i;
+diff -up mesa-20160225/src/gallium/drivers/radeonsi/si_state.c.egbe mesa-20160225/src/gallium/drivers/radeonsi/si_state.c
+--- mesa-20160225/src/gallium/drivers/radeonsi/si_state.c.egbe	2016-02-22 21:42:41.000000000 +1000
++++ mesa-20160225/src/gallium/drivers/radeonsi/si_state.c	2016-02-25 13:06:47.353154114 +1000
+@@ -1966,7 +1966,7 @@ static bool si_is_vertex_format_supporte
+ static bool si_is_colorbuffer_format_supported(enum pipe_format format)
+ {
+ 	return si_translate_colorformat(format) != V_028C70_COLOR_INVALID &&
+-		r600_translate_colorswap(format) != ~0U;
++		r600_translate_colorswap(0, format) != ~0U;
+ }
+ 
+ static bool si_is_zs_format_supported(enum pipe_format format)
+@@ -2249,7 +2249,7 @@ static void si_initialize_color_surface(
+ 		R600_ERR("Invalid CB format: %d, disabling CB.\n", surf->base.format);
+ 	}
+ 	assert(format != V_028C70_COLOR_INVALID);
+-	swap = r600_translate_colorswap(surf->base.format);
++	swap = r600_translate_colorswap(0, surf->base.format);
+ 	if (rtex->resource.b.b.usage == PIPE_USAGE_STAGING) {
+ 		endian = V_028C70_ENDIAN_NONE;
+ 	} else {
