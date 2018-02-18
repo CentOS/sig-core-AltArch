@@ -1,0 +1,67 @@
+# HG changeset patch
+# User andrew
+# Date 1508194072 -3600
+#      Mon Oct 16 23:47:52 2017 +0100
+# Node ID 5dcb55da00c1531264934559c9f10c2e0ae46420
+# Parent  bf62c56e3604fee0018b19f65fd56c76dc156630
+PR3479, RH1486025: ECC and NSS JVM crash
+Summary: SunEC provider can have multiple instances, leading to premature NSS shutdown
+Contributed-by: Martin Balao <mbalao@redhat.com>
+
+diff --git a/make/mapfiles/libsunec/mapfile-vers b/make/mapfiles/libsunec/mapfile-vers
+--- openjdk/jdk/make/mapfiles/libsunec/mapfile-vers
++++ openjdk/jdk/make/mapfiles/libsunec/mapfile-vers
+@@ -32,7 +32,6 @@
+                 Java_sun_security_ec_ECDSASignature_verifySignedDigest;
+                 Java_sun_security_ec_ECDHKeyAgreement_deriveKey;
+ 		Java_sun_security_ec_SunEC_initialize;
+-		Java_sun_security_ec_SunEC_cleanup;
+         local:
+                 *;
+ };
+diff --git a/src/share/classes/sun/security/ec/SunEC.java b/src/share/classes/sun/security/ec/SunEC.java
+--- openjdk/jdk/src/share/classes/sun/security/ec/SunEC.java
++++ openjdk/jdk/src/share/classes/sun/security/ec/SunEC.java
+@@ -83,21 +83,8 @@
+     }
+ 
+     /**
+-     * Cleanup native resources during finalisation.
+-     */
+-    @Override
+-    protected void finalize() {
+-        cleanup();
+-    }
+-
+-    /**
+      * Initialize the native code.
+      */
+     private static native void initialize();
+ 
+-    /**
+-     * Cleanup in the native layer.
+-     */
+-    private static native void cleanup();
+-
+ }
+diff --git a/src/share/native/sun/security/ec/ECC_JNI.cpp b/src/share/native/sun/security/ec/ECC_JNI.cpp
+--- openjdk/jdk/src/share/native/sun/security/ec/ECC_JNI.cpp
++++ openjdk/jdk/src/share/native/sun/security/ec/ECC_JNI.cpp
+@@ -525,14 +525,12 @@
+ }
+ 
+ JNIEXPORT void
+-JNICALL Java_sun_security_ec_SunEC_cleanup
+-  (JNIEnv *env, jclass UNUSED(clazz))
++JNICALL JNI_OnUnload
++  (JavaVM *vm, void *reserved)
+ {
+ #ifdef SYSTEM_NSS
+     RNG_RNGShutdown();
+-    if (SECOID_Shutdown() != SECSuccess) {
+-	ThrowException(env, INTERNAL_ERROR);
+-    }
++    SECOID_Shutdown();
+ #endif
+ }
+ 

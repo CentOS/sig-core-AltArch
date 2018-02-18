@@ -1,0 +1,150 @@
+# HG changeset patch
+# User ssadetsky
+# Date 1467220169 -3600
+#      Wed Jun 29 18:09:29 2016 +0100
+# Node ID 9fffaa63c49d93bff70b96af9a86b7635bce44be
+# Parent  d0462c26152fc8bd5f79db7f1670777e807ef2b3
+6260348, PR3066: GTK+ L&F JTextComponent not respecting desktop caret blink rate
+Reviewed-by: alexsch, azvegint
+
+diff -r d0462c26152f -r 9fffaa63c49d src/share/classes/com/sun/java/swing/plaf/gtk/GTKEngine.java
+--- openjdk/jdk/src/share/classes/com/sun/java/swing/plaf/gtk/GTKEngine.java	Tue Jun 28 19:44:50 2016 +0100
++++ openjdk/jdk/src/share/classes/com/sun/java/swing/plaf/gtk/GTKEngine.java	Wed Jun 29 18:09:29 2016 +0100
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2005, 2007, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -93,7 +93,9 @@
+      */
+     static enum Settings {
+         GTK_FONT_NAME,
+-        GTK_ICON_SIZES
++        GTK_ICON_SIZES,
++        GTK_CURSOR_BLINK,
++        GTK_CURSOR_BLINK_TIME
+     }
+ 
+     /* Custom regions are needed for representing regions that don't exist
+diff -r d0462c26152f -r 9fffaa63c49d src/share/classes/com/sun/java/swing/plaf/gtk/GTKLookAndFeel.java
+--- openjdk/jdk/src/share/classes/com/sun/java/swing/plaf/gtk/GTKLookAndFeel.java	Tue Jun 28 19:44:50 2016 +0100
++++ openjdk/jdk/src/share/classes/com/sun/java/swing/plaf/gtk/GTKLookAndFeel.java	Wed Jun 29 18:09:29 2016 +0100
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2002, 2013, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -371,7 +371,17 @@
+         int vProgWidth  =  22 - (progXThickness * 2);
+         int vProgHeight =  80 - (progYThickness * 2);
+ 
+-        Integer caretBlinkRate = Integer.valueOf(500);
++        Integer caretBlinkRate;
++        if (Boolean.FALSE.equals(GTKEngine.INSTANCE.getSetting(
++                GTKEngine.Settings.GTK_CURSOR_BLINK))) {
++            caretBlinkRate = Integer.valueOf(0);
++        } else {
++            caretBlinkRate = (Integer) GTKEngine.INSTANCE.getSetting(
++                    GTKEngine.Settings.GTK_CURSOR_BLINK_TIME);
++            if (caretBlinkRate == null) {
++                caretBlinkRate = Integer.valueOf(500);
++            }
++        }
+         Insets zeroInsets = new InsetsUIResource(0, 0, 0, 0);
+ 
+         Double defaultCaretAspectRatio = new Double(0.025);
+diff -r d0462c26152f -r 9fffaa63c49d src/solaris/native/sun/awt/gtk2_interface.c
+--- openjdk/jdk/src/solaris/native/sun/awt/gtk2_interface.c	Tue Jun 28 19:44:50 2016 +0100
++++ openjdk/jdk/src/solaris/native/sun/awt/gtk2_interface.c	Wed Jun 29 18:09:29 2016 +0100
+@@ -1316,9 +1316,6 @@
+             {
+                 result = gtk2_widgets[_GTK_COMBO_BOX_TEXT_FIELD_TYPE] =
+                      (*fp_gtk_entry_new)();
+-
+-                GtkSettings* settings = fp_gtk_widget_get_settings(result);
+-                fp_g_object_set(settings, "gtk-cursor-blink", FALSE, NULL);
+             }
+             result = gtk2_widgets[_GTK_COMBO_BOX_TEXT_FIELD_TYPE];
+             break;
+@@ -1363,10 +1360,6 @@
+             {
+                 gtk2_widgets[_GTK_ENTRY_TYPE] =
+                     (*fp_gtk_entry_new)();
+-
+-                GtkSettings* settings =
+-                    fp_gtk_widget_get_settings(gtk2_widgets[_GTK_ENTRY_TYPE]);
+-                fp_g_object_set(settings, "gtk-cursor-blink", FALSE, NULL);
+             }
+             result = gtk2_widgets[_GTK_ENTRY_TYPE];
+             break;
+@@ -1558,9 +1551,6 @@
+             {
+                 result = gtk2_widgets[_GTK_SPIN_BUTTON_TYPE] =
+                     (*fp_gtk_spin_button_new)(NULL, 0, 0);
+-
+-                GtkSettings* settings = fp_gtk_widget_get_settings(result);
+-                fp_g_object_set(settings, "gtk-cursor-blink", FALSE, NULL);
+             }
+             result = gtk2_widgets[_GTK_SPIN_BUTTON_TYPE];
+             break;
+@@ -2510,14 +2500,20 @@
+ 
+     return result;
+ }
+-/*
++
+ jobject get_integer_property(JNIEnv *env, GtkSettings* settings, const gchar* key)
+ {
+-    gint    intval = NULL;
+-
++    gint intval = NULL;
+     (*fp_g_object_get)(settings, key, &intval, NULL);
+     return create_Integer(env, intval);
+-}*/
++}
++
++jobject get_boolean_property(JNIEnv *env, GtkSettings* settings, const gchar* key)
++{
++    gint intval = NULL;
++    (*fp_g_object_get)(settings, key, &intval, NULL);
++    return create_Boolean(env, intval);
++}
+ 
+ jobject gtk2_get_setting(JNIEnv *env, Setting property)
+ {
+@@ -2529,6 +2525,10 @@
+             return get_string_property(env, settings, "gtk-font-name");
+         case GTK_ICON_SIZES:
+             return get_string_property(env, settings, "gtk-icon-sizes");
++        case GTK_CURSOR_BLINK:
++            return get_boolean_property(env, settings, "gtk-cursor-blink");
++        case GTK_CURSOR_BLINK_TIME:
++            return get_integer_property(env, settings, "gtk-cursor-blink-time");
+     }
+ 
+     return NULL;
+diff -r d0462c26152f -r 9fffaa63c49d src/solaris/native/sun/awt/gtk2_interface.h
+--- openjdk/jdk/src/solaris/native/sun/awt/gtk2_interface.h	Tue Jun 28 19:44:50 2016 +0100
++++ openjdk/jdk/src/solaris/native/sun/awt/gtk2_interface.h	Wed Jun 29 18:09:29 2016 +0100
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2005, 2013, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -140,7 +140,9 @@
+ typedef enum _Setting
+ {
+     GTK_FONT_NAME,
+-    GTK_ICON_SIZES
++    GTK_ICON_SIZES,
++    GTK_CURSOR_BLINK,
++    GTK_CURSOR_BLINK_TIME
+ } Setting;
+ 
+ /* GTK types, here to eliminate need for GTK headers at compile time */

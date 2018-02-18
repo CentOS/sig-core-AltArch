@@ -1,0 +1,60 @@
+# HG changeset patch
+# User andrew
+# Date 1459487045 -3600
+#      Fri Apr 01 06:04:05 2016 +0100
+# Node ID 3334efeacd8327a14b7d2f392f4546e3c29c594b
+# Parent  6b81fd2227d14226f2121f2d51b464536925686e
+PR2888: OpenJDK should check for system cacerts database (e.g. /etc/pki/java/cacerts)
+
+diff --git a/src/share/classes/sun/security/ssl/TrustManagerFactoryImpl.java b/src/share/classes/sun/security/ssl/TrustManagerFactoryImpl.java
+--- openjdk/jdk/src/share/classes/sun/security/ssl/TrustManagerFactoryImpl.java
++++ openjdk/jdk/src/share/classes/sun/security/ssl/TrustManagerFactoryImpl.java
+@@ -174,15 +174,20 @@
+                     storeFile = new File(storeFileName);
+                     fis = getFileInputStream(storeFile);
+                 } else {
+-                    String javaHome = props.get("javaHome");
+-                    storeFile = new File(javaHome + sep + "lib" + sep
+-                                                    + "security" + sep +
+-                                                    "jssecacerts");
++                    /* Check system cacerts DB first; /etc/pki/java/cacerts */
++                    storeFile = new File(sep + "etc" + sep + "pki" + sep
++                                         + "java" + sep + "cacerts");
+                     if ((fis = getFileInputStream(storeFile)) == null) {
++                        String javaHome = props.get("javaHome");
+                         storeFile = new File(javaHome + sep + "lib" + sep
+-                                                    + "security" + sep +
+-                                                    "cacerts");
+-                        fis = getFileInputStream(storeFile);
++                                             + "security" + sep +
++                                             "jssecacerts");
++                        if ((fis = getFileInputStream(storeFile)) == null) {
++                            storeFile = new File(javaHome + sep + "lib" + sep
++                                                 + "security" + sep +
++                                                 "cacerts");
++                            fis = getFileInputStream(storeFile);
++                        }
+                     }
+                 }
+ 
+diff --git a/src/share/classes/sun/security/tools/KeyStoreUtil.java b/src/share/classes/sun/security/tools/KeyStoreUtil.java
+--- openjdk/jdk/src/share/classes/sun/security/tools/KeyStoreUtil.java
++++ openjdk/jdk/src/share/classes/sun/security/tools/KeyStoreUtil.java
+@@ -87,9 +87,14 @@
+         throws Exception
+     {
+         String sep = File.separator;
+-        File file = new File(System.getProperty("java.home") + sep
+-                             + "lib" + sep + "security" + sep
+-                             + "cacerts");
++        /* Check system cacerts DB first; /etc/pki/java/cacerts */
++        File file = new File(sep + "etc" + sep + "pki" + sep
++                             + "java" + sep + "cacerts");
++        if (!file.exists()) {
++            file = new File(System.getProperty("java.home") + sep
++                            + "lib" + sep + "security" + sep
++                            + "cacerts");
++        }
+         if (!file.exists()) {
+             return null;
+         }
