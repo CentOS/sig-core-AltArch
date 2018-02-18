@@ -224,6 +224,9 @@ Provides: liblto_plugin.so.0
 %ifarch ppc64le
 %global oformat OUTPUT_FORMAT(elf64-powerpcle)
 %endif
+%ifarch %{arm}
+%global oformat OUTPUT_FORMAT(elf32-littlearm)
+%endif
 %ifarch aarch64
 %global oformat OUTPUT_FORMAT(elf64-littleaarch64)
 %endif
@@ -255,6 +258,11 @@ Patch2001: doxygen-1.7.1-config.patch
 Patch2002: doxygen-1.7.5-timestamp.patch
 Patch2003: doxygen-1.8.0-rh856725.patch
 
+# specific patches for .el7 armhfp build
+Patch10001: gcc6-decimal-rtti-arm.patch
+Patch10002: gcc6-nonshared11-arm.patch
+Patch10004: gcc6-nonshared98-arm.patch
+
 %if 0%{?rhel} >= 7
 %global nonsharedver 48
 %else
@@ -272,7 +280,10 @@ Patch2003: doxygen-1.8.0-rh856725.patch
 %ifarch ppc
 %global gcc_target_platform ppc64-%{_vendor}-%{_target_os}%{?_gnu}
 %endif
-%ifnarch sparcv9 ppc
+%ifarch %{arm}
+%global gcc_target_platform armv7hl-%{_vendor}-%{_target_os}-gnueabi
+%endif
+%ifnarch sparcv9 ppc %{arm}
 %global gcc_target_platform %{_target_platform}
 %endif
 
@@ -631,6 +642,12 @@ cd ..
 %endif
 %endif
 
+%ifarch %{arm}
+%patch10001 -p1 -b .arm1
+%patch10002 -p1 -b .arm2
+%patch10004 -p1 -b .arm4
+%endif
+
 echo 'Red Hat %{version}-%{gcc_release}' > gcc/DEV-PHASE
 
 %if 0%{?rhel} == 6
@@ -827,6 +844,10 @@ CONFIGURE_OPTS="\
 %endif
 %ifarch s390 s390x
 	--with-arch=z9-109 --with-tune=z10 --enable-decimal-float \
+%endif
+%ifarch armv7hl
+	--with-tune=cortex-a8 --with-arch=armv7-a \
+	--with-float=hard --with-fpu=vfpv3-d16 --with-abi=aapcs-linux \
 %endif
 %ifnarch sparc sparcv9 ppc
 	--build=%{gcc_target_platform} \
@@ -2630,6 +2651,15 @@ fi
 %doc rpm.doc/changelogs/libcc1/ChangeLog*
 
 %changelog
+* Fri Feb 16 2018 Pablo Greco <pablo@fliagreco.com.ar> 6.3.1-3.1
+- update spec to build on armv7hl
+
+* Fri Feb 9  2018 Fabian Arrotin <arrfab@centos.org> 6.3.1-3.1
+- added gcc_target_platform for armv7hl
+- added gcc6-decimal-rtti-arm.patch  (jacco@redsleeve.org)
+- added gcc6-nonshared11-arm.patch  (jacco@redsleeve.org)
+- added gcc6-nonshared98-arm.patch  (jacco@redsleeve.org)
+
 * Mon Feb 20 2017 Marek Polacek <polacek@redhat.com> 6.3.1-3.1
 - use "export" when setting LD_LIBRARY_PATH (#1421107)
 
