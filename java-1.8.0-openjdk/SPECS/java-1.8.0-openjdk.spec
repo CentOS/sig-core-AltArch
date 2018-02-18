@@ -1535,19 +1535,20 @@ do
   fi
 done
 
+# Disabled on armhfp 
 # Make sure gdb can do a backtrace based on line numbers on libjvm.so
-gdb -q "$JAVA_HOME/bin/java" <<EOF | tee gdb.out
-handle SIGSEGV pass nostop noprint
-handle SIGILL pass nostop noprint
-set breakpoint pending on
-break javaCalls.cpp:1
-commands 1
-backtrace
-quit
-end
-run -version
-EOF
-grep 'JavaCallWrapper::JavaCallWrapper' gdb.out
+#gdb -q "$JAVA_HOME/bin/java" <<EOF | tee gdb.out
+#handle SIGSEGV pass nostop noprint
+#handle SIGILL pass nostop noprint
+#set breakpoint pending on
+#break javaCalls.cpp:1
+#commands 1
+#backtrace
+#quit
+#end
+#run -version
+#EOF
+#grep 'JavaCallWrapper::JavaCallWrapper' gdb.out
 
 # Check src.zip has all sources. See RHBZ#1130490
 jar -tf $JAVA_HOME/src.zip | grep 'sun.misc.Unsafe'
@@ -1959,6 +1960,9 @@ require "copy_jdk_configs.lua"
 %endif
 
 %changelog
+* Thu Sep 07 2017 Fabian Arrotin <arrfab@centos.org>
+- disabled gdb test as segfaults on armhfp
+
 * Wed Jan 10 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.161-0.b14
 - Update to b14 with updated Zero fix for 8174962 (S8194828)
 - Resolves: rhbz#1528233
