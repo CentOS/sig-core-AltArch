@@ -231,6 +231,9 @@ cat %{SOURCE14} > mysql-test/rh-skipped-tests.list
 %ifarch aarch64
 echo "perfschema.dml_setup_timers : rhbz#1449880" >> mysql-test/rh-skipped-tests.list
 %endif
+%ifarch %{arm}
+echo "perfschema.dml_setup_timers : rhbz#1449880" >> mysql-test/rh-skipped-tests.list
+%endif
 %ifarch i686
 echo "main.mysql_client_test_nonblock : rhbz#1021450" >> mysql-test/rh-skipped-tests.list
 %endif
@@ -721,6 +724,9 @@ fi
 %{_mandir}/man1/mysql_client_test.1*
 
 %changelog
+* Tue Aug 08 2017 Fabian Arrotin <arrfab@centos.org> - 1:5.5.56-2
+- Added exception for %{arm} for test failing on armhfp and already excluded from aarch64
+
 * Thu Jun 08 2017 Honza Horak <hhorak@redhat.com> - 1:5.5.56-2
 - Do not fix context and change owner if run by root in mariadb-prepare-db-dir
   Related: #1458940
