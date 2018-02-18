@@ -290,7 +290,7 @@ Provides:      pcmk-cluster-manager
 %systemd_requires
 %endif
 
-ExclusiveArch: i686 x86_64 ppc64le s390x
+ExclusiveArch: i686 x86_64 ppc64le s390x armv7hl
 
 # Pacemaker targets compatibility with python 2.6+ and 3.2+
 Requires:      python >= 2.6
@@ -940,6 +940,9 @@ exit 0
 %attr(0644,root,root) %{_datadir}/pacemaker/nagios/plugins-metadata/*
 
 %changelog
+* Wed Aug 09 2017 Fabian Arrotin <arrfab@centos.org> - 1.1.16-12.7
+- Added armv7hl to supported arches (centos userland)
+
 * Tue Jan 2 2018 Ken Gaillot <kgaillot@redhat.com> - 1.1.16-12.7
 - Fix use-of-NULL memory issues
 - Resolves: rhbz#1527810
