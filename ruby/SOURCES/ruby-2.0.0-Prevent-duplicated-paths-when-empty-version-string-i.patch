@@ -1,0 +1,70 @@
+From e943a89efd63dcfb80a0ab8d9a4db37f523f508e Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?V=C3=ADt=20Ondruch?= <vondruch@redhat.com>
+Date: Fri, 8 Feb 2013 22:48:41 +0100
+Subject: [PATCH] Prevent duplicated paths when empty version string is
+ configured.
+
+---
+ configure.in |  3 +++
+ version.c    | 10 ++++++++++
+ 2 files changed, 13 insertions(+)
+
+diff --git a/configure.in b/configure.in
+index 5850bbf..7604bb8 100644
+--- a/configure.in
++++ b/configure.in
+@@ -3419,6 +3419,9 @@ unexpand_shvar exec_prefix         prefix
+ if test ${RUBY_LIB_VERSION_STYLE+set}; then
+     AC_DEFINE_UNQUOTED(RUBY_LIB_VERSION_STYLE, $RUBY_LIB_VERSION_STYLE !<verconf>!)
+ else
++    if test "x${ruby_version}" = 'x'; then
++        AC_DEFINE(RUBY_LIB_VERSION_BLANK, 1)
++    fi
+     AC_DEFINE_UNQUOTED(RUBY_LIB_VERSION, [$RUBY_LIB_VERSION] !<verconf>!)
+ fi
+ AC_DEFINE_UNQUOTED(RUBY_EXEC_PREFIX, ${RUBY_EXEC_PREFIX})
+diff --git a/version.c b/version.c
+index 282960d..54c4513 100644
+--- a/version.c
++++ b/version.c
+@@ -39,9 +39,15 @@
+ #define RUBY_VENDOR_LIB RUBY_LIB_PREFIX"/vendor_ruby"
+ #endif
+ 
++#ifdef RUBY_LIB_VERSION_BLANK
++#define RUBY_LIB                    RUBY_LIB_PREFIX
++#define RUBY_SITE_LIB2              RUBY_SITE_LIB
++#define RUBY_VENDOR_LIB2            RUBY_VENDOR_LIB
++#else
+ #define RUBY_LIB                    RUBY_LIB_PREFIX  "/"RUBY_LIB_VERSION
+ #define RUBY_SITE_LIB2              RUBY_SITE_LIB    "/"RUBY_LIB_VERSION
+ #define RUBY_VENDOR_LIB2            RUBY_VENDOR_LIB  "/"RUBY_LIB_VERSION
++#endif
+ #ifndef RUBY_ARCH_LIB_FOR
+ #define RUBY_ARCH_LIB_FOR(arch)        RUBY_LIB         "/"arch
+ #endif
+@@ -77,8 +83,10 @@ const char ruby_initial_load_paths[] =
+     RUBY_SITE_ARCH_LIB_FOR(RUBY_THINARCH) "\0"
+ #endif
+     RUBY_SITE_ARCH_LIB_FOR(RUBY_SITEARCH) "\0"
++#ifndef RUBY_LIB_VERSION_BLANK
+     RUBY_SITE_LIB "\0"
+ #endif
++#endif
+ 
+ #ifndef NO_RUBY_VENDOR_LIB
+     RUBY_VENDOR_LIB2 "\0"
+@@ -86,8 +94,10 @@ const char ruby_initial_load_paths[] =
+     RUBY_VENDOR_ARCH_LIB_FOR(RUBY_THINARCH) "\0"
+ #endif
+     RUBY_VENDOR_ARCH_LIB_FOR(RUBY_SITEARCH) "\0"
++#ifndef RUBY_LIB_VERSION_BLANK
+     RUBY_VENDOR_LIB "\0"
+ #endif
++#endif
+ 
+     RUBY_LIB "\0"
+ #ifdef RUBY_THINARCH
+-- 
+1.8.1.2
+

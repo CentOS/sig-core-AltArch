@@ -1,0 +1,68 @@
+From e41ee7cf3347ced6e689c198dbf3c5900009d70f Mon Sep 17 00:00:00 2001
+From: usa <usa@b2dd03c8-39d4-4d8f-98ff-823fe69b080e>
+Date: Thu, 25 Feb 2016 10:58:02 +0000
+Subject: [PATCH] merge revision(s) 53677: [Backport #11877]
+
+        * ext/socket/socket.c (sock_gethostname): support unlimited size
+          hostname.
+
+
+git-svn-id: svn+ssh://ci.ruby-lang.org/ruby/branches/ruby_2_1@53936 b2dd03c8-39d4-4d8f-98ff-823fe69b080e
+---
+ ChangeLog           |  5 +++++
+ ext/socket/socket.c | 26 ++++++++++++++++++++------
+ version.h           |  2 +-
+ 3 files changed, 26 insertions(+), 7 deletions(-)
+
+diff --git a/ChangeLog b/ChangeLog
+index f407b73..2216dd4 100644
+--- a/ChangeLog
++++ b/ChangeLog
+@@ -1,3 +1,8 @@
++Thu Feb 25 19:49:31 2016  Nobuyoshi Nakada  <nobu@ruby-lang.org>
++
++	* ext/socket/socket.c (sock_gethostname): support unlimited size
++	  hostname.
++
+ Sat Feb 13 17:11:58 2016  Fabian Wiesel  <fabian.wiesel@sap.com>
+
+ 	* lib/uri/generic.rb (find_proxy): exclude white-spaces and allow
+diff --git a/ext/socket/socket.c b/ext/socket/socket.c
+index 0592432..13006ab 100644
+--- a/ext/socket/socket.c
++++ b/ext/socket/socket.c
+@@ -898,14 +898,28 @@ sock_gethostname(VALUE obj)
+ #ifndef HOST_NAME_MAX
+ #  define HOST_NAME_MAX 1024
+ #endif
+-    char buf[HOST_NAME_MAX+1];
++    long len = HOST_NAME_MAX;
++    VALUE name;
+ 
+     rb_secure(3);
+-    if (gethostname(buf, (int)sizeof buf - 1) < 0)
+-	rb_sys_fail("gethostname");
+-
+-    buf[sizeof buf - 1] = '\0';
+-    return rb_str_new2(buf);
++    name = rb_str_new(0, len);
++    while (gethostname(RSTRING_PTR(name), len) < 0) {
++	int e = errno;
++	switch (e) {
++	  case ENAMETOOLONG:
++#ifdef __linux__
++	  case EINVAL:
++	    /* glibc before version 2.1 uses EINVAL instead of ENAMETOOLONG */
++#endif
++	    break;
++	  default:
++	    rb_syserr_fail(e, "gethostname(3)");
++	}
++	rb_str_modify_expand(name, len);
++	len += len;
++    }
++    rb_str_resize(name, strlen(RSTRING_PTR(name)));
++    return name;
+ }
+ #else
+ #ifdef HAVE_UNAME

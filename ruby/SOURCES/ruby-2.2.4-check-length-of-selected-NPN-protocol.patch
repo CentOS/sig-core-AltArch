@@ -1,0 +1,102 @@
+From 950fd771fb8908968cce67a38fdde69ef0cd2b80 Mon Sep 17 00:00:00 2001
+From: nagachika <nagachika@b2dd03c8-39d4-4d8f-98ff-823fe69b080e>
+Date: Fri, 27 Nov 2015 21:24:30 +0000
+Subject: [PATCH] merge revision(s) 52227,52228: [Backport #11369]
+
+	* ext/openssl/ossl_ssl.c (ssl_npn_select_cb): explicitly raise error
+	  in ext/openssl instead of OpenSSL itself because LibreSSL
+	  silently truncate the selected protocol name by casting the length
+	  from int to unsigned char. [Bug #11369]
+	  Patch by Jeremy Evans <merch-redmine@jeremyevans.net>
+
+
+git-svn-id: svn+ssh://ci.ruby-lang.org/ruby/branches/ruby_2_2@52772 b2dd03c8-39d4-4d8f-98ff-823fe69b080e
+---
+ ChangeLog              |  8 ++++++++
+ ext/openssl/ossl_ssl.c | 43 +++++++++++++++++++++++++++++++------------
+ 2 files changed, 39 insertions(+), 12 deletions(-)
+
+diff --git a/ChangeLog b/ChangeLog
+index 161a4b9..160143c 100644
+--- a/ChangeLog
++++ b/ChangeLog
+@@ -36,6 +36,14 @@
+ 
+ 	* ext/dl/handle.c (rb_dlhandle_sym): ditto
+ 
++Sat Nov 28 06:12:32 2015  NARUSE, Yui  <naruse@ruby-lang.org>
++
++	* ext/openssl/ossl_ssl.c (ssl_npn_select_cb): explicitly raise error
++	  in ext/openssl instead of OpenSSL itself because LibreSSL
++	  silently truncate the selected protocol name by casting the length
++	  from int to unsigned char. [Bug #11369]
++	  Patch by Jeremy Evans <merch-redmine@jeremyevans.net>
++
+ Tue Aug 18 22:00:12 2015  SHIBATA Hiroshi  <hsbt@ruby-lang.org>
+ 
+ 	* lib/rubygems.rb: bump version to 2.0.14.1. this version fixed
+diff --git a/ext/openssl/ossl_ssl.c b/ext/openssl/ossl_ssl.c
+index 75e26a4..6e777c9 100644
+--- a/ext/openssl/ossl_ssl.c
++++ b/ext/openssl/ossl_ssl.c
+@@ -601,29 +601,48 @@ ssl_npn_advertise_cb(SSL *ssl, const unsigned char **out, unsigned int *outlen,
+ }
+ 
+ static int
+-ssl_npn_select_cb(SSL *s, unsigned char **out, unsigned char *outlen, const unsigned char *in, unsigned int inlen, void *arg)
++ssl_npn_select_cb_common(VALUE cb, const unsigned char **out, unsigned char *outlen, const unsigned char *in, unsigned int inlen)
+ {
+-    int i = 0;
+-    VALUE sslctx_obj, cb, protocols, selected;
+-
+-    sslctx_obj = (VALUE) arg;
+-    cb = rb_iv_get(sslctx_obj, "@npn_select_cb");
+-    protocols = rb_ary_new();
++    VALUE selected;
++    long len;
++    unsigned char l;
++    VALUE protocols = rb_ary_new();
+ 
+     /* The format is len_1|proto_1|...|len_n|proto_n\0 */
+-    while (in[i]) {
+-	VALUE protocol = rb_str_new((const char *) &in[i + 1], in[i]);
++    while (l = *in++) {
++	VALUE protocol;
++	if (l > inlen) {
++	    ossl_raise(eSSLError, "Invalid protocol name list");
++	}
++	protocol = rb_str_new((const char *)in, l);
+ 	rb_ary_push(protocols, protocol);
+-	i += in[i] + 1;
++	in += l;
++	inlen -= l;
+     }
+ 
+     selected = rb_funcall(cb, rb_intern("call"), 1, protocols);
+     StringValue(selected);
+-    *out = (unsigned char *) StringValuePtr(selected);
+-    *outlen = RSTRING_LENINT(selected);
++    len = RSTRING_LEN(selected);
++    if (len < 1 || len >= 256) {
++	ossl_raise(eSSLError, "Selected protocol name must have length 1..255");
++    }
++    *out = (unsigned char *)RSTRING_PTR(selected);
++    *outlen = (unsigned char)len;
+ 
+     return SSL_TLSEXT_ERR_OK;
+ }
++
++static int
++ssl_npn_select_cb(SSL *s, unsigned char **out, unsigned char *outlen, const unsigned char *in, unsigned int inlen, void *arg)
++{
++    VALUE sslctx_obj, cb;
++
++    sslctx_obj = (VALUE) arg;
++    cb = rb_iv_get(sslctx_obj, "@npn_select_cb");
++
++    return ssl_npn_select_cb_common(cb, (const unsigned char **)out, outlen, in, inlen);
++}
++
+ #endif
+ 
+ /* This function may serve as the entry point to support further

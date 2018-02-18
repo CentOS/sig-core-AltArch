@@ -1,0 +1,64 @@
+From 59ed302965c5e38526ad33b13d8361859c5e7726 Mon Sep 17 00:00:00 2001
+From: nobu <nobu@b2dd03c8-39d4-4d8f-98ff-823fe69b080e>
+Date: Sat, 30 Nov 2013 04:28:15 +0000
+Subject: [PATCH] siphash.c: fix missing condition
+
+* siphash.c (sip_hash24): fix for aligned word access little endian
+  platforms.  [ruby-core:58658] [Bug #9172]
+
+git-svn-id: svn+ssh://ci.ruby-lang.org/ruby/trunk@43928 b2dd03c8-39d4-4d8f-98ff-823fe69b080e
+---
+ ChangeLog                | 5 +++++
+ siphash.c                | 4 ++--
+ test/ruby/test_string.rb | 2 ++
+ 3 files changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/ChangeLog b/ChangeLog
+index f732f5c..1e803ff 100644
+--- a/ChangeLog
++++ b/ChangeLog
+@@ -1,3 +1,8 @@
++Sat Nov 30 13:28:13 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
++
++ * siphash.c (sip_hash24): fix for aligned word access little endian
++   platforms.  [ruby-core:58658] [Bug #9172]
++
+ Fri Apr 22 21:00:44 2016  Tanaka Akira  <akr@fsij.org>
+
+   * test/ruby/test_time_tz.rb: Tests depends on Europe/Moscow removed
+ 
+diff --git a/siphash.c b/siphash.c
+index 2018ade..cd8ba62 100644
+--- a/siphash.c
++++ b/siphash.c
+@@ -417,7 +417,7 @@ sip_hash24(const uint8_t key[16], const uint8_t *data, size_t len)
+ 	    SIP_2_ROUND(m, v0, v1, v2, v3);
+         }
+     }
+-#elif BYTE_ORDER == BIG_ENDIAN
++#else
+     for (; data != end; data += sizeof(uint64_t)) {
+ 	m = U8TO64_LE(data);
+ 	SIP_2_ROUND(m, v0, v1, v2, v3);
+@@ -453,7 +453,7 @@ sip_hash24(const uint8_t key[16], const uint8_t *data, size_t len)
+ 	    last.lo |= ((uint32_t *) end)[0];
+   #endif
+ 	    break;
+-#elif BYTE_ORDER == BIG_ENDIAN
++#else
+ 	    OR_BYTE(3);
+ #endif
+ 	case 3:
+diff --git a/test/ruby/test_string.rb b/test/ruby/test_string.rb
+index 2ff8458..7ce1c06 100644
+--- a/test/ruby/test_string.rb
++++ b/test/ruby/test_string.rb
+@@ -895,6 +895,8 @@ class TestString < Test::Unit::TestCase
+     assert(S("hello").hash != S("helLO").hash)
+     bug4104 = '[ruby-core:33500]'
+     assert_not_equal(S("a").hash, S("a\0").hash, bug4104)
++    bug9172 = '[ruby-core:58658] [Bug #9172]'
++    assert_not_equal(S("sub-setter").hash, S("discover").hash, bug9172)
+   end
+ 
+   def test_hash_random
