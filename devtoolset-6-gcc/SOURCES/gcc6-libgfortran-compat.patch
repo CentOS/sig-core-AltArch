@@ -1,0 +1,2536 @@
+--- libgfortran/config/fpu-glibc.h.jj	2016-04-15 16:55:24.108218643 +0200
++++ libgfortran/config/fpu-glibc.h	2016-07-13 11:17:15.843054198 +0200
+@@ -125,6 +125,7 @@ support_fpu_trap (int flag)
+ }
+ 
+ 
++#ifndef LIBGFORTRAN_NONSHARED
+ void set_fpu (void)
+ {
+ #ifndef FE_INVALID
+@@ -165,6 +166,7 @@ void set_fpu (void)
+ 
+   set_fpu_trap_exceptions (options.fpe, 0);
+ }
++#endif
+ 
+ 
+ int
+--- libgfortran/config/fpu-387.h.jj	2016-04-15 16:55:24.107218657 +0200
++++ libgfortran/config/fpu-387.h	2016-07-13 11:17:15.866053907 +0200
+@@ -206,11 +206,13 @@ set_fpu_trap_exceptions (int trap, int n
+     }
+ }
+ 
++#ifndef LIBGFORTRAN_NONSHARED
+ void
+ set_fpu (void)
+ {
+   set_fpu_trap_exceptions (options.fpe, 0);
+ }
++#endif
+ 
+ int
+ get_fpu_trap_exceptions (void)
+--- libgfortran/libgfortran.h.jj	2016-04-15 16:55:24.107218657 +0200
++++ libgfortran/libgfortran.h	2016-07-13 11:17:15.876053780 +0200
+@@ -185,7 +185,7 @@ extern int __mingw_snprintf (char *, siz
+ # define internal_proto(x)	sym_rename(x, IPREFIX(x))
+ #endif
+ 
+-#if defined(HAVE_ATTRIBUTE_VISIBILITY) && defined(HAVE_ATTRIBUTE_ALIAS)
++#if defined(HAVE_ATTRIBUTE_VISIBILITY) && defined(HAVE_ATTRIBUTE_ALIAS) && !defined(LIBGFORTRAN_NONSHARED)
+ # define export_proto(x)	sym_rename(x, PREFIX(x))
+ # define export_proto_np(x)	extern char swallow_semicolon
+ # define iexport_proto(x)	internal_proto(x)
+@@ -264,6 +264,10 @@ typedef GFC_UINTEGER_4 gfc_char4_t;
+ extern int big_endian;
+ internal_proto(big_endian);
+ 
++#ifdef LIBGFORTRAN_NONSHARED
++#define big_endian (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
++#endif
++
+ #define GFOR_POINTER_TO_L1(p, kind) \
+   (big_endian * (kind - 1) + (GFC_LOGICAL_1 *)(p))
+ 
+@@ -1413,4 +1417,63 @@ void cshift0_c16 (gfc_array_c16 *, const
+ internal_proto(cshift0_c16);
+ #endif
+ 
++#ifdef LIBGFORTRAN_NONSHARED
++#include <stdlib.h>
++#include <string.h>              
++#include <errno.h>
++
++#define internal_malloc_size nonshared_internal_malloc_size
++#define xmalloc nonshared_internal_xmalloc
++#define xmallocarray nonshared_internal_xmallocarray
++#define reshape_packed nonshared_reshape_packed
++static inline __attribute__((__always_inline__, __unused__))
++void *
++internal_malloc_size (size_t size)
++{
++  void *p;
++
++  if (size == 0)
++    return NULL;
++
++  p = (void *) malloc (size);
++  if (p == NULL)
++    os_error ("Memory allocation failed");
++  return p;
++}
++
++static inline __attribute__((__always_inline__, __unused__))
++void *
++xmalloc (size_t size)
++{
++  return internal_malloc_size (size ? size : 1);
++}
++
++static inline __attribute__((__always_inline__, __unused__))
++void *
++xmallocarray (size_t nmemb, size_t size)
++{
++  if (!nmemb || !size)
++    size = nmemb = 1;
++  else if (__builtin_expect ((nmemb | size)
++			     >= (((size_t) 1) << (__CHAR_BIT__
++						  * sizeof (size_t) / 2)), 0)
++	   && nmemb > __SIZE_MAX__ / size)
++    {
++      errno = ENOMEM;
++      os_error ("Integer overflow in xmallocarray");
++    }
++
++  return internal_malloc_size (nmemb * size);
++}
++
++static inline __attribute__((__always_inline__, __unused__))
++#include "intrinsics/reshape_packed.c"
++
++struct no_bounds_check { int bounds_check; };
++#define compile_options ((struct no_bounds_check) { .bounds_check = 0 })
++
++#define internal_error(x, y...) runtime_error (y)
++
++#endif
++
+ #endif  /* LIBGFOR_H  */
+--- libgfortran/generated/nonshared-misc_specifics.F90.jj	2016-07-13 11:17:15.877053767 +0200
++++ libgfortran/generated/nonshared-misc_specifics.F90	2016-07-13 11:17:15.877053767 +0200
+@@ -0,0 +1,53 @@
++!   Copyright 2002-2016 Free Software Foundation, Inc.
++!   Contributed by Paul Brook <paul@nowt.org>
++!
++!This file is part of the GNU Fortran 95 runtime library (libgfortran).
++!
++!GNU libgfortran is free software; you can redistribute it and/or
++!modify it under the terms of the GNU General Public
++!License as published by the Free Software Foundation; either
++!version 3 of the License, or (at your option) any later version.
++!
++!GNU libgfortran is distributed in the hope that it will be useful,
++!but WITHOUT ANY WARRANTY; without even the implied warranty of
++!MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++!GNU General Public License for more details.
++!
++!Under Section 7 of GPL version 3, you are granted additional
++!permissions described in the GCC Runtime Library Exception, version
++!3.1, as published by the Free Software Foundation.
++!
++!You should have received a copy of the GNU General Public License and
++!a copy of the GCC Runtime Library Exception along with this program;
++!see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
++!<http://www.gnu.org/licenses/>.
++
++#include "config.h"
++#include "kinds.inc"
++
++
++
++
++#if defined (HAVE_GFC_REAL_16) && defined (HAVE_GFC_INTEGER_4)
++elemental function _gfortran_specific__nint_4_16 (parm)
++   real (kind=16) , intent (in) :: parm
++   integer (kind=4) :: _gfortran_specific__nint_4_16
++   _gfortran_specific__nint_4_16 = nint (parm)
++end function
++#endif
++
++#if defined (HAVE_GFC_REAL_16) && defined (HAVE_GFC_INTEGER_8)
++elemental function _gfortran_specific__nint_8_16 (parm)
++   real (kind=16) , intent (in) :: parm
++   integer (kind=8) :: _gfortran_specific__nint_8_16
++   _gfortran_specific__nint_8_16 = nint (parm)
++end function
++#endif
++
++#if defined (HAVE_GFC_REAL_16) && defined (HAVE_GFC_INTEGER_16)
++elemental function _gfortran_specific__nint_16_16 (parm)
++   real (kind=16) , intent (in) :: parm
++   integer (kind=16) :: _gfortran_specific__nint_16_16
++   _gfortran_specific__nint_16_16 = nint (parm)
++end function
++#endif
+--- libgfortran/runtime/nonshared-stop.c.jj	2016-07-13 11:17:15.877053767 +0200
++++ libgfortran/runtime/nonshared-stop.c	2016-07-13 11:17:15.877053767 +0200
+@@ -0,0 +1,93 @@
++/* Implementation of the STOP statement.
++   Copyright 2002-2016 Free Software Foundation, Inc.
++   Contributed by Paul Brook <paul@nowt.org>
++
++This file is part of the GNU Fortran 95 runtime library (libgfortran).
++
++Libgfortran is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public
++License as published by the Free Software Foundation; either
++version 3 of the License, or (at your option) any later version.
++
++Libgfortran is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++Under Section 7 of GPL version 3, you are granted additional
++permissions described in the GCC Runtime Library Exception, version
++3.1, as published by the Free Software Foundation.
++
++You should have received a copy of the GNU General Public License and
++a copy of the GCC Runtime Library Exception along with this program;
++see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
++<http://www.gnu.org/licenses/>.  */
++
++#define LIBGFORTRAN_NONSHARED
++#include "libgfortran.h"
++#include <unistd.h>
++#include <stdlib.h>
++
++/* A numeric STOP statement.  */
++
++extern void stop_numeric (GFC_INTEGER_4)
++  __attribute__ ((noreturn));
++export_proto(stop_numeric);
++
++/* A Fortran 2008 numeric STOP statement.  */
++
++extern void stop_numeric_f08 (GFC_INTEGER_4)
++  __attribute__ ((noreturn));
++export_proto(stop_numeric_f08);
++
++void
++stop_numeric_f08 (GFC_INTEGER_4 code)
++{
++  /* Unfortunately we can't do much here.  */
++  if (code == -1)
++    code = -1 ^ 256;
++  stop_numeric (code);
++}
++
++
++/* Per Fortran 2008, section 8.4:  "Execution of a STOP statement initiates
++   normal termination of execution. Execution of an ERROR STOP statement
++   initiates error termination of execution."  Thus, error_stop_string returns
++   a nonzero exit status code.  */
++
++extern void error_stop_string (const char *, GFC_INTEGER_4)
++  __attribute__ ((noreturn));
++export_proto(error_stop_string);
++
++void
++error_stop_string (const char *string, GFC_INTEGER_4 len)
++{
++  (void) string;
++  (void) len;
++  stop_numeric (1);
++}
++
++
++/* A numeric ERROR STOP statement.  */
++
++extern void error_stop_numeric (GFC_INTEGER_4)
++  __attribute__ ((noreturn));
++export_proto(error_stop_numeric);
++
++void
++error_stop_numeric (GFC_INTEGER_4 code)
++{
++  stop_numeric (code);
++}
++
++__attribute__((visibility ("hidden"))) void
++stop_string (const char *string, GFC_INTEGER_4 len)
++{
++  if (string)
++    {
++      (void) write (STDERR_FILENO, "STOP ", 5);
++      (void) write (STDERR_FILENO, string, len);
++      (void) write (STDERR_FILENO, "\n", 1);
++    }
++  exit (0);
++}
+--- libgfortran/runtime/nonshared-fpu.c.jj	2016-07-13 11:17:15.877053767 +0200
++++ libgfortran/runtime/nonshared-fpu.c	2016-07-13 11:17:15.877053767 +0200
+@@ -0,0 +1,29 @@
++/* Set FPU mask.
++   Copyright (C) 2005-2016 Free Software Foundation, Inc.
++   Contributed by Francois-Xavier Coudert <coudert@clipper.ens.fr>
++
++This file is part of the GNU Fortran runtime library (libgfortran).
++
++Libgfortran is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public
++License as published by the Free Software Foundation; either
++version 3 of the License, or (at your option) any later version.
++
++Libgfortran is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++Under Section 7 of GPL version 3, you are granted additional
++permissions described in the GCC Runtime Library Exception, version
++3.1, as published by the Free Software Foundation.
++
++You should have received a copy of the GNU General Public License and
++a copy of the GCC Runtime Library Exception along with this program;
++see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
++<http://www.gnu.org/licenses/>.  */
++
++#define LIBGFORTRAN_NONSHARED
++#include "libgfortran.h"
++
++#include "fpu-target.h"
+--- libgfortran/runtime/nonshared-backtrace.c.jj	2016-07-13 11:17:15.878053755 +0200
++++ libgfortran/runtime/nonshared-backtrace.c	2016-07-13 11:41:34.623604801 +0200
+@@ -0,0 +1,327 @@
++/* Copyright (C) 2006-2016 Free Software Foundation, Inc.
++   Contributed by François-Xavier Coudert
++
++This file is part of the GNU Fortran runtime library (libgfortran).
++
++Libgfortran is free software; you can redistribute it and/or modify
++it under the terms of the GNU General Public License as published by
++the Free Software Foundation; either version 3, or (at your option)
++any later version.
++
++Libgfortran is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++Under Section 7 of GPL version 3, you are granted additional
++permissions described in the GCC Runtime Library Exception, version
++3.1, as published by the Free Software Foundation.
++
++You should have received a copy of the GNU General Public License and
++a copy of the GCC Runtime Library Exception along with this program;
++see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
++<http://www.gnu.org/licenses/>.  */
++
++#include "libgfortran.h"
++
++#include <string.h>
++#include <stdlib.h>
++
++#ifdef HAVE_UNISTD_H
++#include <unistd.h>
++#endif
++
++#ifdef HAVE_SYS_WAIT_H
++#include <sys/wait.h>
++#endif
++
++#include <limits.h>
++
++#include "unwind.h"
++
++
++/* Macros for common sets of capabilities: can we fork and exec, and
++   can we use pipes to communicate with the subprocess.  */
++#define CAN_FORK (defined(HAVE_FORK) && defined(HAVE_EXECVE) \
++		  && defined(HAVE_WAIT))
++#define CAN_PIPE (CAN_FORK && defined(HAVE_PIPE) \
++		  && defined(HAVE_DUP2) && defined(HAVE_CLOSE))
++
++#ifndef PATH_MAX
++#define PATH_MAX 4096
++#endif
++
++#define estr_write(str) write (STDERR_FILENO, str, strlen (str))
++
++
++/* GDB style #NUM index for each stack frame.  */
++
++static void 
++bt_header (int num)
++{
++  char buf[32];
++  snprintf (buf, sizeof buf, "#%d  ", num);
++  estr_write (buf);
++}
++
++
++/* fgets()-like function that reads a line from a fd, without
++   needing to malloc() a buffer, and does not use locks, hence should
++   be async-signal-safe.  */
++
++static char *
++fd_gets (char *s, int size, int fd)
++{
++  for (int i = 0; i < size; i++)
++    {
++      char c;
++      ssize_t nread = read (fd, &c, 1);
++      if (nread == 1)
++	{
++	  s[i] = c;
++	  if (c == '\n')
++	    {
++	      if (i + 1 < size)
++		s[i+1] = '\0';
++	      else
++		s[i] = '\0';
++	      break;
++	    }
++	}
++      else
++	{
++	  s[i] = '\0';
++	  if (i == 0)
++	    return NULL;
++	  break;
++	}
++    }
++  return s;
++}
++
++
++/* Struct containing backtrace state.  */
++typedef struct
++{
++  int frame_number;
++  int direct_output;
++  int outfd;
++  int infd;
++  int error;
++}
++bt_state;
++
++static inline const char *
++nonshared_gfc_xtoa (GFC_UINTEGER_LARGEST n, char *buffer,
++		    size_t len __attribute__((unused)))
++{
++  int digit;
++  char *p;
++
++  if (n == 0)
++    return "0";
++
++  p = buffer + GFC_XTOA_BUF_SIZE - 1;
++  *p = '\0';
++
++  while (n != 0)
++    {
++      digit = n & 0xF;
++      if (digit > 9)
++        digit += 'A' - '0' - 10;
++
++      *--p = '0' + digit;
++      n >>= 4;
++    }
++
++  return p;
++}
++#define gfc_xtoa nonshared_gfc_xtoa
++
++static _Unwind_Reason_Code
++trace_function (struct _Unwind_Context *context, void *state_ptr)
++{
++  bt_state* state = (bt_state*) state_ptr;
++  _Unwind_Ptr ip;
++#ifdef HAVE_GETIPINFO
++  int ip_before_insn = 0;
++  ip = _Unwind_GetIPInfo (context, &ip_before_insn);
++  
++  /* If the unwinder gave us a 'return' address, roll it back a little
++     to ensure we get the correct line number for the call itself.  */
++  if (! ip_before_insn)
++    --ip;
++#else  
++  ip = _Unwind_GetIP (context);
++#endif
++
++  if (state->direct_output)
++    {
++      char buf[32];
++      bt_header(state->frame_number);
++      snprintf (buf, sizeof buf, "%p\n", (void*) ip);
++      estr_write (buf);
++    }
++  else
++    {
++      char addr_buf[GFC_XTOA_BUF_SIZE], func[1024], file[PATH_MAX];
++      char *p;
++      const char* addr = gfc_xtoa (ip, addr_buf, sizeof (addr_buf));
++      write (state->outfd, addr, strlen (addr));
++      write (state->outfd, "\n", 1);
++
++      if (! fd_gets (func, sizeof(func), state->infd))
++	{
++	  state->error = 1;
++	  goto done;
++	}
++      if (! fd_gets (file, sizeof(file), state->infd))
++	{
++	  state->error = 1;
++	  goto done;
++	}
++	    
++	for (p = func; *p != '\n' && *p != '\r'; p++)
++	  ;
++	*p = '\0';
++	
++	/* _start is a setup routine that calls main(), and main() is
++	   the frontend routine that calls some setup stuff and then
++	   calls MAIN__, so at this point we should stop.  */
++	if (strcmp (func, "_start") == 0 || strcmp (func, "main") == 0)
++	  return _URC_END_OF_STACK;
++	
++	bt_header (state->frame_number);
++	estr_write ("0x");
++	estr_write (addr);
++
++	if (func[0] != '?' && func[1] != '?')
++	  {
++	    estr_write (" in ");
++	    estr_write (func);
++	  }
++	
++	if (strncmp (file, "??", 2) == 0)
++	  estr_write ("\n");
++	else
++	  {
++	    estr_write (" at ");
++	    estr_write (file);
++	  }
++    }
++
++ done:
++
++  state->frame_number++;
++  
++  return _URC_NO_REASON;
++}
++
++extern void backtrace (void);
++export_proto (backtrace);
++
++/* Display the backtrace.  */
++
++void
++backtrace (void)
++{
++  bt_state state;
++  state.frame_number = 0;
++  state.error = 0;
++
++#if CAN_PIPE
++
++#ifndef PATH_MAX
++#define PATH_MAX 1024
++#endif
++
++#ifndef DIR_SEPARATOR
++#define DIR_SEPARATOR '/'
++#endif
++
++  char exe_path[PATH_MAX];
++
++  /* Reading the /proc/self/exe symlink is Linux-specific(?), but if
++     it works it gives the correct answer.  */
++#ifdef HAVE_READLINK
++  int len;
++  if ((len = readlink ("/proc/self/exe", exe_path, sizeof (exe_path) - 1)) != -1)
++    exe_path[len] = '\0';
++  else
++#endif
++    goto fallback_noerr;
++
++  /* We attempt to extract file and line information from addr2line.  */
++  do
++  {
++    /* Local variables.  */
++    int f[2], pid, inp[2];
++
++    /* Don't output an error message if something goes wrong, we'll simply
++       fall back to printing the addresses.  */
++    if (pipe (f) != 0)
++      break;
++    if (pipe (inp) != 0)
++      break;
++    if ((pid = fork ()) == -1)
++      break;
++
++    if (pid == 0)
++      {
++	/* Child process.  */
++#define NUM_FIXEDARGS 7
++	char *arg[NUM_FIXEDARGS];
++
++	close (f[0]);
++
++	close (inp[1]);
++	if (dup2 (inp[0], STDIN_FILENO) == -1)
++	  _exit (1);
++	close (inp[0]);
++
++	close (STDERR_FILENO);
++
++	if (dup2 (f[1], STDOUT_FILENO) == -1)
++	  _exit (1);
++	close (f[1]);
++
++	arg[0] = (char *) "addr2line";
++	arg[1] = (char *) "-e";
++	arg[2] = exe_path;
++	arg[3] = (char *) "-f";
++	arg[4] = (char *) "-s";
++	arg[5] = (char *) "-C";
++	arg[6] = NULL;
++	execvp ("addr2line", arg);
++	_exit (1);
++#undef NUM_FIXEDARGS
++      }
++
++    /* Father process.  */
++    close (f[1]);
++    close (inp[0]);
++
++    state.outfd = inp[1];
++    state.infd = f[0];
++    state.direct_output = 0;
++    _Unwind_Backtrace (trace_function, &state);
++    if (state.error)
++      goto fallback;
++    close (inp[1]);
++    close (f[0]);
++    wait (NULL);
++    return;
++
++fallback:
++    estr_write ("** Something went wrong while running addr2line. **\n"
++		"** Falling back to a simpler backtrace scheme. **\n");
++  }
++  while (0);
++
++fallback_noerr:
++#endif /* CAN_PIPE */
++
++  /* Fallback to the simple backtrace without addr2line.  */
++  state.direct_output = 1;
++  _Unwind_Backtrace (trace_function, &state);
++}
+--- libgfortran/intrinsics/nonshared-random.c.jj	2016-07-13 11:17:15.878053755 +0200
++++ libgfortran/intrinsics/nonshared-random.c	2016-07-13 11:17:15.878053755 +0200
+@@ -0,0 +1,142 @@
++/* Implementation of the RANDOM intrinsics
++   Copyright 2002-2016 Free Software Foundation, Inc.
++   Contributed by Lars Segerlund <seger@linuxmail.org>
++   and Steve Kargl.
++
++This file is part of the GNU Fortran runtime library (libgfortran).
++
++Libgfortran is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public
++License as published by the Free Software Foundation; either
++version 3 of the License, or (at your option) any later version.
++
++Ligbfortran is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++Under Section 7 of GPL version 3, you are granted additional
++permissions described in the GCC Runtime Library Exception, version
++3.1, as published by the Free Software Foundation.
++
++You should have received a copy of the GNU General Public License and
++a copy of the GCC Runtime Library Exception along with this program;
++see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
++<http://www.gnu.org/licenses/>.  */
++
++#define LIBGFORTRAN_NONSHARED
++#include "libgfortran.h"
++#include <gthr.h>
++#include <string.h>
++
++#if defined HAVE_GFC_REAL_10 && defined HAVE_GFC_REAL_16 \
++    && GFC_REAL_10_RADIX == 2 && GFC_REAL_10_DIGITS == 64
++extern void random_r10 (GFC_REAL_10 *);
++iexport_proto(random_r10);
++
++extern void random_r16 (GFC_REAL_16 *);
++iexport_proto(random_r16);
++
++extern void arandom_r16 (gfc_array_r16 *);
++export_proto(arandom_r16);
++
++/* For REAL(KIND=16), we only need to mask off the lower bits.  */
++
++static inline void
++rnumber_16 (GFC_REAL_16 *f, GFC_UINTEGER_8 v1, GFC_UINTEGER_8 v2)
++{
++  GFC_UINTEGER_8 mask;
++#if GFC_REAL_16_RADIX == 2
++  mask = ~ (GFC_UINTEGER_8) 0u << (128 - GFC_REAL_16_DIGITS);
++#elif GFC_REAL_16_RADIX == 16
++  mask = ~ (GFC_UINTEGER_8) 0u << ((32 - GFC_REAL_16_DIGITS) * 4);
++#else
++#error "GFC_REAL_16_RADIX has unknown value"
++#endif
++  v2 = v2 & mask;
++  *f = (GFC_REAL_16) v1 * GFC_REAL_16_LITERAL(0x1.p-64)
++    + (GFC_REAL_16) v2 * GFC_REAL_16_LITERAL(0x1.p-128);
++}
++
++/*  This function produces a REAL(16) value from the uniform distribution
++    with range [0,1).  */
++
++void
++random_r16 (GFC_REAL_16 *x)
++{
++  GFC_UINTEGER_8 kiss1, kiss2;
++  GFC_REAL_10 num1, num2;
++
++  random_r10 (&num1);
++  random_r10 (&num2);
++  num1 *= GFC_REAL_10_LITERAL(0x1.p64);
++  num2 *= GFC_REAL_10_LITERAL(0x1.p64);
++  kiss1 = num1;
++  kiss2 = num2;
++
++  rnumber_16 (x, kiss1, kiss2);
++}
++iexport(random_r16);
++
++/*  This function fills a REAL(16) array with values from the uniform
++    distribution with range [0,1).  */
++
++void
++arandom_r16 (gfc_array_r16 *x)
++{
++  index_type count[GFC_MAX_DIMENSIONS];
++  index_type extent[GFC_MAX_DIMENSIONS];
++  index_type stride[GFC_MAX_DIMENSIONS];
++  index_type stride0;
++  index_type dim;
++  GFC_REAL_16 *dest;
++  int n;
++
++  dest = x->base_addr;
++
++  dim = GFC_DESCRIPTOR_RANK (x);
++
++  for (n = 0; n < dim; n++)
++    {
++      count[n] = 0;
++      stride[n] = GFC_DESCRIPTOR_STRIDE(x,n);
++      extent[n] = GFC_DESCRIPTOR_EXTENT(x,n);
++      if (extent[n] <= 0)
++        return;
++    }
++
++  stride0 = stride[0];
++
++  while (dest)
++    {
++      random_r16 (dest);
++
++      /* Advance to the next element.  */
++      dest += stride0;
++      count[0]++;
++      /* Advance to the next source element.  */
++      n = 0;
++      while (count[n] == extent[n])
++        {
++          /* When we get to the end of a dimension, reset it and increment
++             the next dimension.  */
++          count[n] = 0;
++          /* We could precalculate these products, but this is a less
++             frequently used path so probably not worth it.  */
++          dest -= stride[n] * extent[n];
++          n++;
++          if (n == dim)
++            {
++              dest = NULL;
++              break;
++            }
++          else
++            {
++              count[n]++;
++              dest += stride[n];
++            }
++        }
++    }
++}
++
++#endif
+--- libgfortran/intrinsics/nonshared-selected_real_kind.F90.jj	2016-07-13 11:17:15.878053755 +0200
++++ libgfortran/intrinsics/nonshared-selected_real_kind.F90	2016-07-13 11:17:15.878053755 +0200
+@@ -0,0 +1,79 @@
++!   Copyright 2003-2016 Free Software Foundation, Inc.
++!   Contributed by Kejia Zhao <kejia_zh@yahoo.com.cn>
++!
++!This file is part of the GNU Fortran runtime library (libgfortran).
++!
++!Libgfortran is free software; you can redistribute it and/or
++!modify it under the terms of the GNU General Public
++!License as published by the Free Software Foundation; either
++!version 3 of the License, or (at your option) any later version.
++!
++!Libgfortran is distributed in the hope that it will be useful,
++!but WITHOUT ANY WARRANTY; without even the implied warranty of
++!MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++!GNU General Public License for more details.
++!
++!Under Section 7 of GPL version 3, you are granted additional
++!permissions described in the GCC Runtime Library Exception, version
++!3.1, as published by the Free Software Foundation.
++!
++!You should have received a copy of the GNU General Public License and
++!a copy of the GCC Runtime Library Exception along with this program;
++!see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
++!<http://www.gnu.org/licenses/>.
++
++function _gfortran_selected_real_kind2008 (p, r, rdx)
++  implicit none
++  integer, optional, intent (in) :: p, r, rdx
++  integer :: _gfortran_selected_real_kind2008
++  integer :: i, p2, r2, radix2
++  logical :: found_p, found_r, found_radix
++  ! Real kind_precision_range table
++  type :: real_info
++    integer :: kind
++    integer :: precision
++    integer :: range
++    integer :: radix
++  end type real_info
++
++  include "selected_real_kind.inc"
++
++  _gfortran_selected_real_kind2008 = 0
++  p2 = 0
++  r2 = 0
++  radix2 = 0
++  found_p = .false.
++  found_r = .false.
++  found_radix = .false.
++
++  if (present (p)) p2 = p
++  if (present (r)) r2 = r
++  if (present (rdx)) radix2 = rdx
++
++  ! Assumes each type has a greater precision and range than previous one.
++
++  do i = 1, c
++    if (p2 <= real_infos (i) % precision) found_p = .true.
++    if (r2 <= real_infos (i) % range) found_r = .true.
++    if (radix2 <= real_infos (i) % radix) found_radix = .true.
++
++    if (p2 <= real_infos (i) % precision   &
++        .and. r2 <= real_infos (i) % range &
++        .and. radix2 <= real_infos (i) % radix) then
++      _gfortran_selected_real_kind2008 = real_infos (i) % kind
++      return
++    end if
++  end do
++
++  if (found_radix .and. found_r .and. .not. found_p) then
++    _gfortran_selected_real_kind2008 = -1
++  elseif (found_radix .and. found_p .and. .not. found_r) then
++    _gfortran_selected_real_kind2008 = -2
++  elseif (found_radix .and. .not. found_p .and. .not. found_r) then
++    _gfortran_selected_real_kind2008 = -3
++  elseif (found_radix) then
++    _gfortran_selected_real_kind2008 = -4
++  else
++    _gfortran_selected_real_kind2008 = -5
++  end if
++end function _gfortran_selected_real_kind2008
+--- libgfortran/intrinsics/nonshared-mvbits.c.jj	2016-07-13 12:17:36.807227177 +0200
++++ libgfortran/intrinsics/nonshared-mvbits.c	2016-07-13 12:18:26.677594781 +0200
+@@ -0,0 +1,38 @@
++/* Implementation of the MVBITS intrinsic
++   Copyright (C) 2004-2016 Free Software Foundation, Inc.
++   Contributed by Tobias Schlüter
++
++This file is part of the GNU Fortran 95 runtime library (libgfortran).
++
++Libgfortran is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public
++License as published by the Free Software Foundation; either
++version 3 of the License, or (at your option) any later version.
++
++Libgfortran is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++Under Section 7 of GPL version 3, you are granted additional
++permissions described in the GCC Runtime Library Exception, version
++3.1, as published by the Free Software Foundation.
++
++You should have received a copy of the GNU General Public License and
++a copy of the GCC Runtime Library Exception along with this program;
++see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
++<http://www.gnu.org/licenses/>.  */
++
++/* TODO: This should be replaced by a compiler builtin.  */
++
++#include <libgfortran.h>
++
++#if defined (HAVE_GFC_INTEGER_16)
++#  define TYPE GFC_INTEGER_16
++#  define UTYPE GFC_UINTEGER_16
++#  define SUB_NAME mvbits_i16
++#  include "mvbits.c"
++#  undef SUB_NAME
++#  undef TYPE
++#  undef UTYPE
++#endif
+--- libgfortran/intrinsics/nonshared-cpu_time.c.jj	2016-07-13 11:17:15.878053755 +0200
++++ libgfortran/intrinsics/nonshared-cpu_time.c	2016-07-13 11:17:15.878053755 +0200
+@@ -0,0 +1,43 @@
++/* Implementation of the CPU_TIME intrinsic.
++   Copyright (C) 2003-2016 Free Software Foundation, Inc.
++
++This file is part of the GNU Fortran runtime library (libgfortran).
++
++Libgfortran is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public
++License as published by the Free Software Foundation; either
++version 3 of the License, or (at your option) any later version.
++
++Libgfortran is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++Under Section 7 of GPL version 3, you are granted additional
++permissions described in the GCC Runtime Library Exception, version
++3.1, as published by the Free Software Foundation.
++
++You should have received a copy of the GNU General Public License and
++a copy of the GCC Runtime Library Exception along with this program;
++see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
++<http://www.gnu.org/licenses/>.  */
++
++#define LIBGFORTRAN_NONSHARED
++#include "libgfortran.h"
++#include "time_1.h"
++
++
++#if defined HAVE_GFC_REAL_10 && defined HAVE_GFC_REAL_16
++extern void cpu_time_10 (GFC_REAL_10 *);
++export_proto(cpu_time_10);
++
++extern void cpu_time_16 (GFC_REAL_16 *);
++export_proto(cpu_time_16);
++
++void cpu_time_16 (GFC_REAL_16 *time)
++{
++  GFC_REAL_10 t;
++  cpu_time_10 (&t);
++  *time = t;
++}
++#endif
+--- libgfortran/intrinsics/nonshared-erfc_scaled.c.jj	2016-07-13 11:17:15.879053742 +0200
++++ libgfortran/intrinsics/nonshared-erfc_scaled.c	2016-07-13 11:17:15.879053742 +0200
+@@ -0,0 +1,109 @@
++/* Implementation of the ERFC_SCALED intrinsic.
++   Copyright (C) 2008-2016 Free Software Foundation, Inc.
++
++This file is part of the GNU Fortran runtime library (libgfortran).
++
++Libgfortran is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public
++License as published by the Free Software Foundation; either
++version 3 of the License, or (at your option) any later version.
++
++Libgfortran is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++Under Section 7 of GPL version 3, you are granted additional
++permissions described in the GCC Runtime Library Exception, version
++3.1, as published by the Free Software Foundation.
++
++You should have received a copy of the GNU General Public License and
++a copy of the GCC Runtime Library Exception along with this program;
++see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
++<http://www.gnu.org/licenses/>.  */
++
++#define LIBGFORTRAN_NONSHARED
++#include "libgfortran.h"
++
++/* This implementation of ERFC_SCALED is based on the netlib algorithm
++   available at http://www.netlib.org/specfun/erf  */
++
++#ifdef HAVE_GFC_REAL_16
++
++/* For quadruple-precision, netlib's implementation is
++   not accurate enough.  We provide another one.  */
++
++#ifdef GFC_REAL_16_IS_FLOAT128
++
++# define _THRESH -106.566990228185312813205074546585730Q
++# define _M_2_SQRTPI M_2_SQRTPIq
++# define _INF __builtin_infq()
++# define _ERFC(x) erfcq(x)
++# define _EXP(x) expq(x)
++
++#else
++
++# define _THRESH -106.566990228185312813205074546585730L
++# ifndef M_2_SQRTPIl
++#  define M_2_SQRTPIl 1.128379167095512573896158903121545172L
++# endif
++# define _M_2_SQRTPI M_2_SQRTPIl
++# define _INF __builtin_infl()
++# ifdef HAVE_ERFCL
++#  define _ERFC(x) erfcl(x)
++# endif
++# ifdef HAVE_EXPL
++#  define _EXP(x) expl(x)
++# endif
++
++#endif
++
++#if defined(_ERFC) && defined(_EXP)
++
++extern GFC_REAL_16 erfc_scaled_r16 (GFC_REAL_16);
++export_proto(erfc_scaled_r16);
++
++GFC_REAL_16
++erfc_scaled_r16 (GFC_REAL_16 x)
++{
++  if (x < _THRESH)
++    {
++      return _INF;
++    }
++  if (x < 12)
++    {
++      /* Compute directly as ERFC_SCALED(x) = ERFC(x) * EXP(X**2).
++	 This is not perfect, but much better than netlib.  */
++      return _ERFC(x) * _EXP(x * x);
++    }
++  else
++    {
++      /* Calculate ERFC_SCALED(x) using a power series in 1/x:
++	 ERFC_SCALED(x) = 1 / (x * sqrt(pi))
++			 * (1 + Sum_n (-1)**n * (1 * 3 * 5 * ... * (2n-1))
++					      / (2 * x**2)**n)
++       */
++      GFC_REAL_16 sum = 0, oldsum;
++      GFC_REAL_16 inv2x2 = 1 / (2 * x * x);
++      GFC_REAL_16 fac = 1;
++      int n = 1;
++
++      while (n < 200)
++	{
++	  fac *= - (2*n - 1) * inv2x2;
++	  oldsum = sum;
++	  sum += fac;
++
++	  if (sum == oldsum)
++	    break;
++
++	  n++;
++	}
++
++      return (1 + sum) / x * (_M_2_SQRTPI / 2);
++    }
++}
++
++#endif
++
++#endif
+--- libgfortran/intrinsics/nonshared-shift.c.jj	2016-07-13 11:17:15.879053742 +0200
++++ libgfortran/intrinsics/nonshared-shift.c	2016-07-13 11:17:15.879053742 +0200
+@@ -0,0 +1,118 @@
++/* Generic implementation of the CSHIFT intrinsic
++   Copyright 2003-2016 Free Software Foundation, Inc.
++   Contributed by Feng Wang <wf_cs@yahoo.com>
++
++This file is part of the GNU Fortran runtime library (libgfortran).
++
++Libgfortran is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public
++License as published by the Free Software Foundation; either
++version 3 of the License, or (at your option) any later version.
++
++Libgfortran is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++Under Section 7 of GPL version 3, you are granted additional
++permissions described in the GCC Runtime Library Exception, version
++3.1, as published by the Free Software Foundation.
++
++You should have received a copy of the GNU General Public License and
++a copy of the GCC Runtime Library Exception along with this program;
++see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
++<http://www.gnu.org/licenses/>.  */
++
++#define LIBGFORTRAN_NONSHARED
++#include "libgfortran.h"
++
++#ifdef HAVE_GFC_INTEGER_16
++extern void cshift0_8_char4 (gfc_array_char *, GFC_INTEGER_4,
++			     const gfc_array_char *,
++			     const GFC_INTEGER_8 *,
++			     const GFC_INTEGER_8 *, GFC_INTEGER_4);
++export_proto(cshift0_8_char4);
++
++extern void cshift0_16_char4 (gfc_array_char *, GFC_INTEGER_4,
++			      const gfc_array_char *,
++			      const GFC_INTEGER_16 *,
++			      const GFC_INTEGER_16 *, GFC_INTEGER_4);
++export_proto(cshift0_16_char4);
++
++void
++cshift0_16_char4 (gfc_array_char *ret,
++		  GFC_INTEGER_4 ret_length,
++		  const gfc_array_char *array,
++		  const GFC_INTEGER_16 *pshift,
++		  const GFC_INTEGER_16 *pdim,
++		  GFC_INTEGER_4 array_length)
++{
++  GFC_INTEGER_8 shift = *pshift;
++  GFC_INTEGER_8 dim = pdim ? *pdim : 1;
++
++  cshift0_8_char4 (ret, ret_length, array, &shift, pdim ? &dim : NULL,
++		   array_length);
++}
++
++extern void eoshift0_8_char4 (gfc_array_char *, GFC_INTEGER_4,
++			      const gfc_array_char *,
++			      const GFC_INTEGER_8 *,
++			      const char *, const GFC_INTEGER_8 *,
++			      GFC_INTEGER_4, GFC_INTEGER_4);
++export_proto(eoshift0_8_char4);
++
++extern void eoshift0_16_char4 (gfc_array_char *, GFC_INTEGER_4,
++			       const gfc_array_char *,
++			       const GFC_INTEGER_16 *,
++			       const char *, const GFC_INTEGER_16 *,
++			       GFC_INTEGER_4, GFC_INTEGER_4);
++export_proto(eoshift0_16_char4);
++
++void
++eoshift0_16_char4 (gfc_array_char *ret,
++		   GFC_INTEGER_4 ret_length,
++		   const gfc_array_char *array,
++		   const GFC_INTEGER_16 *pshift,
++		   const char *pbound,
++		   const GFC_INTEGER_16 *pdim,
++		   GFC_INTEGER_4 array_length,
++		   GFC_INTEGER_4 bound_length)
++{
++  GFC_INTEGER_8 shift = *pshift;
++  GFC_INTEGER_8 dim = pdim ? *pdim : 1;
++
++  eoshift0_8_char4 (ret, ret_length, array, &shift, pbound,
++		    pdim ? &dim : NULL, array_length, bound_length);
++}
++
++extern void eoshift2_8_char4 (gfc_array_char *, GFC_INTEGER_4,
++			      const gfc_array_char *,
++			      const GFC_INTEGER_8 *,
++			      const gfc_array_char *, const GFC_INTEGER_8 *,
++			      GFC_INTEGER_4, GFC_INTEGER_4);
++export_proto(eoshift2_8_char4);
++
++extern void eoshift2_16_char4 (gfc_array_char *, GFC_INTEGER_4,
++			       const gfc_array_char *,
++			       const GFC_INTEGER_16 *,
++			       const gfc_array_char *, const GFC_INTEGER_16 *,
++			       GFC_INTEGER_4, GFC_INTEGER_4);
++export_proto(eoshift2_16_char4);
++
++void
++eoshift2_16_char4 (gfc_array_char *ret,
++		   GFC_INTEGER_4 ret_length,
++		   const gfc_array_char *array,
++		   const GFC_INTEGER_16 *pshift,
++		   const gfc_array_char *pbound,
++		   const GFC_INTEGER_16 *pdim,
++		   GFC_INTEGER_4 array_length,
++		   GFC_INTEGER_4 bound_length)
++{
++  GFC_INTEGER_8 shift = *pshift;
++  GFC_INTEGER_8 dim = pdim ? *pdim : 1;
++
++  eoshift2_8_char4 (ret, ret_length, array, &shift, pbound,
++		    pdim ? &dim : NULL, array_length, bound_length);
++}
++#endif
+--- libgfortran/intrinsics/nonshared-execute_command_line.c.jj	2016-07-13 11:17:15.879053742 +0200
++++ libgfortran/intrinsics/nonshared-execute_command_line.c	2016-07-13 11:17:15.879053742 +0200
+@@ -0,0 +1,192 @@
++/* Implementation of the EXECUTE_COMMAND_LINE intrinsic.
++   Copyright (C) 2009-2016 Free Software Foundation, Inc.
++   Contributed by FranÃ§ois-Xavier Coudert.
++
++This file is part of the GNU Fortran runtime library (libgfortran).
++
++Libgfortran is free software; you can redistribute it and/or modify it under
++the terms of the GNU General Public License as published by the Free
++Software Foundation; either version 3, or (at your option) any later
++version.
++
++Libgfortran is distributed in the hope that it will be useful, but WITHOUT
++ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++for more details.
++
++Under Section 7 of GPL version 3, you are granted additional
++permissions described in the GCC Runtime Library Exception, version
++3.1, as published by the Free Software Foundation.
++
++You should have received a copy of the GNU General Public License and
++a copy of the GCC Runtime Library Exception along with this program;
++see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
++<http://www.gnu.org/licenses/>.  */
++
++#define LIBGFORTRAN_NONSHARED
++#include "libgfortran.h"
++#include <string.h>
++#include <stdbool.h>
++
++#ifdef HAVE_STDLIB_H
++#include <stdlib.h>
++#endif
++#ifdef HAVE_UNISTD_H
++#include <unistd.h>
++#endif
++#ifdef  HAVE_SYS_WAIT_H
++#include <sys/wait.h>
++#endif
++
++extern void flush_i4 (GFC_INTEGER_4 *);
++export_proto(flush_i4);
++
++enum { EXEC_NOERROR = 0, EXEC_SYSTEMFAILED };
++static const char *cmdmsg_values[] =
++  { "", "Execution of child process impossible" };
++
++
++
++static void
++set_cmdstat (int *cmdstat, int value)
++{
++  if (cmdstat)
++    *cmdstat = value;
++  else if (value != 0)
++    runtime_error ("Could not execute command line");
++}
++
++
++static void
++execute_command_line (const char *command, bool wait, int *exitstat,
++		      int *cmdstat, char *cmdmsg,
++		      gfc_charlen_type command_len,
++		      gfc_charlen_type cmdmsg_len)
++{
++  /* Transform the Fortran string to a C string.  */
++  char *cmd = malloc (command_len + 1);
++  if (!cmd)
++    os_error ("Memory allocation failed in fc_strdup");
++  memcpy (cmd, command, command_len);
++  cmd[command_len] = '\0';
++
++  /* Flush all I/O units before executing the command.  */
++  flush_i4(NULL);
++
++#if defined(HAVE_FORK)
++  if (!wait)
++    {
++      /* Asynchronous execution.  */
++      pid_t pid;
++
++      set_cmdstat (cmdstat, 0);
++
++      if ((pid = fork()) < 0)
++	set_cmdstat (cmdstat, EXEC_SYSTEMFAILED);
++      else if (pid == 0)
++	{
++	  /* Child process.  */
++	  int res = system (cmd);
++	  _exit (WIFEXITED(res) ? WEXITSTATUS(res) : res);
++	}
++    }
++  else
++#endif
++    {
++      /* Synchronous execution.  */
++      int res = system (cmd);
++
++      if (!wait)
++	set_cmdstat (cmdstat, -2);
++      else if (res == -1)
++	set_cmdstat (cmdstat, EXEC_SYSTEMFAILED);
++      else
++	{
++	  set_cmdstat (cmdstat, 0);
++#if defined(WEXITSTATUS) && defined(WIFEXITED)
++	  *exitstat = WIFEXITED(res) ? WEXITSTATUS(res) : res;
++#else
++	  *exitstat = res;
++#endif
++	}
++    }
++
++  free (cmd);
++
++  /* Now copy back to the Fortran string if needed.  */
++  if (cmdstat && *cmdstat > 0)
++    {
++      if (cmdmsg)
++	{
++	  size_t srclen = strlen (cmdmsg_values[*cmdstat]);
++	  if (srclen >= (size_t) cmdmsg_len)
++	    memcpy (cmdmsg, cmdmsg_values[*cmdstat], cmdmsg_len);
++	  else
++	    {
++	      memcpy (cmdmsg, cmdmsg_values[*cmdstat], srclen);
++	      memset (cmdmsg + srclen, ' ', cmdmsg_len - srclen);
++	    }
++	}
++      else
++	runtime_error ("Failure in EXECUTE_COMMAND_LINE: %s",
++		       cmdmsg_values[*cmdstat]);
++    }
++}
++
++
++extern void
++execute_command_line_i4 (const char *command, GFC_LOGICAL_4 *wait,
++			 GFC_INTEGER_4 *exitstat, GFC_INTEGER_4 *cmdstat,
++			 char *cmdmsg, gfc_charlen_type command_len,
++			 gfc_charlen_type cmdmsg_len);
++export_proto(execute_command_line_i4);
++
++void
++execute_command_line_i4 (const char *command, GFC_LOGICAL_4 *wait,
++			 GFC_INTEGER_4 *exitstat, GFC_INTEGER_4 *cmdstat,
++			 char *cmdmsg, gfc_charlen_type command_len,
++			 gfc_charlen_type cmdmsg_len)
++{
++  bool w = wait ? *wait : true;
++  int estat, estat_initial, cstat;
++
++  if (exitstat)
++    estat_initial = estat = *exitstat;
++
++  execute_command_line (command, w, &estat, cmdstat ? &cstat : NULL,
++			cmdmsg, command_len, cmdmsg_len);
++
++  if (exitstat && estat != estat_initial)
++    *exitstat = estat;
++  if (cmdstat)
++    *cmdstat = cstat;
++}
++
++
++extern void
++execute_command_line_i8 (const char *command, GFC_LOGICAL_8 *wait,
++			 GFC_INTEGER_8 *exitstat, GFC_INTEGER_8 *cmdstat,
++			 char *cmdmsg, gfc_charlen_type command_len,
++			 gfc_charlen_type cmdmsg_len);
++export_proto(execute_command_line_i8);
++
++void
++execute_command_line_i8 (const char *command, GFC_LOGICAL_8 *wait,
++			 GFC_INTEGER_8 *exitstat, GFC_INTEGER_8 *cmdstat,
++			 char *cmdmsg, gfc_charlen_type command_len,
++			 gfc_charlen_type cmdmsg_len)
++{
++  bool w = wait ? *wait : true;
++  int estat, estat_initial, cstat;
++
++  if (exitstat)
++    estat_initial = estat = *exitstat;
++
++  execute_command_line (command, w, &estat, cmdstat ? &cstat : NULL,
++			cmdmsg, command_len, cmdmsg_len);
++
++  if (exitstat && estat != estat_initial)
++    *exitstat = estat;
++  if (cmdstat)
++    *cmdstat = cstat;
++}
+--- libgfortran/intrinsics/nonshared-iso_c_generated_procs.c.jj	2016-07-13 11:17:15.880053729 +0200
++++ libgfortran/intrinsics/nonshared-iso_c_generated_procs.c	2016-07-13 11:17:15.880053729 +0200
+@@ -0,0 +1,77 @@
++/* Implementation of the ISO_C_BINDING library helper generated functions.
++   Copyright (C) 2007-2016 Free Software Foundation, Inc.
++   Contributed by Christopher Rickett.
++
++This file is part of the GNU Fortran 95 runtime library (libgfortran).
++
++Libgfortran is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public
++License as published by the Free Software Foundation; either
++version 3 of the License, or (at your option) any later version.
++
++Libgfortran is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++Under Section 7 of GPL version 3, you are granted additional
++permissions described in the GCC Runtime Library Exception, version
++3.1, as published by the Free Software Foundation.
++
++You should have received a copy of the GNU General Public License and
++a copy of the GCC Runtime Library Exception along with this program;
++see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
++<http://www.gnu.org/licenses/>.  */
++
++
++#define LIBGFORTRAN_NONSHARED
++#include "libgfortran.h"
++#include "iso_c_binding.h"
++
++
++#ifdef HAVE_GFC_REAL_16
++void ISO_C_BINDING_PREFIX (c_f_pointer_r16) (void *, gfc_array_void *,
++					     const array_t *);
++#endif
++
++#ifdef HAVE_GFC_COMPLEX_16
++void ISO_C_BINDING_PREFIX (c_f_pointer_c16) (void *, gfc_array_void *,
++					     const array_t *);
++#endif
++
++#ifdef HAVE_GFC_REAL_16
++/* Set the given Fortran pointer, f_ptr_out, to point to the given C
++   address, c_ptr_in.  The Fortran pointer is of type real and
++   kind=16.  The function c_f_pointer is used to set up the pointer
++   descriptor.  */
++
++void
++ISO_C_BINDING_PREFIX (c_f_pointer_r16) (void *c_ptr_in,
++					gfc_array_void *f_ptr_out,
++					const array_t *shape)
++{
++  /* Here we have an real(kind=16).  */
++  ISO_C_BINDING_PREFIX (c_f_pointer) (c_ptr_in, f_ptr_out, shape,
++				      (int) BT_REAL,
++				      (int) sizeof (GFC_REAL_16));
++}
++#endif
++
++
++#ifdef HAVE_GFC_COMPLEX_16
++/* Set the given Fortran pointer, f_ptr_out, to point to the given C
++   address, c_ptr_in.  The Fortran pointer is of type complex and
++   kind=16.  The function c_f_pointer is used to set up the pointer
++   descriptor.  */
++
++void
++ISO_C_BINDING_PREFIX (c_f_pointer_c16) (void *c_ptr_in,
++					gfc_array_void *f_ptr_out,
++					const array_t *shape)
++{
++  /* Here we have an complex(kind=16).  */
++  ISO_C_BINDING_PREFIX (c_f_pointer) (c_ptr_in, f_ptr_out, shape,
++				      (int) BT_COMPLEX,
++				      (int) sizeof (GFC_COMPLEX_16));
++}
++#endif
+--- libgfortran/Makefile.am.jj	2016-04-15 16:55:24.134218293 +0200
++++ libgfortran/Makefile.am	2016-07-13 12:34:50.815109274 +0200
+@@ -34,6 +34,7 @@ LTLDFLAGS = $(shell $(SHELL) $(top_srcdi
+ 	    $(lt_host_flags)
+ 
+ toolexeclib_LTLIBRARIES = libgfortran.la
++noinst_LTLIBRARIES = libgfortran_nonshared44.la libgfortran_nonshared48.la
+ toolexeclib_DATA = libgfortran.spec
+ libgfortran_la_LINK = $(LINK) $(libgfortran_la_LDFLAGS)
+ libgfortran_la_LDFLAGS = -version-info `grep -v '^\#' $(srcdir)/libtool-version` \
+@@ -911,6 +912,242 @@ libgfortran_la_SOURCES = $(prereq_SRC)
+ 
+ endif
+ 
++if LIBGFOR_BUILD_QUAD
++nonshared_generated_quad_F90_SRC = \
++nonshared-_abs_c16.F90 \
++nonshared-_abs_r16.F90 \
++nonshared-_acosh_r16.F90 \
++nonshared-_acos_r16.F90 \
++nonshared-_aimag_c16.F90 \
++nonshared-_aint_r16.F90 \
++nonshared-_anint_r16.F90 \
++nonshared-_asinh_r16.F90 \
++nonshared-_asin_r16.F90 \
++nonshared-_atan2_r16.F90 \
++nonshared-_atanh_r16.F90 \
++nonshared-_atan_r16.F90 \
++nonshared-_conjg_c16.F90 \
++nonshared-_cos_c16.F90 \
++nonshared-_cosh_r16.F90 \
++nonshared-_cos_r16.F90 \
++nonshared-_dim_r16.F90 \
++nonshared-_exp_c16.F90 \
++nonshared-_exp_r16.F90 \
++nonshared-_log10_r16.F90 \
++nonshared-_log_c16.F90 \
++nonshared-_log_r16.F90 \
++nonshared-_mod_r16.F90 \
++nonshared-_sign_r16.F90 \
++nonshared-_sin_c16.F90 \
++nonshared-_sinh_r16.F90 \
++nonshared-_sin_r16.F90 \
++nonshared-_sqrt_c16.F90 \
++nonshared-_sqrt_r16.F90 \
++nonshared-_tanh_r16.F90 \
++nonshared-_tan_r16.F90
++nonshared_generated_quad_C_SRC = \
++nonshared-exponent_r16.c \
++nonshared-fraction_r16.c \
++nonshared-matmul_c16.c \
++nonshared-matmul_r16.c \
++nonshared-maxloc0_16_r16.c \
++nonshared-maxloc0_4_r16.c \
++nonshared-maxloc0_8_r16.c \
++nonshared-maxloc1_16_r16.c \
++nonshared-maxloc1_4_r16.c \
++nonshared-maxloc1_8_r16.c \
++nonshared-maxval_r16.c \
++nonshared-minloc0_16_r16.c \
++nonshared-minloc0_4_r16.c \
++nonshared-minloc0_8_r16.c \
++nonshared-minloc1_16_r16.c \
++nonshared-minloc1_4_r16.c \
++nonshared-minloc1_8_r16.c \
++nonshared-minval_r16.c \
++nonshared-nearest_r16.c \
++nonshared-pow_c16_i16.c \
++nonshared-pow_c16_i4.c \
++nonshared-pow_c16_i8.c \
++nonshared-pow_r16_i16.c \
++nonshared-pow_r16_i4.c \
++nonshared-pow_r16_i8.c \
++nonshared-product_c16.c \
++nonshared-product_r16.c \
++nonshared-reshape_c16.c \
++nonshared-reshape_r16.c \
++nonshared-rrspacing_r16.c \
++nonshared-set_exponent_r16.c \
++nonshared-spacing_r16.c \
++nonshared-sum_c16.c \
++nonshared-sum_r16.c \
++nonshared-transpose_c16.c \
++nonshared-transpose_r16.c
++nonshared_generated_special_quad_F90_SRC = \
++nonshared-misc_specifics.F90
++nonshared_quad_SRC = \
++$(srcdir)/intrinsics/nonshared-iso_c_generated_procs.c \
++$(srcdir)/intrinsics/nonshared-cpu_time.c \
++$(srcdir)/intrinsics/nonshared-erfc_scaled.c \
++$(srcdir)/intrinsics/nonshared-random.c
++else
++nonshared_generated_quad_F90_SRC =
++nonshared_generated_quad_C_SRC =
++nonshared_generated_special_quad_F90_SRC =
++nonshared_quad_SRC =
++endif
++
++nonshared_generated_F90_SRC = \
++$(nonshared_generated_quad_F90_SRC)
++nonshared_generated_special_F90_SRC = \
++$(nonshared_generated_special_quad_F90_SRC)
++nonshared_intrinsics_special_F90_SRC = \
++nonshared-selected_real_kind.F90
++nonshared_generated_C_SRC = \
++$(nonshared_generated_quad_C_SRC) \
++nonshared-bessel_r10.c \
++nonshared-bessel_r16.c \
++nonshared-bessel_r4.c \
++nonshared-bessel_r8.c \
++nonshared-iall_i1.c \
++nonshared-iall_i2.c \
++nonshared-iall_i4.c \
++nonshared-iall_i8.c \
++nonshared-iall_i16.c \
++nonshared-iany_i1.c \
++nonshared-iany_i2.c \
++nonshared-iany_i4.c \
++nonshared-iany_i8.c \
++nonshared-iany_i16.c \
++nonshared-iparity_i1.c \
++nonshared-iparity_i2.c \
++nonshared-iparity_i4.c \
++nonshared-iparity_i8.c \
++nonshared-iparity_i16.c \
++nonshared-norm2_r10.c \
++nonshared-norm2_r16.c \
++nonshared-norm2_r4.c \
++nonshared-norm2_r8.c \
++nonshared-parity_l16.c \
++nonshared-parity_l1.c \
++nonshared-parity_l2.c \
++nonshared-parity_l4.c \
++nonshared-parity_l8.c \
++nonshared-shape_i1.c \
++nonshared-shape_i2.c
++
++nonshared_intrinsics_C_SRC = \
++nonshared-extends_type_of.c
++
++nonshared_runtime_C_SRC = \
++nonshared-bounds.c
++
++nonshared_ieee_C_SRC = \
++nonshared-ieee_helper.c
++
++nonshared_ieee_F90_SRC = \
++nonshared-ieee_arithmetic.F90 \
++nonshared-ieee_exceptions.F90 \
++nonshared-ieee_features.F90
++
++$(patsubst %.c,%.lo,$(nonshared_generated_C_SRC) $(nonshared)): \
++nonshared-%.lo: $(srcdir)/generated/%.c
++	$(LTCOMPILE) -c -o $@ $< -DLIBGFORTRAN_NONSHARED
++
++$(patsubst %.c,%.o,$(nonshared_generated_C_SRC) $(nonshared)): \
++nonshared-%.o: $(srcdir)/generated/%.c
++	$(COMPILE) -c -o $@ $< -DLIBGFORTRAN_NONSHARED
++
++$(patsubst %.F90,%.lo,$(nonshared_generated_F90_SRC) $(nonshared)): \
++nonshared-%.lo: $(srcdir)/generated/%.F90
++	$(LTPPFCCOMPILE) -c -o $@ $< -DLIBGFORTRAN_NONSHARED -fallow-leading-underscore
++
++$(patsubst %.F90,%.o,$(nonshared_generated_F90_SRC) $(nonshared)): \
++nonshared-%.o: $(srcdir)/generated/%.F90
++	$(PPFCCOMPILE) -c -o $@ $< -DLIBGFORTRAN_NONSHARED -fallow-leading-underscore
++
++$(patsubst %.c,%.lo,$(nonshared_intrinsics_C_SRC) $(nonshared)): \
++nonshared-%.lo: $(srcdir)/intrinsics/%.c
++	$(LTCOMPILE) -c -o $@ $< -DLIBGFORTRAN_NONSHARED
++
++$(patsubst %.c,%.o,$(nonshared_intrinsics_C_SRC) $(nonshared)): \
++nonshared-%.o: $(srcdir)/intrinsics/%.c
++	$(COMPILE) -c -o $@ $< -DLIBGFORTRAN_NONSHARED
++
++$(patsubst %.c,%.lo,$(nonshared_runtime_C_SRC) $(nonshared)): \
++nonshared-%.lo: $(srcdir)/runtime/%.c
++	$(LTCOMPILE) -c -o $@ $< -DLIBGFORTRAN_NONSHARED
++
++$(patsubst %.c,%.o,$(nonshared_runtime_C_SRC) $(nonshared)): \
++nonshared-%.o: $(srcdir)/runtime/%.c
++	$(COMPILE) -c -o $@ $< -DLIBGFORTRAN_NONSHARED
++
++$(patsubst %.F90,%.lo,$(nonshared_generated_special_F90_SRC) $(nonshared)): \
++nonshared-%.lo: $(srcdir)/generated/nonshared-%.F90
++	$(LTPPFCCOMPILE) -c -o $@ $< -fallow-leading-underscore
++
++$(patsubst %.F90,%.o,$(nonshared_generated_special_F90_SRC) $(nonshared)): \
++nonshared-%.o: $(srcdir)/generated/nonshared-%.F90
++	$(PPFCCOMPILE) -c -o $@ $< -fallow-leading-underscore
++
++$(patsubst %.F90,%.lo,$(nonshared_intrinsics_special_F90_SRC) $(nonshared)): \
++nonshared-%.lo: $(srcdir)/intrinsics/nonshared-%.F90
++	$(LTPPFCCOMPILE) -c -o $@ $< -fallow-leading-underscore
++
++$(patsubst %.F90,%.o,$(nonshared_intrinsics_special_F90_SRC) $(nonshared)): \
++nonshared-%.o: $(srcdir)/intrinsics/nonshared-%.F90
++	$(PPFCCOMPILE) -c -o $@ $< -fallow-leading-underscore
++
++# Add flags for IEEE modules
++$(patsubst %.F90,%.lo,$(notdir $(nonshared_ieee_F90_SRC))): AM_FCFLAGS += -Wno-unused-dummy-argument -Wno-c-binding-type -ffree-line-length-0 -fallow-leading-underscore
++
++# Dependencies between IEEE_ARITHMETIC and IEEE_EXCEPTIONS
++nonshared-ieee_arithmetic.lo: $(srcdir)/ieee/ieee_arithmetic.F90 ieee_arithmetic.lo ieee_exceptions.lo
++nonshared-ieee_exceptions.lo: $(srcdir)/ieee/ieee_exceptions.F90 ieee_exceptions.lo
++nonshared-ieee_features.lo: $(srcdir)/ieee/ieee_features.F90 ieee_features.lo
++
++$(patsubst %.c,%.lo,$(nonshared_ieee_C_SRC) $(nonshared)): \
++nonshared-%.lo: $(srcdir)/ieee/%.c
++	$(LTCOMPILE) -c -o $@ $< -DLIBGFORTRAN_NONSHARED
++
++$(patsubst %.c,%.o,$(nonshared_ieee_C_SRC) $(nonshared)): \
++nonshared-%.o: $(srcdir)/ieee/%.c
++	$(COMPILE) -c -o $@ $< -DLIBGFORTRAN_NONSHARED
++
++$(patsubst %.F90,%.lo,$(nonshared_ieee_F90_SRC) $(nonshared)): \
++nonshared-%.lo: $(srcdir)/ieee/%.F90
++	$(LTPPFCCOMPILE) -c -o $@ $< -fallow-leading-underscore
++
++$(patsubst %.F90,%.o,$(nonshared_ieee_F90_SRC) $(nonshared)): \
++nonshared-%.o: $(srcdir)/ieee/%.F90
++	$(PPFCCOMPILE) -c -o $@ $< -fallow-leading-underscore
++
++libgfortran_nonshared44_la_SOURCES = \
++$(nonshared_generated_F90_SRC) \
++$(nonshared_generated_C_SRC) \
++$(nonshared_intrinsics_C_SRC) \
++$(nonshared_runtime_C_SRC) \
++$(nonshared_quad_SRC) \
++$(nonshared_generated_special_F90_SRC) \
++$(nonshared_intrinsics_special_F90_SRC) \
++$(nonshared_ieee_F90_SRC) \
++$(nonshared_ieee_C_SRC) \
++$(srcdir)/intrinsics/nonshared-execute_command_line.c \
++$(srcdir)/intrinsics/nonshared-mvbits.c \
++$(srcdir)/intrinsics/nonshared-shift.c \
++$(srcdir)/io/nonshared-transfer.c \
++$(srcdir)/io/nonshared-ftell2.c \
++$(srcdir)/runtime/nonshared-backtrace.c \
++$(srcdir)/runtime/nonshared-stop.c \
++$(srcdir)/runtime/nonshared-fpu.c
++
++libgfortran_nonshared48_la_SOURCES = \
++$(nonshared_ieee_F90_SRC) \
++$(nonshared_ieee_C_SRC) \
++$(srcdir)/intrinsics/nonshared-mvbits.c \
++$(srcdir)/runtime/nonshared-fpu.c \
++nonshared-shape_i1.c \
++nonshared-shape_i2.c
++
+ I_M4_DEPS=m4/iparm.m4
+ I_M4_DEPS0=$(I_M4_DEPS) m4/iforeach.m4
+ I_M4_DEPS1=$(I_M4_DEPS) m4/ifunction.m4
+--- libgfortran/Makefile.in.jj	2016-04-15 16:55:23.407228083 +0200
++++ libgfortran/Makefile.in	2016-07-13 12:34:55.407050970 +0200
+@@ -176,7 +176,8 @@ am__uninstall_files_from_dir = { \
+ am__installdirs = "$(DESTDIR)$(cafexeclibdir)" \
+ 	"$(DESTDIR)$(toolexeclibdir)" "$(DESTDIR)$(toolexeclibdir)" \
+ 	"$(DESTDIR)$(fincludedir)"
+-LTLIBRARIES = $(cafexeclib_LTLIBRARIES) $(toolexeclib_LTLIBRARIES)
++LTLIBRARIES = $(cafexeclib_LTLIBRARIES) $(noinst_LTLIBRARIES) \
++	$(toolexeclib_LTLIBRARIES)
+ libcaf_single_la_LIBADD =
+ am_libcaf_single_la_OBJECTS = single.lo
+ libcaf_single_la_OBJECTS = $(am_libcaf_single_la_OBJECTS)
+@@ -393,6 +394,118 @@ am__objects_54 = $(am__objects_3) $(am__
+ @onestep_FALSE@am_libgfortran_la_OBJECTS = $(am__objects_54)
+ @onestep_TRUE@am_libgfortran_la_OBJECTS = libgfortran_c.lo
+ libgfortran_la_OBJECTS = $(am_libgfortran_la_OBJECTS)
++libgfortran_nonshared44_la_LIBADD =
++@LIBGFOR_BUILD_QUAD_TRUE@am__objects_55 = nonshared-_abs_c16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_abs_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_acosh_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_acos_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_aimag_c16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_aint_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_anint_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_asinh_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_asin_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_atan2_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_atanh_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_atan_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_conjg_c16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_cos_c16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_cosh_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_cos_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_dim_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_exp_c16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_exp_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_log10_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_log_c16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_log_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_mod_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_sign_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_sin_c16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_sinh_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_sin_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_sqrt_c16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_sqrt_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_tanh_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-_tan_r16.lo
++am__objects_56 = $(am__objects_55)
++@LIBGFOR_BUILD_QUAD_TRUE@am__objects_57 = nonshared-exponent_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-fraction_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-matmul_c16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-matmul_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-maxloc0_16_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-maxloc0_4_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-maxloc0_8_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-maxloc1_16_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-maxloc1_4_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-maxloc1_8_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-maxval_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-minloc0_16_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-minloc0_4_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-minloc0_8_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-minloc1_16_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-minloc1_4_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-minloc1_8_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-minval_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-nearest_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-pow_c16_i16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-pow_c16_i4.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-pow_c16_i8.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-pow_r16_i16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-pow_r16_i4.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-pow_r16_i8.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-product_c16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-product_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-reshape_c16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-reshape_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-rrspacing_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-set_exponent_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-spacing_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-sum_c16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-sum_r16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-transpose_c16.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-transpose_r16.lo
++am__objects_58 = $(am__objects_57) nonshared-bessel_r10.lo \
++	nonshared-bessel_r16.lo nonshared-bessel_r4.lo \
++	nonshared-bessel_r8.lo nonshared-iall_i1.lo \
++	nonshared-iall_i2.lo nonshared-iall_i4.lo nonshared-iall_i8.lo \
++	nonshared-iall_i16.lo nonshared-iany_i1.lo \
++	nonshared-iany_i2.lo nonshared-iany_i4.lo nonshared-iany_i8.lo \
++	nonshared-iany_i16.lo nonshared-iparity_i1.lo \
++	nonshared-iparity_i2.lo nonshared-iparity_i4.lo \
++	nonshared-iparity_i8.lo nonshared-iparity_i16.lo \
++	nonshared-norm2_r10.lo nonshared-norm2_r16.lo \
++	nonshared-norm2_r4.lo nonshared-norm2_r8.lo \
++	nonshared-parity_l16.lo nonshared-parity_l1.lo \
++	nonshared-parity_l2.lo nonshared-parity_l4.lo \
++	nonshared-parity_l8.lo nonshared-shape_i1.lo \
++	nonshared-shape_i2.lo
++am__objects_59 = nonshared-extends_type_of.lo
++am__objects_60 = nonshared-bounds.lo
++@LIBGFOR_BUILD_QUAD_TRUE@am__objects_61 =  \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-iso_c_generated_procs.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-cpu_time.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-erfc_scaled.lo \
++@LIBGFOR_BUILD_QUAD_TRUE@	nonshared-random.lo
++@LIBGFOR_BUILD_QUAD_TRUE@am__objects_62 = nonshared-misc_specifics.lo
++am__objects_63 = $(am__objects_62)
++am__objects_64 = nonshared-selected_real_kind.lo
++am__objects_65 = nonshared-ieee_arithmetic.lo \
++	nonshared-ieee_exceptions.lo nonshared-ieee_features.lo
++am__objects_66 = nonshared-ieee_helper.lo
++am_libgfortran_nonshared44_la_OBJECTS = $(am__objects_56) \
++	$(am__objects_58) $(am__objects_59) $(am__objects_60) \
++	$(am__objects_61) $(am__objects_63) $(am__objects_64) \
++	$(am__objects_65) $(am__objects_66) \
++	nonshared-execute_command_line.lo nonshared-mvbits.lo \
++	nonshared-shift.lo nonshared-transfer.lo nonshared-ftell2.lo \
++	nonshared-backtrace.lo nonshared-stop.lo nonshared-fpu.lo
++libgfortran_nonshared44_la_OBJECTS =  \
++	$(am_libgfortran_nonshared44_la_OBJECTS)
++libgfortran_nonshared48_la_LIBADD =
++am_libgfortran_nonshared48_la_OBJECTS = $(am__objects_65) \
++	$(am__objects_66) nonshared-mvbits.lo nonshared-fpu.lo \
++	nonshared-shape_i1.lo nonshared-shape_i2.lo
++libgfortran_nonshared48_la_OBJECTS =  \
++	$(am_libgfortran_nonshared48_la_OBJECTS)
+ DEFAULT_INCLUDES = -I.@am__isrc@
+ depcomp = $(SHELL) $(top_srcdir)/../depcomp
+ am__depfiles_maybe = depfiles
+@@ -418,7 +531,9 @@ LINK = $(LIBTOOL) --tag=CC $(AM_LIBTOOLF
+ FCCOMPILE = $(FC) $(AM_FCFLAGS) $(FCFLAGS)
+ LTFCCOMPILE = $(LIBTOOL) --tag=FC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) \
+ 	--mode=compile $(FC) $(AM_FCFLAGS) $(FCFLAGS)
+-SOURCES = $(libcaf_single_la_SOURCES) $(libgfortran_la_SOURCES)
++SOURCES = $(libcaf_single_la_SOURCES) $(libgfortran_la_SOURCES) \
++	$(libgfortran_nonshared44_la_SOURCES) \
++	$(libgfortran_nonshared48_la_SOURCES)
+ MULTISRCTOP = 
+ MULTIBUILDTOP = 
+ MULTIDIRS = 
+@@ -595,6 +710,7 @@ LTLDFLAGS = $(shell $(SHELL) $(top_srcdi
+ 	    $(lt_host_flags)
+ 
+ toolexeclib_LTLIBRARIES = libgfortran.la
++noinst_LTLIBRARIES = libgfortran_nonshared44.la libgfortran_nonshared48.la
+ toolexeclib_DATA = libgfortran.spec
+ libgfortran_la_LINK = $(LINK) $(libgfortran_la_LDFLAGS)
+ libgfortran_la_LDFLAGS = -version-info `grep -v '^\#' $(srcdir)/libtool-version` \
+@@ -1302,6 +1418,173 @@ prereq_SRC = $(gfor_src) $(gfor_built_sr
+ #libgfortran_F.lo: 
+ #	$(LTPPFCCOMPILE) -c -o $@ $^ -combine
+ @onestep_TRUE@libgfortran_la_SOURCES = libgfortran_c.c $(filter-out %.c,$(prereq_SRC))
++@LIBGFOR_BUILD_QUAD_FALSE@nonshared_generated_quad_F90_SRC = 
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared_generated_quad_F90_SRC = \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_abs_c16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_abs_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_acosh_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_acos_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_aimag_c16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_aint_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_anint_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_asinh_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_asin_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_atan2_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_atanh_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_atan_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_conjg_c16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_cos_c16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_cosh_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_cos_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_dim_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_exp_c16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_exp_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_log10_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_log_c16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_log_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_mod_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_sign_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_sin_c16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_sinh_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_sin_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_sqrt_c16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_sqrt_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_tanh_r16.F90 \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-_tan_r16.F90
++
++@LIBGFOR_BUILD_QUAD_FALSE@nonshared_generated_quad_C_SRC = 
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared_generated_quad_C_SRC = \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-exponent_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-fraction_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-matmul_c16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-matmul_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-maxloc0_16_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-maxloc0_4_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-maxloc0_8_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-maxloc1_16_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-maxloc1_4_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-maxloc1_8_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-maxval_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-minloc0_16_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-minloc0_4_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-minloc0_8_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-minloc1_16_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-minloc1_4_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-minloc1_8_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-minval_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-nearest_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-pow_c16_i16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-pow_c16_i4.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-pow_c16_i8.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-pow_r16_i16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-pow_r16_i4.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-pow_r16_i8.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-product_c16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-product_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-reshape_c16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-reshape_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-rrspacing_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-set_exponent_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-spacing_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-sum_c16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-sum_r16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-transpose_c16.c \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-transpose_r16.c
++
++@LIBGFOR_BUILD_QUAD_FALSE@nonshared_generated_special_quad_F90_SRC = 
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared_generated_special_quad_F90_SRC = \
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared-misc_specifics.F90
++
++@LIBGFOR_BUILD_QUAD_FALSE@nonshared_quad_SRC = 
++@LIBGFOR_BUILD_QUAD_TRUE@nonshared_quad_SRC = \
++@LIBGFOR_BUILD_QUAD_TRUE@$(srcdir)/intrinsics/nonshared-iso_c_generated_procs.c \
++@LIBGFOR_BUILD_QUAD_TRUE@$(srcdir)/intrinsics/nonshared-cpu_time.c \
++@LIBGFOR_BUILD_QUAD_TRUE@$(srcdir)/intrinsics/nonshared-erfc_scaled.c \
++@LIBGFOR_BUILD_QUAD_TRUE@$(srcdir)/intrinsics/nonshared-random.c
++
++nonshared_generated_F90_SRC = \
++$(nonshared_generated_quad_F90_SRC)
++
++nonshared_generated_special_F90_SRC = \
++$(nonshared_generated_special_quad_F90_SRC)
++
++nonshared_intrinsics_special_F90_SRC = \
++nonshared-selected_real_kind.F90
++
++nonshared_generated_C_SRC = \
++$(nonshared_generated_quad_C_SRC) \
++nonshared-bessel_r10.c \
++nonshared-bessel_r16.c \
++nonshared-bessel_r4.c \
++nonshared-bessel_r8.c \
++nonshared-iall_i1.c \
++nonshared-iall_i2.c \
++nonshared-iall_i4.c \
++nonshared-iall_i8.c \
++nonshared-iall_i16.c \
++nonshared-iany_i1.c \
++nonshared-iany_i2.c \
++nonshared-iany_i4.c \
++nonshared-iany_i8.c \
++nonshared-iany_i16.c \
++nonshared-iparity_i1.c \
++nonshared-iparity_i2.c \
++nonshared-iparity_i4.c \
++nonshared-iparity_i8.c \
++nonshared-iparity_i16.c \
++nonshared-norm2_r10.c \
++nonshared-norm2_r16.c \
++nonshared-norm2_r4.c \
++nonshared-norm2_r8.c \
++nonshared-parity_l16.c \
++nonshared-parity_l1.c \
++nonshared-parity_l2.c \
++nonshared-parity_l4.c \
++nonshared-parity_l8.c \
++nonshared-shape_i1.c \
++nonshared-shape_i2.c
++
++nonshared_intrinsics_C_SRC = \
++nonshared-extends_type_of.c
++
++nonshared_runtime_C_SRC = \
++nonshared-bounds.c
++
++nonshared_ieee_C_SRC = \
++nonshared-ieee_helper.c
++
++nonshared_ieee_F90_SRC = \
++nonshared-ieee_arithmetic.F90 \
++nonshared-ieee_exceptions.F90 \
++nonshared-ieee_features.F90
++
++libgfortran_nonshared44_la_SOURCES = \
++$(nonshared_generated_F90_SRC) \
++$(nonshared_generated_C_SRC) \
++$(nonshared_intrinsics_C_SRC) \
++$(nonshared_runtime_C_SRC) \
++$(nonshared_quad_SRC) \
++$(nonshared_generated_special_F90_SRC) \
++$(nonshared_intrinsics_special_F90_SRC) \
++$(nonshared_ieee_F90_SRC) \
++$(nonshared_ieee_C_SRC) \
++$(srcdir)/intrinsics/nonshared-execute_command_line.c \
++$(srcdir)/intrinsics/nonshared-mvbits.c \
++$(srcdir)/intrinsics/nonshared-shift.c \
++$(srcdir)/io/nonshared-transfer.c \
++$(srcdir)/io/nonshared-ftell2.c \
++$(srcdir)/runtime/nonshared-backtrace.c \
++$(srcdir)/runtime/nonshared-stop.c \
++$(srcdir)/runtime/nonshared-fpu.c
++
++libgfortran_nonshared48_la_SOURCES = \
++$(nonshared_ieee_F90_SRC) \
++$(nonshared_ieee_C_SRC) \
++$(srcdir)/intrinsics/nonshared-mvbits.c \
++$(srcdir)/runtime/nonshared-fpu.c \
++nonshared-shape_i1.c \
++nonshared-shape_i2.c
++
+ I_M4_DEPS = m4/iparm.m4
+ I_M4_DEPS0 = $(I_M4_DEPS) m4/iforeach.m4
+ I_M4_DEPS1 = $(I_M4_DEPS) m4/ifunction.m4
+@@ -1395,6 +1678,15 @@ clean-cafexeclibLTLIBRARIES:
+ 	  echo "rm -f \"$${dir}/so_locations\""; \
+ 	  rm -f "$${dir}/so_locations"; \
+ 	done
++
++clean-noinstLTLIBRARIES:
++	-test -z "$(noinst_LTLIBRARIES)" || rm -f $(noinst_LTLIBRARIES)
++	@list='$(noinst_LTLIBRARIES)'; for p in $$list; do \
++	  dir="`echo $$p | sed -e 's|/[^/]*$$||'`"; \
++	  test "$$dir" != "$$p" || dir=.; \
++	  echo "rm -f \"$${dir}/so_locations\""; \
++	  rm -f "$${dir}/so_locations"; \
++	done
+ install-toolexeclibLTLIBRARIES: $(toolexeclib_LTLIBRARIES)
+ 	@$(NORMAL_INSTALL)
+ 	@list='$(toolexeclib_LTLIBRARIES)'; test -n "$(toolexeclibdir)" || list=; \
+@@ -1431,6 +1723,10 @@ libcaf_single.la: $(libcaf_single_la_OBJ
+ 	$(libcaf_single_la_LINK) -rpath $(cafexeclibdir) $(libcaf_single_la_OBJECTS) $(libcaf_single_la_LIBADD) $(LIBS)
+ libgfortran.la: $(libgfortran_la_OBJECTS) $(libgfortran_la_DEPENDENCIES) $(EXTRA_libgfortran_la_DEPENDENCIES) 
+ 	$(libgfortran_la_LINK) -rpath $(toolexeclibdir) $(libgfortran_la_OBJECTS) $(libgfortran_la_LIBADD) $(LIBS)
++libgfortran_nonshared44.la: $(libgfortran_nonshared44_la_OBJECTS) $(libgfortran_nonshared44_la_DEPENDENCIES) $(EXTRA_libgfortran_nonshared44_la_DEPENDENCIES) 
++	$(FCLINK)  $(libgfortran_nonshared44_la_OBJECTS) $(libgfortran_nonshared44_la_LIBADD) $(LIBS)
++libgfortran_nonshared48.la: $(libgfortran_nonshared48_la_OBJECTS) $(libgfortran_nonshared48_la_DEPENDENCIES) $(EXTRA_libgfortran_nonshared48_la_DEPENDENCIES) 
++	$(FCLINK)  $(libgfortran_nonshared48_la_OBJECTS) $(libgfortran_nonshared48_la_LIBADD) $(LIBS)
+ 
+ mostlyclean-compile:
+ 	-rm -f *.$(OBJEXT)
+@@ -1733,6 +2029,87 @@ distclean-compile:
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nearest_r16.Plo@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nearest_r4.Plo@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nearest_r8.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-backtrace.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-bessel_r10.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-bessel_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-bessel_r4.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-bessel_r8.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-bounds.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-cpu_time.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-erfc_scaled.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-execute_command_line.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-exponent_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-extends_type_of.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-fpu.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-fraction_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-ftell2.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-iall_i1.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-iall_i16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-iall_i2.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-iall_i4.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-iall_i8.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-iany_i1.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-iany_i16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-iany_i2.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-iany_i4.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-iany_i8.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-ieee_helper.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-iparity_i1.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-iparity_i16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-iparity_i2.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-iparity_i4.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-iparity_i8.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-iso_c_generated_procs.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-matmul_c16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-matmul_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-maxloc0_16_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-maxloc0_4_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-maxloc0_8_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-maxloc1_16_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-maxloc1_4_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-maxloc1_8_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-maxval_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-minloc0_16_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-minloc0_4_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-minloc0_8_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-minloc1_16_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-minloc1_4_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-minloc1_8_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-minval_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-mvbits.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-nearest_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-norm2_r10.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-norm2_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-norm2_r4.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-norm2_r8.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-parity_l1.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-parity_l16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-parity_l2.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-parity_l4.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-parity_l8.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-pow_c16_i16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-pow_c16_i4.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-pow_c16_i8.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-pow_r16_i16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-pow_r16_i4.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-pow_r16_i8.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-product_c16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-product_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-random.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-reshape_c16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-reshape_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-rrspacing_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-set_exponent_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-shape_i1.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-shape_i2.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-shift.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-spacing_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-stop.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-sum_c16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-sum_r16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-transfer.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-transpose_c16.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nonshared-transpose_r16.Plo@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/norm2_r10.Plo@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/norm2_r16.Plo@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/norm2_r4.Plo@am__quote@
+@@ -5666,6 +6043,90 @@ ieee_helper.lo: ieee/ieee_helper.c
+ @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+ @am__fastdepCC_FALSE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o ieee_helper.lo `test -f 'ieee/ieee_helper.c' || echo '$(srcdir)/'`ieee/ieee_helper.c
+ 
++nonshared-iso_c_generated_procs.lo: $(srcdir)/intrinsics/nonshared-iso_c_generated_procs.c
++@am__fastdepCC_TRUE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT nonshared-iso_c_generated_procs.lo -MD -MP -MF $(DEPDIR)/nonshared-iso_c_generated_procs.Tpo -c -o nonshared-iso_c_generated_procs.lo `test -f '$(srcdir)/intrinsics/nonshared-iso_c_generated_procs.c' || echo '$(srcdir)/'`$(srcdir)/intrinsics/nonshared-iso_c_generated_procs.c
++@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/nonshared-iso_c_generated_procs.Tpo $(DEPDIR)/nonshared-iso_c_generated_procs.Plo
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/intrinsics/nonshared-iso_c_generated_procs.c' object='nonshared-iso_c_generated_procs.lo' libtool=yes @AMDEPBACKSLASH@
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
++@am__fastdepCC_FALSE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o nonshared-iso_c_generated_procs.lo `test -f '$(srcdir)/intrinsics/nonshared-iso_c_generated_procs.c' || echo '$(srcdir)/'`$(srcdir)/intrinsics/nonshared-iso_c_generated_procs.c
++
++nonshared-cpu_time.lo: $(srcdir)/intrinsics/nonshared-cpu_time.c
++@am__fastdepCC_TRUE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT nonshared-cpu_time.lo -MD -MP -MF $(DEPDIR)/nonshared-cpu_time.Tpo -c -o nonshared-cpu_time.lo `test -f '$(srcdir)/intrinsics/nonshared-cpu_time.c' || echo '$(srcdir)/'`$(srcdir)/intrinsics/nonshared-cpu_time.c
++@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/nonshared-cpu_time.Tpo $(DEPDIR)/nonshared-cpu_time.Plo
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/intrinsics/nonshared-cpu_time.c' object='nonshared-cpu_time.lo' libtool=yes @AMDEPBACKSLASH@
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
++@am__fastdepCC_FALSE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o nonshared-cpu_time.lo `test -f '$(srcdir)/intrinsics/nonshared-cpu_time.c' || echo '$(srcdir)/'`$(srcdir)/intrinsics/nonshared-cpu_time.c
++
++nonshared-erfc_scaled.lo: $(srcdir)/intrinsics/nonshared-erfc_scaled.c
++@am__fastdepCC_TRUE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT nonshared-erfc_scaled.lo -MD -MP -MF $(DEPDIR)/nonshared-erfc_scaled.Tpo -c -o nonshared-erfc_scaled.lo `test -f '$(srcdir)/intrinsics/nonshared-erfc_scaled.c' || echo '$(srcdir)/'`$(srcdir)/intrinsics/nonshared-erfc_scaled.c
++@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/nonshared-erfc_scaled.Tpo $(DEPDIR)/nonshared-erfc_scaled.Plo
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/intrinsics/nonshared-erfc_scaled.c' object='nonshared-erfc_scaled.lo' libtool=yes @AMDEPBACKSLASH@
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
++@am__fastdepCC_FALSE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o nonshared-erfc_scaled.lo `test -f '$(srcdir)/intrinsics/nonshared-erfc_scaled.c' || echo '$(srcdir)/'`$(srcdir)/intrinsics/nonshared-erfc_scaled.c
++
++nonshared-random.lo: $(srcdir)/intrinsics/nonshared-random.c
++@am__fastdepCC_TRUE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT nonshared-random.lo -MD -MP -MF $(DEPDIR)/nonshared-random.Tpo -c -o nonshared-random.lo `test -f '$(srcdir)/intrinsics/nonshared-random.c' || echo '$(srcdir)/'`$(srcdir)/intrinsics/nonshared-random.c
++@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/nonshared-random.Tpo $(DEPDIR)/nonshared-random.Plo
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/intrinsics/nonshared-random.c' object='nonshared-random.lo' libtool=yes @AMDEPBACKSLASH@
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
++@am__fastdepCC_FALSE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o nonshared-random.lo `test -f '$(srcdir)/intrinsics/nonshared-random.c' || echo '$(srcdir)/'`$(srcdir)/intrinsics/nonshared-random.c
++
++nonshared-execute_command_line.lo: $(srcdir)/intrinsics/nonshared-execute_command_line.c
++@am__fastdepCC_TRUE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT nonshared-execute_command_line.lo -MD -MP -MF $(DEPDIR)/nonshared-execute_command_line.Tpo -c -o nonshared-execute_command_line.lo `test -f '$(srcdir)/intrinsics/nonshared-execute_command_line.c' || echo '$(srcdir)/'`$(srcdir)/intrinsics/nonshared-execute_command_line.c
++@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/nonshared-execute_command_line.Tpo $(DEPDIR)/nonshared-execute_command_line.Plo
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/intrinsics/nonshared-execute_command_line.c' object='nonshared-execute_command_line.lo' libtool=yes @AMDEPBACKSLASH@
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
++@am__fastdepCC_FALSE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o nonshared-execute_command_line.lo `test -f '$(srcdir)/intrinsics/nonshared-execute_command_line.c' || echo '$(srcdir)/'`$(srcdir)/intrinsics/nonshared-execute_command_line.c
++
++nonshared-mvbits.lo: $(srcdir)/intrinsics/nonshared-mvbits.c
++@am__fastdepCC_TRUE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT nonshared-mvbits.lo -MD -MP -MF $(DEPDIR)/nonshared-mvbits.Tpo -c -o nonshared-mvbits.lo `test -f '$(srcdir)/intrinsics/nonshared-mvbits.c' || echo '$(srcdir)/'`$(srcdir)/intrinsics/nonshared-mvbits.c
++@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/nonshared-mvbits.Tpo $(DEPDIR)/nonshared-mvbits.Plo
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/intrinsics/nonshared-mvbits.c' object='nonshared-mvbits.lo' libtool=yes @AMDEPBACKSLASH@
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
++@am__fastdepCC_FALSE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o nonshared-mvbits.lo `test -f '$(srcdir)/intrinsics/nonshared-mvbits.c' || echo '$(srcdir)/'`$(srcdir)/intrinsics/nonshared-mvbits.c
++
++nonshared-shift.lo: $(srcdir)/intrinsics/nonshared-shift.c
++@am__fastdepCC_TRUE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT nonshared-shift.lo -MD -MP -MF $(DEPDIR)/nonshared-shift.Tpo -c -o nonshared-shift.lo `test -f '$(srcdir)/intrinsics/nonshared-shift.c' || echo '$(srcdir)/'`$(srcdir)/intrinsics/nonshared-shift.c
++@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/nonshared-shift.Tpo $(DEPDIR)/nonshared-shift.Plo
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/intrinsics/nonshared-shift.c' object='nonshared-shift.lo' libtool=yes @AMDEPBACKSLASH@
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
++@am__fastdepCC_FALSE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o nonshared-shift.lo `test -f '$(srcdir)/intrinsics/nonshared-shift.c' || echo '$(srcdir)/'`$(srcdir)/intrinsics/nonshared-shift.c
++
++nonshared-transfer.lo: $(srcdir)/io/nonshared-transfer.c
++@am__fastdepCC_TRUE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT nonshared-transfer.lo -MD -MP -MF $(DEPDIR)/nonshared-transfer.Tpo -c -o nonshared-transfer.lo `test -f '$(srcdir)/io/nonshared-transfer.c' || echo '$(srcdir)/'`$(srcdir)/io/nonshared-transfer.c
++@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/nonshared-transfer.Tpo $(DEPDIR)/nonshared-transfer.Plo
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/io/nonshared-transfer.c' object='nonshared-transfer.lo' libtool=yes @AMDEPBACKSLASH@
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
++@am__fastdepCC_FALSE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o nonshared-transfer.lo `test -f '$(srcdir)/io/nonshared-transfer.c' || echo '$(srcdir)/'`$(srcdir)/io/nonshared-transfer.c
++
++nonshared-ftell2.lo: $(srcdir)/io/nonshared-ftell2.c
++@am__fastdepCC_TRUE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT nonshared-ftell2.lo -MD -MP -MF $(DEPDIR)/nonshared-ftell2.Tpo -c -o nonshared-ftell2.lo `test -f '$(srcdir)/io/nonshared-ftell2.c' || echo '$(srcdir)/'`$(srcdir)/io/nonshared-ftell2.c
++@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/nonshared-ftell2.Tpo $(DEPDIR)/nonshared-ftell2.Plo
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/io/nonshared-ftell2.c' object='nonshared-ftell2.lo' libtool=yes @AMDEPBACKSLASH@
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
++@am__fastdepCC_FALSE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o nonshared-ftell2.lo `test -f '$(srcdir)/io/nonshared-ftell2.c' || echo '$(srcdir)/'`$(srcdir)/io/nonshared-ftell2.c
++
++nonshared-backtrace.lo: $(srcdir)/runtime/nonshared-backtrace.c
++@am__fastdepCC_TRUE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT nonshared-backtrace.lo -MD -MP -MF $(DEPDIR)/nonshared-backtrace.Tpo -c -o nonshared-backtrace.lo `test -f '$(srcdir)/runtime/nonshared-backtrace.c' || echo '$(srcdir)/'`$(srcdir)/runtime/nonshared-backtrace.c
++@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/nonshared-backtrace.Tpo $(DEPDIR)/nonshared-backtrace.Plo
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/runtime/nonshared-backtrace.c' object='nonshared-backtrace.lo' libtool=yes @AMDEPBACKSLASH@
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
++@am__fastdepCC_FALSE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o nonshared-backtrace.lo `test -f '$(srcdir)/runtime/nonshared-backtrace.c' || echo '$(srcdir)/'`$(srcdir)/runtime/nonshared-backtrace.c
++
++nonshared-stop.lo: $(srcdir)/runtime/nonshared-stop.c
++@am__fastdepCC_TRUE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT nonshared-stop.lo -MD -MP -MF $(DEPDIR)/nonshared-stop.Tpo -c -o nonshared-stop.lo `test -f '$(srcdir)/runtime/nonshared-stop.c' || echo '$(srcdir)/'`$(srcdir)/runtime/nonshared-stop.c
++@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/nonshared-stop.Tpo $(DEPDIR)/nonshared-stop.Plo
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/runtime/nonshared-stop.c' object='nonshared-stop.lo' libtool=yes @AMDEPBACKSLASH@
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
++@am__fastdepCC_FALSE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o nonshared-stop.lo `test -f '$(srcdir)/runtime/nonshared-stop.c' || echo '$(srcdir)/'`$(srcdir)/runtime/nonshared-stop.c
++
++nonshared-fpu.lo: $(srcdir)/runtime/nonshared-fpu.c
++@am__fastdepCC_TRUE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT nonshared-fpu.lo -MD -MP -MF $(DEPDIR)/nonshared-fpu.Tpo -c -o nonshared-fpu.lo `test -f '$(srcdir)/runtime/nonshared-fpu.c' || echo '$(srcdir)/'`$(srcdir)/runtime/nonshared-fpu.c
++@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/nonshared-fpu.Tpo $(DEPDIR)/nonshared-fpu.Plo
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/runtime/nonshared-fpu.c' object='nonshared-fpu.lo' libtool=yes @AMDEPBACKSLASH@
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
++@am__fastdepCC_FALSE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o nonshared-fpu.lo `test -f '$(srcdir)/runtime/nonshared-fpu.c' || echo '$(srcdir)/'`$(srcdir)/runtime/nonshared-fpu.c
++
+ .f90.o:
+ 	$(FCCOMPILE) -c -o $@ $<
+ 
+@@ -5846,7 +6307,8 @@ maintainer-clean-generic:
+ clean: clean-am clean-multi
+ 
+ clean-am: clean-cafexeclibLTLIBRARIES clean-generic clean-libtool \
+-	clean-toolexeclibLTLIBRARIES mostlyclean-am
++	clean-noinstLTLIBRARIES clean-toolexeclibLTLIBRARIES \
++	mostlyclean-am
+ 
+ distclean: distclean-am distclean-multi
+ 	-rm -f $(am__CONFIG_DISTCLEAN_FILES)
+@@ -5926,16 +6388,16 @@ uninstall-am: uninstall-cafexeclibLTLIBR
+ 
+ .PHONY: CTAGS GTAGS all all-am all-multi am--refresh check check-am \
+ 	clean clean-cafexeclibLTLIBRARIES clean-generic clean-libtool \
+-	clean-multi clean-toolexeclibLTLIBRARIES ctags distclean \
+-	distclean-compile distclean-generic distclean-hdr \
+-	distclean-libtool distclean-multi distclean-tags dvi dvi-am \
+-	html html-am info info-am install install-am \
+-	install-cafexeclibLTLIBRARIES install-data install-data-am \
+-	install-dvi install-dvi-am install-exec install-exec-am \
+-	install-html install-html-am install-info install-info-am \
+-	install-man install-multi install-nodist_fincludeHEADERS \
+-	install-pdf install-pdf-am install-ps install-ps-am \
+-	install-strip install-toolexeclibDATA \
++	clean-multi clean-noinstLTLIBRARIES \
++	clean-toolexeclibLTLIBRARIES ctags distclean distclean-compile \
++	distclean-generic distclean-hdr distclean-libtool \
++	distclean-multi distclean-tags dvi dvi-am html html-am info \
++	info-am install install-am install-cafexeclibLTLIBRARIES \
++	install-data install-data-am install-dvi install-dvi-am \
++	install-exec install-exec-am install-html install-html-am \
++	install-info install-info-am install-man install-multi \
++	install-nodist_fincludeHEADERS install-pdf install-pdf-am \
++	install-ps install-ps-am install-strip install-toolexeclibDATA \
+ 	install-toolexeclibLTLIBRARIES installcheck installcheck-am \
+ 	installdirs maintainer-clean maintainer-clean-generic \
+ 	maintainer-clean-multi mostlyclean mostlyclean-compile \
+@@ -5986,6 +6448,78 @@ ieee_arithmetic.mod: ieee_arithmetic.lo
+ @onestep_TRUE@libgfortran_c.lo: $(filter %.c,$(prereq_SRC))
+ @onestep_TRUE@	$(LTCOMPILE) -c -o $@ $^ -combine
+ 
++$(patsubst %.c,%.lo,$(nonshared_generated_C_SRC) $(nonshared)): \
++nonshared-%.lo: $(srcdir)/generated/%.c
++	$(LTCOMPILE) -c -o $@ $< -DLIBGFORTRAN_NONSHARED
++
++$(patsubst %.c,%.o,$(nonshared_generated_C_SRC) $(nonshared)): \
++nonshared-%.o: $(srcdir)/generated/%.c
++	$(COMPILE) -c -o $@ $< -DLIBGFORTRAN_NONSHARED
++
++$(patsubst %.F90,%.lo,$(nonshared_generated_F90_SRC) $(nonshared)): \
++nonshared-%.lo: $(srcdir)/generated/%.F90
++	$(LTPPFCCOMPILE) -c -o $@ $< -DLIBGFORTRAN_NONSHARED -fallow-leading-underscore
++
++$(patsubst %.F90,%.o,$(nonshared_generated_F90_SRC) $(nonshared)): \
++nonshared-%.o: $(srcdir)/generated/%.F90
++	$(PPFCCOMPILE) -c -o $@ $< -DLIBGFORTRAN_NONSHARED -fallow-leading-underscore
++
++$(patsubst %.c,%.lo,$(nonshared_intrinsics_C_SRC) $(nonshared)): \
++nonshared-%.lo: $(srcdir)/intrinsics/%.c
++	$(LTCOMPILE) -c -o $@ $< -DLIBGFORTRAN_NONSHARED
++
++$(patsubst %.c,%.o,$(nonshared_intrinsics_C_SRC) $(nonshared)): \
++nonshared-%.o: $(srcdir)/intrinsics/%.c
++	$(COMPILE) -c -o $@ $< -DLIBGFORTRAN_NONSHARED
++
++$(patsubst %.c,%.lo,$(nonshared_runtime_C_SRC) $(nonshared)): \
++nonshared-%.lo: $(srcdir)/runtime/%.c
++	$(LTCOMPILE) -c -o $@ $< -DLIBGFORTRAN_NONSHARED
++
++$(patsubst %.c,%.o,$(nonshared_runtime_C_SRC) $(nonshared)): \
++nonshared-%.o: $(srcdir)/runtime/%.c
++	$(COMPILE) -c -o $@ $< -DLIBGFORTRAN_NONSHARED
++
++$(patsubst %.F90,%.lo,$(nonshared_generated_special_F90_SRC) $(nonshared)): \
++nonshared-%.lo: $(srcdir)/generated/nonshared-%.F90
++	$(LTPPFCCOMPILE) -c -o $@ $< -fallow-leading-underscore
++
++$(patsubst %.F90,%.o,$(nonshared_generated_special_F90_SRC) $(nonshared)): \
++nonshared-%.o: $(srcdir)/generated/nonshared-%.F90
++	$(PPFCCOMPILE) -c -o $@ $< -fallow-leading-underscore
++
++$(patsubst %.F90,%.lo,$(nonshared_intrinsics_special_F90_SRC) $(nonshared)): \
++nonshared-%.lo: $(srcdir)/intrinsics/nonshared-%.F90
++	$(LTPPFCCOMPILE) -c -o $@ $< -fallow-leading-underscore
++
++$(patsubst %.F90,%.o,$(nonshared_intrinsics_special_F90_SRC) $(nonshared)): \
++nonshared-%.o: $(srcdir)/intrinsics/nonshared-%.F90
++	$(PPFCCOMPILE) -c -o $@ $< -fallow-leading-underscore
++
++# Add flags for IEEE modules
++$(patsubst %.F90,%.lo,$(notdir $(nonshared_ieee_F90_SRC))): AM_FCFLAGS += -Wno-unused-dummy-argument -Wno-c-binding-type -ffree-line-length-0 -fallow-leading-underscore
++
++# Dependencies between IEEE_ARITHMETIC and IEEE_EXCEPTIONS
++nonshared-ieee_arithmetic.lo: $(srcdir)/ieee/ieee_arithmetic.F90 ieee_arithmetic.lo ieee_exceptions.lo
++nonshared-ieee_exceptions.lo: $(srcdir)/ieee/ieee_exceptions.F90 ieee_exceptions.lo
++nonshared-ieee_features.lo: $(srcdir)/ieee/ieee_features.F90 ieee_features.lo
++
++$(patsubst %.c,%.lo,$(nonshared_ieee_C_SRC) $(nonshared)): \
++nonshared-%.lo: $(srcdir)/ieee/%.c
++	$(LTCOMPILE) -c -o $@ $< -DLIBGFORTRAN_NONSHARED
++
++$(patsubst %.c,%.o,$(nonshared_ieee_C_SRC) $(nonshared)): \
++nonshared-%.o: $(srcdir)/ieee/%.c
++	$(COMPILE) -c -o $@ $< -DLIBGFORTRAN_NONSHARED
++
++$(patsubst %.F90,%.lo,$(nonshared_ieee_F90_SRC) $(nonshared)): \
++nonshared-%.lo: $(srcdir)/ieee/%.F90
++	$(LTPPFCCOMPILE) -c -o $@ $< -fallow-leading-underscore
++
++$(patsubst %.F90,%.o,$(nonshared_ieee_F90_SRC) $(nonshared)): \
++nonshared-%.o: $(srcdir)/ieee/%.F90
++	$(PPFCCOMPILE) -c -o $@ $< -fallow-leading-underscore
++
+ kinds.h: $(srcdir)/mk-kinds-h.sh
+ 	$(SHELL) $(srcdir)/mk-kinds-h.sh '$(FCCOMPILE)' > $@ || rm $@
+ 
+--- libgfortran/io/nonshared-ftell2.c.jj	2016-07-13 11:17:15.924053172 +0200
++++ libgfortran/io/nonshared-ftell2.c	2016-07-13 11:17:15.924053172 +0200
+@@ -0,0 +1,58 @@
++/* Implementation of the FTELL intrinsic.
++   Copyright (C) 2005-2016 Free Software Foundation, Inc.
++
++This file is part of the GNU Fortran runtime library (libgfortran).
++
++Libgfortran is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public
++License as published by the Free Software Foundation; either
++version 3 of the License, or (at your option) any later version.
++
++Libgfortran is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++Under Section 7 of GPL version 3, you are granted additional
++permissions described in the GCC Runtime Library Exception, version
++3.1, as published by the Free Software Foundation.
++
++You should have received a copy of the GNU General Public License and
++a copy of the GCC Runtime Library Exception along with this program;
++see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
++<http://www.gnu.org/licenses/>.  */
++
++#include "io.h"
++#include "fbuf.h"
++#include "unix.h"
++#include <stdlib.h>
++#include <string.h>
++#include <dlfcn.h>
++
++
++/* Here is the ftell function with an incorrect return type; retained
++   due to ABI compatibility.  */
++
++extern size_t PREFIX(ftell) (int *);
++
++/* Here is the ftell function with the correct return type, ensuring
++   that large files can be supported as long as the target supports
++   large integers; as of 4.8 the FTELL intrinsic function will call
++   this one instead of the old ftell above.  */
++
++extern GFC_IO_INT PREFIX(ftell2) (int *);
++
++GFC_IO_INT
++PREFIX(ftell2) (int * unit)
++{
++  if (sizeof (GFC_IO_INT) == sizeof (size_t))
++    return PREFIX(ftell) (unit);
++  else
++    {
++      GFC_IO_INT (*fn) (int *)
++	= (GFC_IO_INT (*) (int *)) dlsym (RTLD_NEXT, "_gfortran_ftell2");
++      if (fn)
++	return fn (unit);
++      return PREFIX(ftell) (unit);
++    }
++}
+--- libgfortran/io/nonshared-transfer.c.jj	2016-07-13 11:17:15.924053172 +0200
++++ libgfortran/io/nonshared-transfer.c	2016-07-13 11:17:15.924053172 +0200
+@@ -0,0 +1,117 @@
++/* Copyright (C) 2002-2016 Free Software Foundation, Inc.
++   Contributed by Andy Vaught
++   Namelist transfer functions contributed by Paul Thomas
++   F2003 I/O support contributed by Jerry DeLisle
++
++This file is part of the GNU Fortran runtime library (libgfortran).
++
++Libgfortran is free software; you can redistribute it and/or modify
++it under the terms of the GNU General Public License as published by
++the Free Software Foundation; either version 3, or (at your option)
++any later version.
++
++Libgfortran is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++Under Section 7 of GPL version 3, you are granted additional
++permissions described in the GCC Runtime Library Exception, version
++3.1, as published by the Free Software Foundation.
++
++You should have received a copy of the GNU General Public License and
++a copy of the GCC Runtime Library Exception along with this program;
++see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
++<http://www.gnu.org/licenses/>.  */
++
++
++#define LIBGFORTRAN_NONSHARED
++#include "io.h"
++
++extern void transfer_integer (st_parameter_dt *, void *, int);
++export_proto(transfer_integer);
++
++extern void transfer_integer_write (st_parameter_dt *, void *, int);
++export_proto(transfer_integer_write);
++
++extern void transfer_real (st_parameter_dt *, void *, int);
++export_proto(transfer_real);
++
++extern void transfer_real_write (st_parameter_dt *, void *, int);
++export_proto(transfer_real_write);
++
++extern void transfer_logical (st_parameter_dt *, void *, int);
++export_proto(transfer_logical);
++
++extern void transfer_logical_write (st_parameter_dt *, void *, int);
++export_proto(transfer_logical_write);
++
++extern void transfer_character (st_parameter_dt *, void *, int);
++export_proto(transfer_character);
++
++extern void transfer_character_write (st_parameter_dt *, void *, int);
++export_proto(transfer_character_write);
++
++extern void transfer_character_wide (st_parameter_dt *, void *, int, int);
++export_proto(transfer_character_wide);
++
++extern void transfer_character_wide_write (st_parameter_dt *,
++					   void *, int, int);
++export_proto(transfer_character_wide_write);
++
++extern void transfer_complex (st_parameter_dt *, void *, int);
++export_proto(transfer_complex);
++
++extern void transfer_complex_write (st_parameter_dt *, void *, int);
++export_proto(transfer_complex_write);
++
++extern void transfer_array (st_parameter_dt *, gfc_array_char *, int,
++			    gfc_charlen_type);
++export_proto(transfer_array);
++
++extern void transfer_array_write (st_parameter_dt *, gfc_array_char *, int,
++			    gfc_charlen_type);
++export_proto(transfer_array_write);
++
++void
++transfer_integer_write (st_parameter_dt *dtp, void *p, int kind)
++{
++  transfer_integer (dtp, p, kind);
++}
++
++void
++transfer_real_write (st_parameter_dt *dtp, void *p, int kind)
++{
++  transfer_real (dtp, p, kind);
++}
++
++void
++transfer_logical_write (st_parameter_dt *dtp, void *p, int kind)
++{
++  transfer_logical (dtp, p, kind);
++}
++
++void
++transfer_character_write (st_parameter_dt *dtp, void *p, int len)
++{
++  transfer_character (dtp, p, len);
++}
++
++void
++transfer_character_wide_write (st_parameter_dt *dtp, void *p, int len, int kind)
++{
++  transfer_character_wide (dtp, p, len, kind);
++}
++
++void
++transfer_complex_write (st_parameter_dt *dtp, void *p, int kind)
++{
++  transfer_complex (dtp, p, kind);
++}
++
++void
++transfer_array_write (st_parameter_dt *dtp, gfc_array_char *desc, int kind,
++		      gfc_charlen_type charlen)
++{
++  transfer_array (dtp, desc, kind, charlen);
++}
