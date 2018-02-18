@@ -1,0 +1,89 @@
+commit 87868c2418fb74357757e3b739ce5b76b17a8929
+Author: Adhemerval Zanella <azanella@linux.vnet.ibm.com>
+Date:   Wed Jun 25 11:54:31 2014 -0500
+
+    PowerPC: Align power7 memcpy using VSX to quadword
+    
+    This patch changes power7 memcpy to use VSX instructions only when
+    memory is aligned to quardword.  It is to avoid unaligned kernel traps
+    on non-cacheable memory (for instance, memory-mapped I/O).
+
+diff --git a/sysdeps/powerpc/powerpc32/power7/memcpy.S b/sysdeps/powerpc/powerpc32/power7/memcpy.S
+index 52c2a6b..e540fea 100644
+--- a/sysdeps/powerpc/powerpc32/power7/memcpy.S
++++ b/sysdeps/powerpc/powerpc32/power7/memcpy.S
+@@ -38,8 +38,8 @@ EALIGN (memcpy, 5, 0)
+ 	ble	cr1, L(copy_LT_32)  /* If move < 32 bytes use short move
+ 				    code.  */
+ 
+-	andi.   11,3,7	      /* Check alignment of DST.  */
+-	clrlwi  10,4,29	      /* Check alignment of SRC.  */
++	andi.   11,3,15	      /* Check alignment of DST.  */
++	clrlwi  10,4,28	      /* Check alignment of SRC.  */
+ 	cmplw   cr6,10,11     /* SRC and DST alignments match?  */
+ 	mr	12,4
+ 	mr	31,5
+diff --git a/sysdeps/powerpc/powerpc64/power7/memcpy.S b/sysdeps/powerpc/powerpc64/power7/memcpy.S
+index bbfd381..58d9b12 100644
+--- a/sysdeps/powerpc/powerpc64/power7/memcpy.S
++++ b/sysdeps/powerpc/powerpc64/power7/memcpy.S
+@@ -36,16 +36,11 @@ EALIGN (memcpy, 5, 0)
+ 	ble	cr1, L(copy_LT_32)  /* If move < 32 bytes use short move
+ 				    code.  */
+ 
+-#ifdef __LITTLE_ENDIAN__
+-/* In little-endian mode, power7 takes an alignment trap on any lxvd2x
+-   or stxvd2x crossing a 32-byte boundary, so ensure the aligned_copy
+-   loop is only used for quadword aligned copies.  */
++/* Align copies using VSX instructions to quadword. It is to avoid alignment
++   traps when memcpy is used on non-cacheable memory (for instance, memory
++   mapped I/O).  */
+ 	andi.	10,3,15
+ 	clrldi	11,4,60
+-#else
+-	andi.	10,3,7		/* Check alignment of DST.  */
+-	clrldi	11,4,61		/* Check alignment of SRC.  */
+-#endif
+ 	cmpld	cr6,10,11	/* SRC and DST alignments match?  */
+ 
+ 	mr	dst,3
+@@ -53,13 +48,9 @@ EALIGN (memcpy, 5, 0)
+ 	beq	L(aligned_copy)
+ 
+ 	mtocrf	0x01,0
+-#ifdef __LITTLE_ENDIAN__
+ 	clrldi	0,0,60
+-#else
+-	clrldi	0,0,61
+-#endif
+ 
+-/* Get the DST and SRC aligned to 8 bytes (16 for little-endian).  */
++/* Get the DST and SRC aligned to 16 bytes.  */
+ 1:
+ 	bf	31,2f
+ 	lbz	6,0(src)
+@@ -79,14 +70,12 @@ EALIGN (memcpy, 5, 0)
+ 	stw	6,0(dst)
+ 	addi	dst,dst,4
+ 8:
+-#ifdef __LITTLE_ENDIAN__
+ 	bf	28,16f
+ 	ld	6,0(src)
+ 	addi	src,src,8
+ 	std	6,0(dst)
+ 	addi	dst,dst,8
+ 16:
+-#endif
+ 	subf	cnt,0,cnt
+ 
+ /* Main aligned copy loop. Copies 128 bytes at a time. */
+@@ -298,9 +287,6 @@ L(copy_LE_8):
+ 	.align	4
+ L(copy_GE_32_unaligned):
+ 	clrldi	0,0,60	      /* Number of bytes until the 1st dst quadword.  */
+-#ifndef __LITTLE_ENDIAN__
+-	andi.	10,3,15	      /* Check alignment of DST (against quadwords).  */
+-#endif
+ 	srdi	9,cnt,4	      /* Number of full quadwords remaining.  */
+ 
+ 	beq	L(copy_GE_32_unaligned_cont)
