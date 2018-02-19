@@ -1,0 +1,266 @@
+From 97f09918ef370c3be5aa64dcfeb3bb21e762f90d Mon Sep 17 00:00:00 2001
+From: Mark Reynolds <mreynolds@redhat.com>
+Date: Tue, 14 Mar 2017 20:23:07 -0400
+Subject: [PATCH 4/5] Issue 49169 - Fix covscan errors
+
+src/libsds/bpt/map.c  - resource leak
+ldap/servers/slapd/vattr.c - resource leak
+ldap/servers/slapd/task.c:  resource leaks
+ldap/servers/slapd/str2filter.c - resource leak
+ldap/servers/slapd/pw.c - resource leak
+ldap/servers/slapd/back-ldbm/import-threads.c - resource leak
+ldap/servers/plugins/uiduniq/uid.c:536 - resource leak
+ldap/servers/plugins/pwdstorage/pbkdf2_pwd.c:164 - resource leak
+ldap/servers/plugins/linkedattrs/linked_attrs.c:1672 - resource leak
+ldap/servers/plugins/addn/addn.c:419
+ldap/servers/slapd/ssl.c - dead code
+ldap/servers/slapd/index_subsystem.c - null dereference
+
+https://pagure.io/389-ds-base/issue/49169
+
+Reviewed by: nkinder & wibrown(Thanks!!)
+
+(cherry picked from commit c75126be1edece121826e336141f9b0b9c0bddfd)
+---
+ ldap/servers/plugins/addn/addn.c                |  4 +++-
+ ldap/servers/plugins/linkedattrs/linked_attrs.c |  2 ++
+ ldap/servers/plugins/pwdstorage/pbkdf2_pwd.c    |  1 +
+ ldap/servers/plugins/uiduniq/uid.c              |  6 +++++-
+ ldap/servers/slapd/back-ldbm/import-threads.c   |  1 +
+ ldap/servers/slapd/index_subsystem.c            | 27 +++++++++++++------------
+ ldap/servers/slapd/pw.c                         |  1 +
+ ldap/servers/slapd/pw_verify.c                  |  1 -
+ ldap/servers/slapd/ssl.c                        |  8 +++-----
+ ldap/servers/slapd/str2filter.c                 |  1 +
+ ldap/servers/slapd/task.c                       |  3 +--
+ ldap/servers/slapd/vattr.c                      |  6 +++---
+ src/libsds/sds/bpt/map.c                        |  1 +
+ 13 files changed, 36 insertions(+), 26 deletions(-)
+
+diff --git a/ldap/servers/plugins/addn/addn.c b/ldap/servers/plugins/addn/addn.c
+index 3abc112..6ba7833 100644
+--- a/ldap/servers/plugins/addn/addn.c
++++ b/ldap/servers/plugins/addn/addn.c
+@@ -415,7 +415,9 @@ addn_start(Slapi_PBlock *pb)
+     domain = slapi_entry_attr_get_charptr(plugin_entry, "addn_default_domain");
+ 
+     if (domain == NULL) {
+-        slapi_log_err(SLAPI_LOG_ERR, plugin_name, "addn_start: CRITICAL: No default domain in configuration, you must set addn_default_domain!\n");
++        slapi_log_err(SLAPI_LOG_ERR, plugin_name,
++                "addn_start: CRITICAL: No default domain in configuration, you must set addn_default_domain!\n");
++        slapi_ch_free((void**)&config);
+         return SLAPI_PLUGIN_FAILURE;
+     }
+ 
+diff --git a/ldap/servers/plugins/linkedattrs/linked_attrs.c b/ldap/servers/plugins/linkedattrs/linked_attrs.c
+index b5adb21..d046542 100644
+--- a/ldap/servers/plugins/linkedattrs/linked_attrs.c
++++ b/ldap/servers/plugins/linkedattrs/linked_attrs.c
+@@ -1669,6 +1669,8 @@ linked_attrs_mod_post_op(Slapi_PBlock *pb)
+             /* Bail out if the plug-in close function was just called. */
+             if (!slapi_plugin_running(pb)) {
+                 linked_attrs_unlock();
++                slapi_mod_free(&next_mod);
++                slapi_mods_free(&smods);
+                 return SLAPI_PLUGIN_SUCCESS;
+             }
+ 
+diff --git a/ldap/servers/plugins/pwdstorage/pbkdf2_pwd.c b/ldap/servers/plugins/pwdstorage/pbkdf2_pwd.c
+index 1b3e555..b228700 100644
+--- a/ldap/servers/plugins/pwdstorage/pbkdf2_pwd.c
++++ b/ldap/servers/plugins/pwdstorage/pbkdf2_pwd.c
+@@ -161,6 +161,7 @@ pbkdf2_sha256_pw_enc(const char *pwd)
+      */
+     if ( pbkdf2_sha256_hash(hash + PBKDF2_ITERATIONS_LENGTH + PBKDF2_SALT_LENGTH, PBKDF2_HASH_LENGTH, &passItem, &saltItem, PBKDF2_ITERATIONS) != SECSuccess ) {
+         slapi_log_err(SLAPI_LOG_ERR, (char *)schemeName, "Could not generate pbkdf2_sha256_hash!\n");
++        slapi_ch_free_string(&enc);
+         return NULL;
+     }
+ 
+diff --git a/ldap/servers/plugins/uiduniq/uid.c b/ldap/servers/plugins/uiduniq/uid.c
+index ae9320e..46554b2 100644
+--- a/ldap/servers/plugins/uiduniq/uid.c
++++ b/ldap/servers/plugins/uiduniq/uid.c
+@@ -533,7 +533,11 @@ create_filter(const char **attributes, const struct berval *value, const char *r
+ 
+           /* Place value in filter */
+           if (ldap_quote_filter_value(value->bv_val, value->bv_len,
+-            fp, max-fp, &valueLen)) { slapi_ch_free((void**)&filter); return 0; }
++                                      fp, max-fp, &valueLen)) {
++              slapi_ch_free((void**)&filter);
++              slapi_ch_free((void**)&attrLen);
++              return 0;
++          }
+           fp += valueLen;
+ 
+           strcpy(fp, ")");
+diff --git a/ldap/servers/slapd/back-ldbm/import-threads.c b/ldap/servers/slapd/back-ldbm/import-threads.c
+index 5b81427..087103b 100644
+--- a/ldap/servers/slapd/back-ldbm/import-threads.c
++++ b/ldap/servers/slapd/back-ldbm/import-threads.c
+@@ -1647,6 +1647,7 @@ upgradedn_producer(void *param)
+                 }
+                 e = slapi_str2entry_ext(normdn, NULL, data.dptr, 
+                                         SLAPI_STR2ENTRY_USE_OBSOLETE_DNFORMAT);
++                slapi_ch_free_string(&rdn);
+             }
+         } else {
+             e = 
+diff --git a/ldap/servers/slapd/index_subsystem.c b/ldap/servers/slapd/index_subsystem.c
+index 57d4f58..8f9fe6d 100644
+--- a/ldap/servers/slapd/index_subsystem.c
++++ b/ldap/servers/slapd/index_subsystem.c
+@@ -185,27 +185,28 @@ static int index_subsys_index_matches_filter(indexEntry *index, Slapi_Filter *f)
+  */
+ int index_subsys_assign_filter_decoders(Slapi_PBlock *pb)
+ {
+-	int				rc;
++	int				rc = 0;
+ 	Slapi_Filter	*f;
+ 	char			*subsystem = "index_subsys_assign_filter_decoders";
+ 	char			logbuf[ 1024 ];
+ 
+ 	/* extract the filter */
+ 	slapi_pblock_get(pb, SLAPI_SEARCH_FILTER, &f);   
++	if (f) {
++		if ( loglevel_is_set( LDAP_DEBUG_FILTER )) {
++			logbuf[0] = '\0';
++			slapi_log_err(SLAPI_LOG_DEBUG, subsystem, "before: %s\n",
++					slapi_filter_to_string(f, logbuf, sizeof(logbuf)));
++		}
+ 
+-	if ( loglevel_is_set( LDAP_DEBUG_FILTER ) && NULL != f ) {
+-		logbuf[0] = '\0';
+-		slapi_log_err(SLAPI_LOG_DEBUG, subsystem, "before: %s\n",
+-				slapi_filter_to_string(f, logbuf, sizeof(logbuf)));
+-	}
+-
+-	/* find decoders */
+-	rc = index_subsys_assign_decoders(f);
++		/* find decoders */
++		rc = index_subsys_assign_decoders(f);
+ 
+-	if ( loglevel_is_set( LDAP_DEBUG_FILTER ) && NULL != f ) {
+-		logbuf[0] = '\0';
+-		slapi_log_err(SLAPI_LOG_DEBUG, subsystem, " after: %s\n",
+-				slapi_filter_to_string(f, logbuf, sizeof(logbuf)));
++		if ( loglevel_is_set( LDAP_DEBUG_FILTER )) {
++			logbuf[0] = '\0';
++			slapi_log_err(SLAPI_LOG_DEBUG, subsystem, " after: %s\n",
++					slapi_filter_to_string(f, logbuf, sizeof(logbuf)));
++		}
+ 	}
+ 
+ 	return rc;
+diff --git a/ldap/servers/slapd/pw.c b/ldap/servers/slapd/pw.c
+index 215c9eb..378d148 100644
+--- a/ldap/servers/slapd/pw.c
++++ b/ldap/servers/slapd/pw.c
+@@ -1512,6 +1512,7 @@ check_trivial_words (Slapi_PBlock *pb, Slapi_Entry *e, Slapi_Value **vals, char
+ 			ep = sp + strlen(sp);
+ 			ep = ldap_utf8prevn(sp, ep, toklen);
+ 			if (!ep || (sp >= ep)) {
++				slapi_ch_free_string(&sp);
+ 				continue;
+ 			}
+ 			/* See if the password contains the value */
+diff --git a/ldap/servers/slapd/pw_verify.c b/ldap/servers/slapd/pw_verify.c
+index 529bb83..a9fd9ec 100644
+--- a/ldap/servers/slapd/pw_verify.c
++++ b/ldap/servers/slapd/pw_verify.c
+@@ -103,7 +103,6 @@ pw_verify_be_dn(Slapi_PBlock *pb, Slapi_Entry **referral)
+ int
+ pw_validate_be_dn(Slapi_PBlock *pb, Slapi_Entry **referral)
+ {
+-    int rc = 0;
+     Slapi_Backend *be = NULL;
+     Slapi_DN *pb_sdn;
+     struct berval *cred;
+diff --git a/ldap/servers/slapd/ssl.c b/ldap/servers/slapd/ssl.c
+index f35b3f1..050e7b5 100644
+--- a/ldap/servers/slapd/ssl.c
++++ b/ldap/servers/slapd/ssl.c
+@@ -1418,12 +1418,10 @@ slapd_ssl_init()
+       errorCode = PR_GetError();
+       slapd_SSL_error("Failed to retrieve SSL "
+                      "configuration information ("
+-                     SLAPI_COMPONENT_NAME_NSPR " error %d - %s): "
++                     SLAPI_COMPONENT_NAME_NSPR " error %d - not found): "
+                      "nssslSessionTimeout: %s ",
+-                     errorCode, slapd_pr_strerror(errorCode),
+-             (val ? "found" : "not found"));
+-      slapi_ch_free((void **) &val);
+-      slapi_ch_free((void **) &ciphers);
++                     errorCode, slapd_pr_strerror(errorCode));
++      slapi_ch_free((void **)&ciphers);
+       freeConfigEntry( &entry );
+       return -1;
+     }
+diff --git a/ldap/servers/slapd/str2filter.c b/ldap/servers/slapd/str2filter.c
+index ebd5c5d..744c93f 100644
+--- a/ldap/servers/slapd/str2filter.c
++++ b/ldap/servers/slapd/str2filter.c
+@@ -344,6 +344,7 @@ str2simple( char *str , int unescape_filter)
+ 			*endp = '\0';
+ 			rc = _parse_ext_filter(str, extp, &f->f_mr_type, &f->f_mr_oid, &f->f_mr_dnAttrs);
+ 			if (rc) {
++				slapi_filter_free(f, 1);
+ 				return NULL; /* error */
+ 			} else {
+ 				f->f_choice = LDAP_FILTER_EXTENDED;
+diff --git a/ldap/servers/slapd/task.c b/ldap/servers/slapd/task.c
+index ad52e9d..eabd517 100644
+--- a/ldap/servers/slapd/task.c
++++ b/ldap/servers/slapd/task.c
+@@ -2389,7 +2389,6 @@ task_fixup_tombstones_add(Slapi_PBlock *pb, Slapi_Entry *e, Slapi_Entry *eAfter,
+         slapi_task_finish(task, *returncode);
+         slapi_ch_array_free(base);
+         slapi_ch_free((void **)&task_data);
+-        return SLAPI_DSE_CALLBACK_ERROR;
+     }
+ 
+ done:
+@@ -2507,9 +2506,9 @@ task_des2aes(Slapi_PBlock *pb, Slapi_Entry *e, Slapi_Entry *eAfter,
+ error:
+     if (rc == SLAPI_DSE_CALLBACK_ERROR){
+         slapi_ch_array_free(bases);
+-        slapi_ch_array_free(suffix);
+         slapi_ch_free((void **)&task_data);
+     }
++    slapi_ch_array_free(suffix);
+     return rc;
+ }
+ 
+diff --git a/ldap/servers/slapd/vattr.c b/ldap/servers/slapd/vattr.c
+index 34665de..599b54e 100644
+--- a/ldap/servers/slapd/vattr.c
++++ b/ldap/servers/slapd/vattr.c
+@@ -753,10 +753,10 @@ slapi_vattr_values_get_sp(vattr_context *c,
+   }
+   if (use_local_ctx) {
+     /* slapi_pblock_destroy cleans up pb_vattr_context, as well */
+-    slapi_pblock_destroy(local_pb);
+-  } else {
+-    vattr_context_ungrok(&c);
++	slapi_pblock_destroy(local_pb);
++	ctx->pb = NULL;
+   }
++  vattr_context_ungrok(&ctx);
+   return rc;
+ }
+ 
+diff --git a/src/libsds/sds/bpt/map.c b/src/libsds/sds/bpt/map.c
+index 4205aa5..2c3468b 100644
+--- a/src/libsds/sds/bpt/map.c
++++ b/src/libsds/sds/bpt/map.c
+@@ -18,6 +18,7 @@ sds_bptree_map_nodes(sds_bptree_instance *binst, sds_bptree_node *root, sds_resu
+     sds_bptree_node_list *tail = cur;
+ 
+     if (binst == NULL) {
++        sds_free(cur);
+         return SDS_NULL_POINTER;
+     }
+ 
+-- 
+2.9.3
+

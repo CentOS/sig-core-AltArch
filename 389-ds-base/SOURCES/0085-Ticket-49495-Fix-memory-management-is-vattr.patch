@@ -1,0 +1,293 @@
+From d1236b0d3917b024a252b4d6acf823a975182d3b Mon Sep 17 00:00:00 2001
+From: William Brown <firstyear@redhat.com>
+Date: Mon, 11 Dec 2017 15:48:24 +0100
+Subject: [PATCH] Ticket 49495 - Fix memory management is vattr.
+
+Bug Description:  During the fix for
+https://pagure.io/389-ds-base/issue/49436 a issue was exposed
+in how registration of attributes to cos work. With the change
+to handle -> attr link, this exposed that cos treats each attribute
+and template pair as a new type for the handle. As  aresult, this
+caused the sp_list to create a long linked list of M*N entries
+for each attr - template value. Obviously, this is extremely
+slow to traverse during a search!
+
+Fix Description:  Undo part of the SLL next change and convert
+to reference counting. The issue remains that there is a defect
+in how cos handles attribute registration, but this can not be
+resolved without a significant rearchitecture of the code
+related to virtual attributes.
+
+https://pagure.io/389-ds-base/issue/49495
+
+Author: wibrown
+
+Review by: tbordaz, lkrispen (Thanks!)
+
+Note: includes backport of incr and decr for rc
+---
+ ldap/servers/plugins/cos/cos_cache.c |  28 ++++------
+ ldap/servers/slapd/slapi-plugin.h    |  21 ++++++++
+ ldap/servers/slapd/slapi_counter.c   |  30 +++++++++++
+ ldap/servers/slapd/vattr.c           | 100 +++++++++++++++++++++--------------
+ 4 files changed, 122 insertions(+), 57 deletions(-)
+
+diff --git a/ldap/servers/plugins/cos/cos_cache.c b/ldap/servers/plugins/cos/cos_cache.c
+index 0e93183d2..74261af87 100644
+--- a/ldap/servers/plugins/cos/cos_cache.c
++++ b/ldap/servers/plugins/cos/cos_cache.c
+@@ -275,7 +275,7 @@ static Slapi_Mutex *start_lock;
+ static Slapi_Mutex *stop_lock;
+ static Slapi_CondVar *something_changed = NULL;
+ static Slapi_CondVar *start_cond = NULL;
+-
++static vattr_sp_handle *vattr_handle = NULL;
+ 
+ /*
+ 	cos_cache_init
+@@ -313,6 +313,15 @@ int cos_cache_init(void)
+         goto out;
+     }
+ 
++    if (slapi_vattrspi_register((vattr_sp_handle **)&vattr_handle,
++                                cos_cache_vattr_get,
++                                cos_cache_vattr_compare,
++                                cos_cache_vattr_types) != 0) {
++        slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM, "cos_cache_init - Cannot register as service provider\n");
++        ret = -1;
++        goto out;
++    }
++
+     /* grab the views interface */
+     if (slapi_apib_get_interface(Views_v1_0_GUID, &views_api)) {
+         /* lets be tolerant if views is disabled */
+@@ -872,22 +881,7 @@ cos_dn_defs_cb (Slapi_Entry* e, void *callback_data)
+                                           dnVals[valIndex]->bv_val);
+                 }
+ 
+-                /*
+-                 * Each SP_handle is associated to one and only one vattr.
+-                 * We could consider making this a single function rather
+-                 * than the double-call.
+-                 */
+-
+-                vattr_sp_handle *vattr_handle = NULL;
+-
+-                if (slapi_vattrspi_register((vattr_sp_handle **)&vattr_handle,
+-                                            cos_cache_vattr_get,
+-                                            cos_cache_vattr_compare,
+-                                            cos_cache_vattr_types) != 0) {
+-                    slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM, "cos_cache_init - Cannot register as service provider for %s\n", dnVals[valIndex]->bv_val);
+-                } else {
+-                    slapi_vattrspi_regattr((vattr_sp_handle *)vattr_handle, dnVals[valIndex]->bv_val, NULL, NULL);
+-                }
++                slapi_vattrspi_regattr((vattr_sp_handle *)vattr_handle, dnVals[valIndex]->bv_val, NULL, NULL);
+ 
+             } /* if(attrType is cosAttribute) */
+ 
+diff --git a/ldap/servers/slapd/slapi-plugin.h b/ldap/servers/slapd/slapi-plugin.h
+index 4084945f4..16aa1b711 100644
+--- a/ldap/servers/slapd/slapi-plugin.h
++++ b/ldap/servers/slapd/slapi-plugin.h
+@@ -8063,6 +8063,27 @@ int slapi_is_special_rdn(const char *rdn, int flag);
+  */
+ void    DS_Sleep(PRIntervalTime ticks);
+ 
++/**
++ * Increment a 64bitintegral atomicly
++ *
++ * \param ptr - pointer to integral to increment
++ * \param memorder - __ATOMIC_RELAXED, __ATOMIC_CONSUME, __ATOMIC_ACQUIRE,
++ * __ATOMIC_RELEASE, __ATOMIC_ACQ_REL, __ATOMIC_SEQ_CST
++ * \return - new value of ptr
++ */
++uint64_t slapi_atomic_incr_64(uint64_t *ptr, int memorder);
++
++/**
++ * Decrement a 64bitintegral atomicly
++ *
++ * \param ptr - pointer to integral to decrement
++ * \param memorder - __ATOMIC_RELAXED, __ATOMIC_CONSUME, __ATOMIC_ACQUIRE,
++ * __ATOMIC_RELEASE, __ATOMIC_ACQ_REL, __ATOMIC_SEQ_CST
++ * \return - new value of ptr
++ */
++uint64_t slapi_atomic_decr_64(uint64_t *ptr, int memorder);
++
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/ldap/servers/slapd/slapi_counter.c b/ldap/servers/slapd/slapi_counter.c
+index 9904fe964..59e5223ad 100644
+--- a/ldap/servers/slapd/slapi_counter.c
++++ b/ldap/servers/slapd/slapi_counter.c
+@@ -269,3 +269,33 @@ uint64_t slapi_counter_get_value(Slapi_Counter *counter)
+     return value;
+ }
+ 
++/*
++ * atomic increment functions (64bit)
++ */
++uint64_t
++slapi_atomic_incr_64(uint64_t *ptr, int memorder)
++{
++#ifdef ATOMIC_64BIT_OPERATIONS
++    return __atomic_add_fetch_8(ptr, 1, memorder);
++#else
++    PRInt32 *pr_ptr = (PRInt32 *)ptr;
++    return PR_AtomicIncrement(pr_ptr);
++#endif
++}
++
++/*
++ * atomic decrement functions (64bit)
++ */
++
++uint64_t
++slapi_atomic_decr_64(uint64_t *ptr, int memorder)
++{
++#ifdef ATOMIC_64BIT_OPERATIONS
++    return __atomic_sub_fetch_8(ptr, 1, memorder);
++#else
++    PRInt32 *pr_ptr = (PRInt32 *)ptr;
++    return PR_AtomicDecrement(pr_ptr);
++#endif
++}
++
++
+diff --git a/ldap/servers/slapd/vattr.c b/ldap/servers/slapd/vattr.c
+index 84e01cd62..adf44b0b6 100644
+--- a/ldap/servers/slapd/vattr.c
++++ b/ldap/servers/slapd/vattr.c
+@@ -1529,10 +1529,12 @@ struct _vattr_sp {
+ typedef struct _vattr_sp vattr_sp;
+ 
+ /* Service provider handle */
+-struct _vattr_sp_handle {
+-	vattr_sp *sp;
+-	struct _vattr_sp_handle *next; /* So we can link them together in the map */
+-	void *hint; /* Hint to the SP */
++struct _vattr_sp_handle
++{
++    vattr_sp *sp;
++    struct _vattr_sp_handle *next; /* So we can link them together in the map */
++    void *hint;                    /* Hint to the SP */
++    uint64_t rc;
+ };
+ 
+ /* Calls made by Service Providers */
+@@ -1758,7 +1760,7 @@ is a separate thing in the insterests of stability.
+ 
+  */
+ 
+-#define VARRT_MAP_HASHTABLE_SIZE 10
++#define VARRT_MAP_HASHTABLE_SIZE 32
+ 
+ /* Attribute map oject */
+ /* Needs to contain: a linked list of pointers to provider handles handles,
+@@ -1849,7 +1851,10 @@ vattr_map_entry_free(vattr_map_entry *vae)
+     vattr_sp_handle *list_entry = vae->sp_list;
+     while (list_entry != NULL) {
+         vattr_sp_handle *next_entry = list_entry->next;
+-        slapi_ch_free((void **)&list_entry);
++        if (slapi_atomic_decr_64(&(list_entry->rc), __ATOMIC_RELAXED) == 0) {
++            /* Only free on RC 0 */
++            slapi_ch_free((void **)&list_entry);
++        }
+         list_entry = next_entry;
+     }
+     slapi_ch_free_string(&(vae->type_name));
+@@ -2268,41 +2273,56 @@ to handle the calls on it, but return nothing */
+  *
+  * Better idea, is that regattr should just take the fn pointers
+  * and callers never *see* the sp_handle structure at all.
++ *
++ * This leaves us with some quirks today. First: if you have plugin A
++ * and B, A registers attr 1 and B 1 and 2, it's possible that if you
++ * register A1 first, then B1, you have B->A in next. Then when you
++ * register B2, because we take 0==result from map_lookup, we add sp
++ * "as is" to the map. This means that B2 now has the same next to A1
++ * handle. This won't add a bug, because A1 won't be able to service the
++ * attr, but it could cause some head scratching ...
++ *
++ * Again, to fix this, the whole vattr external interface needs a
++ * redesign ... :(
+  */
+-
+-int vattr_map_sp_insert(char *type_to_add, vattr_sp_handle *sp, void *hint)
+-{
+-	int result = 0;
+-	vattr_map_entry *map_entry = NULL;
+-	/* Is this type already there ? */
+-	result = vattr_map_lookup(type_to_add,&map_entry);
+-	/* If it is, add this SP to the list, safely even if readers are traversing the list at the same time */
+-	if (0 == result) {
+-		int found = 0;
+-		vattr_sp_handle *list_entry = NULL;
+-		/* Walk the list checking that the daft SP isn't already here */
+-		for (list_entry = map_entry->sp_list ; list_entry; list_entry = list_entry->next) {
+-			if (list_entry == sp) {
+-				found = 1;
+-				break;
+-			}
+-		}
+-		/* If it is, we do nothing */
+-		if(found) {
+-			return 0;
+-		}
+-		/* We insert the SP handle into the linked list at the head */
+-		sp->next = map_entry->sp_list;
+-		map_entry->sp_list = sp;
+-	} else {
+-	/* If not, add it */
+-		map_entry = vattr_map_entry_new(type_to_add,sp,hint);
+-		if (NULL == map_entry) {
+-			return ENOMEM;
+-		}
+-		return vattr_map_insert(map_entry);
+-	}
+-	return 0;
++int
++vattr_map_sp_insert(char *type_to_add, vattr_sp_handle *sp, void *hint)
++{
++    int result = 0;
++    vattr_map_entry *map_entry = NULL;
++    /* Is this type already there ? */
++    result = vattr_map_lookup(type_to_add, &map_entry);
++    /* If it is, add this SP to the list, safely even if readers are traversing the list at the same time */
++    if (0 == result) {
++        int found = 0;
++        vattr_sp_handle *list_entry = NULL;
++        /* Walk the list checking that the daft SP isn't already here */
++        for (list_entry = map_entry->sp_list; list_entry; list_entry = list_entry->next) {
++            if (list_entry == sp) {
++                found = 1;
++                break;
++            }
++        }
++        /* If it is, we do nothing */
++        if (found) {
++            return 0;
++        }
++        /* Increase the ref count of the sphandle */
++        slapi_atomic_incr_64(&(sp->rc), __ATOMIC_RELAXED);
++        /* We insert the SP handle into the linked list at the head */
++        sp->next = map_entry->sp_list;
++        map_entry->sp_list = sp;
++    } else {
++        /* If not, add it */
++        /* Claim a reference on the sp ... */
++        slapi_atomic_incr_64(&(sp->rc), __ATOMIC_RELAXED);
++        map_entry = vattr_map_entry_new(type_to_add, sp, hint);
++        if (NULL == map_entry) {
++            return ENOMEM;
++        }
++        return vattr_map_insert(map_entry);
++    }
++    return 0;
+ }
+ 
+ /*
+-- 
+2.13.6
+

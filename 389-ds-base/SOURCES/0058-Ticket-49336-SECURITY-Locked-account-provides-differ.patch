@@ -1,0 +1,201 @@
+From 95b39e29361812a62f2e038c89a88d717c82794e Mon Sep 17 00:00:00 2001
+From: William Brown <firstyear@redhat.com>
+Date: Mon, 31 Jul 2017 14:13:49 +1000
+Subject: [PATCH] Ticket 49336 - SECURITY: Locked account provides different
+ return code
+
+Bug Description:  The directory server password lockout policy prevents binds
+ from operating once a threshold of failed passwords has been met. During
+ this lockout, if you bind with a successful password, a different error code
+ is returned. This means that an attacker has no ratelimit or penalty during
+ an account lock, and can continue to attempt passwords via bruteforce, using
+ the change in return code to ascertain a sucessful password auth.
+
+Fix Description:  Move the account lock check *before* the password bind
+check. If the account is locked, we do not mind disclosing this as the
+attacker will either ignore it (and will not bind anyway), or they will
+be forced to back off as the attack is not working preventing the
+bruteforce.
+
+https://pagure.io/389-ds-base/issue/49336
+
+Author: wibrown
+
+Review by: tbordaz (Thanks!)
+
+Signed-off-by: Mark Reynolds <mreynolds@redhat.com>
+---
+ .../suites/password/pwd_lockout_bypass_test.py     | 55 ++++++++++++++++++++++
+ ldap/servers/slapd/bind.c                          | 29 ++++++++----
+ ldap/servers/slapd/pw_verify.c                     | 15 +++---
+ 3 files changed, 84 insertions(+), 15 deletions(-)
+ create mode 100644 dirsrvtests/tests/suites/password/pwd_lockout_bypass_test.py
+
+diff --git a/dirsrvtests/tests/suites/password/pwd_lockout_bypass_test.py b/dirsrvtests/tests/suites/password/pwd_lockout_bypass_test.py
+new file mode 100644
+index 0000000..e4add72
+--- /dev/null
++++ b/dirsrvtests/tests/suites/password/pwd_lockout_bypass_test.py
+@@ -0,0 +1,55 @@
++# --- BEGIN COPYRIGHT BLOCK ---
++# Copyright (C) 2017 Red Hat, Inc.
++# All rights reserved.
++#
++# License: GPL (version 3 or any later version).
++# See LICENSE for details.
++# --- END COPYRIGHT BLOCK ---
++#
++import pytest
++from lib389.tasks import *
++from lib389.utils import *
++from lib389.topologies import topology_st
++from lib389.idm.user import UserAccounts, TEST_USER_PROPERTIES
++import ldap
++
++# The irony of these names is not lost on me.
++GOOD_PASSWORD = 'password'
++BAD_PASSWORD = 'aontseunao'
++
++logging.getLogger(__name__).setLevel(logging.INFO)
++log = logging.getLogger(__name__)
++
++def test_lockout_bypass(topology_st):
++    inst = topology_st.standalone
++
++    # Configure the lock policy
++    inst.config.set('passwordMaxFailure', '1')
++    inst.config.set('passwordLockoutDuration', '99999')
++    inst.config.set('passwordLockout', 'on')
++
++    # Create the account
++    users = UserAccounts(inst, DEFAULT_SUFFIX)
++    testuser = users.create(properties=TEST_USER_PROPERTIES)
++    testuser.set('userPassword', GOOD_PASSWORD)
++
++    conn = testuser.bind(GOOD_PASSWORD)
++    assert conn != None
++    conn.unbind_s()
++
++    # Bind with bad creds twice
++    # This is the failure.
++    with pytest.raises(ldap.INVALID_CREDENTIALS):
++        conn = testuser.bind(BAD_PASSWORD)
++    # Now we should not be able to ATTEMPT the bind. It doesn't matter that
++    # we disclose that we have hit the rate limit here, what matters is that
++    # it exists.
++    with pytest.raises(ldap.CONSTRAINT_VIOLATION):
++        conn = testuser.bind(BAD_PASSWORD)
++
++    # now bind with good creds
++    # Should be error 19 still.
++    with pytest.raises(ldap.CONSTRAINT_VIOLATION):
++        conn = testuser.bind(GOOD_PASSWORD)
++
++
+diff --git a/ldap/servers/slapd/bind.c b/ldap/servers/slapd/bind.c
+index 7f4414f..064ace1 100644
+--- a/ldap/servers/slapd/bind.c
++++ b/ldap/servers/slapd/bind.c
+@@ -662,12 +662,14 @@ do_bind( Slapi_PBlock *pb )
+         /* We could be serving multiple database backends.  Select the appropriate one */
+         /* pw_verify_be_dn will select the backend we need for us. */
+ 
+-        if (auto_bind) {
+-            /* We have no password material. We should just check who we are binding as. */
+-            rc = pw_validate_be_dn(pb, &referral);
+-        } else {
+-            rc = pw_verify_be_dn(pb, &referral);
+-        }
++        /*
++         * WARNING: We have to validate *all* other conditions *first* before
++         * we attempt the bind!
++         *
++         * this is because ldbm_bind.c will SEND THE FAILURE.
++         */
++
++        rc = pw_validate_be_dn(pb, &referral);
+ 
+         if (rc == SLAPI_BIND_NO_BACKEND) {
+             send_nobackend_ldap_result( pb );
+@@ -736,8 +738,18 @@ do_bind( Slapi_PBlock *pb )
+                     myrc = 0;
+                 }
+                 if (!auto_bind) {
+-                    /* 
+-                     * There could be a race that bind_target_entry was not added 
++                    /*
++                     * Okay, we've made it here. FINALLY check if the entry really
++                     * can bind or not. THIS IS THE PASSWORD CHECK.
++                     */
++                    rc = pw_verify_be_dn(pb, &referral);
++                    if (rc != SLAPI_BIND_SUCCESS) {
++                        /* Invalid pass - lets bail ... */
++                        goto bind_failed;
++                    }
++
++                    /*
++                     * There could be a race that bind_target_entry was not added
+                      * when bind_target_entry was retrieved before be_bind, but it
+                      * was in be_bind.  Since be_bind returned SLAPI_BIND_SUCCESS,
+                      * the entry is in the DS.  So, we need to retrieve it once more.
+@@ -786,6 +798,7 @@ do_bind( Slapi_PBlock *pb )
+                 }
+             }
+         } else { /* if auto_bind || rc == slapi_bind_success | slapi_bind_anonymous */
++        bind_failed:
+             if (rc == LDAP_OPERATIONS_ERROR) {
+                 send_ldap_result( pb, LDAP_UNWILLING_TO_PERFORM, NULL, "Function not implemented", 0, NULL );
+                 goto free_and_return;
+diff --git a/ldap/servers/slapd/pw_verify.c b/ldap/servers/slapd/pw_verify.c
+index 852b027..cb182ed 100644
+--- a/ldap/servers/slapd/pw_verify.c
++++ b/ldap/servers/slapd/pw_verify.c
+@@ -55,7 +55,7 @@ pw_verify_root_dn(const char *dn, const Slapi_Value *cred)
+ int
+ pw_verify_be_dn(Slapi_PBlock *pb, Slapi_Entry **referral)
+ {
+-    int rc = 0;
++    int rc = SLAPI_BIND_SUCCESS;
+     Slapi_Backend *be = NULL;
+ 
+     if (slapi_mapping_tree_select(pb, &be, referral, NULL, 0) != LDAP_SUCCESS) {
+@@ -109,14 +109,10 @@ pw_validate_be_dn(Slapi_PBlock *pb, Slapi_Entry **referral)
+     slapi_pblock_get(pb, SLAPI_BIND_CREDENTIALS, &cred);
+     slapi_pblock_get(pb, SLAPI_BIND_METHOD, &method);
+ 
+-    if (pb_sdn != NULL || cred != NULL) {
++    if (pb_sdn == NULL) {
+         return LDAP_OPERATIONS_ERROR;
+     }
+ 
+-    if (*referral) {
+-        return SLAPI_BIND_REFERRAL;
+-    }
+-
+     /* We need a slapi_sdn_isanon? */
+     if (method == LDAP_AUTH_SIMPLE && cred->bv_len == 0) {
+         return SLAPI_BIND_ANONYMOUS;
+@@ -130,7 +126,11 @@ pw_validate_be_dn(Slapi_PBlock *pb, Slapi_Entry **referral)
+     if (slapi_mapping_tree_select(pb, &be, referral, NULL, 0) != LDAP_SUCCESS) {
+         return SLAPI_BIND_NO_BACKEND;
+     }
+-    slapi_be_Unlock(be);
++
++    if (*referral) {
++        slapi_be_Unlock(be);
++        return SLAPI_BIND_REFERRAL;
++    }
+ 
+     slapi_pblock_set(pb, SLAPI_BACKEND, be);
+     slapi_pblock_set(pb, SLAPI_PLUGIN, be->be_database);
+@@ -138,6 +138,7 @@ pw_validate_be_dn(Slapi_PBlock *pb, Slapi_Entry **referral)
+     set_db_default_result_handlers(pb);
+ 
+     /* The backend associated with this identity is real. */
++    slapi_be_Unlock(be);
+ 
+     return SLAPI_BIND_SUCCESS;
+ }
+-- 
+2.9.4
+

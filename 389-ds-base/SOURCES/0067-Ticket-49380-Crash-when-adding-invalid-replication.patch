@@ -1,0 +1,55 @@
+From af59afa03296160577e419257772d5319796a992 Mon Sep 17 00:00:00 2001
+From: Mark Reynolds <mreynolds@redhat.com>
+Date: Thu, 14 Sep 2017 08:32:11 -0400
+Subject: [PATCH] Ticket 49380 - Crash when adding invalid replication 
+ agreement
+
+    Bug Description:  If you add a replication agreement with an invalid "replicaEnabled" value
+                      the server crashes when freeing the replica schedule.  This is because the
+                      schedule never gets allocated before the rror conidtion is hit, and then
+                      it get dereferenced.
+
+    Fix Description:  Check for a NULL schedule before trying to destroy it.
+
+    https://pagure.io/389-ds-base/issue/49380
+
+    Reviewed by: tbordaz(Thanks!)
+---
+ ldap/servers/plugins/replication/repl5_schedule.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/ldap/servers/plugins/replication/repl5_schedule.c b/ldap/servers/plugins/replication/repl5_schedule.c
+index 60ee6f2..4572e63 100644
+--- a/ldap/servers/plugins/replication/repl5_schedule.c
++++ b/ldap/servers/plugins/replication/repl5_schedule.c
+@@ -130,6 +130,10 @@ schedule_destroy(Schedule *s)
+ {
+ 	int i;
+ 
++	if (s == NULL) {
++		return;
++	}
++
+     /* unschedule update window event if exists */
+     unschedule_window_state_change_event (s);
+ 
+@@ -177,11 +181,15 @@ free_schedule_list(schedule_item **schedule_list)
+ int
+ schedule_set(Schedule *sch, Slapi_Attr *attr)
+ {
+-	int return_value;
++	int return_value = -1;
+ 	schedule_item *si = NULL;
+ 	schedule_item *new_schedule_list = NULL;
+ 	int valid = 1;
+ 	
++	if (sch == NULL) {
++		return return_value;
++	}
++
+ 	if (NULL != attr)
+ 	{
+ 		int ind;
+-- 
+2.9.5
+

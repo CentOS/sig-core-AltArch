@@ -1,0 +1,96 @@
+From 645e628626f4a3d4b662c067584b4efc6b5c70c5 Mon Sep 17 00:00:00 2001
+From: William Brown <firstyear@redhat.com>
+Date: Wed, 15 Mar 2017 10:46:38 +1000
+Subject: [PATCH 5/5] Ticket 49171 - Nunc Stans incorrectly reports a timeout
+
+Bug Description:  In some cases nunc-stans would incorrectly report
+and IO timeout.
+
+Fix Description:  Make the io output type volatile to prevent re-arranging
+of the code. We then make timeout exclusive to read, write and signal.
+Finally, we add an extra check into ns_handle_pr_read_ready that
+asserts we truly have an idle timeout. It issues a warning now
+instead if this scenario occurs, rather than closing the
+connection.
+
+https://pagure.io/389-ds-base/issue/49171
+
+Author: wibrown
+
+Review by: mreynolds (thanks!)
+
+(cherry picked from commit c8ce1b32cc365174c8280111c2d55bba45f7949f)
+---
+ ldap/servers/slapd/daemon.c           | 15 +++++++++++----
+ src/nunc-stans/ns/ns_event_fw_event.c | 28 ++++++++++++++++------------
+ 2 files changed, 27 insertions(+), 16 deletions(-)
+
+diff --git a/ldap/servers/slapd/daemon.c b/ldap/servers/slapd/daemon.c
+index a37c8c6..6b3331d 100644
+--- a/ldap/servers/slapd/daemon.c
++++ b/ldap/servers/slapd/daemon.c
+@@ -1970,11 +1970,18 @@ ns_handle_pr_read_ready(struct ns_job_t *job)
+ 	connection_release_nolock_ext(c, 1); /* release ref acquired when job was added */
+ 	if (CONN_NEEDS_CLOSING(c)) {
+ 		ns_handle_closure_nomutex(c);
++		/* We shouldn't need the c_idletimeout check here because of how libevent works.
++		 * consider testing this and removing it oneday.
++		 */
+ 	} else if (NS_JOB_IS_TIMER(ns_job_get_output_type(job))) {
+-		/* idle timeout */
+-		disconnect_server_nomutex_ext(c, c->c_connid, -1,
+-					      SLAPD_DISCONNECT_IDLE_TIMEOUT, EAGAIN,
+-				              0 /* do not schedule closure, do it next */);
++		if (c->c_idletimeout > 0) {
++			/* idle timeout */
++			disconnect_server_nomutex_ext(c, c->c_connid, -1,
++							  SLAPD_DISCONNECT_IDLE_TIMEOUT, EAGAIN,
++								  0 /* do not schedule closure, do it next */);
++		} else {
++			slapi_log_err(SLAPI_LOG_WARNING, "ns_handle_pr_read_ready", "Received idletime out with c->c_idletimeout as 0. Ignoring.\n");
++		}
+ 		ns_handle_closure_nomutex(c);
+ 	} else if ((connection_activity(c, maxthreads)) == -1) {
+ 		/* This might happen as a result of
+diff --git a/src/nunc-stans/ns/ns_event_fw_event.c b/src/nunc-stans/ns/ns_event_fw_event.c
+index 58dac28..3acbaf7 100644
+--- a/src/nunc-stans/ns/ns_event_fw_event.c
++++ b/src/nunc-stans/ns/ns_event_fw_event.c
+@@ -71,18 +71,22 @@ event_logger_cb(int severity, const char *msg)
+ static ns_job_type_t
+ event_flags_to_type(short events)
+ {
+-    ns_job_type_t job_type = 0;
+-    if (events & EV_READ) {
+-        job_type |= NS_JOB_READ;
+-    }
+-    if (events & EV_WRITE) {
+-        job_type |= NS_JOB_WRITE;
+-    }
+-    if (events & EV_TIMEOUT) {
+-        job_type |= NS_JOB_TIMER;
+-    }
+-    if (events & EV_SIGNAL) {
+-        job_type |= NS_JOB_SIGNAL;
++    /* The volatile here prevents gcc rearranging this code within the thread. */
++    volatile ns_job_type_t job_type = 0;
++
++    /* Either we timeout *or* we are a real event */
++    if (!(events & EV_TIMEOUT)) {
++        if (events & EV_READ) {
++            job_type |= NS_JOB_READ;
++        }
++        if (events & EV_WRITE) {
++            job_type |= NS_JOB_WRITE;
++        }
++        if (events & EV_SIGNAL) {
++            job_type |= NS_JOB_SIGNAL;
++        }
++    } else {
++        job_type = NS_JOB_TIMER;
+     }
+     return job_type;
+ }
+-- 
+2.9.3
+

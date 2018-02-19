@@ -1,0 +1,174 @@
+From 22f1ff8d87a7daf9fbbe2ddfbd195a6bfdae1cd6 Mon Sep 17 00:00:00 2001
+From: William Brown <firstyear@redhat.com>
+Date: Tue, 14 Mar 2017 14:01:33 +1000
+Subject: [PATCH 3/5] Ticket 49165 pw_verify did not handle external auth
+
+Bug Description:  During the change to improve sasl and simple bind,
+we externalised the backend selection outside of do_bind. In an
+auto_bind scenario however, this mean the be was null, causing the
+dn to always be invalidated.
+
+Fix Description:  Add a pw_validate_be_dn function, that correctly
+checks if we are anonymous, a real be dn, or rootdn. This then allows
+the correct authentication of autobinds.
+
+https://pagure.io/389-ds-base/issue/49165
+
+Author: wibrown
+
+Review by: mreynolds (Thanks!)
+
+(cherry picked from commit 8dbfff1ff4152afb018490886a612c448ea2a1b0)
+---
+ ldap/servers/slapd/bind.c         |  9 +++++--
+ ldap/servers/slapd/dn.c           |  5 ++++
+ ldap/servers/slapd/pw_verify.c    | 57 +++++++++++++++++++++++++++++++++++++--
+ ldap/servers/slapd/pw_verify.h    |  1 +
+ ldap/servers/slapd/slapi-plugin.h |  9 +++++++
+ 5 files changed, 77 insertions(+), 4 deletions(-)
+
+diff --git a/ldap/servers/slapd/bind.c b/ldap/servers/slapd/bind.c
+index b4bb363..5c4fada 100644
+--- a/ldap/servers/slapd/bind.c
++++ b/ldap/servers/slapd/bind.c
+@@ -656,7 +656,12 @@ do_bind( Slapi_PBlock *pb )
+         /* We could be serving multiple database backends.  Select the appropriate one */
+         /* pw_verify_be_dn will select the backend we need for us. */
+ 
+-        rc = pw_verify_be_dn(pb, &referral);
++        if (auto_bind) {
++            /* We have no password material. We should just check who we are binding as. */
++            rc = pw_validate_be_dn(pb, &referral);
++        } else {
++            rc = pw_verify_be_dn(pb, &referral);
++        }
+ 
+         if (rc == SLAPI_BIND_NO_BACKEND) {
+             send_nobackend_ldap_result( pb );
+@@ -715,7 +720,7 @@ do_bind( Slapi_PBlock *pb )
+                  *
+                  */
+                 slapi_pblock_get(pb, SLAPI_BACKEND, &be);
+-                if (!slapi_be_is_flag_set(be, SLAPI_BE_FLAG_REMOTE_DATA)) {
++                if (!isroot && !slapi_be_is_flag_set(be, SLAPI_BE_FLAG_REMOTE_DATA)) {
+                     bind_target_entry = get_entry(pb, slapi_sdn_get_ndn(sdn));
+                     myrc = slapi_check_account_lock(pb, bind_target_entry, pw_response_requested, 1, 1);
+                     if (1 == myrc) { /* account is locked */
+diff --git a/ldap/servers/slapd/dn.c b/ldap/servers/slapd/dn.c
+index d043f2a..fa3909f 100644
+--- a/ldap/servers/slapd/dn.c
++++ b/ldap/servers/slapd/dn.c
+@@ -1738,6 +1738,11 @@ slapi_dn_isroot( const char *dn )
+ 	return( rc );
+ }
+ 
++int32_t
++slapi_sdn_isroot(const Slapi_DN *sdn) {
++    return slapi_dn_isroot(slapi_sdn_get_ndn(sdn));
++}
++
+ int
+ slapi_is_rootdse( const char *dn )
+ {
+diff --git a/ldap/servers/slapd/pw_verify.c b/ldap/servers/slapd/pw_verify.c
+index 93e5ff3..529bb83 100644
+--- a/ldap/servers/slapd/pw_verify.c
++++ b/ldap/servers/slapd/pw_verify.c
+@@ -88,8 +88,61 @@ pw_verify_be_dn(Slapi_PBlock *pb, Slapi_Entry **referral)
+     return rc;
+ }
+ 
++/*
++ * Resolve the dn we have been requested to bind with and verify it's
++ * valid, and has a backend.
++ *
++ * We are checking:
++ * * is this anonymous?
++ * * is this the rootdn?
++ * * is this a real dn, which associates to a real backend.
++ *
++ * This is used in SASL autobinds, so we need to handle this validation.
++ */
++
+ int
+-pw_verify_dn()
++pw_validate_be_dn(Slapi_PBlock *pb, Slapi_Entry **referral)
+ {
+-    return LDAP_OPERATIONS_ERROR;
++    int rc = 0;
++    Slapi_Backend *be = NULL;
++    Slapi_DN *pb_sdn;
++    struct berval *cred;
++    ber_tag_t method;
++
++
++    slapi_pblock_get(pb, SLAPI_BIND_TARGET_SDN, &pb_sdn);
++    slapi_pblock_get(pb, SLAPI_BIND_CREDENTIALS, &cred);
++    slapi_pblock_get(pb, SLAPI_BIND_METHOD, &method);
++
++    if (pb_sdn != NULL || cred != NULL) {
++        return LDAP_OPERATIONS_ERROR;
++    }
++
++    if (*referral) {
++        return SLAPI_BIND_REFERRAL;
++    }
++
++    /* We need a slapi_sdn_isanon? */
++    if (method == LDAP_AUTH_SIMPLE && cred->bv_len == 0) {
++        return SLAPI_BIND_ANONYMOUS;
++    }
++
++    if (slapi_sdn_isroot(pb_sdn)) {
++        /* This is a real identity */
++        return SLAPI_BIND_SUCCESS;
++    }
++
++    if (slapi_mapping_tree_select(pb, &be, referral, NULL, 0) != LDAP_SUCCESS) {
++        return SLAPI_BIND_NO_BACKEND;
++    }
++    slapi_be_Unlock(be);
++
++    slapi_pblock_set(pb, SLAPI_BACKEND, be);
++    slapi_pblock_set(pb, SLAPI_PLUGIN, be->be_database);
++    /* Make sure the result handlers are setup */
++    set_db_default_result_handlers(pb);
++
++    /* The backend associated with this identity is real. */
++
++    return SLAPI_BIND_SUCCESS;
+ }
+diff --git a/ldap/servers/slapd/pw_verify.h b/ldap/servers/slapd/pw_verify.h
+index fc34fd1..5137027 100644
+--- a/ldap/servers/slapd/pw_verify.h
++++ b/ldap/servers/slapd/pw_verify.h
+@@ -11,5 +11,6 @@
+ 
+ int pw_verify_root_dn(const char *dn, const Slapi_Value *cred);
+ int pw_verify_be_dn(Slapi_PBlock *pb, Slapi_Entry **referral);
++int pw_validate_be_dn(Slapi_PBlock *pb, Slapi_Entry **referral);
+ 
+ #endif /* _SLAPD_PW_VERIFY_H_ */
+diff --git a/ldap/servers/slapd/slapi-plugin.h b/ldap/servers/slapd/slapi-plugin.h
+index b223f65..1bd8fc8 100644
+--- a/ldap/servers/slapd/slapi-plugin.h
++++ b/ldap/servers/slapd/slapi-plugin.h
+@@ -3800,6 +3800,15 @@ int slapi_dn_isparent( const char *parentdn, const char *childdn );
+ int slapi_dn_isroot( const char *dn );
+ 
+ /**
++ * Determines if an SDN is the root DN.
++ *
++ * \param sdn The DN to check
++ * \return \c 1 if the DN is the root DN.
++ * \return \c 0 if the DN is not the root DN.
++ */
++int32_t slapi_sdn_isroot( const Slapi_DN *sdn );
++
++/**
+  * Checks if a DN is the backend suffix.
+  *
+  * \param pb A parameter block with the backend set.
+-- 
+2.9.3
+

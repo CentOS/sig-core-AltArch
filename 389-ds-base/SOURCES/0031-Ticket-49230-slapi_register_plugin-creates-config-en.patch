@@ -1,0 +1,50 @@
+From 91a162d66c2fe239c009f1ee16974d310b333e7e Mon Sep 17 00:00:00 2001
+From: Thierry Bordaz <tbordaz@redhat.com>
+Date: Fri, 21 Apr 2017 17:16:55 +0200
+Subject: [PATCH] Ticket 49230 - slapi_register_plugin creates config entry
+ where it should not
+
+Bug Description:
+    slapi-register-plugin systematically create an entry under
+    'cn=plugins,cn=config' because it is not taking into account
+    the flag 'add_entry in 'plugin_setup'.
+
+    This is potentially a regression introduced by
+    https://pagure.io/389-ds-base/issue/49066 (TBC)
+
+Fix Description:
+    Test 'add_entry' before adding the entry
+
+    https://pagure.io/389-ds-base/issue/49230
+
+Review by: Mark Reynolds, William Brown
+---
+ ldap/servers/slapd/plugin.c | 12 +++++++-----
+ 1 file changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/ldap/servers/slapd/plugin.c b/ldap/servers/slapd/plugin.c
+index ac8306f..a5e0724 100644
+--- a/ldap/servers/slapd/plugin.c
++++ b/ldap/servers/slapd/plugin.c
+@@ -3132,11 +3132,13 @@ plugin_setup(Slapi_Entry *plugin_entry, struct slapi_componentid *group,
+ 		add_plugin_entry_dn(dn_copy);
+ 	}
+ 
+-    /* make a copy of the plugin entry for our own use because it will
+-       be freed later by the caller */
+-    Slapi_Entry *e_copy = slapi_entry_dup(plugin_entry);
+-    /* new_plugin_entry(&plugin_entries, plugin_entry, plugin); */
+-    new_plugin_entry(&dep_plugin_entries, e_copy, plugin);
++	if (add_entry) {
++		/* make a copy of the plugin entry for our own use because it will
++		   be freed later by the caller */
++		Slapi_Entry *e_copy = slapi_entry_dup(plugin_entry);
++		/* new_plugin_entry(&plugin_entries, plugin_entry, plugin); */
++		new_plugin_entry(&dep_plugin_entries, e_copy, plugin);
++	}
+ 
+ PLUGIN_CLEANUP:
+ 	if (status) {
+-- 
+2.9.3
+

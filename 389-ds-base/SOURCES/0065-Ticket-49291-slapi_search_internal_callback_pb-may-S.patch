@@ -1,0 +1,46 @@
+From 28529671057c95327a35c326ee99fcafccad9de9 Mon Sep 17 00:00:00 2001
+From: Thierry Bordaz <tbordaz@redhat.com>
+Date: Wed, 14 Jun 2017 18:36:55 +0200
+Subject: [PATCH] Ticket 49291 - slapi_search_internal_callback_pb may SIGSEV
+ if related pblock has not operation set
+
+Bug Description:
+    if slapi_search_internal_set_pb is called with an invalid (NULL) base, the pblock should not
+    be used to call send_ldap_result. If it is, the send_ldap_result trying to derefence the
+    operation pointer will crash
+
+Fix Description:
+    Check that the operation is set before derefencing it
+
+https://pagure.io/389-ds-base/issue/49291
+
+Reviewed by: Mark Reynolds
+
+Platforms tested: F23
+
+Flag Day: no
+
+Doc impact: no
+---
+ ldap/servers/slapd/result.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/ldap/servers/slapd/result.c b/ldap/servers/slapd/result.c
+index 56257c3..f3016ca 100644
+--- a/ldap/servers/slapd/result.c
++++ b/ldap/servers/slapd/result.c
+@@ -350,6 +350,11 @@ send_ldap_result_ext(
+ 	slapi_pblock_get (pb, SLAPI_BIND_METHOD, &bind_method);
+ 	slapi_pblock_get (pb, SLAPI_OPERATION, &operation);
+ 
++	if (operation == NULL) {
++		slapi_log_err(SLAPI_LOG_ERR, "send_ldap_result_ext", "No operation found: slapi_search_internal_set_pb was incomplete (invalid 'base' ?)\n");
++		return;
++	}
++
+ 	if (operation->o_status == SLAPI_OP_STATUS_RESULT_SENT) {
+ 		return; /* result already sent */
+ 	}
+-- 
+2.9.5
+

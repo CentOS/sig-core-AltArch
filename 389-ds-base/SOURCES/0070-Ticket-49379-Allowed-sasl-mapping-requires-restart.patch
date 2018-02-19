@@ -1,0 +1,439 @@
+From 8a7b47602acc910d2f64439b81af3299b60359c8 Mon Sep 17 00:00:00 2001
+From: Mark Reynolds <mreynolds@redhat.com>
+Date: Mon, 18 Sep 2017 10:35:20 -0400
+Subject: [PATCH] Ticket 49379 - Allowed sasl mapping requires restart
+
+Bug Description:  If allowed sasl mechanisms are configured, and the server is
+                  restarted, trying to add new sasl mechanisms does not get applied
+                  until the server is restarted again. [1]
+
+                  We were also overwriting memory when we stripped the commas from
+                  the allowed machanism list.  THis lead to the allowed mechanisms
+                  to get truncated,and permanently lose certain mechs. [2]
+
+                  A crash with PLAIN sasl mechanism was also found. [3]
+
+Fix Description:  To address allowed sasl mechs, we no longer explicitly the mechanisms
+                  during the sasl_init at server startup.  Instead we check the allowed
+                  list ourselves during a bind. [1]
+
+                  When setting the allowed sasl mechs, make a copy of the value to
+                  apply the changes to(removing coamms), and do not change the original
+                  value as it's still being used. [2]
+
+                  The crash when using sasl PLAIN was due to unlocking a rwlock that
+                  was not locked. [3]
+
+https://pagure.io/389-ds-base/issue/49379
+
+Reviewed by: tbordaz(Thanks!)
+
+(cherry picked from commit c78f41db31752a99aadd6abcbf7a1d852a8e7931)
+---
+ dirsrvtests/tests/suites/sasl/allowed_mechs.py | 114 ++++++++++++++++++++++--
+ dirsrvtests/tests/suites/sasl/plain.py         |  10 ++-
+ ldap/servers/slapd/libglobs.c                  |  23 ++---
+ ldap/servers/slapd/saslbind.c                  | 116 +++++++++++++------------
+ 4 files changed, 187 insertions(+), 76 deletions(-)
+
+diff --git a/dirsrvtests/tests/suites/sasl/allowed_mechs.py b/dirsrvtests/tests/suites/sasl/allowed_mechs.py
+index 7958db4..5b1b92c 100644
+--- a/dirsrvtests/tests/suites/sasl/allowed_mechs.py
++++ b/dirsrvtests/tests/suites/sasl/allowed_mechs.py
+@@ -8,45 +8,141 @@
+ #
+ 
+ import pytest
+-import ldap
+-
+-import time
+-
++import os
+ from lib389.topologies import topology_st
+ 
++
+ def test_sasl_allowed_mechs(topology_st):
++    """Test the alloweed sasl mechanism feature
++
++    :ID: ab7d9f86-8cfe-48c3-8baa-739e599f006a
++    :feature: Allowed sasl mechanisms
++    :steps: 1.  Get the default list of mechanisms
++            2.  Set allowed mechanism PLAIN, and verify it's correctly listed
++            3.  Restart server, and verify list is still correct
++            4.  Test EXTERNAL is properly listed
++            5.  Add GSSAPI to the existing list, and verify it's correctly listed
++            6.  Restart server and verify list is still correct
++            7.  Add ANONYMOUS to the existing list, and veirfy it's correctly listed
++            8.  Restart server and verify list is still correct
++            9.  Remove GSSAPI and verify it's correctly listed
++            10. Restart server and verify list is still correct
++            11. Reset allowed list to nothing, verify "all" the mechanisms are returned
++            12. Restart server and verify list is still correct
++
++    :expectedresults: The supported mechanisms supported what is set for the allowed
++                      mechanisms
++    """
+     standalone = topology_st.standalone
+ 
+     # Get the supported mechs. This should contain PLAIN, GSSAPI, EXTERNAL at least
++    standalone.log.info("Test we have some of the default mechanisms")
+     orig_mechs = standalone.rootdse.supported_sasl()
+     print(orig_mechs)
+     assert('GSSAPI' in orig_mechs)
+     assert('PLAIN' in orig_mechs)
+     assert('EXTERNAL' in orig_mechs)
+ 
+-    # Now edit the supported mechs. CHeck them again.
++    # Now edit the supported mechs. Check them again.
++    standalone.log.info("Edit mechanisms to allow just PLAIN")
+     standalone.config.set('nsslapd-allowed-sasl-mechanisms', 'PLAIN')
++    limit_mechs = standalone.rootdse.supported_sasl()
++    assert('PLAIN' in limit_mechs)
++    assert('EXTERNAL' in limit_mechs)  # Should always be in the allowed list, even if not set.
++    assert('GSSAPI' not in limit_mechs)  # Should not be there!
+ 
++    # Restart the server a few times and make sure nothing changes
++    standalone.log.info("Restart server and make sure we still have correct allowed mechs")
++    standalone.restart()
++    standalone.restart()
+     limit_mechs = standalone.rootdse.supported_sasl()
+     assert('PLAIN' in limit_mechs)
+-    # Should always be in the allowed list, even if not set.
+     assert('EXTERNAL' in limit_mechs)
+-    # Should not be there!
+     assert('GSSAPI' not in limit_mechs)
+ 
++    # Set EXTERNAL, even though its always supported
++    standalone.log.info("Edit mechanisms to allow just PLAIN and EXTERNAL")
+     standalone.config.set('nsslapd-allowed-sasl-mechanisms', 'PLAIN, EXTERNAL')
++    limit_mechs = standalone.rootdse.supported_sasl()
++    assert('PLAIN' in limit_mechs)
++    assert('EXTERNAL' in limit_mechs)
++    assert('GSSAPI' not in limit_mechs)
++
++    # Now edit the supported mechs. Check them again.
++    standalone.log.info("Edit mechanisms to allow just PLAIN and GSSAPI")
++    standalone.config.set('nsslapd-allowed-sasl-mechanisms', 'PLAIN, GSSAPI')
++    limit_mechs = standalone.rootdse.supported_sasl()
++    assert('PLAIN' in limit_mechs)
++    assert('EXTERNAL' in limit_mechs)
++    assert('GSSAPI' in limit_mechs)
++    assert(len(limit_mechs) == 3)
++
++    # Restart server twice and make sure the allowed list is the same
++    standalone.restart()
++    standalone.restart()  # For ticket 49379 (test double restart)
++    limit_mechs = standalone.rootdse.supported_sasl()
++    assert('PLAIN' in limit_mechs)
++    assert('EXTERNAL' in limit_mechs)
++    assert('GSSAPI' in limit_mechs)
++    assert(len(limit_mechs) == 3)
++
++    # Add ANONYMOUS to the supported mechs and test again.
++    standalone.log.info("Edit mechanisms to allow just PLAIN, GSSAPI, and ANONYMOUS")
++    standalone.config.set('nsslapd-allowed-sasl-mechanisms', 'PLAIN, GSSAPI, ANONYMOUS')
++    limit_mechs = standalone.rootdse.supported_sasl()
++    assert('PLAIN' in limit_mechs)
++    assert('EXTERNAL' in limit_mechs)
++    assert('GSSAPI' in limit_mechs)
++    assert('ANONYMOUS' in limit_mechs)
++    assert(len(limit_mechs) == 4)
++
++    # Restart server and make sure the allowed list is the same
++    standalone.restart()
++    standalone.restart()  # For ticket 49379 (test double restart)
++    limit_mechs = standalone.rootdse.supported_sasl()
++    assert('PLAIN' in limit_mechs)
++    assert('EXTERNAL' in limit_mechs)
++    assert('GSSAPI' in limit_mechs)
++    assert('ANONYMOUS' in limit_mechs)
++    assert(len(limit_mechs) == 4)
+ 
++    # Remove GSSAPI
++    standalone.log.info("Edit mechanisms to allow just PLAIN and ANONYMOUS")
++    standalone.config.set('nsslapd-allowed-sasl-mechanisms', 'PLAIN, ANONYMOUS')
+     limit_mechs = standalone.rootdse.supported_sasl()
+     assert('PLAIN' in limit_mechs)
+     assert('EXTERNAL' in limit_mechs)
+-    # Should not be there!
+     assert('GSSAPI' not in limit_mechs)
++    assert('ANONYMOUS' in limit_mechs)
++    assert(len(limit_mechs) == 3)
++
++    # Restart server and make sure the allowed list is the same
++    standalone.restart()
++    limit_mechs = standalone.rootdse.supported_sasl()
++    assert('PLAIN' in limit_mechs)
++    assert('EXTERNAL' in limit_mechs)
++    assert('GSSAPI' not in limit_mechs)
++    assert('ANONYMOUS' in limit_mechs)
++    assert(len(limit_mechs) == 3)
+ 
+     # Do a config reset
++    standalone.log.info("Reset allowed mechaisms")
+     standalone.config.reset('nsslapd-allowed-sasl-mechanisms')
+ 
+     # check the supported list is the same as our first check.
++    standalone.log.info("Check that we have the original set of mechanisms")
+     final_mechs = standalone.rootdse.supported_sasl()
+-    print(final_mechs)
+     assert(set(final_mechs) == set(orig_mechs))
+ 
++    # Check it after a restart
++    standalone.log.info("Check that we have the original set of mechanisms after a restart")
++    standalone.restart()
++    final_mechs = standalone.rootdse.supported_sasl()
++    assert(set(final_mechs) == set(orig_mechs))
++
++
++if __name__ == '__main__':
++    # Run isolated
++    # -s for DEBUG mode
++    CURRENT_FILE = os.path.realpath(__file__)
++    pytest.main("-s %s" % CURRENT_FILE)
+diff --git a/dirsrvtests/tests/suites/sasl/plain.py b/dirsrvtests/tests/suites/sasl/plain.py
+index 91ccb02..6bf39a8 100644
+--- a/dirsrvtests/tests/suites/sasl/plain.py
++++ b/dirsrvtests/tests/suites/sasl/plain.py
+@@ -15,9 +15,11 @@ from lib389.topologies import topology_st
+ from lib389.utils import *
+ from lib389.sasl import PlainSASL
+ from lib389.idm.services import ServiceAccounts
++from lib389._constants import (SECUREPORT_STANDALONE1, DEFAULT_SUFFIX)
+ 
+ log = logging.getLogger(__name__)
+ 
++
+ def test_sasl_plain(topology_st):
+ 
+     standalone = topology_st.standalone
+@@ -38,7 +40,7 @@ def test_sasl_plain(topology_st):
+     standalone.rsa.create()
+     # Set the secure port and nsslapd-security
+     # Could this fail with selinux?
+-    standalone.config.set('nsslapd-secureport', '%s' % SECUREPORT_STANDALONE1 )
++    standalone.config.set('nsslapd-secureport', '%s' % SECUREPORT_STANDALONE1)
+     standalone.config.set('nsslapd-security', 'on')
+     # Do we need to restart to allow starttls?
+     standalone.restart()
+@@ -65,12 +67,14 @@ def test_sasl_plain(topology_st):
+     # I can not solve. I think it's leaking state across connections in start_tls_s?
+ 
+     # Check that it works with TLS
+-    conn = standalone.openConnection(saslmethod='PLAIN', sasltoken=auth_tokens, starttls=True, connOnly=True, certdir=standalone.get_cert_dir(), reqcert=ldap.OPT_X_TLS_NEVER)
++    conn = standalone.openConnection(saslmethod='PLAIN', sasltoken=auth_tokens, starttls=True, connOnly=True,
++                                    certdir=standalone.get_cert_dir(), reqcert=ldap.OPT_X_TLS_NEVER)
+     conn.close()
+ 
+     # Check that it correct fails our bind if we don't have the password.
+     auth_tokens = PlainSASL("dn:%s" % sa.dn, 'password-wrong')
+     with pytest.raises(ldap.INVALID_CREDENTIALS):
+-        standalone.openConnection(saslmethod='PLAIN', sasltoken=auth_tokens, starttls=False, connOnly=True, certdir=standalone.get_cert_dir(), reqcert=ldap.OPT_X_TLS_NEVER)
++        standalone.openConnection(saslmethod='PLAIN', sasltoken=auth_tokens, starttls=True, connOnly=True,
++                                  certdir=standalone.get_cert_dir(), reqcert=ldap.OPT_X_TLS_NEVER)
+ 
+     # Done!
+diff --git a/ldap/servers/slapd/libglobs.c b/ldap/servers/slapd/libglobs.c
+index bb51827..2fb4bab 100644
+--- a/ldap/servers/slapd/libglobs.c
++++ b/ldap/servers/slapd/libglobs.c
+@@ -7137,22 +7137,25 @@ config_set_allowed_sasl_mechs(const char *attrname, char *value, char *errorbuf,
+ 
+     /* During a reset, the value is "", so we have to handle this case. */
+     if (strcmp(value, "") != 0) {
+-        /* cyrus sasl doesn't like comma separated lists */
+-        remove_commas(value);
++        char *nval = slapi_ch_strdup(value);
+ 
+-        if(invalid_sasl_mech(value)){
+-            slapi_log_err(SLAPI_LOG_ERR,"config_set_allowed_sasl_mechs",
+-                    "Invalid value/character for sasl mechanism (%s).  Use ASCII "
+-                    "characters, upto 20 characters, that are upper-case letters, "
+-                    "digits, hyphens, or underscores\n", value);
++        /* cyrus sasl doesn't like comma separated lists */
++        remove_commas(nval);
++
++        if (invalid_sasl_mech(nval)) {
++            slapi_log_err(SLAPI_LOG_ERR, "config_set_allowed_sasl_mechs",
++                          "Invalid value/character for sasl mechanism (%s).  Use ASCII "
++                          "characters, upto 20 characters, that are upper-case letters, "
++                          "digits, hyphens, or underscores\n",
++                          nval);
++            slapi_ch_free_string(&nval);
+             return LDAP_UNWILLING_TO_PERFORM;
+         }
+-
+         CFG_LOCK_WRITE(slapdFrontendConfig);
+         slapi_ch_free_string(&slapdFrontendConfig->allowed_sasl_mechs);
+         slapi_ch_array_free(slapdFrontendConfig->allowed_sasl_mechs_array);
+-        slapdFrontendConfig->allowed_sasl_mechs = slapi_ch_strdup(value);
+-        slapdFrontendConfig->allowed_sasl_mechs_array = slapi_str2charray_ext(value, " ", 0);
++        slapdFrontendConfig->allowed_sasl_mechs = nval;
++        slapdFrontendConfig->allowed_sasl_mechs_array = slapi_str2charray_ext(nval, " ", 0);
+         CFG_UNLOCK_WRITE(slapdFrontendConfig);
+     } else {
+         /* If this value is "", we need to set the list to *all* possible mechs */
+diff --git a/ldap/servers/slapd/saslbind.c b/ldap/servers/slapd/saslbind.c
+index 134f5aa..03e2a97 100644
+--- a/ldap/servers/slapd/saslbind.c
++++ b/ldap/servers/slapd/saslbind.c
+@@ -169,8 +169,6 @@ static int ids_sasl_getopt(
+         }
+     } else if (strcasecmp(option, "auxprop_plugin") == 0) {
+         *result = "iDS";
+-    } else if (strcasecmp(option, "mech_list") == 0){
+-        *result = config_get_allowed_sasl_mechs();
+     }
+ 
+     if (*result) *len = strlen(*result);
+@@ -572,12 +570,8 @@ static int ids_sasl_userdb_checkpass(sasl_conn_t *conn, void *context, const cha
+         slapi_pblock_set(pb, SLAPI_BIND_METHOD, &method);
+         /* Feed it to pw_verify_be_dn */
+         bind_result = pw_verify_be_dn(pb, &referral);
+-        /* Now check the result, and unlock be if needed. */
+-        if (bind_result == SLAPI_BIND_SUCCESS || bind_result == SLAPI_BIND_ANONYMOUS) {
+-            Slapi_Backend *be = NULL;
+-            slapi_pblock_get(pb, SLAPI_BACKEND, &be);
+-            slapi_be_Unlock(be);
+-        } else if (bind_result == SLAPI_BIND_REFERRAL) {
++        /* Now check the result. */
++        if (bind_result == SLAPI_BIND_REFERRAL) {
+             /* If we have a referral do we ignore it for sasl? */
+             slapi_entry_free(referral);
+         }
+@@ -760,22 +754,25 @@ char **ids_sasl_listmech(Slapi_PBlock *pb)
+     sup_ret = slapi_get_supported_saslmechanisms_copy();
+ 
+     /* If we have a connection, get the provided list from SASL */
+-    if (pb->pb_conn != NULL) {
+-        sasl_conn = (sasl_conn_t*)pb->pb_conn->c_sasl_conn;
+-
+-        /* sasl library mechanisms are connection dependent */
+-        PR_EnterMonitor(pb->pb_conn->c_mutex);
+-        if (sasl_listmech(sasl_conn,
+-                          NULL,     /* username */
+-                          "", ",", "",
+-                          &str, NULL, NULL) == SASL_OK) {
+-            slapi_log_err(SLAPI_LOG_TRACE, "ids_sasl_listmech", "sasl library mechs: %s\n", str);
+-            /* merge into result set */
+-            dupstr = slapi_ch_strdup(str);
+-            others = slapi_str2charray_ext(dupstr, ",", 0 /* don't list duplicate mechanisms */);
+-            charray_merge(&sup_ret, others, 1);
+-            charray_free(others);
+-            slapi_ch_free((void**)&dupstr);
++    if (pb_conn != NULL) {
++        sasl_conn = (sasl_conn_t*)pb_conn->c_sasl_conn;
++        if (sasl_conn != NULL) {
++            /* sasl library mechanisms are connection dependent */
++            PR_EnterMonitor(pb_conn->c_mutex);
++            if (sasl_listmech(sasl_conn,
++                              NULL,     /* username */
++                              "", ",", "",
++                              &str, NULL, NULL) == SASL_OK) {
++                slapi_log_err(SLAPI_LOG_TRACE, "ids_sasl_listmech", "sasl library mechs: %s\n", str);
++                /* merge into result set */
++                dupstr = slapi_ch_strdup(str);
++                others = slapi_str2charray_ext(dupstr, ",", 0 /* don't list duplicate mechanisms */);
++
++                charray_merge(&sup_ret, others, 1);
++                charray_free(others);
++                slapi_ch_free((void**)&dupstr);
++            }
++            PR_ExitMonitor(pb_conn->c_mutex);
+         }
+         PR_ExitMonitor(pb->pb_conn->c_mutex);
+     }
+@@ -785,7 +782,7 @@ char **ids_sasl_listmech(Slapi_PBlock *pb)
+ 
+     /* Remove any content that isn't in the allowed list */
+     if (config_ret != NULL) {
+-        /* Get the set of supported mechs in the insection of the two */
++        /* Get the set of supported mechs in the intersection of the two */
+         ret = charray_intersection(sup_ret, config_ret);
+         charray_free(sup_ret);
+         charray_free(config_ret);
+@@ -816,41 +813,52 @@ char **ids_sasl_listmech(Slapi_PBlock *pb)
+ static int
+ ids_sasl_mech_supported(Slapi_PBlock *pb, const char *mech)
+ {
+-  int i, ret = 0;
+-  char **mechs;
+-  char *dupstr;
+-  const char *str;
+-  int sasl_result = 0;
+-  sasl_conn_t *sasl_conn = (sasl_conn_t *)pb->pb_conn->c_sasl_conn;
+-
+-  slapi_log_err(SLAPI_LOG_TRACE, "ids_sasl_mech_supported", "=>\n");
+-
+-
+-  /* sasl_listmech is not thread-safe - caller must lock pb_conn */
+-  sasl_result = sasl_listmech(sasl_conn, 
+-                    NULL,     /* username */
+-                    "", ",", "",
+-                    &str, NULL, NULL);
+-  if (sasl_result != SASL_OK) {
+-    return 0;
+-  }
++    int i, ret = 0;
++    char **mechs;
++    char **allowed_mechs = NULL;
++    char *dupstr;
++    const char *str;
++    int sasl_result = 0;
++    Connection *pb_conn = NULL;
++
++    slapi_pblock_get(pb, SLAPI_CONNECTION, &pb_conn);
++    sasl_conn_t *sasl_conn = (sasl_conn_t *)pb_conn->c_sasl_conn;
++    slapi_log_err(SLAPI_LOG_TRACE, "ids_sasl_mech_supported", "=>\n");
++
++    /* sasl_listmech is not thread-safe - caller must lock pb_conn */
++    sasl_result = sasl_listmech(sasl_conn,
++                                NULL, /* username */
++                                "", ",", "",
++                                &str, NULL, NULL);
++    if (sasl_result != SASL_OK) {
++        return 0;
++    }
+ 
+-  dupstr = slapi_ch_strdup(str);
+-  mechs = slapi_str2charray(dupstr, ",");
++    dupstr = slapi_ch_strdup(str);
++    mechs = slapi_str2charray(dupstr, ",");
++    allowed_mechs = config_get_allowed_sasl_mechs_array();
+ 
+-  for (i = 0; mechs[i] != NULL; i++) {
+-    if (strcasecmp(mech, mechs[i]) == 0) {
+-      ret = 1;
+-      break;
++    for (i = 0; mechs[i] != NULL; i++) {
++        if (strcasecmp(mech, mechs[i]) == 0) {
++            if (allowed_mechs) {
++                if (charray_inlist(allowed_mechs, (char *)mech) == 0) {
++                    ret = 1;
++                }
++                break;
++            } else {
++                ret = 1;
++                break;
++            }
++        }
+     }
+-  }
+ 
+-  charray_free(mechs);
+-  slapi_ch_free((void**)&dupstr);
++    charray_free(allowed_mechs);
++    charray_free(mechs);
++    slapi_ch_free((void **)&dupstr);
+ 
+-  slapi_log_err(SLAPI_LOG_TRACE, "ids_sasl_mech_supported", "<=\n");
++    slapi_log_err(SLAPI_LOG_TRACE, "ids_sasl_mech_supported", "<=\n");
+ 
+-  return ret;
++    return ret;
+ }
+ 
+ /*
+-- 
+2.9.5
+

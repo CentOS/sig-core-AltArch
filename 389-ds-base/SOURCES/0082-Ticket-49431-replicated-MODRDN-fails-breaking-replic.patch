@@ -1,0 +1,38 @@
+From 557f4d4ed5e37f09691d383dd8189b642ade8f2b Mon Sep 17 00:00:00 2001
+From: Ludwig Krispenz <lkrispen@redhat.com>
+Date: Sun, 29 Oct 2017 16:32:11 +0100
+Subject: [PATCH] Ticket 49431 - replicated MODRDN fails breaking replication
+
+Bug: in urp modrdn_operation not a full dn was passed to generate the conflict rdn passed
+    and so the sufix test failed
+
+Fix: provide full dn of new entry
+
+Reviewed by: Mark, Thanks
+---
+ ldap/servers/plugins/replication/urp.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/ldap/servers/plugins/replication/urp.c b/ldap/servers/plugins/replication/urp.c
+index 64810e9d4..21319d9f7 100644
+--- a/ldap/servers/plugins/replication/urp.c
++++ b/ldap/servers/plugins/replication/urp.c
+@@ -433,7 +433,14 @@ urp_modrdn_operation( Slapi_PBlock *pb )
+ 			/* The target entry is a loser */
+ 
+ 			char *newrdn_with_uniqueid;
+-			newrdn_with_uniqueid= get_rdn_plus_uniqueid (sessionid, newrdn, op_uniqueid);
++			char *newdn = NULL;
++                        if (new_parent_entry) {
++                            newdn = slapi_ch_smprintf("%s,%s", newrdn, slapi_entry_get_dn(new_parent_entry));
++                        } else {
++                            newdn = slapi_ch_smprintf("%s,%s", newrdn, slapi_entry_get_dn(parent_entry));
++                        }
++			newrdn_with_uniqueid= get_rdn_plus_uniqueid (sessionid, newdn, op_uniqueid);
++			slapi_ch_free_string(&newdn);
+ 			if(newrdn_with_uniqueid==NULL)
+ 			{
+ 				op_result= LDAP_OPERATIONS_ERROR;
+-- 
+2.13.6
+

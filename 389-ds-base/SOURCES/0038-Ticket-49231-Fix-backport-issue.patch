@@ -1,0 +1,62 @@
+From e0d5f86c9410bd29c0e4636d3072b24228e60128 Mon Sep 17 00:00:00 2001
+From: Mark Reynolds <mreynolds@redhat.com>
+Date: Fri, 5 May 2017 14:58:13 -0400
+Subject: [PATCH] Ticket 49231 - Fix backport issue
+
+Description:  The cherry-pick was incorrect, and caused a crash
+---
+ ldap/servers/slapd/saslbind.c | 36 ++++++++++++++++++------------------
+ 1 file changed, 18 insertions(+), 18 deletions(-)
+
+diff --git a/ldap/servers/slapd/saslbind.c b/ldap/servers/slapd/saslbind.c
+index 6e544e6..8d23c52 100644
+--- a/ldap/servers/slapd/saslbind.c
++++ b/ldap/servers/slapd/saslbind.c
+@@ -759,26 +759,26 @@ char **ids_sasl_listmech(Slapi_PBlock *pb)
+     /* hard-wired mechanisms and slapi plugin registered mechanisms */
+     sup_ret = slapi_get_supported_saslmechanisms_copy();
+ 
+-    if (pb->pb_conn == NULL) return ret;
++    /* If we have a connection, get the provided list from SASL */
++    if (pb->pb_conn != NULL) {
++        sasl_conn = (sasl_conn_t*)pb->pb_conn->c_sasl_conn;
+ 
+-    sasl_conn = (sasl_conn_t*)pb->pb_conn->c_sasl_conn;
+-    if (sasl_conn == NULL) return ret;
+-
+-    /* sasl library mechanisms are connection dependent */
+-    PR_EnterMonitor(pb->pb_conn->c_mutex);
+-    if (sasl_listmech(sasl_conn, 
+-                      NULL,     /* username */
+-                      "", ",", "",
+-                      &str, NULL, NULL) == SASL_OK) {
+-        slapi_log_err(SLAPI_LOG_TRACE, "ids_sasl_listmech", "sasl library mechs: %s\n", str);
+-        /* merge into result set */
+-        dupstr = slapi_ch_strdup(str);
+-        others = slapi_str2charray_ext(dupstr, ",", 0 /* don't list duplicate mechanisms */);
+-        charray_merge(&ret, others, 1);
+-        charray_free(others);
+-        slapi_ch_free((void**)&dupstr);
++        /* sasl library mechanisms are connection dependent */
++        PR_EnterMonitor(pb->pb_conn->c_mutex);
++        if (sasl_listmech(sasl_conn,
++                          NULL,     /* username */
++                          "", ",", "",
++                          &str, NULL, NULL) == SASL_OK) {
++            slapi_log_err(SLAPI_LOG_TRACE, "ids_sasl_listmech", "sasl library mechs: %s\n", str);
++            /* merge into result set */
++            dupstr = slapi_ch_strdup(str);
++            others = slapi_str2charray_ext(dupstr, ",", 0 /* don't list duplicate mechanisms */);
++            charray_merge(&ret, others, 1);
++            charray_free(others);
++            slapi_ch_free((void**)&dupstr);
++        }
++        PR_ExitMonitor(pb->pb_conn->c_mutex);
+     }
+-    PR_ExitMonitor(pb->pb_conn->c_mutex);
+ 
+     /* Get the servers "allowed" list */
+     config_ret = config_get_allowed_sasl_mechs_array();
+-- 
+2.9.3
+

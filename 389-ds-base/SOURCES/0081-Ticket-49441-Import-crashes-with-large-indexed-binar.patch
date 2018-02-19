@@ -1,0 +1,96 @@
+From df5000efced2d00aa0fc6546fcf6fc7b02e27256 Mon Sep 17 00:00:00 2001
+From: Mark Reynolds <mreynolds@redhat.com>
+Date: Mon, 6 Nov 2017 22:30:55 -0500
+Subject: [PATCH] Ticket 49441 - Import crashes with large indexed binary 
+ attributes
+
+Bug Description:  Importing an ldif file that contains entries with large
+                  binary attributes that are indexed crashes the server.
+                  The crash occurs when "encoding" the binary value to a
+                  string for debug logging, where we "underflow" the buffer
+                  space index which then allows the string buffer to overflow.
+
+Fix Description:  While filling the string buffer with the encoded binary
+                  value we need to make sure if the buffer space is greater
+                  than zero before decrementing it.
+
+                  Also check if trace logging is being used before we actually
+                  call the logging function which calls the "encoded" function
+                  first.  This way we avoid this costly "encoding" on every
+                  index call we make.
+
+https://pagure.io/389-ds-base/issue/49441
+
+Reviewed by: firstyear(Thanks!)
+---
+ ldap/servers/slapd/back-ldbm/index.c | 21 ++++++++++-----------
+ 1 file changed, 10 insertions(+), 11 deletions(-)
+
+diff --git a/ldap/servers/slapd/back-ldbm/index.c b/ldap/servers/slapd/back-ldbm/index.c
+index d4de28ca3..d62052a22 100644
+--- a/ldap/servers/slapd/back-ldbm/index.c
++++ b/ldap/servers/slapd/back-ldbm/index.c
+@@ -808,7 +808,10 @@ encode (const struct berval* data, char buf[BUFSIZ])
+ 		    bufSpace -= (s - first);
+ 		}
+ 		do {
+-		    *bufNext++ = '\\'; --bufSpace;
++		    if (bufSpace) {
++		        *bufNext++ = '\\';
++		        --bufSpace;
++		    }
+ 		    if (bufSpace < 2) {
+ 			memcpy (bufNext, "..", 2);
+ 			bufNext += 2;
+@@ -903,8 +906,10 @@ index_read_ext_allids(
+ 		slapi_log_err(SLAPI_LOG_ERR, "index_read_ext_allids", "NULL prefix\n");
+ 		return NULL;
+ 	}
+-	slapi_log_err(SLAPI_LOG_TRACE, "index_read_ext_allids", "=> ( \"%s\" %s \"%s\" )\n",
+-		   type, prefix, encode (val, buf));
++	if (slapi_is_loglevel_set(LDAP_DEBUG_TRACE)) {
++	    slapi_log_err(SLAPI_LOG_TRACE, "index_read_ext_allids", "=> ( \"%s\" %s \"%s\" )\n",
++	                  type, prefix, encode (val, buf));
++	}
+ 
+ 	basetype = typebuf;
+ 	if ( (basetmp = slapi_attr_basetype( type, typebuf, sizeof(typebuf) ))
+@@ -1737,16 +1742,13 @@ addordel_values(
+                  */
+ 		key.flags = DB_DBT_USERMEM;
+                 key.ulen = tmpbuflen;
+-#ifdef LDAP_ERROR_LOGGING
+-		/* XXX if ( slapd_ldap_debug & LDAP_DEBUG_TRACE )  XXX */
+-		{
++        if (slapi_is_loglevel_set(LDAP_DEBUG_TRACE)) {
+ 			char encbuf[BUFSIZ];
+ 
+ 			slapi_log_err(SLAPI_LOG_TRACE, "addordel_values", "%s_value(\"%s\")\n",
+ 				   (flags & BE_INDEX_ADD) ? "add" : "del",
+ 				   encoded (&key, encbuf));
+ 		}
+-#endif
+ 
+ 		if (NULL != txn) {
+ 			db_txn = txn->back_txn_txn;
+@@ -1907,16 +1909,13 @@ addordel_values_sv(
+          */
+         key.flags = DB_DBT_USERMEM;
+         key.ulen = tmpbuflen;
+-#ifdef LDAP_ERROR_LOGGING
+-        /* XXX if ( slapd_ldap_debug & LDAP_DEBUG_TRACE )  XXX */
+-        {
++        if (slapi_is_loglevel_set(LDAP_DEBUG_TRACE)) {
+             char encbuf[BUFSIZ];
+ 
+             slapi_log_err(SLAPI_LOG_TRACE, "addordel_values_sv", "%s_value(\"%s\")\n",
+                        (flags & BE_INDEX_ADD) ? "add" : "del",
+                        encoded (&key, encbuf));
+         }
+-#endif
+ 
+         if (NULL != txn) {
+             db_txn = txn->back_txn_txn;
+-- 
+2.13.6
+

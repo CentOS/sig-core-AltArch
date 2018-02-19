@@ -1,0 +1,40 @@
+From 8c39c9dbe69949065940019e930c37b8f5450a75 Mon Sep 17 00:00:00 2001
+From: Adam Tkac <vonsch@gmail.com>
+Date: Sat, 18 Mar 2017 23:34:54 +0100
+Subject: [PATCH] Fix double-free in _cl5NewDBFile() error path
+
+Although slapi_ch_free should prevent double-free errors, it doesn't work
+in old code because after assignment
+
+(*dbFile)->name = name;
+
+two independent pointers points to the same allocated area and both pointers
+are free()-ed (one directly in error path in _cl5NewDBFile and the second
+in _cl5DBCloseFile, called in error path as well).
+
+Signed-off-by: Mark Reynolds <mreynolds@redhat.com>
+---
+ ldap/servers/plugins/replication/cl5_api.c | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/ldap/servers/plugins/replication/cl5_api.c b/ldap/servers/plugins/replication/cl5_api.c
+index fc70ab7..5c2233f 100644
+--- a/ldap/servers/plugins/replication/cl5_api.c
++++ b/ldap/servers/plugins/replication/cl5_api.c
+@@ -6269,9 +6269,10 @@ out:
+ 	}
+ 
+     (*dbFile)->db = db;
+-    (*dbFile)->name = name;  
+-    (*dbFile)->replName = slapi_ch_strdup (replName);  
+-    (*dbFile)->replGen = slapi_ch_strdup (replGen);  
++    (*dbFile)->name = name;
++    name = NULL; /* transfer ownership to dbFile struct */
++    (*dbFile)->replName = slapi_ch_strdup (replName);
++    (*dbFile)->replGen = slapi_ch_strdup (replGen);
+ 
+ 	/*
+ 	 * Considerations for setting up cl semaphore:
+-- 
+2.9.3
+

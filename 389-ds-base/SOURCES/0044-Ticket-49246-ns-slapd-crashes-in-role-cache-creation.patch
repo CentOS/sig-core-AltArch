@@ -1,0 +1,171 @@
+From 18491418e661b5dc1b9ca4c6bb4adb85bfb0bf0d Mon Sep 17 00:00:00 2001
+From: Mark Reynolds <mreynolds@redhat.com>
+Date: Tue, 9 May 2017 16:31:52 -0400
+Subject: [PATCH] Ticket 49246 - ns-slapd crashes in role cache creation
+
+Bug Description:  Using a nested filter for a filtered role can
+                  cause a crash.  This was due to the way the filter
+                  was being checked by the roles plugin.
+
+Fix Description:  Properly resurse over a filter.
+
+https://pagure.io/389-ds-base/issue/49246
+
+Reviewed by: firstyear & tbordaz(Thanks!!)
+
+(cherry picked from commit 54e4fca35899550e0c25b25e7f7c756302d258ce)
+---
+ dirsrvtests/tests/tickets/ticket49122_test.py | 61 ++++++++++++++++++---------
+ ldap/servers/plugins/roles/roles_cache.c      | 34 +++++++++++----
+ 2 files changed, 66 insertions(+), 29 deletions(-)
+
+diff --git a/dirsrvtests/tests/tickets/ticket49122_test.py b/dirsrvtests/tests/tickets/ticket49122_test.py
+index ff1e8d1..0945122 100644
+--- a/dirsrvtests/tests/tickets/ticket49122_test.py
++++ b/dirsrvtests/tests/tickets/ticket49122_test.py
+@@ -2,8 +2,7 @@ import time
+ import ldap
+ import logging
+ import pytest
+-from lib389 import DirSrv, Entry, tools, tasks
+-from lib389.tools import DirSrvTools
++from lib389 import Entry
+ from lib389._constants import *
+ from lib389.properties import *
+ from lib389.tasks import *
+@@ -19,6 +18,15 @@ log = logging.getLogger(__name__)
+ 
+ USER_DN = 'uid=user,' + DEFAULT_SUFFIX
+ ROLE_DN = 'cn=Filtered_Role_That_Includes_Empty_Role,' + DEFAULT_SUFFIX
++filters = ['nsrole=cn=empty,dc=example,dc=com',
++           '(nsrole=cn=empty,dc=example,dc=com)',
++           '(&(nsrole=cn=empty,dc=example,dc=com))',
++           '(!(nsrole=cn=empty,dc=example,dc=com))',
++           '(&(|(objectclass=person)(sn=app*))(userpassword=*))',
++           '(&(|(objectclass=person)(nsrole=cn=empty,dc=example,dc=com))(userpassword=*))',
++           '(&(|(nsrole=cn=empty,dc=example,dc=com)(sn=app*))(userpassword=*))',
++           '(&(|(objectclass=person)(sn=app*))(nsrole=cn=empty,dc=example,dc=com))',
++           '(&(|(&(cn=*)(objectclass=person)(nsrole=cn=empty,dc=example,dc=com)))(uid=*))']
+ 
+ 
+ def test_ticket49122(topo):
+@@ -29,18 +37,6 @@ def test_ticket49122(topo):
+     topo.standalone.plugins.enable(name=PLUGIN_ROLES)
+     topo.standalone.restart()
+ 
+-    # Add invalid role
+-    try:
+-        topo.standalone.add_s(Entry((
+-            ROLE_DN, {'objectclass': ['top', 'ldapsubentry', 'nsroledefinition',
+-                                      'nscomplexroledefinition', 'nsfilteredroledefinition'],
+-                      'cn': 'Filtered_Role_That_Includes_Empty_Role',
+-                      'nsRoleFilter': '(!(nsrole=cn=This_Is_An_Empty_Managed_NsRoleDefinition,dc=example,dc=com))',
+-                      'description': 'A filtered role with filter that will crash the server'})))
+-    except ldap.LDAPError as e:
+-        topo.standalone.log.fatal('Failed to add filtered role: error ' + e.message['desc'])
+-        assert False
+-
+     # Add test user
+     try:
+         topo.standalone.add_s(Entry((
+@@ -51,16 +47,39 @@ def test_ticket49122(topo):
+         assert False
+ 
+     if DEBUGGING:
+-        # Add debugging steps(if any)...
+         print("Attach gdb")
+         time.sleep(20)
+ 
+-    # Search for the role
+-    try:
+-        topo.standalone.search_s(USER_DN, ldap.SCOPE_SUBTREE, 'objectclass=*', ['nsrole'])
+-    except ldap.LDAPError as e:
+-        topo.standalone.log.fatal('Search failed: error ' + str(e))
+-        assert False
++    # Loop over filters
++    for role_filter in filters:
++        log.info('Testing filter: ' + role_filter)
++
++        # Add invalid role
++        try:
++            topo.standalone.add_s(Entry((
++                ROLE_DN, {'objectclass': ['top', 'ldapsubentry', 'nsroledefinition',
++                                          'nscomplexroledefinition', 'nsfilteredroledefinition'],
++                          'cn': 'Filtered_Role_That_Includes_Empty_Role',
++                          'nsRoleFilter': role_filter,
++                          'description': 'A filtered role with filter that will crash the server'})))
++        except ldap.LDAPError as e:
++            topo.standalone.log.fatal('Failed to add filtered role: error ' + e.message['desc'])
++            assert False
++
++        # Search for the role
++        try:
++            topo.standalone.search_s(USER_DN, ldap.SCOPE_SUBTREE, 'objectclass=*', ['nsrole'])
++        except ldap.LDAPError as e:
++            topo.standalone.log.fatal('Search failed: error ' + str(e))
++            assert False
++
++        # Cleanup
++        try:
++            topo.standalone.delete_s(ROLE_DN)
++        except ldap.LDAPError as e:
++            topo.standalone.log.fatal('delete failed: error ' + str(e))
++            assert False
++        time.sleep(1)
+ 
+     topo.standalone.log.info('Test Passed')
+ 
+diff --git a/ldap/servers/plugins/roles/roles_cache.c b/ldap/servers/plugins/roles/roles_cache.c
+index 4f27c4c..3697eaa 100644
+--- a/ldap/servers/plugins/roles/roles_cache.c
++++ b/ldap/servers/plugins/roles/roles_cache.c
+@@ -1073,20 +1073,38 @@ static int roles_cache_create_role_under(roles_cache_def** roles_cache_suffix, S
+ }
+ 
+ /*
+- * Check that we are not using nsrole in the filter
++ * Check that we are not using nsrole in the filter, recurse over all the
++ * nested filters.
+  */
+ static int roles_check_filter(Slapi_Filter *filter_list)
+ {
+ 	Slapi_Filter  *f;
+ 	char *type = NULL;
+ 
+-	for ( f = slapi_filter_list_first( filter_list );
+-	          f != NULL;
+-	          f = slapi_filter_list_next( filter_list, f ) )
+-	{
+-		slapi_filter_get_attribute_type(f, &type);
+-		if (strcasecmp(type, NSROLEATTR) == 0){
+-			return -1;
++	f = slapi_filter_list_first( filter_list );
++	if (f == NULL){
++		/* Single filter */
++		if (slapi_filter_get_attribute_type(filter_list, &type) == 0){
++			if (strcasecmp(type, NSROLEATTR) == 0){
++				return -1;
++			}
++		}
++	}
++	for ( ; f != NULL; f = slapi_filter_list_next(filter_list, f) ){
++		/* Complex filter */
++		if (slapi_filter_list_first(f)) {
++			/* Another filter list - recurse */
++			if (roles_check_filter(f) == -1){
++				/* Done, break out */
++				return -1;
++			}
++		} else {
++			/* Not a filter list, so check the type */
++			if (slapi_filter_get_attribute_type(f, &type) == 0){
++				if (strcasecmp(type, NSROLEATTR) == 0){
++					return -1;
++				}
++			}
+ 		}
+ 	}
+ 
+-- 
+2.9.4
+

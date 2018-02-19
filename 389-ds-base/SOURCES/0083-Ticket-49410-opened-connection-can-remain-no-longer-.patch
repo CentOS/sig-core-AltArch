@@ -1,0 +1,58 @@
+From 72f541fd317321fbd0395dcaa77830aa8b5d35b6 Mon Sep 17 00:00:00 2001
+From: Thierry Bordaz <tbordaz@redhat.com>
+Date: Wed, 15 Nov 2017 16:38:28 +0100
+Subject: [PATCH] Ticket 49410 - opened connection can remain no longer poll,
+ like hanging
+
+Bug Description:
+    Some opened connection are no longer poll.
+    Those connections has 'gettingber' toggle set although there is
+    no more worker thread reading it.
+    The reason they have gettingber set is that the last
+    operation had 'persistent search' flag. With such flag
+    gettingber is not reset.
+    persistent flag is set even when no persistent search/sync_repl
+    was received on the connection.
+    The problem is that the flag is tested on the wrong operation.
+    The tested operation can be
+        - the first operation when the connection entered in turbo mode
+        - the previous operation if several ops PDUs were read on the network
+        - accessing random memory
+
+    In theory testing the flag can lead to sigsev even
+    if it never crash
+
+Fix Description:
+    The fix is to use the operation that is in the pblock
+    In such case pb_op is no longer used, so we can get rid of it.
+    In addition make pb_conn a local variable where it is used
+
+https://pagure.io/389-ds-base/issue/49410
+
+Reviewed by: Ludwig Krispenz, Mark Reynolds
+
+Platforms tested: F26
+
+Flag Day: no
+
+Doc impact: no
+---
+ ldap/servers/slapd/connection.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/ldap/servers/slapd/connection.c b/ldap/servers/slapd/connection.c
+index 359b59a4d..c00c88578 100644
+--- a/ldap/servers/slapd/connection.c
++++ b/ldap/servers/slapd/connection.c
+@@ -1540,6 +1540,8 @@ connection_threadmain()
+ 		}
+ 
+ 		if (!thread_turbo_flag && !more_data) {
++			Connection *pb_conn = NULL;
++
+ 			/* If more data is left from the previous connection_read_operation,
+ 			   we should finish the op now.  Client might be thinking it's
+ 			   done sending the request and wait for the response forever.
+-- 
+2.13.6
+

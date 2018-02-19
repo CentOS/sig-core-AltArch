@@ -1,0 +1,81 @@
+From d336e3558655d44f8ba797392af882e33d492958 Mon Sep 17 00:00:00 2001
+From: Mark Reynolds <mreynolds@redhat.com>
+Date: Thu, 14 Sep 2017 14:15:25 -0400
+Subject: [PATCH] Ticket 49380 - Add CI test
+
+Description:  Add test to verify invalid agreement is rejected, and it
+              does not cause a crash
+
+https://pagure.io/389-ds-base/issue/49380
+
+Reviewed by: spichugi(Thanks!)
+
+(cherry picked from commit 02d76b61489f105f81d72d4f3848e2444463289b)
+---
+ .../tests/suites/replication/acceptance_test.py    | 43 ++++++++++++++++++++++
+ 1 file changed, 43 insertions(+)
+
+diff --git a/dirsrvtests/tests/suites/replication/acceptance_test.py b/dirsrvtests/tests/suites/replication/acceptance_test.py
+index e6f2ef7..2f8b180 100644
+--- a/dirsrvtests/tests/suites/replication/acceptance_test.py
++++ b/dirsrvtests/tests/suites/replication/acceptance_test.py
+@@ -3,6 +3,12 @@ from lib389.tasks import *
+ from lib389.utils import *
+ from lib389.topologies import topology_m4 as topo
+ 
++from lib389._constants import (BACKEND_NAME, DEFAULT_SUFFIX, LOG_REPLICA, REPLICA_RUV_FILTER,
++                               ReplicaRole, REPLICATION_BIND_DN, REPLICATION_BIND_PW,
++                               REPLICATION_BIND_METHOD, REPLICATION_TRANSPORT, defaultProperties,
++                               RA_NAME, RA_BINDDN, RA_BINDPW, RA_METHOD, RA_TRANSPORT_PROT,
++                               DN_DM, PASSWORD, LOG_DEFAULT, RA_ENABLED, RA_SCHEDULE)
++
+ TEST_ENTRY_NAME = 'mmrepl_test'
+ TEST_ENTRY_DN = 'uid={},{}'.format(TEST_ENTRY_NAME, DEFAULT_SUFFIX)
+ 
+@@ -193,6 +199,43 @@ def test_modrdn_entry(topo, test_entry, delold):
+         topo.ms["master1"].delete_s(newrdn_dn)
+ 
+ 
++def test_invalid_agmt(topo_m4):
++    """Test adding that an invalid agreement is properly rejected and does not crash the server
++
++    :id: 6c3b2a7e-edcd-4327-a003-6bd878ff722b
++    :setup: MMR with four masters
++    :steps:
++        1. Add invalid agreement (nsds5ReplicaEnabled set to invalid value)
++        2. Verify the server is still running
++    :expectedresults:
++        1. Invalid repl agreement should be rejected
++        2. Server should be still running
++    """
++    m1 = topo_m4.ms["master1"]
++
++    # Add invalid agreement (nsds5ReplicaEnabled set to invalid value)
++    AGMT_DN = 'cn=whatever,cn=replica,cn="dc=example,dc=com",cn=mapping tree,cn=config'
++    try:
++        invalid_props = {RA_ENABLED: 'True',  # Invalid value
++                         RA_SCHEDULE: '0001-2359 0123456'}
++        m1.agreement.create(suffix=DEFAULT_SUFFIX, host='localhost', port=389, properties=invalid_props)
++    except ldap.UNWILLING_TO_PERFORM:
++        m1.log.info('Invalid repl agreement correctly rejected')
++    except ldap.LDAPError as e:
++        m1.log.fatal('Got unexpected error adding invalid agreement: ' + str(e))
++        assert False
++    else:
++        m1.log.fatal('Invalid agreement was incorrectly accepted by the server')
++        assert False
++
++    # Verify the server is still running
++    try:
++        m1.simple_bind_s(DN_DM, PASSWORD)
++    except ldap.LDAPError as e:
++        m1.log.fatal('Failed to bind: ' + str(e))
++        assert False
++
++
+ if __name__ == '__main__':
+     # Run isolated
+     # -s for DEBUG mode
+-- 
+2.9.5
+

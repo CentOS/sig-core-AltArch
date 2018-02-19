@@ -1,0 +1,243 @@
+From 4182dd8bbff22f9e0e45b763a4619c0bc8dcb153 Mon Sep 17 00:00:00 2001
+From: Mark Reynolds <mreynolds@redhat.com>
+Date: Tue, 9 May 2017 12:31:58 -0400
+Subject: [PATCH] Ticket 49238 - AddressSanitizer: heap-use-after-free in
+ libreplication
+
+Bug Description:
+        The bug is detected in csn pending list component, when
+        accessing a csn that has already been freed.
+
+        The bug is mostly detectable under ASAN because under normal run
+        the read access to the csn would only crash if the csn was in
+        an unmapped page (that is quite difficult to acheive).
+
+        The bug was observed under the following conditions:
+            - very slow machine
+            - all instances running on the same machine
+
+        The patch address 2 issues
+
+        Issue - 1
+        Under specfic circumstance (failure, like "db_deadlock" during changelog update),
+        the csn was freed but still present in the pending list (fix-1).
+
+        Issue - 2
+        Further investigations, showed an other corner case where a
+        replica could be updated by several suppliers in parallel.
+        In such scenario, an update (on one thread-2) with a higher csn (let csn-2)
+        may be applied before an update (on another thread-1) with a smaller
+        csn (let csn-1).
+        csn-2 is freed when thread-2 complete but the csn-2 will remain
+        in the pending list until csn-1 is commited.
+        so followup of pending list may access a csn that was freed
+
+Fix Description:
+        Issue - 1
+        The fix in repl5_plugins.c, frees the csn (thread private area)
+        at the condition pending list was roll up for that csn (ruv update).
+
+        Issue - 2
+        The fix is in two parts:
+            If a supplier tries to acquire a replica while it is
+        already owner of it, the replica is granted.
+
+            If a supplier owns a replica and is asking again for it,
+        but this time the replica is not granted, the replica is release and
+        the supplier disconnected.
+
+https://pagure.io/389-ds-base/issue/49238
+
+Reviewed by: Mark Reynolds, Ludwig Krispenz, William Brown (thanks to you all !!)
+
+Platforms tested: 7.4
+
+Flag Day: no
+
+Doc impact: no
+---
+ ldap/servers/plugins/replication/repl5.h         |  1 +
+ ldap/servers/plugins/replication/repl5_plugins.c |  7 +++-
+ ldap/servers/plugins/replication/repl5_replica.c | 49 +++++++++++++++++++-----
+ ldap/servers/plugins/replication/repl_extop.c    | 42 ++++++++++++++++++--
+ 4 files changed, 86 insertions(+), 13 deletions(-)
+
+diff --git a/ldap/servers/plugins/replication/repl5.h b/ldap/servers/plugins/replication/repl5.h
+index c3bd10c..1d8989c 100644
+--- a/ldap/servers/plugins/replication/repl5.h
++++ b/ldap/servers/plugins/replication/repl5.h
+@@ -549,6 +549,7 @@ void replica_relinquish_exclusive_access(Replica *r, PRUint64 connid, int opid);
+ PRBool replica_get_tombstone_reap_active(const Replica *r);
+ const Slapi_DN *replica_get_root(const Replica *r);
+ const char *replica_get_name(const Replica *r);
++uint64_t replica_get_locking_conn(const Replica *r);
+ ReplicaId replica_get_rid (const Replica *r);
+ void replica_set_rid (Replica *r, ReplicaId rid);
+ PRBool replica_is_initialized (const Replica *r);
+diff --git a/ldap/servers/plugins/replication/repl5_plugins.c b/ldap/servers/plugins/replication/repl5_plugins.c
+index ebcc230..9ef06af 100644
+--- a/ldap/servers/plugins/replication/repl5_plugins.c
++++ b/ldap/servers/plugins/replication/repl5_plugins.c
+@@ -1224,7 +1224,12 @@ common_return:
+ 	opcsn = operation_get_csn(op);
+ 	prim_csn = get_thread_primary_csn();
+ 	if (csn_is_equal(opcsn, prim_csn)) {
+-		set_thread_primary_csn(NULL);
++		if (return_value == 0) {
++			/* the primary csn was succesfully committed
++			 * unset it in the thread local data
++			 */
++			set_thread_primary_csn(NULL);
++		}
+ 	}
+ 	if (repl_obj) {
+ 		object_release (repl_obj);
+diff --git a/ldap/servers/plugins/replication/repl5_replica.c b/ldap/servers/plugins/replication/repl5_replica.c
+index a106f8b..1bdc138 100644
+--- a/ldap/servers/plugins/replication/repl5_replica.c
++++ b/ldap/servers/plugins/replication/repl5_replica.c
+@@ -64,6 +64,7 @@ struct replica {
+ 	PRBool state_update_inprogress; /* replica state is being updated */
+ 	PRLock *agmt_lock;          	/* protects agreement creation, start and stop */
+ 	char *locking_purl;				/* supplier who has exclusive access */
++	uint64_t locking_conn;         	/* The supplier's connection id */
+ 	Slapi_Counter *protocol_timeout;/* protocol shutdown timeout */
+ 	Slapi_Counter *backoff_min;		/* backoff retry minimum */
+ 	Slapi_Counter *backoff_max;		/* backoff retry maximum */
+@@ -602,19 +603,32 @@ replica_get_exclusive_access(Replica *r, PRBool *isInc, PRUint64 connid, int opi
+ 				slapi_sdn_get_dn(r->repl_root),
+ 				r->locking_purl ? r->locking_purl : "unknown");
+ 		rval = PR_FALSE;
++		if (!(r->repl_state_flags & REPLICA_TOTAL_IN_PROGRESS)) {
++			/* inc update */
++			if (r->locking_purl && r->locking_conn == connid) {
++				/* This is the same supplier connection, reset the replica
++				 * purl, and return success */
++				slapi_log_err(SLAPI_LOG_REPL, repl_plugin_name,
++					"replica_get_exclusive_access - "
++					"This is a second acquire attempt from the same replica connection "
++					" - return success instead of busy\n");
++				slapi_ch_free_string(&r->locking_purl);
++				r->locking_purl = slapi_ch_strdup(locking_purl);
++				rval = PR_TRUE;
++				goto done;
++			}
++			if (replica_get_release_timeout(r)) {
++				/*
++				 * Abort the current session so other replicas can acquire
++				 * this server.
++				 */
++				r->abort_session = ABORT_SESSION;
++			}
++		}
+ 		if (current_purl)
+ 		{
+ 			*current_purl = slapi_ch_strdup(r->locking_purl);
+ 		}
+-		if (!(r->repl_state_flags & REPLICA_TOTAL_IN_PROGRESS) &&
+-		    replica_get_release_timeout(r))
+-		{
+-			/*
+-			 * We are not doing a total update, so abort the current session
+-			 * so other replicas can acquire this server.
+-			 */
+-			r->abort_session = ABORT_SESSION;
+-		}
+ 	}
+ 	else
+ 	{
+@@ -642,7 +656,9 @@ replica_get_exclusive_access(Replica *r, PRBool *isInc, PRUint64 connid, int opi
+ 		}
+ 		slapi_ch_free_string(&r->locking_purl);
+ 		r->locking_purl = slapi_ch_strdup(locking_purl);
++		r->locking_conn = connid;
+ 	}
++done:
+ 	replica_unlock(r->repl_lock);
+ 	return rval;
+ }
+@@ -720,6 +736,18 @@ replica_get_name(const Replica *r) /* ONREPL - should we return copy instead? */
+     return(r->repl_name);
+ }
+ 
++/*
++ * Returns locking_conn of this replica
++ */
++uint64_t
++replica_get_locking_conn(const Replica *r)
++{
++	uint64_t connid;
++	replica_lock(r->repl_lock);
++	connid = r->locking_conn;
++	replica_unlock(r->repl_lock);
++	return connid;
++}
+ /* 
+  * Returns replicaid of this replica 
+  */
+@@ -2251,6 +2279,9 @@ _replica_init_from_config (Replica *r, Slapi_Entry *e, char *errortext)
+     }
+ 
+     r->tombstone_reap_stop = r->tombstone_reap_active = PR_FALSE;
++    
++    /* No supplier holding the replica */
++    r->locking_conn = ULONG_MAX;
+ 
+     return (_replica_check_validity (r));
+ }
+diff --git a/ldap/servers/plugins/replication/repl_extop.c b/ldap/servers/plugins/replication/repl_extop.c
+index 412caec..a39d918 100644
+--- a/ldap/servers/plugins/replication/repl_extop.c
++++ b/ldap/servers/plugins/replication/repl_extop.c
+@@ -1138,9 +1138,45 @@ send_response:
+ 		 */
+ 		if (NULL != connext && NULL != connext->replica_acquired)
+ 		{
+-            Object *r_obj = (Object*)connext->replica_acquired;
+-			replica_relinquish_exclusive_access((Replica*)object_get_data (r_obj),
+-												connid, opid);
++			Replica *r = (Replica*)object_get_data ((Object*)connext->replica_acquired);
++			uint64_t r_locking_conn;
++			
++			/* At this point the supplier runs a Replica Agreement for 
++			 * the specific replica connext->replica_acquired.
++			 * The RA does not know it holds the replica (because it is
++			 * sending this request).
++			 * The situation is confused
++			 */
++			slapi_log_err(SLAPI_LOG_REPL, repl_plugin_name, "multimaster_extop_StartNSDS50ReplicationRequest - "
++				"already acquired replica: replica not ready (%d) (replica=%s)\n", response, replica_get_name(r) ? replica_get_name(r) : "no name");
++			
++			/*
++			 * On consumer side, we release the exclusive access at the
++			 * condition this is this RA that holds the replica
++			 */
++			if (r) {
++				
++				r_locking_conn = replica_get_locking_conn(r);
++				slapi_log_err(SLAPI_LOG_REPL, repl_plugin_name, "multimaster_extop_StartNSDS50ReplicationRequest - "
++				"already acquired replica: locking_conn=%d, current connid=%d\n", (int) r_locking_conn, (int) connid);
++				
++				if ((r_locking_conn != ULONG_MAX) && (r_locking_conn == connid)) {
++					replica_relinquish_exclusive_access(r, connid, opid);
++					object_release((Object*) connext->replica_acquired);
++					connext->replica_acquired = NULL;
++				}
++			}
++			/*
++			 * On consumer side we should not keep a incoming connection
++			 * with replica_acquired set although the supplier is not aware of
++			 * 
++			 * On the supplier, we need to close the connection so
++			 * that the RA will restart a new session in a clear state 
++			 */
++			slapi_log_err(SLAPI_LOG_REPL, repl_plugin_name, "multimaster_extop_StartNSDS50ReplicationRequest - "
++				"already acquired replica: disconnect conn=%d\n", connid);
++			slapi_disconnect_server(conn);
++            
+ 		}
+ 		/* Remove any flags that would indicate repl session in progress */
+ 		if (NULL != connext)
+-- 
+2.9.4
+

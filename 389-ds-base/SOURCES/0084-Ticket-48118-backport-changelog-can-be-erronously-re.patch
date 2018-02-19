@@ -1,0 +1,237 @@
+From b0d593b001d4ef1fb19348335fb39bd45b31764c Mon Sep 17 00:00:00 2001
+From: Ludwig Krispenz <lkrispen@redhat.com>
+Date: Fri, 8 Dec 2017 14:26:06 +0100
+Subject: [PATCH] Ticket 48118 - backport - changelog can be erronously rebuilt
+ at startup
+
+---
+ ldap/servers/plugins/replication/cl5_api.c         | 39 ++++++++++++++++++++++
+ ldap/servers/plugins/replication/repl5.h           |  1 -
+ ldap/servers/plugins/replication/repl5_replica.c   | 39 ++--------------------
+ .../plugins/replication/repl5_replica_config.c     |  2 --
+ 4 files changed, 41 insertions(+), 40 deletions(-)
+
+diff --git a/ldap/servers/plugins/replication/cl5_api.c b/ldap/servers/plugins/replication/cl5_api.c
+index 5c2233f82..1ce8d081f 100644
+--- a/ldap/servers/plugins/replication/cl5_api.c
++++ b/ldap/servers/plugins/replication/cl5_api.c
+@@ -304,6 +304,8 @@ static void _cl5ReadBerval (struct berval *bv, char** buff);
+ static void _cl5WriteBerval (struct berval *bv, char** buff);
+ static int _cl5ReadBervals (struct berval ***bv, char** buff, unsigned int size);
+ static int _cl5WriteBervals (struct berval **bv, char** buff, u_int32_t *size);
++static int32_t _cl5CheckMaxRUV(CL5DBFile *file, RUV *maxruv);
++static int32_t _cl5CheckCSNinCL(const ruv_enum_data *element, void *arg);
+ 
+ /* replay iteration */
+ #ifdef FOR_DEBUGGING
+@@ -2885,6 +2887,36 @@ static int _cl5WriteBervals (struct berval **bv, char** buff, u_int32_t *size)
+     return CL5_SUCCESS;
+ }
+ 
++static int32_t
++_cl5CheckCSNinCL(const ruv_enum_data *element, void *arg)
++{
++    CL5DBFile *file = (CL5DBFile *)arg;
++    int rc = 0;
++
++    DBT key = {0}, data = {0};
++    char csnStr[CSN_STRSIZE];
++
++    /* construct the key */
++    key.data = csn_as_string(element->csn, PR_FALSE, csnStr);
++    key.size = CSN_STRSIZE;
++
++    data.flags = DB_DBT_MALLOC;
++
++    rc = file->db->get(file->db, NULL /*txn*/, &key, &data, 0);
++
++    slapi_ch_free(&(data.data));
++    return rc;
++}
++
++static int32_t
++_cl5CheckMaxRUV(CL5DBFile *file, RUV *maxruv)
++{
++    int rc = 0;
++
++    rc = ruv_enumerate_elements(maxruv, _cl5CheckCSNinCL, (void *)file);
++
++    return rc;
++}
+ /* upgrade from db33 to db41
+  * 1. Run recovery on the database environment using the DB_ENV->open method
+  * 2. Remove any Berkeley DB environment using the DB_ENV->remove method 
+@@ -4248,6 +4280,13 @@ static int _cl5WriteRUV (CL5DBFile *file, PRBool purge)
+ 		rc = ruv_to_bervals(file->maxRUV, &vals);
+ 	}
+ 
++	if (!purge && _cl5CheckMaxRUV(file, file->maxRUV)) {
++		slapi_log_err(SLAPI_LOG_ERR, repl_plugin_name_cl,
++				"_cl5WriteRUV - changelog maxRUV not found in changelog for file %s\n",
++				file->name);
++		return CL5_DB_ERROR;
++	}
++
+ 	key.size = CSN_STRSIZE;
+     
+ 	rc = _cl5WriteBervals (vals, &buff, &data.size);
+diff --git a/ldap/servers/plugins/replication/repl5.h b/ldap/servers/plugins/replication/repl5.h
+index 718f64ef1..9c4789f9e 100644
+--- a/ldap/servers/plugins/replication/repl5.h
++++ b/ldap/servers/plugins/replication/repl5.h
+@@ -620,7 +620,6 @@ Object *replica_get_for_backend (const char *be_name);
+ void replica_set_purge_delay (Replica *r, PRUint32 purge_delay);
+ void replica_set_tombstone_reap_interval (Replica *r, long interval);
+ void replica_update_ruv_consumer (Replica *r, RUV *supplier_ruv);
+-void replica_set_ruv_dirty (Replica *r);
+ Slapi_Entry *get_in_memory_ruv(Slapi_DN *suffix_sdn);
+ int replica_write_ruv (Replica *r);
+ char *replica_get_dn(Replica *r);
+diff --git a/ldap/servers/plugins/replication/repl5_replica.c b/ldap/servers/plugins/replication/repl5_replica.c
+index 7927ac30a..3c7281a42 100644
+--- a/ldap/servers/plugins/replication/repl5_replica.c
++++ b/ldap/servers/plugins/replication/repl5_replica.c
+@@ -46,7 +46,6 @@ struct replica {
+ 	char*   legacy_purl;            /* partial url of the legacy supplier   */
+ 	ReplicaId repl_rid;				/* replicaID							*/
+ 	Object	*repl_ruv;				/* replica update vector				*/
+-	PRBool repl_ruv_dirty;          /* Dirty flag for ruv                   */
+ 	CSNPL *min_csn_pl;              /* Pending list for minimal CSN         */
+ 	void *csn_pl_reg_id;            /* registration assignment for csn callbacks */
+ 	unsigned long repl_state_flags;	/* state flags							*/
+@@ -855,7 +854,6 @@ replica_set_ruv (Replica *r, RUV *ruv)
+     }
+ 
+ 	r->repl_ruv = object_new((void*)ruv, (FNFree)ruv_destroy);
+-	r->repl_ruv_dirty = PR_TRUE;
+ 
+ 	replica_unlock(r->repl_lock);
+ }
+@@ -941,11 +939,6 @@ replica_update_ruv(Replica *r, const CSN *updated_csn, const char *replica_purl)
+ 						slapi_sdn_get_dn(r->repl_root),
+ 						csn_as_string(updated_csn, PR_FALSE, csn_str));
+ 				}
+-				else
+-				{
+-					/* RUV updated - mark as dirty */
+-					r->repl_ruv_dirty = PR_TRUE;
+-				}
+ 			}
+ 			else
+ 			{
+@@ -1526,8 +1519,6 @@ replica_dump(Replica *r)
+     slapi_log_err(SLAPI_LOG_REPL, repl_plugin_name, "\tupdate dn: %s\n",
+             updatedn_list? updatedn_list : "not configured");
+     slapi_ch_free_string(&updatedn_list);
+-    slapi_log_err(SLAPI_LOG_REPL, repl_plugin_name, "\truv: %s configured and is %sdirty\n",
+-                    r->repl_ruv ? "" : "not", r->repl_ruv_dirty ? "" : "not ");
+     slapi_log_err(SLAPI_LOG_REPL, repl_plugin_name, "\tCSN generator: %s configured\n",
+                     r->repl_csngen ? "" : "not");
+ 	/* JCMREPL - Dump Referrals */
+@@ -1877,7 +1868,6 @@ int replica_check_for_data_reload (Replica *r, void *arg)
+ 
+                     ruv_force_csn_update_from_ruv(upper_bound_ruv, r_ruv, 
+                             "Force update of database RUV (from CL RUV) -> ", SLAPI_LOG_NOTICE);
+-                    replica_set_ruv_dirty(r);
+                 }
+                 
+             } else {
+@@ -2994,12 +2984,6 @@ replica_write_ruv (Replica *r)
+ 
+ 	replica_lock(r->repl_lock);
+ 
+-	if (!r->repl_ruv_dirty)
+-	{
+-		replica_unlock(r->repl_lock);
+-		return rc;
+-	}
+-
+ 	PR_ASSERT (r->repl_ruv);
+ 	
+ 	ruv_to_smod ((RUV*)object_get_data(r->repl_ruv), &smod);
+@@ -3034,19 +3018,13 @@ replica_write_ruv (Replica *r)
+     /* ruv does not exist - create one */
+     replica_lock(r->repl_lock);
+ 
+-    if (rc == LDAP_SUCCESS)
+-    {
+-        r->repl_ruv_dirty = PR_FALSE;
+-    }
+-    else if (rc == LDAP_NO_SUCH_OBJECT)
++    if (rc == LDAP_NO_SUCH_OBJECT)
+     {
+         /* this includes an internal operation - but since this only happens
+            during server startup - its ok that we have lock around it */
+         rc = _replica_configure_ruv  (r, PR_TRUE);
+-        if (rc == 0)
+-            r->repl_ruv_dirty = PR_FALSE;
+     }
+-	else /* error */
++	else if (rc != LDAP_SUCCESS) /* error */
+ 	{
+ 		slapi_log_err(SLAPI_LOG_REPL, repl_plugin_name, 
+ 			"replica_write_ruv - Failed to update RUV tombstone for %s; "
+@@ -3570,7 +3548,6 @@ replica_create_ruv_tombstone(Replica *r)
+ 
+             if (ruv_init_new(csnstr, r->repl_rid, purl, &ruv) == RUV_SUCCESS){
+                 r->repl_ruv = object_new((void*)ruv, (FNFree)ruv_destroy);
+-                r->repl_ruv_dirty = PR_TRUE;
+                 return_value = LDAP_SUCCESS;
+             } else {
+                 slapi_log_err(SLAPI_LOG_ERR, repl_plugin_name, "replica_create_ruv_tombstone - "
+@@ -3610,8 +3587,6 @@ replica_create_ruv_tombstone(Replica *r)
+     slapi_add_internal_pb(pb);
+     e = NULL; /* add consumes e, upon success or failure */
+     slapi_pblock_get(pb, SLAPI_PLUGIN_INTOP_RESULT, &return_value);
+-    if (return_value == LDAP_SUCCESS)
+-        r->repl_ruv_dirty = PR_FALSE;
+ 		
+ done:
+     slapi_entry_free (e);
+@@ -3930,7 +3905,6 @@ replica_strip_cleaned_rids(Replica *r)
+     ruv_get_cleaned_rids(ruv, rid);
+     while(rid[i] != 0){
+         ruv_delete_replica(ruv, rid[i]);
+-        replica_set_ruv_dirty(r);
+         if (replica_write_ruv(r)) {
+             slapi_log_err(SLAPI_LOG_REPL, repl_plugin_name,
+                     "replica_strip_cleaned_rids - Failed to write RUV\n");
+@@ -4052,15 +4026,6 @@ replica_update_ruv_consumer(Replica *r, RUV *supplier_ruv)
+ 	}
+ }
+ 
+-void 
+-replica_set_ruv_dirty(Replica *r)
+-{
+-	PR_ASSERT(r);
+-	replica_lock(r->repl_lock);
+-	r->repl_ruv_dirty = PR_TRUE;
+-	replica_unlock(r->repl_lock);
+-}
+-
+ PRBool
+ replica_is_state_flag_set(Replica *r, PRInt32 flag)
+ {
+diff --git a/ldap/servers/plugins/replication/repl5_replica_config.c b/ldap/servers/plugins/replication/repl5_replica_config.c
+index 814f1cac0..128c9423a 100644
+--- a/ldap/servers/plugins/replication/repl5_replica_config.c
++++ b/ldap/servers/plugins/replication/repl5_replica_config.c
+@@ -1034,7 +1034,6 @@ replica_config_change_type_and_id (Replica *r, const char *new_type,
+                     replica_reset_csn_pl(r);
+                 }
+                 ruv_delete_replica(ruv, oldrid);
+-                replica_set_ruv_dirty(r);
+                 cl5CleanRUV(oldrid);
+                 replica_set_csn_assigned(r);
+             }
+@@ -1454,7 +1453,6 @@ replica_execute_cleanruv_task (Object *r, ReplicaId rid, char *returntext /* not
+ 		return LDAP_UNWILLING_TO_PERFORM;
+ 	}
+ 	rc = ruv_delete_replica(local_ruv, rid);
+-	replica_set_ruv_dirty(replica);
+ 	if (replica_write_ruv(replica)) {
+ 		slapi_log_err(SLAPI_LOG_REPL, repl_plugin_name, "cleanAllRUV_task - Could not write RUV\n");
+ 	}
+-- 
+2.13.6
+

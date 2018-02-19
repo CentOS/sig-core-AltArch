@@ -1,0 +1,245 @@
+From 1a66f5f232d6c2869ef4e439eafe5a820f61a976 Mon Sep 17 00:00:00 2001
+From: Thierry Bordaz <tbordaz@redhat.com>
+Date: Wed, 15 Feb 2017 11:31:27 +0100
+Subject: [PATCH] Ticket 49076 - To debug DB_DEADLOCK condition, allow to reset
+ DB_TXN_NOWAIT flag on txn_begin
+
+Bug Description:
+    For debug reason it is interesting to have a new configuration ldbm backend config
+    option (nsslapd-db-transaction-wait) that allows to hang on deadlock
+    rather to let the server handling retries.
+
+Fix Description:
+    The fix introduce a new attribute nsslapd-db-transaction-wait under
+    "cn=config,cn=ldbm database,cn=plugins,cn=config".
+    By default it is "off" (ldbm returns DB_DEADLOCK) and can be changed
+    online.
+    It is taken into account when a new transcation begin.
+
+https://pagure.io/389-ds-base/issue/49076
+
+Reviewed by: William Brown, Ludwig Krispenz
+
+Platforms tested: F23
+
+Flag Day: no
+
+Doc impact: no
+---
+ dirsrvtests/tests/tickets/ticket49076_test.py | 103 ++++++++++++++++++++++++++
+ ldap/servers/slapd/back-ldbm/dblayer.c        |   9 ++-
+ ldap/servers/slapd/back-ldbm/dblayer.h        |   3 +
+ ldap/servers/slapd/back-ldbm/ldbm_config.c    |  22 ++++++
+ ldap/servers/slapd/back-ldbm/ldbm_config.h    |   1 +
+ 5 files changed, 137 insertions(+), 1 deletion(-)
+ create mode 100644 dirsrvtests/tests/tickets/ticket49076_test.py
+
+diff --git a/dirsrvtests/tests/tickets/ticket49076_test.py b/dirsrvtests/tests/tickets/ticket49076_test.py
+new file mode 100644
+index 0000000..c4a2c1b
+--- /dev/null
++++ b/dirsrvtests/tests/tickets/ticket49076_test.py
+@@ -0,0 +1,103 @@
++import time
++import ldap
++import logging
++import pytest
++from lib389 import DirSrv, Entry, tools, tasks
++from lib389.tools import DirSrvTools
++from lib389._constants import *
++from lib389.properties import *
++from lib389.tasks import *
++from lib389.utils import *
++from lib389.topologies import topology_st as topo
++
++DEBUGGING = os.getenv("DEBUGGING", default=False)
++if DEBUGGING:
++    logging.getLogger(__name__).setLevel(logging.DEBUG)
++else:
++    logging.getLogger(__name__).setLevel(logging.INFO)
++log = logging.getLogger(__name__)
++
++ldbm_config = "cn=config,%s" % (DN_LDBM)
++txn_begin_flag = "nsslapd-db-transaction-wait"
++TEST_USER_DN = 'cn=test,%s' % SUFFIX
++TEST_USER = "test"
++
++def _check_configured_value(topology_st, attr=txn_begin_flag, expected_value=None, required=False):
++    entries = topology_st.standalone.search_s(ldbm_config, ldap.SCOPE_BASE, 'cn=config')
++    if required:
++        assert (entries[0].hasValue(attr))
++    if entries[0].hasValue(attr):
++        topology_st.standalone.log.info('Current value is %s' % entries[0].getValue(attr))
++        assert (entries[0].getValue(attr) == expected_value)
++        
++def _update_db(topology_st):
++    topology_st.standalone.add_s(
++        Entry((TEST_USER_DN, {'objectclass': "top person organizationalPerson inetOrgPerson".split(),
++                              'cn': TEST_USER,
++                              'sn': TEST_USER,
++                              'givenname': TEST_USER})))
++    topology_st.standalone.delete_s(TEST_USER_DN)
++
++def test_ticket49076(topo):
++    """Write your testcase here...
++
++    Also, if you need any testcase initialization,
++    please, write additional fixture for that(include finalizer).
++    """
++    
++    # check default value is DB_TXN_NOWAIT
++    _check_configured_value(topo, expected_value="off")
++    
++    # tests we are able to update DB
++    _update_db(topo)
++    
++    # switch to wait mode
++    topo.standalone.modify_s(ldbm_config,
++                                    [(ldap.MOD_REPLACE, txn_begin_flag, "on")])
++                                    # check default value is DB_TXN_NOWAIT
++    _check_configured_value(topo, expected_value="on")
++    _update_db(topo)
++    
++    
++    # switch back to "normal mode"
++    topo.standalone.modify_s(ldbm_config,
++                                    [(ldap.MOD_REPLACE, txn_begin_flag, "off")])
++    # check default value is DB_TXN_NOWAIT
++    _check_configured_value(topo, expected_value="off")
++    # tests we are able to update DB
++    _update_db(topo)
++    
++    # check that settings are not reset by restart
++    topo.standalone.modify_s(ldbm_config,
++                                    [(ldap.MOD_REPLACE, txn_begin_flag, "on")])
++                                    # check default value is DB_TXN_NOWAIT
++    _check_configured_value(topo, expected_value="on")
++    _update_db(topo)
++    topo.standalone.restart(timeout=10)
++    _check_configured_value(topo, expected_value="on")
++    _update_db(topo)
++    
++    # switch default value
++    topo.standalone.modify_s(ldbm_config,
++                                    [(ldap.MOD_DELETE, txn_begin_flag, None)])
++    # check default value is DB_TXN_NOWAIT
++    _check_configured_value(topo, expected_value="off")
++    # tests we are able to update DB
++    _update_db(topo)
++    topo.standalone.restart(timeout=10)
++    _check_configured_value(topo, expected_value="off")
++    # tests we are able to update DB
++    _update_db(topo)    
++                              
++
++    if DEBUGGING:
++        # Add debugging steps(if any)...
++        pass
++
++
++if __name__ == '__main__':
++    # Run isolated
++    # -s for DEBUG mode
++    CURRENT_FILE = os.path.realpath(__file__)
++    pytest.main("-s %s" % CURRENT_FILE)
++
+diff --git a/ldap/servers/slapd/back-ldbm/dblayer.c b/ldap/servers/slapd/back-ldbm/dblayer.c
+index 683994f..507a3cc 100644
+--- a/ldap/servers/slapd/back-ldbm/dblayer.c
++++ b/ldap/servers/slapd/back-ldbm/dblayer.c
+@@ -3374,6 +3374,8 @@ dblayer_txn_begin_ext(struct ldbminfo *li, back_txnid parent_txn, back_txn *txn,
+ 
+     if (priv->dblayer_enable_transactions)
+     {
++        int txn_begin_flags;
++
+         dblayer_private_env *pEnv = priv->dblayer_env;
+         if(use_lock) slapi_rwlock_rdlock(pEnv->dblayer_env_lock);
+         if (!parent_txn)
+@@ -3383,11 +3385,16 @@ dblayer_txn_begin_ext(struct ldbminfo *li, back_txnid parent_txn, back_txn *txn,
+             if (par_txn_txn) {
+                 parent_txn = par_txn_txn->back_txn_txn;
+             }
++                }
++        if (priv->dblayer_txn_wait) {
++                txn_begin_flags = 0;
++        } else {
++                txn_begin_flags = DB_TXN_NOWAIT;
+         }
+         return_value = TXN_BEGIN(pEnv->dblayer_DB_ENV,
+                                  (DB_TXN*)parent_txn,
+                                  &new_txn.back_txn_txn,
+-                                 DB_TXN_NOWAIT);
++                                 txn_begin_flags);
+         if (0 != return_value) 
+         {
+             if(use_lock) slapi_rwlock_unlock(priv->dblayer_env->dblayer_env_lock);
+diff --git a/ldap/servers/slapd/back-ldbm/dblayer.h b/ldap/servers/slapd/back-ldbm/dblayer.h
+index e02e6e0..e4307fc 100644
+--- a/ldap/servers/slapd/back-ldbm/dblayer.h
++++ b/ldap/servers/slapd/back-ldbm/dblayer.h
+@@ -104,6 +104,9 @@ struct dblayer_private
+                                         * the mpool */
+     int dblayer_recovery_required;
+     int dblayer_enable_transactions;
++    int dblayer_txn_wait;           /* Default is "off" (DB_TXN_NOWAIT) but for
++                                     * support purpose it could be helpful to set
++                                     * "on" so that backend hang on deadlock */
+     int dblayer_durable_transactions;
+     int dblayer_checkpoint_interval;
+     int dblayer_circular_logging;
+diff --git a/ldap/servers/slapd/back-ldbm/ldbm_config.c b/ldap/servers/slapd/back-ldbm/ldbm_config.c
+index 8541224..dfe7a13 100644
+--- a/ldap/servers/slapd/back-ldbm/ldbm_config.c
++++ b/ldap/servers/slapd/back-ldbm/ldbm_config.c
+@@ -636,6 +636,27 @@ static int ldbm_config_db_transaction_logging_set(void *arg, void *value, char *
+     return retval;
+ }
+ 
++
++static void *ldbm_config_db_transaction_wait_get(void *arg)
++{
++    struct ldbminfo *li = (struct ldbminfo *) arg;
++
++    return (void *) ((uintptr_t)li->li_dblayer_private->dblayer_txn_wait);
++}
++
++static int ldbm_config_db_transaction_wait_set(void *arg, void *value, char *errorbuf, int phase, int apply)
++{
++    struct ldbminfo *li = (struct ldbminfo *) arg;
++    int retval = LDAP_SUCCESS;
++    int val = (int) ((uintptr_t)value);
++
++    if (apply) {
++        li->li_dblayer_private->dblayer_txn_wait = val;
++    }
++
++    return retval;
++}
++
+ static void *ldbm_config_db_logbuf_size_get(void *arg) 
+ {
+     struct ldbminfo *li = (struct ldbminfo *) arg;
+@@ -1517,6 +1538,7 @@ static config_info ldbm_config[] = {
+     {CONFIG_DB_DURABLE_TRANSACTIONS, CONFIG_TYPE_ONOFF, "on", &ldbm_config_db_durable_transactions_get, &ldbm_config_db_durable_transactions_set, CONFIG_FLAG_ALWAYS_SHOW},
+     {CONFIG_DB_CIRCULAR_LOGGING, CONFIG_TYPE_ONOFF, "on", &ldbm_config_db_circular_logging_get, &ldbm_config_db_circular_logging_set, 0},
+     {CONFIG_DB_TRANSACTION_LOGGING, CONFIG_TYPE_ONOFF, "on", &ldbm_config_db_transaction_logging_get, &ldbm_config_db_transaction_logging_set, 0},
++    {CONFIG_DB_TRANSACTION_WAIT, CONFIG_TYPE_ONOFF, "off", &ldbm_config_db_transaction_wait_get, &ldbm_config_db_transaction_wait_set, CONFIG_FLAG_ALWAYS_SHOW|CONFIG_FLAG_ALLOW_RUNNING_CHANGE},
+     {CONFIG_DB_CHECKPOINT_INTERVAL, CONFIG_TYPE_INT, "60", &ldbm_config_db_checkpoint_interval_get, &ldbm_config_db_checkpoint_interval_set, CONFIG_FLAG_ALWAYS_SHOW|CONFIG_FLAG_ALLOW_RUNNING_CHANGE},
+     {CONFIG_DB_COMPACTDB_INTERVAL, CONFIG_TYPE_INT, "2592000"/*30days*/, &ldbm_config_db_compactdb_interval_get, &ldbm_config_db_compactdb_interval_set, CONFIG_FLAG_ALWAYS_SHOW|CONFIG_FLAG_ALLOW_RUNNING_CHANGE},
+     {CONFIG_DB_TRANSACTION_BATCH, CONFIG_TYPE_INT, "0", &dblayer_get_batch_transactions, &dblayer_set_batch_transactions, CONFIG_FLAG_ALWAYS_SHOW|CONFIG_FLAG_ALLOW_RUNNING_CHANGE},
+diff --git a/ldap/servers/slapd/back-ldbm/ldbm_config.h b/ldap/servers/slapd/back-ldbm/ldbm_config.h
+index f481937..ddec3a8 100644
+--- a/ldap/servers/slapd/back-ldbm/ldbm_config.h
++++ b/ldap/servers/slapd/back-ldbm/ldbm_config.h
+@@ -80,6 +80,7 @@ struct config_info {
+ #define CONFIG_DB_DURABLE_TRANSACTIONS "nsslapd-db-durable-transaction"
+ #define CONFIG_DB_CIRCULAR_LOGGING "nsslapd-db-circular-logging"
+ #define CONFIG_DB_TRANSACTION_LOGGING "nsslapd-db-transaction-logging"
++#define CONFIG_DB_TRANSACTION_WAIT "nsslapd-db-transaction-wait"
+ #define CONFIG_DB_CHECKPOINT_INTERVAL "nsslapd-db-checkpoint-interval"
+ #define CONFIG_DB_COMPACTDB_INTERVAL "nsslapd-db-compactdb-interval"
+ #define CONFIG_DB_TRANSACTION_BATCH  "nsslapd-db-transaction-batch-val"
+-- 
+2.9.3
+

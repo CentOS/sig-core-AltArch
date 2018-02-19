@@ -1,0 +1,87 @@
+From bbe3403a88f9adecbd5d4187ceeb080fb51d9d14 Mon Sep 17 00:00:00 2001
+From: Mark Reynolds <mreynolds@redhat.com>
+Date: Wed, 31 May 2017 11:15:13 -0400
+Subject: [PATCH] Ticket 49257 - only register modify callbacks
+
+Bug Description:  Regression.  In the previous fix we called
+                  ldbm_instance_config_load_dse_info() to register all
+                  the dse preop callbacks.  Previously this was only done
+                  when creating an instance.  It was not designed to be
+                  used outside of that context, and it caused error 53's
+                  when trying to add a backend after instance creation.
+
+Fix Description:  Just register the "modify" DSE preop callbacks.
+
+https://pagure.io/389-ds-base/issue/49257
+
+Reviewed by: ?
+
+(cherry picked from commit 75a32a8829297a5cab303590d049f581740cf87e)
+---
+ ldap/servers/slapd/back-ldbm/instance.c             | 12 +++---------
+ ldap/servers/slapd/back-ldbm/ldbm_config.h          |  2 +-
+ ldap/servers/slapd/back-ldbm/ldbm_instance_config.c | 13 +++++++++++++
+ 3 files changed, 17 insertions(+), 10 deletions(-)
+
+diff --git a/ldap/servers/slapd/back-ldbm/instance.c b/ldap/servers/slapd/back-ldbm/instance.c
+index 8b38644..f067d22 100644
+--- a/ldap/servers/slapd/back-ldbm/instance.c
++++ b/ldap/servers/slapd/back-ldbm/instance.c
+@@ -305,15 +305,9 @@ ldbm_instance_startall(struct ldbminfo *li)
+         if (rc1 != 0) {
+             rc = rc1;
+         } else {
+-            if(ldbm_instance_config_load_dse_info(inst) != 0){
+-                slapi_log_err(SLAPI_LOG_ERR, "ldbm_instance_startall",
+-                    "Loading database instance configuration failed for (%s)\n",
+-                    inst->inst_name);
+-                rc = -1;
+-            } else {
+-                vlv_init(inst);
+-                slapi_mtn_be_started(inst->inst_be);
+-            }
++            ldbm_instance_register_modify_callback(inst);
++            vlv_init(inst);
++            slapi_mtn_be_started(inst->inst_be);
+         }
+         inst_obj = objset_next_obj(li->li_instance_set, inst_obj);
+     }
+diff --git a/ldap/servers/slapd/back-ldbm/ldbm_config.h b/ldap/servers/slapd/back-ldbm/ldbm_config.h
+index ddec3a8..ea59739 100644
+--- a/ldap/servers/slapd/back-ldbm/ldbm_config.h
++++ b/ldap/servers/slapd/back-ldbm/ldbm_config.h
+@@ -157,6 +157,6 @@ int
+ ldbm_instance_index_config_enable_index(ldbm_instance *inst, Slapi_Entry* e);
+ int ldbm_instance_create_default_user_indexes(ldbm_instance *inst);
+ void ldbm_config_destroy(struct ldbminfo *li);
+-
++void ldbm_instance_register_modify_callback(ldbm_instance *inst);
+ 
+ #endif /* _LDBM_CONFIG_H_ */
+diff --git a/ldap/servers/slapd/back-ldbm/ldbm_instance_config.c b/ldap/servers/slapd/back-ldbm/ldbm_instance_config.c
+index 49a6cac..8fb4119 100644
+--- a/ldap/servers/slapd/back-ldbm/ldbm_instance_config.c
++++ b/ldap/servers/slapd/back-ldbm/ldbm_instance_config.c
+@@ -554,6 +554,19 @@ static int ldbm_instance_deny_config(Slapi_PBlock *pb, Slapi_Entry *e,
+     return SLAPI_DSE_CALLBACK_ERROR;
+ }
+ 
++void
++ldbm_instance_register_modify_callback(ldbm_instance *inst)
++{
++    struct ldbminfo *li = inst->inst_li;
++    char *dn = NULL;
++
++    dn = slapi_create_dn_string("cn=%s,cn=%s,cn=plugins,cn=config",
++                                inst->inst_name, li->li_plugin->plg_name);
++    slapi_config_register_callback(SLAPI_OPERATION_MODIFY, DSE_FLAG_PREOP, dn,
++        LDAP_SCOPE_BASE, "(objectclass=*)",
++        ldbm_instance_modify_config_entry_callback, (void *) inst);
++    slapi_ch_free_string(&dn);
++}
+ /* Reads in any config information held in the dse for the given
+  * entry.  Creates dse entries used to configure the given instance
+  * if they don't already exist.  Registers dse callback functions to
+-- 
+2.9.5
+

@@ -1,0 +1,1366 @@
+From be621fcd9f2215bba4c9190fd63815dc395814d8 Mon Sep 17 00:00:00 2001
+From: Mark Reynolds <mreynolds@redhat.com>
+Date: Tue, 28 Mar 2017 11:39:16 -0400
+Subject: [PATCH] Issue 48989 - Integer overflow
+
+Redo slapi_counters and monitors
+---
+ Makefile.am                                        |   4 +-
+ configure.ac                                       |  74 +++--
+ ldap/servers/plugins/dna/dna.c                     |  20 +-
+ ldap/servers/plugins/posix-winsync/posix-winsync.c |  12 +-
+ ldap/servers/plugins/replication/repl5_init.c      |   2 +-
+ ldap/servers/plugins/replication/repl_extop.c      |   2 +-
+ ldap/servers/plugins/usn/usn.c                     |  16 +-
+ ldap/servers/slapd/back-ldbm/monitor.c             |   4 +-
+ ldap/servers/slapd/back-ldbm/perfctrs.c            |  12 +-
+ ldap/servers/slapd/back-ldbm/perfctrs.h            |  74 ++---
+ ldap/servers/slapd/back-ldbm/vlv_srch.h            |   2 +-
+ ldap/servers/slapd/conntable.c                     |  14 +-
+ ldap/servers/slapd/entry.c                         |   4 +-
+ ldap/servers/slapd/log.c                           |  13 +-
+ ldap/servers/slapd/monitor.c                       |  14 +-
+ ldap/servers/slapd/slapi-plugin.h                  |  14 +-
+ ldap/servers/slapd/slapi_counter.c                 | 333 ++++-----------------
+ ldap/servers/slapd/slapi_counter_sunos_sparcv9.S   | 105 -------
+ ldap/servers/slapd/snmp_collator.c                 |   2 +-
+ test/libslapd/test.c                               |   2 +
+ test/test_slapd.h                                  |   4 +
+ 21 files changed, 205 insertions(+), 522 deletions(-)
+ delete mode 100644 ldap/servers/slapd/slapi_counter_sunos_sparcv9.S
+
+diff --git a/Makefile.am b/Makefile.am
+index df4a037..982dd28 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -1222,9 +1222,6 @@ libslapd_la_SOURCES = ldap/servers/slapd/add.c \
+ 	$(libavl_a_SOURCES)
+ 
+ libslapd_la_CPPFLAGS = $(AM_CPPFLAGS) $(DSPLUGIN_CPPFLAGS) $(SASL_INCLUDES) @db_inc@ $(SVRCORE_INCLUDES) @kerberos_inc@ @pcre_inc@
+-if SPARC
+-libslapd_la_SOURCES += ldap/servers/slapd/slapi_counter_sunos_sparcv9.S
+-endif
+ libslapd_la_LIBADD = $(LDAPSDK_LINK) $(SASL_LINK) $(SVRCORE_LINK) $(NSS_LINK) $(NSPR_LINK) $(KERBEROS_LINK) $(PCRE_LINK) $(THREADLIB) $(SYSTEMD_LINK)
+ libslapd_la_LDFLAGS = $(AM_LDFLAGS) $(SLAPD_LDFLAGS)
+ 
+@@ -2004,6 +2001,7 @@ TESTS = test_slapd \
+ 
+ test_slapd_SOURCES = test/main.c \
+ 	test/libslapd/test.c \
++	test/libslapd/counters/atomic.c \
+ 	test/libslapd/pblock/analytics.c \
+ 	test/libslapd/pblock/v3_compat.c \
+ 	test/libslapd/operation/v3_compat.c
+diff --git a/configure.ac b/configure.ac
+index 3f2aa75..8172bab 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -555,7 +555,6 @@ case $host in
+     case $host in
+       i*86-*-linux*)
+         AC_DEFINE([CPU_x86], [], [cpu type x86])
+-        AC_DEFINE([ATOMIC_64BIT_OPERATIONS], [1], [enabling atomic counter])
+         ;;
+       x86_64-*-linux*)
+         with_xsixfour="yes"
+@@ -565,23 +564,6 @@ case $host in
+         # wibrown -- 2017-02-21 disabled temporarily
+         # with_atomic_queue="yes"
+         # AC_DEFINE([ATOMIC_QUEUE_OPERATIONS], [1], [enabling atomic queue operations])
+-        AC_DEFINE([ATOMIC_64BIT_OPERATIONS], [1], [enabling atomic counter])
+-
+-        AC_MSG_CHECKING([for SSE4.2 features ...])
+-        save_CFLAGS="$CFLAGS"
+-        CFLAGS="$CFLAGS -msse4.2"
+-        AC_TRY_COMPILE(
+-            [],
+-            [return 0;],
+-            [
+-                AC_DEFINE([HAVE_SSE4_2], [1], [Have sss4.2 on this platform arch])
+-                AC_MSG_RESULT([SSE4.2 avaliable on this platform])
+-            ],
+-            [
+-                AC_MSG_RESULT([SSE4.2 not avaliable on this platform])
+-            ]
+-        )
+-        CFLAGS="$save_CFLAGS"
+         ;;
+       aarch64-*-linux*)
+         AC_DEFINE([CPU_arm], [], [cpu type arm])
+@@ -600,17 +582,6 @@ case $host in
+       s390x-*-linux*)
+         ;;
+     esac
+-    AC_MSG_CHECKING([for GCC provided 64-bit atomic bool cas function ...])
+-    AC_LINK_IFELSE([AC_LANG_PROGRAM([[]],
+-                                    [[long long ptrval = 0, val = 0, newval = 1; (void)__sync_bool_compare_and_swap_8(&ptrval, val, newval);]])],
+-                   [AC_DEFINE([HAVE_64BIT_ATOMIC_CAS_FUNC], [1], [have 64-bit atomic bool compare and swap function provided by gcc])AC_MSG_RESULT([yes])],
+-                   [AC_MSG_RESULT([no])])
+-    AC_MSG_CHECKING([for GCC provided 64-bit atomic ops functions ...])
+-    AC_LINK_IFELSE([AC_LANG_PROGRAM([[]],
+-                                    [[long long ptrval = 0, val = 0; (void)__sync_add_and_fetch_8(&ptrval, val);]])],
+-                   [AC_DEFINE([HAVE_64BIT_ATOMIC_OP_FUNCS], [1], [have 64-bit atomic operation functions provided by gcc])AC_MSG_RESULT([yes])],
+-                   [AC_MSG_RESULT([no])])
+-
+     # some programs use the native thread library directly
+     THREADLIB=-lpthread
+     AC_SUBST([THREADLIB], [$THREADLIB])
+@@ -654,7 +625,6 @@ case $host in
+     AC_DEFINE([_POSIX_C_SOURCE], [199506L], [POSIX revision])
+     AC_DEFINE([_HPUX_SOURCE], [1], [Source namespace])
+     AC_DEFINE([_INCLUDE_STDC__SOURCE_199901], [1], [to pick up all of the printf format macros in inttypes.h])
+-    AC_DEFINE([ATOMIC_64BIT_OPERATIONS], [1], [enabling atomic counter])
+     # assume 64 bit
+     initconfigdir="/$PACKAGE_NAME/config"
+     perlexec='/opt/perl_64/bin/perl'
+@@ -689,12 +659,11 @@ dnl Cstd and Crun are required to link any C++ related code
+     initdir='$(sysconfdir)/init.d'
+     case $host in
+       i?86-*-solaris2.1[[0-9]]*)
+-dnl I dont know why i386 need this explicit
++        dnl I dont know why i386 need this explicit
+         AC_DEFINE([HAVE_GETPEERUCRED], [1], [have getpeerucred])
+         ;;
+       sparc-*-solaris*)
+-dnl includes some assembler stuff in counter.o
+-        AC_DEFINE([ATOMIC_64BIT_OPERATIONS], [1], [enabling atomic counter])
++        dnl includes some assembler stuff in counter.o
+         AC_DEFINE([CPU_sparc], [], [cpu type sparc])
+         TARGET='SPARC'
+         ;;
+@@ -705,6 +674,45 @@ dnl includes some assembler stuff in counter.o
+     ;;
+ esac
+ 
++AC_MSG_CHECKING([for SSE4.2 features ...])
++save_CFLAGS="$CFLAGS"
++CFLAGS="$CFLAGS -msse4.2"
++AC_TRY_COMPILE(
++    [],
++    [return 0;],
++    [
++        AC_DEFINE([HAVE_SSE4_2], [1], [Have sss4.2 on this platform arch])
++        AC_MSG_RESULT([SSE4.2 avaliable on this platform])
++    ],
++    [
++        AC_MSG_RESULT([SSE4.2 not avaliable on this platform])
++    ]
++)
++CFLAGS="$save_CFLAGS"
++
++AC_MSG_CHECKING([for GCC provided 64-bit atomic operations])
++AC_LINK_IFELSE([AC_LANG_PROGRAM([[
++    #include <inttypes.h>
++    ]],
++    [[
++    uint64_t t_counter = 0;
++    uint64_t t_oldval = 0;
++    uint64_t t_newval = 1;
++
++    __atomic_compare_exchange_8(&t_counter, &t_oldval, t_newval, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
++    __atomic_add_fetch_8(&t_counter, t_newval, __ATOMIC_SEQ_CST);
++    __atomic_sub_fetch_8(&t_counter, t_newval, __ATOMIC_SEQ_CST);
++    __atomic_load(&t_counter, &t_oldval, __ATOMIC_SEQ_CST);
++    return 0;
++    ]])],
++    [
++        AC_DEFINE([ATOMIC_64BIT_OPERATIONS], [1], [have 64-bit atomic operation functions provided by gcc])
++        AC_MSG_RESULT([yes])
++    ],
++    [
++        AC_MSG_RESULT([no])
++    ]
++)
+ 
+ # cmd line overrides default setting above
+ if test -n "$with_initddir" ; then
+diff --git a/ldap/servers/plugins/dna/dna.c b/ldap/servers/plugins/dna/dna.c
+index 54bbe86..34011b9 100644
+--- a/ldap/servers/plugins/dna/dna.c
++++ b/ldap/servers/plugins/dna/dna.c
+@@ -2497,7 +2497,7 @@ static int dna_get_next_value(struct configEntry *config_entry,
+     if ((config_entry->maxval == -1) ||
+         (nextval <= (config_entry->maxval + config_entry->interval))) {
+         /* try to set the new next value in the config entry */
+-        PR_snprintf(next_value, sizeof(next_value),"%" NSPRIu64, nextval);
++        snprintf(next_value, sizeof(next_value),"%" NSPRIu64, nextval);
+ 
+         /* set up our replace modify operation */
+         replace_val[0] = next_value;
+@@ -2565,13 +2565,13 @@ dna_get_shared_config_attr_val(struct configEntry *config_entry, char *attr, cha
+             if(slapi_sdn_compare(server->sdn, server_sdn) == 0){
+                 if(strcmp(attr, DNA_REMOTE_BIND_METHOD) == 0){
+                     if (server->remote_bind_method) {
+-                        PR_snprintf(value, DNA_REMOTE_BUFSIZ, "%s", server->remote_bind_method);
++                        snprintf(value, DNA_REMOTE_BUFSIZ, "%s", server->remote_bind_method);
+                         found = 1;
+                     }
+                     break;
+                 } else if(strcmp(attr, DNA_REMOTE_CONN_PROT) == 0){
+                     if (server->remote_conn_prot) {
+-                        PR_snprintf(value, DNA_REMOTE_BUFSIZ, "%s", server->remote_conn_prot);
++                        snprintf(value, DNA_REMOTE_BUFSIZ, "%s", server->remote_conn_prot);
+                         found = 1;
+                     }
+                     break;
+@@ -2609,7 +2609,7 @@ dna_update_shared_config(struct configEntry *config_entry)
+ 
+         /* We store the number of remaining assigned values
+          * in the shared config entry. */
+-        PR_snprintf(remaining_vals, sizeof(remaining_vals),"%" NSPRIu64,
++        snprintf(remaining_vals, sizeof(remaining_vals),"%" NSPRIu64,
+                 config_entry->remaining);
+ 
+         /* set up our replace modify operation */
+@@ -2709,7 +2709,7 @@ dna_update_next_range(struct configEntry *config_entry,
+     int ret = 0;
+ 
+     /* Try to set the new next range in the config entry. */
+-    PR_snprintf(nextrange_value, sizeof(nextrange_value), "%" NSPRIu64 "-%" NSPRIu64,
++    snprintf(nextrange_value, sizeof(nextrange_value), "%" NSPRIu64 "-%" NSPRIu64,
+     		lower, upper);
+ 
+     /* set up our replace modify operation */
+@@ -2778,8 +2778,8 @@ dna_activate_next_range(struct configEntry *config_entry)
+     int ret = 0;
+ 
+     /* Setup the modify operation for the config entry */
+-    PR_snprintf(maxval_val, sizeof(maxval_val),"%" NSPRIu64, config_entry->next_range_upper);
+-    PR_snprintf(nextval_val, sizeof(nextval_val),"%" NSPRIu64, config_entry->next_range_lower);
++    snprintf(maxval_val, sizeof(maxval_val),"%" NSPRIu64, config_entry->next_range_upper);
++    snprintf(nextval_val, sizeof(nextval_val),"%" NSPRIu64, config_entry->next_range_lower);
+ 
+     maxval_vals[0] = maxval_val;
+     maxval_vals[1] = 0;
+@@ -4411,8 +4411,8 @@ static int dna_extend_exop(Slapi_PBlock *pb)
+         char highstr[16];
+ 
+         /* Create the exop response */
+-        PR_snprintf(lowstr, sizeof(lowstr), "%" NSPRIu64, lower);
+-        PR_snprintf(highstr, sizeof(highstr), "%" NSPRIu64, upper);
++        snprintf(lowstr, sizeof(lowstr), "%" NSPRIu64, lower);
++        snprintf(highstr, sizeof(highstr), "%" NSPRIu64, upper);
+         range_low.bv_val = lowstr;
+         range_low.bv_len = strlen(range_low.bv_val);
+         range_high.bv_val = highstr;
+@@ -4588,7 +4588,7 @@ dna_release_range(char *range_dn, PRUint64 *lower, PRUint64 *upper)
+                 *lower = *upper - release + 1;
+ 
+                 /* try to set the new maxval in the config entry */
+-                PR_snprintf(max_value, sizeof(max_value),"%" NSPRIu64, (*lower - 1));
++                snprintf(max_value, sizeof(max_value),"%" NSPRIu64, (*lower - 1));
+ 
+                 /* set up our replace modify operation */
+                 replace_val[0] = max_value;
+diff --git a/ldap/servers/plugins/posix-winsync/posix-winsync.c b/ldap/servers/plugins/posix-winsync/posix-winsync.c
+index a7e024d..63444e5 100644
+--- a/ldap/servers/plugins/posix-winsync/posix-winsync.c
++++ b/ldap/servers/plugins/posix-winsync/posix-winsync.c
+@@ -234,7 +234,7 @@ sync_acct_disable(void *cbdata, /* the usual domain config data */
+ {
+     int ds_is_enabled = 1; /* default to true */
+     int ad_is_enabled = 1; /* default to true */
+-    unsigned long adval = 0; /* raw account val from ad entry */
++    uint64_t adval = 0; /* raw account val from ad entry */
+     int isvirt = 0;
+ 
+     /* get the account lock state of the ds entry */
+@@ -270,9 +270,8 @@ sync_acct_disable(void *cbdata, /* the usual domain config data */
+         if (update_entry) {
+             slapi_entry_attr_set_ulong(update_entry, "userAccountControl", adval);
+             slapi_log_err(SLAPI_LOG_PLUGIN, posix_winsync_plugin_name,
+-                            "<-- sync_acct_disable - %s AD account [%s] - "
+-                                "new value is [%ld]\n", (ds_is_enabled) ? "enabled" : "disabled",
+-                            slapi_entry_get_dn_const(update_entry), adval);
++                "<-- sync_acct_disable - %s AD account [%s] - new value is [%" NSPRIu64 "]\n",
++				(ds_is_enabled) ? "enabled" : "disabled", slapi_entry_get_dn_const(update_entry), adval);
+         } else {
+             /* iterate through the mods - if there is already a mod
+              for userAccountControl, change it - otherwise, add it */
+@@ -327,9 +326,8 @@ sync_acct_disable(void *cbdata, /* the usual domain config data */
+                 mod_bval->bv_len = strlen(acctvalstr);
+             }
+             slapi_log_err(SLAPI_LOG_PLUGIN, posix_winsync_plugin_name,
+-                            "<-- sync_acct_disable - %s AD account [%s] - "
+-                                "new value is [%ld]\n", (ds_is_enabled) ? "enabled" : "disabled",
+-                            slapi_entry_get_dn_const(ad_entry), adval);
++                "<-- sync_acct_disable - %s AD account [%s] - new value is [%" NSPRIu64 "]\n",
++				(ds_is_enabled) ? "enabled" : "disabled", slapi_entry_get_dn_const(ad_entry), adval);
+         }
+     }
+ 
+diff --git a/ldap/servers/plugins/replication/repl5_init.c b/ldap/servers/plugins/replication/repl5_init.c
+index 0945f7b..9549dcf 100644
+--- a/ldap/servers/plugins/replication/repl5_init.c
++++ b/ldap/servers/plugins/replication/repl5_init.c
+@@ -208,7 +208,7 @@ get_repl_session_id (Slapi_PBlock *pb, char *idstr, CSN **csn)
+ 		/* Avoid "Connection is NULL and hence cannot access SLAPI_CONN_ID" */
+ 		if (opid) {
+ 			slapi_pblock_get (pb, SLAPI_CONN_ID, &connid);
+-			PR_snprintf (idstr, REPL_SESSION_ID_SIZE, "conn=%" NSPRIu64 " op=%d",
++			snprintf (idstr, REPL_SESSION_ID_SIZE, "conn=%" NSPRIu64 " op=%d",
+ 					connid, opid);
+ 		}
+ 
+diff --git a/ldap/servers/plugins/replication/repl_extop.c b/ldap/servers/plugins/replication/repl_extop.c
+index 948f38d..80580f9 100644
+--- a/ldap/servers/plugins/replication/repl_extop.c
++++ b/ldap/servers/plugins/replication/repl_extop.c
+@@ -865,7 +865,7 @@ multimaster_extop_StartNSDS50ReplicationRequest(Slapi_PBlock *pb)
+ 	 * the session's conn id and op id to identify the the supplier.
+ 	 */
+ 	/* junkrc = ruv_get_first_id_and_purl(supplier_ruv, &junkrid, &locking_purl); */
+-	PR_snprintf(locking_session, sizeof(locking_session), "conn=%" NSPRIu64 " id=%d",
++	snprintf(locking_session, sizeof(locking_session), "conn=%" NSPRIu64 " id=%d",
+ 			connid, opid);
+ 	locking_purl = &locking_session[0];
+ 	if (replica_get_exclusive_access(replica, &isInc, connid, opid,
+diff --git a/ldap/servers/plugins/usn/usn.c b/ldap/servers/plugins/usn/usn.c
+index 6fe8d2e..5e67e0a 100644
+--- a/ldap/servers/plugins/usn/usn.c
++++ b/ldap/servers/plugins/usn/usn.c
+@@ -360,7 +360,7 @@ _usn_mod_next_usn(LDAPMod ***mods, Slapi_Backend *be)
+ 
+     /* add next USN to the mods; "be" contains the usn counter */
+     usn_berval.bv_val = counter_buf;
+-    PR_snprintf(usn_berval.bv_val, USN_COUNTER_BUF_LEN, "%" NSPRIu64, 
++    snprintf(usn_berval.bv_val, USN_COUNTER_BUF_LEN, "%" NSPRIu64,
+                 slapi_counter_get_value(be->be_usn_counter));
+     usn_berval.bv_len = strlen(usn_berval.bv_val);
+     bvals[0] = &usn_berval;
+@@ -670,7 +670,7 @@ usn_rootdse_search(Slapi_PBlock *pb, Slapi_Entry* e, Slapi_Entry* entryAfter,
+         /* nsslapd-entryusn-global: on*/
+         /* root dse shows ...
+          * lastusn: <num> */
+-        PR_snprintf(attr, USN_LAST_USN_ATTR_CORE_LEN + 1, "%s", USN_LAST_USN);
++        snprintf(attr, USN_LAST_USN_ATTR_CORE_LEN + 1, "%s", USN_LAST_USN);
+         for (be = slapi_get_first_backend(&cookie); be;
+              be = slapi_get_next_backend(cookie)) {
+             if (be->be_usn_counter) {
+@@ -681,10 +681,10 @@ usn_rootdse_search(Slapi_PBlock *pb, Slapi_Entry* e, Slapi_Entry* entryAfter,
+             /* get a next USN counter from be_usn_counter; 
+              * then minus 1 from it (except if be_usn_counter has value 0) */
+             if (slapi_counter_get_value(be->be_usn_counter)) {
+-                PR_snprintf(usn_berval.bv_val, USN_COUNTER_BUF_LEN, "%" NSPRIu64,
++                snprintf(usn_berval.bv_val, USN_COUNTER_BUF_LEN, "%" NSPRIu64,
+                             slapi_counter_get_value(be->be_usn_counter)-1);
+             } else {
+-                PR_snprintf(usn_berval.bv_val, USN_COUNTER_BUF_LEN, "-1");
++                snprintf(usn_berval.bv_val, USN_COUNTER_BUF_LEN, "-1");
+             }
+             usn_berval.bv_len = strlen(usn_berval.bv_val);
+             slapi_entry_attr_replace(e, attr, vals);
+@@ -693,7 +693,7 @@ usn_rootdse_search(Slapi_PBlock *pb, Slapi_Entry* e, Slapi_Entry* entryAfter,
+         /* nsslapd-entryusn-global: off (default) */
+         /* root dse shows ...
+          * lastusn;<backend>: <num> */
+-        PR_snprintf(attr, USN_LAST_USN_ATTR_CORE_LEN + 2, "%s;", USN_LAST_USN);
++        snprintf(attr, USN_LAST_USN_ATTR_CORE_LEN + 2, "%s;", USN_LAST_USN);
+         attr_subp = attr + USN_LAST_USN_ATTR_CORE_LEN + 1;
+         for (be = slapi_get_first_backend(&cookie); be;
+              be = slapi_get_next_backend(cookie)) {
+@@ -704,10 +704,10 @@ usn_rootdse_search(Slapi_PBlock *pb, Slapi_Entry* e, Slapi_Entry* entryAfter,
+             /* get a next USN counter from be_usn_counter; 
+              * then minus 1 from it (except if be_usn_counter has value 0) */
+             if (slapi_counter_get_value(be->be_usn_counter)) {
+-                PR_snprintf(usn_berval.bv_val, USN_COUNTER_BUF_LEN, "%" NSPRIu64,
++                snprintf(usn_berval.bv_val, USN_COUNTER_BUF_LEN, "%" NSPRIu64,
+                             slapi_counter_get_value(be->be_usn_counter)-1);
+             } else {
+-                PR_snprintf(usn_berval.bv_val, USN_COUNTER_BUF_LEN, "-1");
++                snprintf(usn_berval.bv_val, USN_COUNTER_BUF_LEN, "-1");
+             }
+             usn_berval.bv_len = strlen(usn_berval.bv_val);
+     
+@@ -716,7 +716,7 @@ usn_rootdse_search(Slapi_PBlock *pb, Slapi_Entry* e, Slapi_Entry* entryAfter,
+                 attr = (char *)slapi_ch_realloc(attr, attr_len);
+                 attr_subp = attr + USN_LAST_USN_ATTR_CORE_LEN;
+             }
+-            PR_snprintf(attr_subp, attr_len - USN_LAST_USN_ATTR_CORE_LEN,
++            snprintf(attr_subp, attr_len - USN_LAST_USN_ATTR_CORE_LEN,
+                                     "%s", be->be_name);
+             slapi_entry_attr_replace(e, attr, vals);
+         }
+diff --git a/ldap/servers/slapd/back-ldbm/monitor.c b/ldap/servers/slapd/back-ldbm/monitor.c
+index dfcc735..757792b 100644
+--- a/ldap/servers/slapd/back-ldbm/monitor.c
++++ b/ldap/servers/slapd/back-ldbm/monitor.c
+@@ -26,7 +26,7 @@
+ 
+ #define MSETF(_attr, _x) do { \
+     char tmp_atype[37]; \
+-    PR_snprintf(tmp_atype, sizeof(tmp_atype), _attr, _x); \
++    snprintf(tmp_atype, sizeof(tmp_atype), _attr, _x); \
+     MSET(tmp_atype); \
+ } while (0)
+ 
+@@ -86,7 +86,7 @@ int ldbm_back_monitor_instance_search(Slapi_PBlock *pb, Slapi_Entry *e,
+     MSET("entryCacheHits");
+     sprintf(buf, "%lu", (long unsigned int)tries);
+     MSET("entryCacheTries");
+-    sprintf(buf, "%lu", (unsigned long)(100.0*(double)hits / (double)(tries > 0 ? tries : 1)));
++    sprintf(buf, "%lu", (long unsigned int)(100.0*(double)hits / (double)(tries > 0 ? tries : 1)));
+     MSET("entryCacheHitRatio");
+     sprintf(buf, "%lu", (long unsigned int)size);
+     MSET("currentEntryCacheSize");
+diff --git a/ldap/servers/slapd/back-ldbm/perfctrs.c b/ldap/servers/slapd/back-ldbm/perfctrs.c
+index 2bd18bd..5929dea 100644
+--- a/ldap/servers/slapd/back-ldbm/perfctrs.c
++++ b/ldap/servers/slapd/back-ldbm/perfctrs.c
+@@ -49,7 +49,7 @@
+ 
+ static void perfctrs_update(perfctrs_private *priv, DB_ENV *db_env);
+ static void perfctr_add_to_entry( Slapi_Entry *e, char *type,
+-	PRUint32 countervalue );
++	uint64_t countervalue );
+ 
+ /* Init perf ctrs */
+ void perfctrs_init(struct ldbminfo *li, perfctrs_private **ret_priv)
+@@ -304,17 +304,13 @@ perfctrs_as_entry( Slapi_Entry *e, perfctrs_private *priv, DB_ENV *db_env )
+      */
+     for ( i = 0; i < SLAPI_LDBM_PERFCTR_AT_MAP_COUNT; ++i ) {
+         perfctr_add_to_entry( e, perfctr_at_map[i].pam_type,
+-            *((PRUint32 *)((char *)perf + perfctr_at_map[i].pam_offset)));
++            *((uint64_t *)((char *)perf + perfctr_at_map[i].pam_offset)));
+     }
+ }
+ 
+ 
+ static void
+-perfctr_add_to_entry( Slapi_Entry *e, char *type, PRUint32 countervalue )
++perfctr_add_to_entry( Slapi_Entry *e, char *type, uint64_t countervalue )
+ {
+-	/*
+-	 * XXXmcs: the following line assumes that long's are 32 bits or larger,
+-	 * which we assume in other places too I am sure.
+-	 */
+-	slapi_entry_attr_set_ulong( e, type, (unsigned long)countervalue );
++	slapi_entry_attr_set_ulong( e, type, countervalue );
+ }
+diff --git a/ldap/servers/slapd/back-ldbm/perfctrs.h b/ldap/servers/slapd/back-ldbm/perfctrs.h
+index 65a7850..57be1d1 100644
+--- a/ldap/servers/slapd/back-ldbm/perfctrs.h
++++ b/ldap/servers/slapd/back-ldbm/perfctrs.h
+@@ -11,46 +11,48 @@
+ #  include <config.h>
+ #endif
+ 
++#include <inttypes.h>
++
+ /* Structure definition for performance data */
+ /* This stuff goes in shared memory, so make sure the packing is consistent */
+ 
+ struct _performance_counters {
+-	PRUint32	sequence_number;
+-	PRUint32    lock_region_wait_rate;
+-	PRUint32    deadlock_rate;
+-	PRUint32    configured_locks;
+-	PRUint32    current_locks;
+-	PRUint32    max_locks;
+-	PRUint32    lockers;
+-	PRUint32    current_lock_objects;
+-	PRUint32    max_lock_objects;
+-	PRUint32    lock_conflicts;
+-	PRUint32    lock_request_rate;
+-	PRUint32    log_region_wait_rate;
+-	PRUint32    log_write_rate;
+-	PRUint32    log_bytes_since_checkpoint;
+-	PRUint32    cache_size_bytes;
+-	PRUint32    page_access_rate;
+-	PRUint32    cache_hit;
+-	PRUint32    cache_try;
+-	PRUint32    page_create_rate;
+-	PRUint32    page_read_rate;
+-	PRUint32    page_write_rate;
+-	PRUint32    page_ro_evict_rate;
+-	PRUint32    page_rw_evict_rate;
+-	PRUint32    hash_buckets;
+-	PRUint32    hash_search_rate;
+-	PRUint32    longest_chain_length;
+-	PRUint32    hash_elements_examine_rate;
+-	PRUint32    pages_in_use;
+-	PRUint32    dirty_pages;
+-	PRUint32    clean_pages;
+-	PRUint32    page_trickle_rate;
+-	PRUint32    cache_region_wait_rate;
+-	PRUint32    active_txns;
+-	PRUint32    commit_rate;
+-	PRUint32    abort_rate;
+-	PRUint32    txn_region_wait_rate;
++	uint64_t	sequence_number;
++	uint64_t    lock_region_wait_rate;
++	uint64_t    deadlock_rate;
++	uint64_t    configured_locks;
++	uint64_t    current_locks;
++	uint64_t    max_locks;
++	uint64_t    lockers;
++	uint64_t    current_lock_objects;
++	uint64_t    max_lock_objects;
++	uint64_t    lock_conflicts;
++	uint64_t    lock_request_rate;
++	uint64_t    log_region_wait_rate;
++	uint64_t    log_write_rate;
++	uint64_t    log_bytes_since_checkpoint;
++	uint64_t    cache_size_bytes;
++	uint64_t    page_access_rate;
++	uint64_t    cache_hit;
++	uint64_t    cache_try;
++	uint64_t    page_create_rate;
++	uint64_t    page_read_rate;
++	uint64_t    page_write_rate;
++	uint64_t    page_ro_evict_rate;
++	uint64_t    page_rw_evict_rate;
++	uint64_t    hash_buckets;
++	uint64_t    hash_search_rate;
++	uint64_t    longest_chain_length;
++	uint64_t    hash_elements_examine_rate;
++	uint64_t    pages_in_use;
++	uint64_t    dirty_pages;
++	uint64_t    clean_pages;
++	uint64_t    page_trickle_rate;
++	uint64_t    cache_region_wait_rate;
++	uint64_t    active_txns;
++	uint64_t    commit_rate;
++	uint64_t    abort_rate;
++	uint64_t    txn_region_wait_rate;
+ };
+ typedef struct _performance_counters performance_counters;
+ 
+diff --git a/ldap/servers/slapd/back-ldbm/vlv_srch.h b/ldap/servers/slapd/back-ldbm/vlv_srch.h
+index d1eba08..6322f80 100644
+--- a/ldap/servers/slapd/back-ldbm/vlv_srch.h
++++ b/ldap/servers/slapd/back-ldbm/vlv_srch.h
+@@ -92,7 +92,7 @@ struct vlvIndex
+     time_t vlv_lastchecked;
+ 
+     /* The number of uses this search has received since start up */
+-    PRUint32 vlv_uses;
++    uint64_t vlv_uses;
+ 
+ 	struct backend* vlv_be; /* need backend to remove the index when done */
+ 
+diff --git a/ldap/servers/slapd/conntable.c b/ldap/servers/slapd/conntable.c
+index 004aeae..bcafa4e 100644
+--- a/ldap/servers/slapd/conntable.c
++++ b/ldap/servers/slapd/conntable.c
+@@ -395,7 +395,7 @@ connection_table_as_entry(Connection_Table *ct, Slapi_Entry *e)
+ 			 * 3 = The number of operations attempted that were blocked
+ 			 *     by max threads.
+ 			 */
+-			PR_snprintf(maxthreadbuf, sizeof(maxthreadbuf), "%d:%"NSPRIu64":%"NSPRIu64"",
++			snprintf(maxthreadbuf, sizeof(maxthreadbuf), "%d:%"NSPRIu64":%"NSPRIu64"",
+ 				maxthreadstate, ct->c[i].c_maxthreadscount,
+ 				ct->c[i].c_maxthreadsblocked);
+ 
+@@ -426,32 +426,32 @@ connection_table_as_entry(Connection_Table *ct, Slapi_Entry *e)
+ 		PR_ExitMonitor(ct->c[i].c_mutex);
+ 	}
+ 
+-	PR_snprintf( buf, sizeof(buf), "%d", nconns );
++	snprintf( buf, sizeof(buf), "%d", nconns );
+ 	val.bv_val = buf;
+ 	val.bv_len = strlen( buf );
+ 	attrlist_replace( &e->e_attrs, "currentconnections", vals );
+ 
+-	PR_snprintf( buf, sizeof(buf), "%" NSPRIu64, slapi_counter_get_value(num_conns));
++	snprintf( buf, sizeof(buf), "%" NSPRIu64, slapi_counter_get_value(num_conns));
+ 	val.bv_val = buf;
+ 	val.bv_len = strlen( buf );
+ 	attrlist_replace( &e->e_attrs, "totalconnections", vals );
+ 
+-	PR_snprintf( buf, sizeof(buf), "%" NSPRIu64, slapi_counter_get_value(conns_in_maxthreads));
++	snprintf( buf, sizeof(buf), "%" NSPRIu64, slapi_counter_get_value(conns_in_maxthreads));
+ 	val.bv_val = buf;
+ 	val.bv_len = strlen( buf );
+ 	attrlist_replace( &e->e_attrs, "currentconnectionsatmaxthreads", vals );
+ 
+-	PR_snprintf( buf, sizeof(buf), "%" NSPRIu64, slapi_counter_get_value(max_threads_count));
++	snprintf( buf, sizeof(buf), "%" NSPRIu64, slapi_counter_get_value(max_threads_count));
+ 	val.bv_val = buf;
+ 	val.bv_len = strlen( buf );
+ 	attrlist_replace( &e->e_attrs, "maxthreadsperconnhits", vals );
+ 
+-	PR_snprintf( buf, sizeof(buf), "%d", (ct!=NULL?ct->size:0) );
++	snprintf( buf, sizeof(buf), "%d", (ct!=NULL?ct->size:0) );
+ 	val.bv_val = buf;
+ 	val.bv_len = strlen( buf );
+ 	attrlist_replace( &e->e_attrs, "dtablesize", vals );
+ 
+-	PR_snprintf( buf, sizeof(buf), "%d", nreadwaiters );
++	snprintf( buf, sizeof(buf), "%d", nreadwaiters );
+ 	val.bv_val = buf;
+ 	val.bv_len = strlen( buf );
+ 	attrlist_replace( &e->e_attrs, "readwaiters", vals );
+diff --git a/ldap/servers/slapd/entry.c b/ldap/servers/slapd/entry.c
+index 7bbd2f4..abacc57 100644
+--- a/ldap/servers/slapd/entry.c
++++ b/ldap/servers/slapd/entry.c
+@@ -3088,14 +3088,14 @@ slapi_entry_attr_set_longlong( Slapi_Entry* e, const char *type, long long l)
+ }
+ 
+ void
+-slapi_entry_attr_set_ulong( Slapi_Entry* e, const char *type, unsigned long l)
++slapi_entry_attr_set_ulong( Slapi_Entry* e, const char *type, uint64_t l)
+ {
+     char value[16];
+ 	struct berval bv;
+ 	struct berval *bvals[2];
+ 	bvals[0] = &bv;
+ 	bvals[1] = NULL;
+-    sprintf(value,"%lu",l);
++    sprintf(value,"%" NSPRIu64, l);
+ 	bv.bv_val = value;
+ 	bv.bv_len = strlen( value );
+     slapi_entry_attr_replace( e, type, bvals );
+diff --git a/ldap/servers/slapd/log.c b/ldap/servers/slapd/log.c
+index 2f43a98..afedd5b 100644
+--- a/ldap/servers/slapd/log.c
++++ b/ldap/servers/slapd/log.c
+@@ -2327,11 +2327,11 @@ vslapd_log_error(
+     char      buffer[SLAPI_LOG_BUFSIZ];
+     char      sev_name[10];
+     int       blen = TBUFSIZE;
+-    char      *vbuf;
++    char      *vbuf = NULL;
+     int       header_len = 0;
+     int       err = 0;
+ 
+-    if ((vbuf = PR_vsmprintf(fmt, ap)) == NULL) {
++    if (vasprintf(&vbuf, fmt, ap) == -1) {
+         log__error_emergency("CRITICAL: vslapd_log_error, Unable to format message", 1 , locked);
+         return -1;
+     }
+@@ -2381,10 +2381,10 @@ vslapd_log_error(
+     /* blen = strlen(buffer); */
+     /* This truncates again .... But we have the nice smprintf above! */
+     if (subsystem == NULL) {
+-        PR_snprintf (buffer+blen, sizeof(buffer)-blen, "- %s - %s",
++        snprintf (buffer+blen, sizeof(buffer)-blen, "- %s - %s",
+                      get_log_sev_name(sev_level, sev_name), vbuf);
+     } else {
+-        PR_snprintf (buffer+blen, sizeof(buffer)-blen, "- %s - %s - %s",
++        snprintf (buffer+blen, sizeof(buffer)-blen, "- %s - %s - %s",
+                      get_log_sev_name(sev_level, sev_name), subsystem, vbuf);
+     }
+ 
+@@ -2418,7 +2418,7 @@ vslapd_log_error(
+         g_set_shutdown( SLAPI_SHUTDOWN_EXIT );
+     }
+ 
+-    PR_smprintf_free (vbuf);
++    slapi_ch_free_string(&vbuf);
+     return( 0 );
+ }
+ 
+@@ -2520,8 +2520,7 @@ static int vslapd_log_access(char *fmt, va_list ap)
+     time_t tnl;
+ 
+     /* We do this sooner, because that we we can use the message in other calls */
+-    vlen = PR_vsnprintf(vbuf, SLAPI_LOG_BUFSIZ, fmt, ap);
+-    if (! vlen) {
++    if ((vlen = vsnprintf(vbuf, SLAPI_LOG_BUFSIZ, fmt, ap)) == -1){
+         log__error_emergency("CRITICAL: vslapd_log_access, Unable to format message", 1 ,0);
+         return -1;
+     }
+diff --git a/ldap/servers/slapd/monitor.c b/ldap/servers/slapd/monitor.c
+index 0917bc8..f1fb38f 100644
+--- a/ldap/servers/slapd/monitor.c
++++ b/ldap/servers/slapd/monitor.c
+@@ -54,25 +54,25 @@ monitor_info(Slapi_PBlock *pb, Slapi_Entry* e, Slapi_Entry* entryAfter, int *ret
+ 	attrlist_replace( &e->e_attrs, "version", vals );
+ 	slapi_ch_free( (void **) &val.bv_val );
+ 
+-	val.bv_len = PR_snprintf( buf, sizeof(buf), "%d", g_get_active_threadcnt() );
++	val.bv_len = snprintf( buf, sizeof(buf), "%d", g_get_active_threadcnt() );
+ 	val.bv_val = buf;
+ 	attrlist_replace( &e->e_attrs, "threads", vals );
+ 
+ 	connection_table_as_entry(the_connection_table, e);
+ 
+-	val.bv_len = PR_snprintf( buf, sizeof(buf), "%" NSPRIu64, slapi_counter_get_value(ops_initiated) );
++	val.bv_len = snprintf( buf, sizeof(buf), "%" NSPRIu64, slapi_counter_get_value(ops_initiated) );
+ 	val.bv_val = buf;
+ 	attrlist_replace( &e->e_attrs, "opsinitiated", vals );
+ 
+-	val.bv_len = PR_snprintf( buf, sizeof(buf), "%" NSPRIu64, slapi_counter_get_value(ops_completed) );
++	val.bv_len = snprintf( buf, sizeof(buf), "%" NSPRIu64, slapi_counter_get_value(ops_completed) );
+ 	val.bv_val = buf;
+ 	attrlist_replace( &e->e_attrs, "opscompleted", vals );
+ 
+-	val.bv_len = PR_snprintf ( buf, sizeof(buf), "%" NSPRIu64, g_get_num_entries_sent() );
++	val.bv_len = snprintf ( buf, sizeof(buf), "%" NSPRIu64, g_get_num_entries_sent() );
+ 	val.bv_val = buf;
+ 	attrlist_replace( &e->e_attrs, "entriessent", vals );
+ 
+-	val.bv_len = PR_snprintf ( buf, sizeof(buf), "%" NSPRIu64, g_get_num_bytes_sent() );
++	val.bv_len = snprintf ( buf, sizeof(buf), "%" NSPRIu64, g_get_num_bytes_sent() );
+ 	val.bv_val = buf;
+ 	attrlist_replace( &e->e_attrs, "bytessent", vals );
+ 
+@@ -88,12 +88,12 @@ monitor_info(Slapi_PBlock *pb, Slapi_Entry* e, Slapi_Entry* entryAfter, int *ret
+ 	val.bv_len = strlen( buf );
+ 	attrlist_replace( &e->e_attrs, "starttime", vals );
+ 
+-	val.bv_len = PR_snprintf( buf, sizeof(buf), "%d", be_nbackends_public() );
++	val.bv_len = snprintf( buf, sizeof(buf), "%d", be_nbackends_public() );
+ 	val.bv_val = buf;
+ 	attrlist_replace( &e->e_attrs, "nbackends", vals );
+ 
+ #ifdef THREAD_SUNOS5_LWP
+-	val.bv_len = PR_snprintf( buf, sizeof(buf), "%d", thr_getconcurrency() );
++	val.bv_len = snprintf( buf, sizeof(buf), "%d", thr_getconcurrency() );
+ 	val.bv_val = buf;
+ 	attrlist_replace( &e->e_attrs, "concurrency", vals );
+ #endif
+diff --git a/ldap/servers/slapd/slapi-plugin.h b/ldap/servers/slapd/slapi-plugin.h
+index 1bd8fc8..725fa1c 100644
+--- a/ldap/servers/slapd/slapi-plugin.h
++++ b/ldap/servers/slapd/slapi-plugin.h
+@@ -1954,7 +1954,7 @@ void slapi_entry_attr_set_longlong( Slapi_Entry* e, const char *type, long long
+  * \param type Attribute type in which you want to set the value.
+  * \param l Unsigned long value that you want to assign to the attribute.
+  */
+-void slapi_entry_attr_set_ulong(Slapi_Entry* e, const char *type, unsigned long l);
++void slapi_entry_attr_set_ulong(Slapi_Entry* e, const char *type, uint64_t l);
+ 
+ /**
+  * Check if an attribute is set in the entry
+@@ -6746,12 +6746,12 @@ void slapi_destroy_task(void *arg);
+ Slapi_Counter *slapi_counter_new(void);
+ void slapi_counter_init(Slapi_Counter *counter);
+ void slapi_counter_destroy(Slapi_Counter **counter);
+-PRUint64 slapi_counter_increment(Slapi_Counter *counter);
+-PRUint64 slapi_counter_decrement(Slapi_Counter *counter);
+-PRUint64 slapi_counter_add(Slapi_Counter *counter, PRUint64 addvalue);
+-PRUint64 slapi_counter_subtract(Slapi_Counter *counter, PRUint64 subvalue);
+-PRUint64 slapi_counter_set_value(Slapi_Counter *counter, PRUint64 newvalue);
+-PRUint64 slapi_counter_get_value(Slapi_Counter *counter);
++uint64_t slapi_counter_increment(Slapi_Counter *counter);
++uint64_t slapi_counter_decrement(Slapi_Counter *counter);
++uint64_t slapi_counter_add(Slapi_Counter *counter, uint64_t addvalue);
++uint64_t slapi_counter_subtract(Slapi_Counter *counter, uint64_t subvalue);
++uint64_t slapi_counter_set_value(Slapi_Counter *counter, uint64_t newvalue);
++uint64_t slapi_counter_get_value(Slapi_Counter *counter);
+ 
+ /* Binder-based (connection centric) resource limits */
+ /*
+diff --git a/ldap/servers/slapd/slapi_counter.c b/ldap/servers/slapd/slapi_counter.c
+index c3ac846..9904fe9 100644
+--- a/ldap/servers/slapd/slapi_counter.c
++++ b/ldap/servers/slapd/slapi_counter.c
+@@ -12,37 +12,21 @@
+ 
+ #include "slap.h"
+ 
+-#ifdef SOLARIS
+-PRUint64 _sparcv9_AtomicSet(PRUint64 *address, PRUint64 newval);
+-PRUint64 _sparcv9_AtomicAdd(PRUint64 *address, PRUint64 val);
+-PRUint64 _sparcv9_AtomicSub(PRUint64 *address, PRUint64 val);
++#ifndef ATOMIC_64BIT_OPERATIONS
++#include <pthread.h>
+ #endif
+ 
+ #ifdef HPUX
+-#ifdef ATOMIC_64BIT_OPERATIONS
+ #include <machine/sys/inline.h>
+ #endif
+-#endif
+-
+-#ifdef ATOMIC_64BIT_OPERATIONS
+-#if defined(LINUX) && !HAVE_64BIT_ATOMIC_OP_FUNCS
+-/* On systems that don't have the 64-bit GCC atomic builtins, we need to
+- * implement our own atomic functions using inline assembly code. */
+-PRUint64 __sync_add_and_fetch_8(PRUint64 *ptr, PRUint64 addval);
+-PRUint64 __sync_sub_and_fetch_8(PRUint64 *ptr, PRUint64 subval);
+-#define __sync_add_and_fetch __sync_add_and_fetch_8
+-#define __sync_sub_and_fetch __sync_sub_and_fetch_8
+-#endif
+-#endif /* ATOMIC_64BIT_OPERATIONS */
+-
+ 
+ /*
+  * Counter Structure
+  */
+ typedef struct slapi_counter {
+-    PRUint64 value;
++    uint64_t value;
+ #ifndef ATOMIC_64BIT_OPERATIONS
+-    Slapi_Mutex *lock;
++    pthread_mutex_t _lock;
+ #endif
+ } slapi_counter;
+ 
+@@ -72,15 +56,11 @@ Slapi_Counter *slapi_counter_new()
+ void slapi_counter_init(Slapi_Counter *counter)
+ {
+     if (counter != NULL) {
+-#ifndef ATOMIC_64BIT_OPERATIONS
+-        /* Create the lock if necessary. */
+-        if (counter->lock == NULL) {
+-            counter->lock = slapi_new_mutex();
+-        }
+-#endif
+-        
+         /* Set the value to 0. */
+         slapi_counter_set_value(counter, 0);
++#ifndef ATOMIC_64BIT_OPERATIONS
++        pthread_mutex_init(&(counter->_lock), NULL);
++#endif
+     }
+ }
+ 
+@@ -94,7 +74,7 @@ void slapi_counter_destroy(Slapi_Counter **counter)
+ {
+     if ((counter != NULL) && (*counter != NULL)) {
+ #ifndef ATOMIC_64BIT_OPERATIONS
+-        slapi_destroy_mutex((*counter)->lock);
++        pthread_mutex_destroy(&((*counter)->_lock));
+ #endif
+         slapi_ch_free((void **)counter);
+     }
+@@ -105,7 +85,7 @@ void slapi_counter_destroy(Slapi_Counter **counter)
+  *
+  * Atomically increments a Slapi_Counter.
+  */
+-PRUint64 slapi_counter_increment(Slapi_Counter *counter)
++uint64_t slapi_counter_increment(Slapi_Counter *counter)
+ {
+     return slapi_counter_add(counter, 1);
+ }
+@@ -117,7 +97,7 @@ PRUint64 slapi_counter_increment(Slapi_Counter *counter)
+  * that this will not prevent you from wrapping
+  * around 0.
+  */
+-PRUint64 slapi_counter_decrement(Slapi_Counter *counter)
++uint64_t slapi_counter_decrement(Slapi_Counter *counter)
+ {
+     return slapi_counter_subtract(counter, 1);
+ }
+@@ -127,28 +107,18 @@ PRUint64 slapi_counter_decrement(Slapi_Counter *counter)
+  *
+  * Atomically add a value to a Slapi_Counter.
+  */
+-PRUint64 slapi_counter_add(Slapi_Counter *counter, PRUint64 addvalue)
++uint64_t slapi_counter_add(Slapi_Counter *counter, uint64_t addvalue)
+ {
+-    PRUint64 newvalue = 0;
+-#ifdef HPUX
+-    PRUint64 prev = 0;
+-#endif
++    uint64_t newvalue = 0;
+ 
+     if (counter == NULL) {
+         return newvalue;
+     }
+-
+-#ifndef ATOMIC_64BIT_OPERATIONS
+-    slapi_lock_mutex(counter->lock);
+-    counter->value += addvalue;
+-    newvalue = counter->value;
+-    slapi_unlock_mutex(counter->lock);
++#ifdef ATOMIC_64BIT_OPERATIONS
++    newvalue = __atomic_add_fetch_8(&(counter->value), addvalue, __ATOMIC_SEQ_CST);
+ #else
+-#ifdef LINUX
+-    newvalue = __sync_add_and_fetch(&(counter->value), addvalue);
+-#elif defined(SOLARIS)
+-    newvalue = _sparcv9_AtomicAdd(&(counter->value), addvalue);
+-#elif defined(HPUX)
++#ifdef HPUX
++    uint64_t prev = 0;
+     /* fetchadd only works with values of 1, 4, 8, and 16.  In addition, it requires
+      * it's argument to be an integer constant. */
+     if (addvalue == 1) {
+@@ -172,8 +142,13 @@ PRUint64 slapi_counter_add(Slapi_Counter *counter, PRUint64 addvalue)
+            _Asm_mov_to_ar(_AREG_CCV, prev);
+         } while (prev != _Asm_cmpxchg(_FASZ_D, _SEM_ACQ, &(counter->value), newvalue, _LDHINT_NONE));
+     }
++#else
++    pthread_mutex_lock(&(counter->_lock));
++    counter->value += addvalue;
++    newvalue = counter->value;
++    pthread_mutex_unlock(&(counter->_lock));
++#endif
+ #endif
+-#endif /* ATOMIC_64BIT_OPERATIONS */
+ 
+     return newvalue;
+ }
+@@ -184,28 +159,19 @@ PRUint64 slapi_counter_add(Slapi_Counter *counter, PRUint64 addvalue)
+  * Atomically subtract a value from a Slapi_Counter.  Note
+  * that this will not prevent you from wrapping around 0.
+  */
+-PRUint64 slapi_counter_subtract(Slapi_Counter *counter, PRUint64 subvalue)
++uint64_t slapi_counter_subtract(Slapi_Counter *counter, uint64_t subvalue)
+ {
+-    PRUint64 newvalue = 0;
+-#ifdef HPUX
+-    PRUint64 prev = 0;
+-#endif
++    uint64_t newvalue = 0;
+ 
+     if (counter == NULL) {
+         return newvalue;
+     }
+ 
+-#ifndef ATOMIC_64BIT_OPERATIONS
+-    slapi_lock_mutex(counter->lock);
+-    counter->value -= subvalue;
+-    newvalue = counter->value;
+-    slapi_unlock_mutex(counter->lock);
++#ifdef ATOMIC_64BIT_OPERATIONS
++    newvalue = __atomic_sub_fetch_8(&(counter->value), subvalue, __ATOMIC_SEQ_CST);
+ #else
+-#ifdef LINUX
+-    newvalue = __sync_sub_and_fetch(&(counter->value), subvalue);
+-#elif defined(SOLARIS)
+-    newvalue = _sparcv9_AtomicSub(&(counter->value), subvalue);
+-#elif defined(HPUX)
++#ifdef HPUX
++    uint64_t prev = 0;
+     /* fetchadd only works with values of -1, -4, -8, and -16.  In addition, it requires
+      * it's argument to be an integer constant. */
+     if (subvalue == 1) {
+@@ -229,8 +195,13 @@ PRUint64 slapi_counter_subtract(Slapi_Counter *counter, PRUint64 subvalue)
+            _Asm_mov_to_ar(_AREG_CCV, prev);
+         } while (prev != _Asm_cmpxchg(_FASZ_D, _SEM_ACQ, &(counter->value), newvalue, _LDHINT_NONE));
+     }
++#else
++    pthread_mutex_lock(&(counter->_lock));
++    counter->value -= subvalue;
++    newvalue = counter->value;
++    pthread_mutex_unlock(&(counter->_lock));
++#endif
+ #endif
+-#endif /* ATOMIC_64BIT_OPERATIONS */
+ 
+     return newvalue;
+ }
+@@ -240,76 +211,30 @@ PRUint64 slapi_counter_subtract(Slapi_Counter *counter, PRUint64 subvalue)
+  *
+  * Atomically sets the value of a Slapi_Counter.
+  */
+-PRUint64 slapi_counter_set_value(Slapi_Counter *counter, PRUint64 newvalue)
++uint64_t slapi_counter_set_value(Slapi_Counter *counter, uint64_t newvalue)
+ {
+-    PRUint64 value = 0;
++    uint64_t value = 0;
+ 
+     if (counter == NULL) {
+         return value;
+     }
+ 
+-#ifndef ATOMIC_64BIT_OPERATIONS
+-    slapi_lock_mutex(counter->lock);
+-    counter->value = newvalue;
+-    slapi_unlock_mutex(counter->lock);
+-    return newvalue;
+-#else
+-#ifdef LINUX
+-/* Use our own inline assembly for an atomic set if
+- * the builtins aren't available. */
+-#if !HAVE_64BIT_ATOMIC_CAS_FUNC
+-    /*
+-     * %0 = counter->value
+-     * %1 = newvalue
+-     */
+-    __asm__ __volatile__(
+-#ifdef CPU_x86
+-        /* Save the PIC register */
+-        " pushl %%ebx;"
+-#endif /* CPU_x86 */
+-        /* Put value of counter->value in EDX:EAX */
+-        "retryset: movl %0, %%eax;"
+-        " movl 4%0, %%edx;"
+-        /* Put newval in ECX:EBX */
+-        " movl %1, %%ebx;"
+-        " movl 4+%1, %%ecx;"
+-        /* If EDX:EAX and counter-> are the same,
+-         * replace *ptr with ECX:EBX */
+-        " lock; cmpxchg8b %0;"
+-        " jnz retryset;"
+-#ifdef CPU_x86
+-        /* Restore the PIC register */
+-        " popl %%ebx"
+-#endif /* CPU_x86 */
+-        : "+o" (counter->value)
+-        : "m" (newvalue)
+-#ifdef CPU_x86
+-        : "memory", "eax", "ecx", "edx", "cc");
+-#else
+-        : "memory", "eax", "ebx", "ecx", "edx", "cc");
+-#endif
+-
+-    return newvalue;
+-#else
+-    while (1) {
+-        value = counter->value;
+-        if (__sync_bool_compare_and_swap(&(counter->value), value, newvalue)) {
+-            return newvalue;
+-        }
+-    }
+-#endif /* CPU_x86 || !HAVE_DECL___SYNC_ADD_AND_FETCH */
+-#elif defined(SOLARIS)
+-    _sparcv9_AtomicSet(&(counter->value), newvalue);
+-    return newvalue;
+-#elif defined(HPUX)
++#ifdef ATOMIC_64BIT_OPERATIONS
++    __atomic_store_8(&(counter->value), newvalue, __ATOMIC_SEQ_CST);
++#else /* HPUX */
++#ifdef HPUX
+     do {
+         value = counter->value;
+         /* Put value in a register for cmpxchg to compare against */
+         _Asm_mov_to_ar(_AREG_CCV, value);
+     } while (value != _Asm_cmpxchg(_FASZ_D, _SEM_ACQ, &(counter->value), newvalue, _LDHINT_NONE));
+-    return newvalue;
++#else
++    pthread_mutex_lock(&(counter->_lock));
++    counter->value = newvalue;
++    pthread_mutex_unlock(&(counter->_lock));
++#endif
+ #endif
+-#endif /* ATOMIC_64BIT_OPERATIONS */
++    return newvalue;
+ }
+ 
+ /*
+@@ -317,174 +242,30 @@ PRUint64 slapi_counter_set_value(Slapi_Counter *counter, PRUint64 newvalue)
+  *
+  * Returns the value of a Slapi_Counter.
+  */
+-PRUint64 slapi_counter_get_value(Slapi_Counter *counter)
++uint64_t slapi_counter_get_value(Slapi_Counter *counter)
+ {
+-    PRUint64 value = 0;
++    uint64_t value = 0;
+ 
+     if (counter == NULL) {
+         return value;
+     }
+ 
+-#ifndef ATOMIC_64BIT_OPERATIONS
+-    slapi_lock_mutex(counter->lock);
+-    value = counter->value;
+-    slapi_unlock_mutex(counter->lock);
+-#else
+-#ifdef LINUX
+-/* Use our own inline assembly for an atomic get if
+- * the builtins aren't available. */
+-#if !HAVE_64BIT_ATOMIC_CAS_FUNC
+-    /*
+-     * %0 = counter->value
+-     * %1 = value
+-     */
+-    __asm__ __volatile__(
+-#ifdef CPU_x86
+-        /* Save the PIC register */
+-        " pushl %%ebx;"
+-#endif /* CPU_x86 */
+-        /* Put value of counter->value in EDX:EAX */
+-        "retryget: movl %0, %%eax;"
+-        " movl 4%0, %%edx;"
+-        /* Copy EDX:EAX to ECX:EBX */
+-        " movl %%eax, %%ebx;"
+-        " movl %%edx, %%ecx;"
+-        /* If EDX:EAX and counter->value are the same,
+-         * replace *ptr with ECX:EBX */
+-        " lock; cmpxchg8b %0;"
+-        " jnz retryget;"
+-        /* Put retrieved value into value */
+-        " movl %%ebx, %1;"
+-        " movl %%ecx, 4%1;"
+-#ifdef CPU_x86
+-        /* Restore the PIC register */
+-        " popl %%ebx"
+-#endif /* CPU_x86 */
+-        : "+o" (counter->value), "=m" (value)
+-        : 
+-#ifdef CPU_x86
+-        : "memory", "eax", "ecx", "edx", "cc");
+-#else
+-        : "memory", "eax", "ebx", "ecx", "edx", "cc");
+-#endif
+-#else
+-    while (1) {
+-        value = counter->value;
+-        if (__sync_bool_compare_and_swap(&(counter->value), value, value)) {
+-            break;
+-        }
+-    }
+-#endif /* CPU_x86 || !HAVE_DECL___SYNC_ADD_AND_FETCH */
+-#elif defined(SOLARIS)
+-    while (1) {
+-        value = counter->value;
+-        if (value == _sparcv9_AtomicSet(&(counter->value), value)) {
+-            break;
+-        }
+-    }
+-#elif defined(HPUX)
++#ifdef ATOMIC_64BIT_OPERATIONS
++    value = __atomic_load_8(&(counter->value), __ATOMIC_SEQ_CST);
++#else  /* HPUX */
++#ifdef HPUX
+     do {
+         value = counter->value;
+         /* Put value in a register for cmpxchg to compare against */
+         _Asm_mov_to_ar(_AREG_CCV, value);
+     } while (value != _Asm_cmpxchg(_FASZ_D, _SEM_ACQ, &(counter->value), value, _LDHINT_NONE));
+-#endif
+-#endif /* ATOMIC_64BIT_OPERATIONS */
+-
+-    return value;
+-}
+-
+-#ifdef ATOMIC_64BIT_OPERATIONS
+-#if defined(LINUX) && !HAVE_64BIT_ATOMIC_OP_FUNCS
+-/* On systems that don't have the 64-bit GCC atomic builtins, we need to
+- * implement our own atomic add and subtract functions using inline
+- * assembly code. */
+-PRUint64 __sync_add_and_fetch_8(PRUint64 *ptr, PRUint64 addval)
+-{
+-    PRUint64 retval = 0;
+-
+-    /*
+-     * %0 = *ptr
+-     * %1 = retval
+-     * %2 = addval
+-     */
+-    __asm__ __volatile__(
+-#ifdef CPU_x86
+-        /* Save the PIC register */
+-        " pushl %%ebx;"
+-#endif /* CPU_x86 */
+-        /* Put value of *ptr in EDX:EAX */
+-        "retryadd: movl %0, %%eax;"
+-        " movl 4%0, %%edx;"
+-        /* Put addval in ECX:EBX */
+-        " movl %2, %%ebx;"
+-        " movl 4+%2, %%ecx;"
+-        /* Add value from EDX:EAX to value in ECX:EBX */
+-        " addl %%eax, %%ebx;"
+-        " adcl %%edx, %%ecx;"
+-        /* If EDX:EAX and *ptr are the same, replace ptr with ECX:EBX */
+-        " lock; cmpxchg8b %0;"
+-        " jnz retryadd;"
+-        /* Put new value into retval */
+-        " movl %%ebx, %1;"
+-        " movl %%ecx, 4%1;"
+-#ifdef CPU_x86
+-        /* Restore the PIC register */
+-        " popl %%ebx"
+-#endif /* CPU_x86 */
+-        : "+o" (*ptr), "=m" (retval)
+-        : "m" (addval)
+-#ifdef CPU_x86
+-        : "memory", "eax", "ecx", "edx", "cc");
+ #else
+-        : "memory", "eax", "ebx", "ecx", "edx", "cc");
++    pthread_mutex_lock(&(counter->_lock));
++    value = counter->value;
++    pthread_mutex_unlock(&(counter->_lock));
+ #endif
+-
+-    return retval;
+-}
+-
+-PRUint64 __sync_sub_and_fetch_8(PRUint64 *ptr, PRUint64 subval)
+-{
+-    PRUint64 retval = 0;
+-
+-    /*
+-     * %0 = *ptr
+-     * %1 = retval
+-     * %2 = subval
+-     */
+-    __asm__ __volatile__(
+-#ifdef CPU_x86
+-        /* Save the PIC register */
+-        " pushl %%ebx;"
+-#endif /* CPU_x86 */
+-        /* Put value of *ptr in EDX:EAX */
+-        "retrysub: movl %0, %%eax;"
+-        " movl 4%0, %%edx;"
+-        /* Copy EDX:EAX to ECX:EBX */
+-        " movl %%eax, %%ebx;"
+-        " movl %%edx, %%ecx;"
+-        /* Subtract subval from value in ECX:EBX */
+-        " subl %2, %%ebx;"
+-        " sbbl 4+%2, %%ecx;"
+-        /* If EDX:EAX and ptr are the same, replace *ptr with ECX:EBX */
+-        " lock; cmpxchg8b %0;"
+-        " jnz retrysub;"
+-        /* Put new value into retval */
+-        " movl %%ebx, %1;"
+-        " movl %%ecx, 4%1;"
+-#ifdef CPU_x86
+-        /* Restore the PIC register */
+-        " popl %%ebx"
+-#endif /* CPU_x86 */
+-        : "+o" (*ptr), "=m" (retval)
+-        : "m" (subval)
+-#ifdef CPU_x86 
+-        : "memory", "eax", "ecx", "edx", "cc");
+-#else
+-        : "memory", "eax", "ebx", "ecx", "edx", "cc");
+ #endif
+ 
+-    return retval;
++    return value;
+ }
+-#endif /* LINUX && !HAVE_64BIT_ATOMIC_OP_FUNCS */
+-#endif /* ATOMIC_64BIT_OPERATIONS */
++
+diff --git a/ldap/servers/slapd/slapi_counter_sunos_sparcv9.S b/ldap/servers/slapd/slapi_counter_sunos_sparcv9.S
+deleted file mode 100644
+index e582c2a..0000000
+--- a/ldap/servers/slapd/slapi_counter_sunos_sparcv9.S
++++ /dev/null
+@@ -1,105 +0,0 @@
+-! BEGIN COPYRIGHT BLOCK
+-! The Original Code is the Netscape Portable Runtime (NSPR).
+-!
+-! The Initial Developer of the Original Code is
+-! Netscape Communications Corporation.
+-! Portions created by the Initial Developer are Copyright (C) 1998-2000
+-! the Initial Developer. All Rights Reserved.
+-!
+-! The original code has been modified to support 64-bit atomic increments by
+-! Red Hat, Inc.  These portions are Copyright (C) 2008 Red Hat, Inc. All Rights
+-! reserved.
+-!
+-! License: GPL (version 3 or any later version).
+-! See LICENSE for details. 
+-! END COPYRIGHT BLOCK
+-!
+-
+-#define _ASM 1 /* force to set an assembler code macro _ASM */
+-#include <sys/asm_linkage.h>
+-
+-!  ======================================================================
+-!
+-!  Perform the sequence a = b atomically with respect to other
+-!  fetch-and-stores to location a in a wait-free fashion.
+-!
+-!  usage : old_val = PR_AtomicSet(address, newval)
+-!
+-!  -----------------------
+-!  Note on REGISTER USAGE:
+-!  as this is a LEAF procedure, a new stack frame is not created;
+-!  we use the caller's stack frame so what would normally be %i (input)
+-!  registers are actually %o (output registers).  Also, we must not
+-!  overwrite the contents of %l (local) registers as they are not
+-!  assumed to be volatile during calls.
+-!  -----------------------
+-
+-        ENTRY(_sparcv9_AtomicSet)            ! standard assembler/ELF prologue
+-
+-retryAS:
+-        ldx     [%o0], %o2              ! set o2 to the current value
+-        mov     %o1, %o3                ! set up the new value
+-        casx    [%o0], %o2, %o3         ! atomically set if o0 hasn't changed
+-        cmp     %o2, %o3                ! see if we set the value
+-        bne     retryAS                 ! if not, try again
+-        nop                             ! empty out the branch pipeline
+-        retl                            ! return back to the caller
+-        mov     %o3, %o0                ! set the return code to the prev value
+-
+-        SET_SIZE(_sparcv9_AtomicSet)    ! standard assembler/ELF epilogue
+-
+-!
+-!  end
+-!
+-!  ======================================================================
+-!
+-!  Perform the sequence a = a + b atomically with respect to other
+-!  fetch-and-adds to location a in a wait-free fashion.
+-!
+-!  usage : newval = PR_AtomicAdd(address, val)
+-!  return: the value after addition
+-!
+-        ENTRY(_sparcv9_AtomicAdd)      ! standard assembler/ELF prologue
+-
+-retryAA:
+-        ldx     [%o0], %o2              ! set o2 to the current value
+-        addx    %o2, %o1, %o3           ! calc the new value
+-        mov     %o3, %o4                ! save the return value
+-        casx    [%o0], %o2, %o3         ! atomically set if o0 hasn't changed
+-        cmp     %o2, %o3                ! see if we set the value
+-        bne     retryAA                 ! if not, try again
+-        nop                             ! empty out the branch pipeline
+-        retl                            ! return back to the caller
+-        mov     %o4, %o0                ! set the return code to the new value
+-
+-        SET_SIZE(_sparcv9_AtomicAdd)    ! standard assembler/ELF epilogue
+-
+-!
+-!  end
+-!
+-!  ======================================================================
+-!
+-!  Perform the sequence a = a - b atomically with respect to other
+-!  fetch-and-subs to location a in a wait-free fashion.
+-!
+-!  usage : newval = PR_AtomicSub(address, val)
+-!  return: the value after addition
+-!
+-        ENTRY(_sparcv9_AtomicSub)      ! standard assembler/ELF prologue
+-
+-retryAU:
+-        ldx     [%o0], %o2              ! set o2 to the current value
+-        subx    %o2, %o1, %o3           ! calc the new value
+-        mov     %o3, %o4                ! save the return value
+-        casx    [%o0], %o2, %o3         ! atomically set if o0 hasn't changed
+-        cmp     %o2, %o3                ! see if we set the value
+-        bne     retryAU                 ! if not, try again
+-        nop                             ! empty out the branch pipeline
+-        retl                            ! return back to the caller
+-        mov     %o4, %o0                ! set the return code to the new value
+-
+-        SET_SIZE(_sparcv9_AtomicSub)    ! standard assembler/ELF epilogue
+-
+-!
+-!  end
+-!
+diff --git a/ldap/servers/slapd/snmp_collator.c b/ldap/servers/slapd/snmp_collator.c
+index 841922f..b0c873d 100644
+--- a/ldap/servers/slapd/snmp_collator.c
++++ b/ldap/servers/slapd/snmp_collator.c
+@@ -711,7 +711,7 @@ static void
+ add_counter_to_value(Slapi_Entry *e, const char *type, PRUint64 countervalue)
+ {
+ 	char value[40];
+-	PR_snprintf(value,sizeof(value),"%" NSPRIu64, countervalue);
++	snprintf(value,sizeof(value),"%" NSPRIu64, countervalue);
+ 	slapi_entry_attr_set_charptr( e, type, value);
+ }
+ 
+diff --git a/test/libslapd/test.c b/test/libslapd/test.c
+index 37d5543..6e1171a 100644
+--- a/test/libslapd/test.c
++++ b/test/libslapd/test.c
+@@ -24,6 +24,8 @@ run_libslapd_tests (void) {
+         cmocka_unit_test(test_libslapd_pblock_v3c_original_target_dn),
+         cmocka_unit_test(test_libslapd_pblock_v3c_target_uniqueid),
+         cmocka_unit_test(test_libslapd_operation_v3c_target_spec),
++        cmocka_unit_test(test_libslapd_counters_atomic_usage),
++        cmocka_unit_test(test_libslapd_counters_atomic_overflow),
+     };
+     return cmocka_run_group_tests(tests, NULL, NULL);
+ }
+diff --git a/test/test_slapd.h b/test/test_slapd.h
+index 02eefdd..b8f1aba 100644
+--- a/test/test_slapd.h
++++ b/test/test_slapd.h
+@@ -37,4 +37,8 @@ void test_libslapd_pblock_v3c_target_uniqueid(void **state);
+ /* libslapd-operation-v3_compat */
+ void test_libslapd_operation_v3c_target_spec(void **state);
+ 
++/* libslapd-counters-atomic */
++
++void test_libslapd_counters_atomic_usage(void **state);
++void test_libslapd_counters_atomic_overflow(void **state);
+ 
+-- 
+2.9.3
+

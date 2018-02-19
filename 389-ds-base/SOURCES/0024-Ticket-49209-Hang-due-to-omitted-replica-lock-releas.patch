@@ -1,0 +1,42 @@
+From 765520fa7bf49f2de542d619b0fce99e13e4d53a Mon Sep 17 00:00:00 2001
+From: Thierry Bordaz <tbordaz@redhat.com>
+Date: Tue, 4 Apr 2017 10:44:55 +0200
+Subject: [PATCH] Ticket 49209 - Hang due to omitted replica lock release
+
+Bug Description:
+    When an operation is canceled (failure), its csn is aborted
+    and removed from the pending list.
+    If at that time the pending list is empty or the csn is not found
+    in that list, the cancel callback forgots to release the replica lock
+
+Fix Description:
+    Release replica lock systematically, whether cnsplRemove fails or not
+
+https://pagure.io/389-ds-base/issue/49209
+
+Reviewed by: Mark Reynolds (thanks Mark !!)
+
+Platforms tested: F23
+
+Flag Day: no
+
+Doc impact: no
+---
+ ldap/servers/plugins/replication/repl5_replica.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/ldap/servers/plugins/replication/repl5_replica.c b/ldap/servers/plugins/replication/repl5_replica.c
+index 7beef50..5718a98 100644
+--- a/ldap/servers/plugins/replication/repl5_replica.c
++++ b/ldap/servers/plugins/replication/repl5_replica.c
+@@ -3662,6 +3662,7 @@ abort_csn_callback(const CSN *csn, void *data)
+         int rc = csnplRemove(r->min_csn_pl, csn);
+         if (rc) {
+             slapi_log_err(SLAPI_LOG_ERR, repl_plugin_name, "abort_csn_callback - csnplRemove failed");
++            replica_unlock(r->repl_lock);
+             return;
+         }
+     }
+-- 
+2.9.3
+

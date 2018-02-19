@@ -1,0 +1,1008 @@
+From fc9a206c294fb5ea2401a9365f01ef2565799478 Mon Sep 17 00:00:00 2001
+From: William Brown <firstyear@redhat.com>
+Date: Thu, 2 Nov 2017 13:32:41 +1000
+Subject: [PATCH] Ticket 49436 - double free in COS in some conditions
+
+Bug Description:  virtualattrs and COS have some serious memory
+ownership issues. What was happening is that COS with multiple
+attributes using the same sp_handle would cause a structure
+to be registered twice. During shutdown we would then trigger
+a double free in the process.
+
+Fix Description:  Change the behaviour of sp_handles to use a
+handle *per* attribute we register to guarantee the assocation
+between them.
+
+https://pagure.io/389-ds-base/issue/49436
+
+Author: wibrown
+
+Review by: mreynolds, vashirov (Thanks!)
+
+(cherry pick from commit ee4428a3f5d2d8e37a7107c7dce9d622fc17d41c)
+---
+ dirsrvtests/tests/suites/cos/indirect_cos_test.py |  43 +-
+ ldap/servers/plugins/cos/cos_cache.c              | 723 +++++++++++-----------
+ ldap/servers/plugins/roles/roles_cache.c          |  50 +-
+ ldap/servers/slapd/vattr.c                        |  34 +-
+ 4 files changed, 406 insertions(+), 444 deletions(-)
+
+diff --git a/dirsrvtests/tests/suites/cos/indirect_cos_test.py b/dirsrvtests/tests/suites/cos/indirect_cos_test.py
+index 1aac6b8ed..452edcdf8 100644
+--- a/dirsrvtests/tests/suites/cos/indirect_cos_test.py
++++ b/dirsrvtests/tests/suites/cos/indirect_cos_test.py
+@@ -7,6 +7,7 @@ import subprocess
+ 
+ from lib389 import Entry
+ from lib389.idm.user import UserAccounts
++from lib389.idm.domain import Domain
+ from lib389.topologies import topology_st as topo
+ from lib389._constants import (DEFAULT_SUFFIX, DN_DM, PASSWORD, HOST_STANDALONE,
+                                SERVERID_STANDALONE, PORT_STANDALONE)
+@@ -48,14 +49,8 @@ def check_user(inst):
+ def setup_subtree_policy(topo):
+     """Set up subtree password policy
+     """
+-    try:
+-        topo.standalone.modify_s("cn=config", [(ldap.MOD_REPLACE,
+-                                                'nsslapd-pwpolicy-local',
+-                                                'on')])
+-    except ldap.LDAPError as e:
+-        log.error('Failed to set fine-grained policy: error {}'.format(
+-            e.message['desc']))
+-        raise e
++
++    topo.standalone.config.set('nsslapd-pwpolicy-local', 'on')
+ 
+     log.info('Create password policy for subtree {}'.format(OU_PEOPLE))
+     try:
+@@ -68,15 +63,9 @@ def setup_subtree_policy(topo):
+             OU_PEOPLE, e.message['desc']))
+         raise e
+ 
+-    log.info('Add pwdpolicysubentry attribute to {}'.format(OU_PEOPLE))
+-    try:
+-        topo.standalone.modify_s(DEFAULT_SUFFIX, [(ldap.MOD_REPLACE,
+-                                                   'pwdpolicysubentry',
+-                                                   PW_POLICY_CONT_PEOPLE2)])
+-    except ldap.LDAPError as e:
+-        log.error('Failed to pwdpolicysubentry pw policy '
+-                  'policy for {}: error {}'.format(OU_PEOPLE, e.message['desc']))
+-        raise e
++    domain = Domain(topo.standalone, DEFAULT_SUFFIX)
++    domain.replace('pwdpolicysubentry', PW_POLICY_CONT_PEOPLE2)
++
+     time.sleep(1)
+ 
+ 
+@@ -116,12 +105,9 @@ def setup(topo, request):
+     """
+     log.info('Add custom schema...')
+     try:
+-        ATTR_1 = ("( 1.3.6.1.4.1.409.389.2.189 NAME 'x-department' " +
+-                  "SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 X-ORIGIN 'user defined' )")
+-        ATTR_2 = ("( 1.3.6.1.4.1.409.389.2.187 NAME 'x-en-ou' " +
+-                  "SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 X-ORIGIN 'user defined' )")
+-        OC = ("( xPerson-oid NAME 'xPerson' DESC '' SUP person STRUCTURAL MAY " +
+-              "( x-department $ x-en-ou ) X-ORIGIN 'user defined' )")
++        ATTR_1 = (b"( 1.3.6.1.4.1.409.389.2.189 NAME 'x-department' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 X-ORIGIN 'user defined' )")
++        ATTR_2 = (b"( 1.3.6.1.4.1.409.389.2.187 NAME 'x-en-ou' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 X-ORIGIN 'user defined' )")
++        OC = (b"( xPerson-oid NAME 'xPerson' DESC '' SUP person STRUCTURAL MAY ( x-department $ x-en-ou ) X-ORIGIN 'user defined' )")
+         topo.standalone.modify_s("cn=schema", [(ldap.MOD_ADD, 'attributeTypes', ATTR_1),
+                                                (ldap.MOD_ADD, 'attributeTypes', ATTR_2),
+                                                (ldap.MOD_ADD, 'objectClasses', OC)])
+@@ -142,14 +128,9 @@ def setup(topo, request):
+         'homeDirectory': '/home/test_user',
+         'seeAlso': 'cn=cosTemplate,dc=example,dc=com'
+     }
+-    users.create(properties=user_properties)
+-    try:
+-        topo.standalone.modify_s(TEST_USER_DN, [(ldap.MOD_ADD,
+-                                                 'objectclass',
+-                                                 'xPerson')])
+-    except ldap.LDAPError as e:
+-        log.fatal('Failed to add objectclass to user')
+-        raise e
++    user = users.create(properties=user_properties)
++
++    user.add('objectClass', 'xPerson')
+ 
+     # Setup COS
+     log.info("Setup indirect COS...")
+diff --git a/ldap/servers/plugins/cos/cos_cache.c b/ldap/servers/plugins/cos/cos_cache.c
+index 87d48908c..0e93183d2 100644
+--- a/ldap/servers/plugins/cos/cos_cache.c
++++ b/ldap/servers/plugins/cos/cos_cache.c
+@@ -108,9 +108,6 @@ void * cos_get_plugin_identity(void);
+ #define COSTYPE_INDIRECT 3
+ #define COS_DEF_ERROR_NO_TEMPLATES -2
+ 
+-/* the global plugin handle */
+-static volatile vattr_sp_handle *vattr_handle = NULL;
+-
+ /* both variables are protected by change_lock */
+ static int cos_cache_notify_flag = 0;
+ static PRBool cos_cache_at_work = PR_FALSE;
+@@ -289,75 +286,61 @@ static Slapi_CondVar *start_cond = NULL;
+ */
+ int cos_cache_init(void)
+ {
+-	int ret = 0;
+-
+-	slapi_log_err(SLAPI_LOG_TRACE, COS_PLUGIN_SUBSYSTEM, "--> cos_cache_init\n");
+-
+-	slapi_vattrcache_cache_none();
+-	cache_lock = slapi_new_mutex();
+-	change_lock = slapi_new_mutex();
+-	stop_lock = slapi_new_mutex();
+-	something_changed = slapi_new_condvar(change_lock);
+-	keeprunning =1;
+-	start_lock = slapi_new_mutex();
+-	start_cond = slapi_new_condvar(start_lock);
+-	started = 0;
+-
+-	if (stop_lock == NULL ||
+-	    change_lock == NULL ||
+-	    cache_lock == NULL ||
+-	    stop_lock == NULL ||
+-	    start_lock == NULL ||
+-	    start_cond == NULL ||
+-	    something_changed == NULL)
+-	{
+-		slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM,
+-			   "cos_cache_init - Cannot create mutexes\n" );
+-				ret = -1;
+-		goto out;
+-	}
+-
+-	/* grab the views interface */
+-	if(slapi_apib_get_interface(Views_v1_0_GUID, &views_api))
+-	{
+-		/* lets be tolerant if views is disabled */
+-		views_api = 0;
+-	}
++    int ret = 0;
+ 
+-	if (slapi_vattrspi_register((vattr_sp_handle **)&vattr_handle, 
+-	                            cos_cache_vattr_get, 
+-	                            cos_cache_vattr_compare, 
+-	                            cos_cache_vattr_types) != 0)
+-	{
+-		slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM,
+-		   "cos_cache_init - Cannot register as service provider\n" );
+-			ret = -1;
+-		goto out;
+-	}
++    slapi_log_err(SLAPI_LOG_TRACE, COS_PLUGIN_SUBSYSTEM, "--> cos_cache_init\n");
++
++    slapi_vattrcache_cache_none();
++    cache_lock = slapi_new_mutex();
++    change_lock = slapi_new_mutex();
++    stop_lock = slapi_new_mutex();
++    something_changed = slapi_new_condvar(change_lock);
++    keeprunning = 1;
++    start_lock = slapi_new_mutex();
++    start_cond = slapi_new_condvar(start_lock);
++    started = 0;
++
++    if (stop_lock == NULL ||
++        change_lock == NULL ||
++        cache_lock == NULL ||
++        stop_lock == NULL ||
++        start_lock == NULL ||
++        start_cond == NULL ||
++        something_changed == NULL) {
++        slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM,
++                      "cos_cache_init - Cannot create mutexes\n");
++        ret = -1;
++        goto out;
++    }
+ 
+-	if ( PR_CreateThread (PR_USER_THREAD, 
+-				cos_cache_wait_on_change, 
+-				NULL,
+-				PR_PRIORITY_NORMAL, 
+-				PR_GLOBAL_THREAD, 
+-				PR_UNJOINABLE_THREAD, 
+-				SLAPD_DEFAULT_THREAD_STACKSIZE) == NULL )
+-	{
+-		slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM,
+-			   "cos_cache_init - PR_CreateThread failed\n" );
+-		ret = -1;
+-		goto out;
+-	}
++    /* grab the views interface */
++    if (slapi_apib_get_interface(Views_v1_0_GUID, &views_api)) {
++        /* lets be tolerant if views is disabled */
++        views_api = 0;
++    }
+ 
+-		/* wait for that thread to get started */
+-		if (ret == 0) {
+-			slapi_lock_mutex(start_lock);
+-			while (!started) {
+-				while (slapi_wait_condvar(start_cond, NULL) == 0);
+-			}
+-			slapi_unlock_mutex(start_lock);
+-		}
++    if (PR_CreateThread(PR_USER_THREAD,
++                        cos_cache_wait_on_change,
++                        NULL,
++                        PR_PRIORITY_NORMAL,
++                        PR_GLOBAL_THREAD,
++                        PR_UNJOINABLE_THREAD,
++                        SLAPD_DEFAULT_THREAD_STACKSIZE) == NULL) {
++        slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM,
++                      "cos_cache_init - PR_CreateThread failed\n");
++        ret = -1;
++        goto out;
++    }
+ 
++    /* wait for that thread to get started */
++    if (ret == 0) {
++        slapi_lock_mutex(start_lock);
++        while (!started) {
++            while (slapi_wait_condvar(start_cond, NULL) == 0)
++                ;
++        }
++        slapi_unlock_mutex(start_lock);
++    }
+ 
+ out:
+ 	slapi_log_err(SLAPI_LOG_TRACE, COS_PLUGIN_SUBSYSTEM, "<-- cos_cache_init\n");
+@@ -752,321 +735,311 @@ struct dn_defs_info {
+ static int 
+ cos_dn_defs_cb (Slapi_Entry* e, void *callback_data)
+ {
+-	struct dn_defs_info *info;
+-	cosAttrValue **pSneakyVal = 0;
+-	cosAttrValue *pObjectclass = 0;
+-	cosAttrValue *pCosTargetTree = 0;
+-	cosAttrValue *pCosTemplateDn = 0;
+-	cosAttrValue *pCosSpecifier = 0;
+-	cosAttrValue *pCosAttribute = 0;
+-	cosAttrValue *pCosOverrides = 0;
+-	cosAttrValue *pCosOperational = 0;
+-	cosAttrValue *pCosOpDefault = 0;
+-	cosAttrValue *pCosMerge = 0;
+-	cosAttrValue *pDn = 0;
+-	struct berval **dnVals;
+-	int cosType = 0;
+-	int valIndex = 0;
+-	Slapi_Attr *dnAttr;
+-	char *attrType = 0;
+-	char *norm_dn = NULL;
+-	info=(struct dn_defs_info *)callback_data;
+-	
+-	cos_cache_add_attrval(&pDn, slapi_entry_get_dn(e));
+-	if(slapi_entry_first_attr(e, &dnAttr)) {
+-		goto bail;
+-	}
++    struct dn_defs_info *info;
++    cosAttrValue **pSneakyVal = 0;
++    cosAttrValue *pObjectclass = 0;
++    cosAttrValue *pCosTargetTree = 0;
++    cosAttrValue *pCosTemplateDn = 0;
++    cosAttrValue *pCosSpecifier = 0;
++    cosAttrValue *pCosAttribute = 0;
++    cosAttrValue *pCosOverrides = 0;
++    cosAttrValue *pCosOperational = 0;
++    cosAttrValue *pCosOpDefault = 0;
++    cosAttrValue *pCosMerge = 0;
++    cosAttrValue *pDn = 0;
++    struct berval **dnVals;
++    int cosType = 0;
++    int valIndex = 0;
++    Slapi_Attr *dnAttr;
++    char *attrType = 0;
++    char *norm_dn = NULL;
++    info = (struct dn_defs_info *)callback_data;
++
++    cos_cache_add_attrval(&pDn, slapi_entry_get_dn(e));
++    if (slapi_entry_first_attr(e, &dnAttr)) {
++        goto bail;
++    }
+ 
+-	do {
+-		attrType = 0;		
+-		/* we need to fill in the details of the definition now */
+-		slapi_attr_get_type(dnAttr, &attrType);		
+-		if(!attrType) {
+-			continue;
+-		}
+-		pSneakyVal = 0;
+-		if(!slapi_utf8casecmp((unsigned char*)attrType, (unsigned char*)"objectclass"))
+-			pSneakyVal = &pObjectclass;
+-		else if(!slapi_utf8casecmp((unsigned char*)attrType, (unsigned char*)"cosTargetTree")){
+-			if(pCosTargetTree){
+-				norm_dn = slapi_create_dn_string("%s", pCosTargetTree->val);
+-				if(norm_dn){
+-					slapi_ch_free_string(&pCosTargetTree->val);
+-					pCosTargetTree->val = norm_dn;
+-				}
+-			}
+-			pSneakyVal = &pCosTargetTree;
+-		} else if(!slapi_utf8casecmp((unsigned char*)attrType, (unsigned char*)"cosTemplateDn"))
+-			pSneakyVal = &pCosTemplateDn;
+-		else if(!slapi_utf8casecmp((unsigned char*)attrType, (unsigned char*)"cosSpecifier"))
+-			pSneakyVal = &pCosSpecifier;
+-		else if(!slapi_utf8casecmp((unsigned char*)attrType, (unsigned char*)"cosAttribute"))
+-			pSneakyVal = &pCosAttribute;
+-		else if(!slapi_utf8casecmp((unsigned char*)attrType, (unsigned char*)"cosIndirectSpecifier"))
+-			pSneakyVal = &pCosSpecifier;			
+-		if(!pSneakyVal) {
+-			continue;
+-		}
+-		/* It's a type we're interested in */
+-		if(slapi_attr_get_bervals_copy(dnAttr, &dnVals)) {
+-			continue;
+-		}
+-		valIndex = 0;
+-		if(!dnVals) {
+-			continue;
+-		}
+-		for (valIndex = 0; dnVals[valIndex]; valIndex++)
+-		{
+-			if(!dnVals[valIndex]->bv_val) {
+-				continue;
+-			}
+-			/*
+-			parse any overide or default values
+-			and deal with them
+-			*/
+-			if(pSneakyVal == &pCosAttribute)
+-			{
+-				int qualifier_hit = 0;
+-				int op_qualifier_hit = 0;
+-				int merge_schemes_qualifier_hit = 0;
+-				int override_qualifier_hit =0;
+-				int default_qualifier_hit = 0;
+-				int operational_default_qualifier_hit = 0;
+-				do
+-				{
+-					qualifier_hit = 0;
++    do {
++        attrType = 0;
++        /* we need to fill in the details of the definition now */
++        slapi_attr_get_type(dnAttr, &attrType);
++        if (!attrType) {
++            continue;
++        }
++        pSneakyVal = 0;
++        if (!slapi_utf8casecmp((unsigned char *)attrType, (unsigned char *)"objectclass"))
++            pSneakyVal = &pObjectclass;
++        else if (!slapi_utf8casecmp((unsigned char *)attrType, (unsigned char *)"cosTargetTree")) {
++            if (pCosTargetTree) {
++                norm_dn = slapi_create_dn_string("%s", pCosTargetTree->val);
++                if (norm_dn) {
++                    slapi_ch_free_string(&pCosTargetTree->val);
++                    pCosTargetTree->val = norm_dn;
++                }
++            }
++            pSneakyVal = &pCosTargetTree;
++        } else if (!slapi_utf8casecmp((unsigned char *)attrType, (unsigned char *)"cosTemplateDn"))
++            pSneakyVal = &pCosTemplateDn;
++        else if (!slapi_utf8casecmp((unsigned char *)attrType, (unsigned char *)"cosSpecifier"))
++            pSneakyVal = &pCosSpecifier;
++        else if (!slapi_utf8casecmp((unsigned char *)attrType, (unsigned char *)"cosAttribute"))
++            pSneakyVal = &pCosAttribute;
++        else if (!slapi_utf8casecmp((unsigned char *)attrType, (unsigned char *)"cosIndirectSpecifier"))
++            pSneakyVal = &pCosSpecifier;
++        if (!pSneakyVal) {
++            continue;
++        }
++        /* It's a type we're interested in */
++        if (slapi_attr_get_bervals_copy(dnAttr, &dnVals)) {
++            continue;
++        }
++        valIndex = 0;
++        if (!dnVals) {
++            continue;
++        }
++        for (valIndex = 0; dnVals[valIndex]; valIndex++) {
++            if (!dnVals[valIndex]->bv_val) {
++                continue;
++            }
++            /*
++            parse any overide or default values
++            and deal with them
++            */
++            if (pSneakyVal == &pCosAttribute) {
++                int qualifier_hit = 0;
++                int op_qualifier_hit = 0;
++                int merge_schemes_qualifier_hit = 0;
++                int override_qualifier_hit = 0;
++                int default_qualifier_hit = 0;
++                int operational_default_qualifier_hit = 0;
++                do {
++                    qualifier_hit = 0;
++
++                    if (cos_cache_backwards_stricmp_and_clip(dnVals[valIndex]->bv_val, " operational")) {
++                        /* matched */
++                        op_qualifier_hit = 1;
++                        qualifier_hit = 1;
++                    }
++
++                    if (cos_cache_backwards_stricmp_and_clip(dnVals[valIndex]->bv_val, " merge-schemes")) {
++                        /* matched */
++                        merge_schemes_qualifier_hit = 1;
++                        qualifier_hit = 1;
++                    }
++
++                    if (cos_cache_backwards_stricmp_and_clip(dnVals[valIndex]->bv_val, " override")) {
++                        /* matched */
++                        override_qualifier_hit = 1;
++                        qualifier_hit = 1;
++                    }
++
++                    if (cos_cache_backwards_stricmp_and_clip(dnVals[valIndex]->bv_val, " default")) {
++                        default_qualifier_hit = 1;
++                        qualifier_hit = 1;
++                    }
++
++                    if (cos_cache_backwards_stricmp_and_clip(dnVals[valIndex]->bv_val, " operational-default")) {
++                        operational_default_qualifier_hit = 1;
++                        qualifier_hit = 1;
++                    }
++                } while (qualifier_hit == 1);
++
++                /*
++                * At this point, dnVals[valIndex]->bv_val
++                * is the value of cosAttribute, stripped of
++                * any qualifiers, so add this pure attribute type to
++                * the appropriate lists.
++                */
++
++                if (op_qualifier_hit) {
++                    cos_cache_add_attrval(&pCosOperational,
++                                          dnVals[valIndex]->bv_val);
++                }
++                if (merge_schemes_qualifier_hit) {
++                    cos_cache_add_attrval(&pCosMerge, dnVals[valIndex]->bv_val);
++                }
++                if (override_qualifier_hit) {
++                    cos_cache_add_attrval(&pCosOverrides,
++                                          dnVals[valIndex]->bv_val);
++                }
++                if (default_qualifier_hit) {
++                    /* attr is added below in pSneakyVal, in any case */
++                }
++
++                if (operational_default_qualifier_hit) {
++                    cos_cache_add_attrval(&pCosOpDefault,
++                                          dnVals[valIndex]->bv_val);
++                }
++
++                /*
++                 * Each SP_handle is associated to one and only one vattr.
++                 * We could consider making this a single function rather
++                 * than the double-call.
++                 */
++
++                vattr_sp_handle *vattr_handle = NULL;
++
++                if (slapi_vattrspi_register((vattr_sp_handle **)&vattr_handle,
++                                            cos_cache_vattr_get,
++                                            cos_cache_vattr_compare,
++                                            cos_cache_vattr_types) != 0) {
++                    slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM, "cos_cache_init - Cannot register as service provider for %s\n", dnVals[valIndex]->bv_val);
++                } else {
++                    slapi_vattrspi_regattr((vattr_sp_handle *)vattr_handle, dnVals[valIndex]->bv_val, NULL, NULL);
++                }
++
++            } /* if(attrType is cosAttribute) */
++
++            /*
++             * Add the attributetype to the appropriate
++             * list.
++             */
++            cos_cache_add_attrval(pSneakyVal, dnVals[valIndex]->bv_val);
++
++        } /* for (valIndex = 0; dnVals[valIndex]; valIndex++) */
++
++        ber_bvecfree(dnVals);
++        dnVals = NULL;
++    } while (!slapi_entry_next_attr(e, dnAttr, &dnAttr));
++
++    if (pCosAttribute && (!pCosTargetTree || !pCosTemplateDn)) {
++        /* get the parent of the definition */
++        char *orig = slapi_dn_parent(pDn->val);
++        char *parent = NULL;
++        if (orig) {
++            parent = slapi_create_dn_string("%s", orig);
++            if (!parent) {
++                parent = orig;
++                slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM,
++                              "cos_dn_defs_cb - "
++                              "Failed to normalize parent dn %s. "
++                              "Adding the pre normalized dn.\n",
++                              parent);
++            }
++            if (!pCosTargetTree) {
++                cos_cache_add_attrval(&pCosTargetTree, parent);
++            }
++            if (!pCosTemplateDn) {
++                cos_cache_add_attrval(&pCosTemplateDn, parent);
++            }
++            if (parent != orig) {
++                slapi_ch_free_string(&parent);
++            }
++            slapi_ch_free_string(&orig);
++        } else {
++            slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM,
++                          "cos_dn_defs_cb - "
++                          "Failed to get parent dn of cos definition %s.\n",
++                          pDn->val);
++            if (!pCosTemplateDn) {
++                if (!pCosTargetTree) {
++                    slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM, "cos_dn_defs_cb - cosTargetTree and cosTemplateDn are not set.\n");
++                } else {
++                    slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM, "cos_dn_defs_cb - cosTemplateDn is not set.\n");
++                }
++            } else if (!pCosTargetTree) {
++                slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM, "cos_dn_defs_cb - cosTargetTree is not set.\n");
++            }
++        }
++    }
+ 
+-					if(cos_cache_backwards_stricmp_and_clip(dnVals[valIndex]->bv_val, " operational"))
+-					{
+-						/* matched */
+-						op_qualifier_hit = 1;
+-						qualifier_hit = 1;
+-					}
+-					
+-					if(cos_cache_backwards_stricmp_and_clip(dnVals[valIndex]->bv_val, " merge-schemes"))
+-					{
+-						/* matched */
+-						merge_schemes_qualifier_hit = 1;
+-						qualifier_hit = 1;
+-					}
++    /*
++    determine the type of class of service scheme
++    */
+ 
+-					if(cos_cache_backwards_stricmp_and_clip(dnVals[valIndex]->bv_val, " override"))
+-					{
+-						/* matched */
+-						override_qualifier_hit = 1;
+-						qualifier_hit = 1;
+-					}
+-					
+-					if(cos_cache_backwards_stricmp_and_clip(dnVals[valIndex]->bv_val, " default")) {
+-						default_qualifier_hit = 1;
+-						qualifier_hit = 1;
+-					}
++    if (pObjectclass) {
++        if (cos_cache_attrval_exists(pObjectclass, "cosDefinition")) {
++            cosType = COSTYPE_CLASSIC;
++        } else if (cos_cache_attrval_exists(pObjectclass, "cosClassicDefinition")) {
++            cosType = COSTYPE_CLASSIC;
+ 
+-					if(cos_cache_backwards_stricmp_and_clip(dnVals[valIndex]->bv_val, " operational-default")) {
+-						operational_default_qualifier_hit = 1;
+-						qualifier_hit = 1;
+-					}
+-				}
+-				while(qualifier_hit == 1);
++        } else if (cos_cache_attrval_exists(pObjectclass, "cosPointerDefinition")) {
++            cosType = COSTYPE_POINTER;
+ 
+-				/*
+-				* At this point, dnVals[valIndex]->bv_val
+-				* is the value of cosAttribute, stripped of
+-				* any qualifiers, so add this pure attribute type to
+-				* the appropriate lists.
+-				*/
+-		
+-				if ( op_qualifier_hit ) {
+-					cos_cache_add_attrval(&pCosOperational,
+-					                      dnVals[valIndex]->bv_val);
+-				}
+-				if ( merge_schemes_qualifier_hit ) {
+-					cos_cache_add_attrval(&pCosMerge, dnVals[valIndex]->bv_val);
+-				}
+-				if ( override_qualifier_hit ) {
+-					cos_cache_add_attrval(&pCosOverrides,
+-					                      dnVals[valIndex]->bv_val);
+-				}
+-				if ( default_qualifier_hit ) {
+-					/* attr is added below in pSneakyVal, in any case */
+-				}
++        } else if (cos_cache_attrval_exists(pObjectclass, "cosIndirectDefinition")) {
++            cosType = COSTYPE_INDIRECT;
+ 
+-				if ( operational_default_qualifier_hit ) {
+-					cos_cache_add_attrval(&pCosOpDefault,
+-					                      dnVals[valIndex]->bv_val);
+-				}
++        } else
++            cosType = COSTYPE_BADTYPE;
++    }
+ 
+-				slapi_vattrspi_regattr((vattr_sp_handle *)vattr_handle,
+-				                        dnVals[valIndex]->bv_val, NULL, NULL);
+-			} /* if(attrType is cosAttribute) */
++    /*
++    we should now have a full definition,
++    do some sanity checks because we don't
++    want bogus entries in the cache
++    then ship it
++    */
++
++    /* these must exist */
++    if (pDn && pObjectclass &&
++        ((cosType == COSTYPE_CLASSIC &&
++          pCosTemplateDn &&
++          pCosSpecifier &&
++          pCosAttribute) ||
++         (cosType == COSTYPE_POINTER &&
++          pCosTemplateDn &&
++          pCosAttribute) ||
++         (cosType == COSTYPE_INDIRECT &&
++          pCosSpecifier &&
++          pCosAttribute))) {
++        int rc = 0;
++        /*
++    we'll leave the referential integrity stuff
++    up to the referint plug-in and assume all
++    is good - if it's not then we just have a
++    useless definition and we'll nag copiously later.
++        */
++        char *pTmpDn = slapi_ch_strdup(pDn->val); /* because dn gets hosed on error */
++
++        if (!(rc = cos_cache_add_defn(info->pDefs, &pDn, cosType,
++                                      &pCosTargetTree, &pCosTemplateDn,
++                                      &pCosSpecifier, &pCosAttribute,
++                                      &pCosOverrides, &pCosOperational,
++                                      &pCosMerge, &pCosOpDefault))) {
++            info->ret = 0; /* we have succeeded to add the defn*/
++        } else {
++            /*
++             * Failed but we will continue the search for other defs
++             * Don't reset info->ret....it keeps track of any success
++            */
++            if (rc == COS_DEF_ERROR_NO_TEMPLATES) {
++                slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM, "cos_dn_defs_cb - Skipping CoS Definition %s"
++                                                                   "--no CoS Templates found, which should be added before the CoS Definition.\n",
++                              pTmpDn);
++            } else {
++                slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM, "cos_dn_defs_cb - Skipping CoS Definition %s\n"
++                                                                   "--error(%d)\n",
++                              pTmpDn, rc);
++            }
++        }
+ 
+-			/*
+-			 * Add the attributetype to the appropriate
+-			 * list.
+-			 */
+-			cos_cache_add_attrval(pSneakyVal, dnVals[valIndex]->bv_val);
+-			
+-		}/* for (valIndex = 0; dnVals[valIndex]; valIndex++) */
+-		
+-		ber_bvecfree( dnVals );
+-		dnVals = NULL;
+-	} while(!slapi_entry_next_attr(e, dnAttr, &dnAttr));
+-
+-	if (pCosAttribute && (!pCosTargetTree || !pCosTemplateDn)) {
+-		/* get the parent of the definition */
+-		char *orig = slapi_dn_parent(pDn->val);
+-		char *parent = NULL;
+-		if (orig) {
+-			parent = slapi_create_dn_string("%s", orig);
+-			if (!parent) {
+-				parent = orig;
+-				slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM, 
+-				              "cos_dn_defs_cb - "
+-				              "Failed to normalize parent dn %s. "
+-				              "Adding the pre normalized dn.\n", 
+-				              parent);
+-			}
+-			if (!pCosTargetTree) {
+-				cos_cache_add_attrval(&pCosTargetTree, parent);
+-			}
+-			if (!pCosTemplateDn) {
+-				cos_cache_add_attrval(&pCosTemplateDn, parent);
+-			}
+-			if (parent != orig) {
+-				slapi_ch_free_string(&parent);
+-			}
+-			slapi_ch_free_string(&orig);
+-		} else {
+-			slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM,
+-			              "cos_dn_defs_cb - "
+-			              "Failed to get parent dn of cos definition %s.\n",
+-			              pDn->val);
+-			if (!pCosTemplateDn) {
+-				if (!pCosTargetTree) {
+-					slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM, "cos_dn_defs_cb - cosTargetTree and cosTemplateDn are not set.\n");
+-				} else {
+-					slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM, "cos_dn_defs_cb - cosTemplateDn is not set.\n");
+-				}
+-			} else if (!pCosTargetTree) {
+-				slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM, "cos_dn_defs_cb - cosTargetTree is not set.\n");
+-			}
+-		}
+-	}
+-	
+-	/*
+-	determine the type of class of service scheme 
+-	*/
+-	
+-	if(pObjectclass)
+-	{
+-		if(cos_cache_attrval_exists(pObjectclass, "cosDefinition"))
+-		{
+-			cosType = COSTYPE_CLASSIC;
+-		}
+-		else if(cos_cache_attrval_exists(pObjectclass, "cosClassicDefinition"))
+-		{
+-			cosType = COSTYPE_CLASSIC;
+-			
+-		}
+-		else if(cos_cache_attrval_exists(pObjectclass, "cosPointerDefinition"))
+-		{
+-			cosType = COSTYPE_POINTER;
+-			
+-		}
+-		else if(cos_cache_attrval_exists(pObjectclass, "cosIndirectDefinition"))
+-		{
+-			cosType = COSTYPE_INDIRECT;
+-			
+-		}
+-		else
+-			cosType = COSTYPE_BADTYPE;
+-	}
+-	
+-	/*	
+-	we should now have a full definition, 
+-	do some sanity checks because we don't
+-	want bogus entries in the cache 
+-	then ship it
+-	*/
+-	
+-	/* these must exist */
+-	if(pDn && pObjectclass && 
+-		(
+-		(cosType == COSTYPE_CLASSIC &&
+-		pCosTemplateDn && 
+-		pCosSpecifier &&   
+-		pCosAttribute ) 
+-		||
+-		(cosType == COSTYPE_POINTER &&
+-		pCosTemplateDn && 
+-		pCosAttribute ) 
+-		||
+-		(cosType == COSTYPE_INDIRECT &&
+-		pCosSpecifier &&   
+-		pCosAttribute ) 
+-		)
+-		)
+-	{
+-		int rc = 0;
+-	/*
+-	we'll leave the referential integrity stuff
+-	up to the referint plug-in and assume all
+-	is good - if it's not then we just have a
+-	useless definition and we'll nag copiously later.
+-		*/
+-		char *pTmpDn = slapi_ch_strdup(pDn->val); /* because dn gets hosed on error */
+-		
+-		if(!(rc = cos_cache_add_defn(info->pDefs, &pDn, cosType,
+-								&pCosTargetTree, &pCosTemplateDn, 
+-								&pCosSpecifier, &pCosAttribute,
+-								&pCosOverrides, &pCosOperational,
+-								&pCosMerge, &pCosOpDefault))) {
+-			info->ret = 0;  /* we have succeeded to add the defn*/
+-		} else {
+-			/*
+-			 * Failed but we will continue the search for other defs
+-			 * Don't reset info->ret....it keeps track of any success
+-			*/
+-			if ( rc == COS_DEF_ERROR_NO_TEMPLATES) {
+-				slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM, "cos_dn_defs_cb - Skipping CoS Definition %s"
+-					"--no CoS Templates found, which should be added before the CoS Definition.\n",
+-					pTmpDn);
+-			} else {
+-				slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM, "cos_dn_defs_cb - Skipping CoS Definition %s\n"
+-					"--error(%d)\n",
+-					pTmpDn, rc);
+-			}
+-		}
+-		
+-		slapi_ch_free_string(&pTmpDn);
+-	}
+-	else
+-	{
+-	/* 
+-	this definition is brain dead - bail
+-	if we have a dn use it to report, if not then *really* bad
+-	things are going on
+-		*/
+-		if(pDn)
+-		{
+-			slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM, "cos_dn_defs_cb - "
+-				"Incomplete cos definition detected in %s, discarding from cache.\n",pDn->val);
+-		}
+-		else
+-			slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM, "cos_dn_defs_cb - "
+-				"Incomplete cos definition detected, no DN to report, discarding from cache.\n");
+-		
+-		if(pCosTargetTree)
+-			cos_cache_del_attrval_list(&pCosTargetTree);
+-		if(pCosTemplateDn)
+-			cos_cache_del_attrval_list(&pCosTemplateDn);
+-		if(pCosSpecifier)
+-			cos_cache_del_attrval_list(&pCosSpecifier);
+-		if(pCosAttribute)
+-			cos_cache_del_attrval_list(&pCosAttribute);
+-		if(pDn)
+-			cos_cache_del_attrval_list(&pDn);
+-	}
++        slapi_ch_free_string(&pTmpDn);
++    } else {
++        /*
++    this definition is brain dead - bail
++    if we have a dn use it to report, if not then *really* bad
++    things are going on
++        */
++        if (pDn) {
++            slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM, "cos_dn_defs_cb - "
++                                                               "Incomplete cos definition detected in %s, discarding from cache.\n",
++                          pDn->val);
++        } else
++            slapi_log_err(SLAPI_LOG_ERR, COS_PLUGIN_SUBSYSTEM, "cos_dn_defs_cb - "
++                                                               "Incomplete cos definition detected, no DN to report, discarding from cache.\n");
++
++        if (pCosTargetTree)
++            cos_cache_del_attrval_list(&pCosTargetTree);
++        if (pCosTemplateDn)
++            cos_cache_del_attrval_list(&pCosTemplateDn);
++        if (pCosSpecifier)
++            cos_cache_del_attrval_list(&pCosSpecifier);
++        if (pCosAttribute)
++            cos_cache_del_attrval_list(&pCosAttribute);
++        if (pDn)
++            cos_cache_del_attrval_list(&pDn);
++    }
+ bail:
+ 	/* we don't keep the objectclasses, so lets free them */
+ 	if(pObjectclass) {
+diff --git a/ldap/servers/plugins/roles/roles_cache.c b/ldap/servers/plugins/roles/roles_cache.c
+index 3697eaa97..3e1724963 100644
+--- a/ldap/servers/plugins/roles/roles_cache.c
++++ b/ldap/servers/plugins/roles/roles_cache.c
+@@ -48,9 +48,6 @@ static char *allUserAttributes[] = {
+ /* views scoping */
+ static void **views_api;
+ 
+-/* Service provider handler */
+-static vattr_sp_handle *vattr_handle = NULL;
+-
+ /* List of nested roles */
+ typedef struct _role_object_nested {
+ 	Slapi_DN *dn;	/* value of attribute nsroledn in a nested role definition */
+@@ -224,13 +221,16 @@ int roles_cache_init()
+ 
+ 	/* Register a callback on backends creation|modification|deletion, 
+       so that we update the corresponding cache */
+-	slapi_register_backend_state_change(NULL, roles_cache_trigger_update_suffix);
+-   
+-	if ( slapi_vattrspi_register((vattr_sp_handle **)&vattr_handle, 
+-									roles_sp_get_value, 
+-									roles_sp_compare_value, 
+-									roles_sp_list_types) )
+-	{
++    slapi_register_backend_state_change(NULL, roles_cache_trigger_update_suffix);
++
++    /* Service provider handler - only used once! and freed by vattr! */
++    vattr_sp_handle *vattr_handle = NULL;
++
++
++    if (slapi_vattrspi_register((vattr_sp_handle **)&vattr_handle,
++                                roles_sp_get_value,
++                                roles_sp_compare_value,
++                                roles_sp_list_types)) {
+         slapi_log_err(SLAPI_LOG_ERR, ROLES_PLUGIN_SUBSYSTEM,
+                "roles_cache_init - slapi_vattrspi_register failed\n");
+ 
+@@ -648,22 +648,20 @@ void roles_cache_stop()
+ 
+     slapi_log_err(SLAPI_LOG_PLUGIN, ROLES_PLUGIN_SUBSYSTEM, "--> roles_cache_stop\n");
+ 
+-	/* Go through all the roles list and trigger the associated structure */
+-	slapi_rwlock_wrlock(global_lock);
+-	current_role = roles_list;
+-	while ( current_role )
+-	{
+-		slapi_lock_mutex(current_role->change_lock);
+-		current_role->keeprunning = 0;	
+-		next_role = current_role->next;
+-		slapi_notify_condvar(current_role->something_changed, 1 );
+-		slapi_unlock_mutex(current_role->change_lock);
+-
+-		current_role = next_role;
+-	}
+-	slapi_rwlock_unlock(global_lock);
+-	slapi_ch_free((void **)&vattr_handle);
+-	roles_list = NULL;
++    /* Go through all the roles list and trigger the associated structure */
++    slapi_rwlock_wrlock(global_lock);
++    current_role = roles_list;
++    while (current_role) {
++        slapi_lock_mutex(current_role->change_lock);
++        current_role->keeprunning = 0;
++        next_role = current_role->next;
++        slapi_notify_condvar(current_role->something_changed, 1);
++        slapi_unlock_mutex(current_role->change_lock);
++
++        current_role = next_role;
++    }
++    slapi_rwlock_unlock(global_lock);
++    roles_list = NULL;
+ 
+     slapi_log_err(SLAPI_LOG_PLUGIN, ROLES_PLUGIN_SUBSYSTEM, "<-- roles_cache_stop\n");
+ }
+diff --git a/ldap/servers/slapd/vattr.c b/ldap/servers/slapd/vattr.c
+index ef4d7f279..84e01cd62 100644
+--- a/ldap/servers/slapd/vattr.c
++++ b/ldap/servers/slapd/vattr.c
+@@ -1843,8 +1843,15 @@ static int vattr_map_create(void)
+ 	return 0;
+ }
+ 
+-void vattr_map_entry_free(vattr_map_entry *vae) {
+-    slapi_ch_free((void **)&(vae->sp_list));
++void
++vattr_map_entry_free(vattr_map_entry *vae)
++{
++    vattr_sp_handle *list_entry = vae->sp_list;
++    while (list_entry != NULL) {
++        vattr_sp_handle *next_entry = list_entry->next;
++        slapi_ch_free((void **)&list_entry);
++        list_entry = next_entry;
++    }
+     slapi_ch_free_string(&(vae->type_name));
+     slapi_ch_free((void **)&vae);
+ }
+@@ -2134,16 +2141,9 @@ int slapi_vattr_schema_check_type(Slapi_Entry *e, char *type)
+ 
+ vattr_map_entry *vattr_map_entry_new(char *type_name, vattr_sp_handle *sph, void* hint)
+ {
+-	vattr_map_entry *result = NULL;
+-	vattr_sp_handle *sp_copy = NULL;
+-
+-	sp_copy = (vattr_sp_handle*)slapi_ch_calloc(1, sizeof (vattr_sp_handle));
+-	sp_copy->sp = sph->sp;
+-	sp_copy->hint = hint;
+-
+-	result = (vattr_map_entry*)slapi_ch_calloc(1, sizeof (vattr_map_entry));
+-	result->type_name = slapi_ch_strdup(type_name);
+-	result->sp_list = sp_copy;
++    vattr_map_entry *result = (vattr_map_entry *)slapi_ch_calloc(1, sizeof(vattr_map_entry));
++    result->type_name = slapi_ch_strdup(type_name);
++    result->sp_list = sph;
+ 
+ 	/* go get schema */
+ 	result->objectclasses = vattr_map_entry_build_schema(type_name);
+@@ -2259,6 +2259,16 @@ we'd need to hold a lock on the read path, which we don't want to do.
+ So any SP which relinquishes its need to handle a type needs to continue
+ to handle the calls on it, but return nothing */
+ /* DBDB need to sort out memory ownership here, it's not quite right */
++/*
++ * This function was inconsistent. We would allocated and "kind of",
++ * copy the sp_handle here for the vattr_map_entry_new path. But we
++ * would "take ownership" for the existing entry and the list addition
++ * path. Instead now, EVERY sp_handle we take, we take ownership of
++ * and the CALLER must allocate a new one each time.
++ *
++ * Better idea, is that regattr should just take the fn pointers
++ * and callers never *see* the sp_handle structure at all.
++ */
+ 
+ int vattr_map_sp_insert(char *type_to_add, vattr_sp_handle *sp, void *hint)
+ {
+-- 
+2.13.6
+

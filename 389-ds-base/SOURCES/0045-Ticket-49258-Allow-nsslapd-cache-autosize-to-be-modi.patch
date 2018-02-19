@@ -1,0 +1,84 @@
+From e0cb3e9ff5337cfc4ecaa6fa5efa189b7bc16246 Mon Sep 17 00:00:00 2001
+From: Mark Reynolds <mreynolds@redhat.com>
+Date: Mon, 15 May 2017 11:14:43 -0400
+Subject: [PATCH 05/10] Ticket 49258 - Allow nsslapd-cache-autosize to be
+ modified while the server is running
+
+Bug Description:  Previously you're not allowed to set nsslapd-cache-autosize, and
+                  nsslapd-cache-autosize-set while the server was running.  The only
+                  way to set it was to edit the dse.ldif
+
+Fix Description:  Allow it to be set while the server is running.  Also added value
+                  validation for these settigs
+
+https://pagure.io/389-ds-base/issue/49258
+
+Reviewed by: tbordaz(Thanks!)
+
+(cherry picked from commit 2d07ca48f9c1232fc544361b5103d353e4791a72)
+---
+ ldap/servers/slapd/back-ldbm/ldbm_config.c | 34 ++++++++++++++++++++++++------
+ 1 file changed, 28 insertions(+), 6 deletions(-)
+
+diff --git a/ldap/servers/slapd/back-ldbm/ldbm_config.c b/ldap/servers/slapd/back-ldbm/ldbm_config.c
+index 401cd60..f7edd9e 100644
+--- a/ldap/servers/slapd/back-ldbm/ldbm_config.c
++++ b/ldap/servers/slapd/back-ldbm/ldbm_config.c
+@@ -1197,8 +1197,19 @@ static int ldbm_config_cache_autosize_set(void *arg, void *value, char *errorbuf
+ {
+     struct ldbminfo *li = (struct ldbminfo *)arg;
+ 
+-    if (apply)
+-    li->li_cache_autosize = (int)((uintptr_t)value);
++    if (apply) {
++        int val = (int)((uintptr_t)value);
++        if (val < 0 || val > 100) {
++            slapi_create_errormsg(errorbuf, SLAPI_DSE_RETURNTEXT_SIZE,
++                "Error: Invalid value for %s (%d). The value must be between \"0\" and \"100\"\n",
++                CONFIG_CACHE_AUTOSIZE, val);
++            slapi_log_err(SLAPI_LOG_ERR, "ldbm_config_cache_autosize_set",
++                "Invalid value for %s (%d). The value must be between \"0\" and \"100\"\n",
++                CONFIG_CACHE_AUTOSIZE, val);
++            return LDAP_UNWILLING_TO_PERFORM;
++        }
++        li->li_cache_autosize = val;
++    }
+     return LDAP_SUCCESS;
+ }
+ 
+@@ -1214,8 +1225,19 @@ static int ldbm_config_cache_autosize_split_set(void *arg, void *value, char *er
+ {
+     struct ldbminfo *li = (struct ldbminfo *)arg;
+ 
+-    if (apply)
+-    li->li_cache_autosize_split = (int)((uintptr_t)value);
++    if (apply) {
++        int val = (int)((uintptr_t)value);
++        if (val < 0 || val > 100) {
++            slapi_create_errormsg(errorbuf, SLAPI_DSE_RETURNTEXT_SIZE,
++                "Error: Invalid value for %s (%d). The value must be between \"0\" and \"100\"\n",
++                CONFIG_CACHE_AUTOSIZE_SPLIT, val);
++            slapi_log_err(SLAPI_LOG_ERR, "ldbm_config_cache_autosize_split_set",
++                "Invalid value for %s (%d). The value must be between \"0\" and \"100\"\n",
++                CONFIG_CACHE_AUTOSIZE_SPLIT, val);
++            return LDAP_UNWILLING_TO_PERFORM;
++        }
++        li->li_cache_autosize_split = val;
++    }
+     return LDAP_SUCCESS;
+ }
+ 
+@@ -1582,8 +1604,8 @@ static config_info ldbm_config[] = {
+     {CONFIG_DB_DEBUG_CHECKPOINTING, CONFIG_TYPE_ONOFF, "off", &ldbm_config_db_debug_checkpointing_get, &ldbm_config_db_debug_checkpointing_set, 0},
+     {CONFIG_DB_HOME_DIRECTORY, CONFIG_TYPE_STRING, "", &ldbm_config_db_home_directory_get, &ldbm_config_db_home_directory_set, 0},
+     {CONFIG_IMPORT_CACHE_AUTOSIZE, CONFIG_TYPE_INT, "-1", &ldbm_config_import_cache_autosize_get, &ldbm_config_import_cache_autosize_set, CONFIG_FLAG_ALWAYS_SHOW|CONFIG_FLAG_ALLOW_RUNNING_CHANGE},
+-    {CONFIG_CACHE_AUTOSIZE, CONFIG_TYPE_INT, "10", &ldbm_config_cache_autosize_get, &ldbm_config_cache_autosize_set, 0},
+-    {CONFIG_CACHE_AUTOSIZE_SPLIT, CONFIG_TYPE_INT, "40", &ldbm_config_cache_autosize_split_get, &ldbm_config_cache_autosize_split_set, 0},
++    {CONFIG_CACHE_AUTOSIZE, CONFIG_TYPE_INT, "10", &ldbm_config_cache_autosize_get, &ldbm_config_cache_autosize_set, CONFIG_FLAG_ALWAYS_SHOW|CONFIG_FLAG_ALLOW_RUNNING_CHANGE},
++    {CONFIG_CACHE_AUTOSIZE_SPLIT, CONFIG_TYPE_INT, "40", &ldbm_config_cache_autosize_split_get, &ldbm_config_cache_autosize_split_set, CONFIG_FLAG_ALWAYS_SHOW|CONFIG_FLAG_ALLOW_RUNNING_CHANGE},
+     {CONFIG_IMPORT_CACHESIZE, CONFIG_TYPE_SIZE_T, "16777216", &ldbm_config_import_cachesize_get, &ldbm_config_import_cachesize_set, CONFIG_FLAG_ALWAYS_SHOW|CONFIG_FLAG_ALLOW_RUNNING_CHANGE},
+     {CONFIG_IDL_SWITCH, CONFIG_TYPE_STRING, "new", &ldbm_config_idl_get_idl_new, &ldbm_config_idl_set_tune, CONFIG_FLAG_ALWAYS_SHOW},
+     {CONFIG_IDL_UPDATE, CONFIG_TYPE_ONOFF, "on", &ldbm_config_idl_get_update, &ldbm_config_idl_set_update, 0},
+-- 
+2.9.4
+

@@ -1,0 +1,62 @@
+From e52c519a8553dd8abee5740714054ebbdd59e51a Mon Sep 17 00:00:00 2001
+From: William Brown <firstyear@redhat.com>
+Date: Tue, 23 May 2017 11:03:24 +1000
+Subject: [PATCH] Ticket 49267 - autosize split of 0 results in dbcache of 0
+
+Bug Description:  autosize split of 0 results in a dbcache of 0. This was
+due to a missing bounds check on the value for 0. In theory this could
+still be problematic if the value was say 1% ... But hopefully we don't
+see that :)
+
+Fix Description:  Add the bounds check.
+
+https://pagure.io/389-ds-base/issue/49267
+
+Author: wibrown
+
+Review by: mreynolds (Thanks!)
+
+(cherry picked from commit 22d4865ea20acb6e6c11aed10d09241b09bb711c)
+---
+ ldap/servers/slapd/back-ldbm/start.c | 14 +++++++++++++-
+ 1 file changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/ldap/servers/slapd/back-ldbm/start.c b/ldap/servers/slapd/back-ldbm/start.c
+index a207bd8..1834a19 100644
+--- a/ldap/servers/slapd/back-ldbm/start.c
++++ b/ldap/servers/slapd/back-ldbm/start.c
+@@ -101,7 +101,11 @@ ldbm_back_start_autotune(struct ldbminfo *li) {
+     /* This doesn't control the availability of the feature, so we can take the
+      * default from ldbm_config.c
+      */
+-    autosize_db_percentage_split = li->li_cache_autosize_split;
++    if (li->li_cache_autosize_split == 0) {
++        autosize_db_percentage_split = 40;
++    } else {
++        autosize_db_percentage_split = li->li_cache_autosize_split;
++    }
+ 
+ 
+     /* Check the values are sane. */
+@@ -131,10 +135,18 @@ ldbm_back_start_autotune(struct ldbminfo *li) {
+     db_size = (autosize_db_percentage_split * zone_size) / 100;
+ 
+     /* Cap the DB size at 512MB, as this doesn't help perf much more (lkrispen's advice) */
++    /* NOTE: Do we need a minimum DB size? */
+     if (db_size > (512 * MEGABYTE)) {
+         db_size = (512 * MEGABYTE);
+     }
+ 
++    /* NOTE: Because of how we workout entry_size, even if
++     * have autosize split to say ... 90% for dbcache, because
++     * we cap db_size, we use zone_size - db_size, meaning that entry
++     * cache still gets the remaining memory *even* though we didn't use it all.
++     * If we didn't do this, entry_cache would only get 10% of of the avail, even
++     * if db_size was caped at say 5% down from 90.
++     */
+     if (backend_count > 0 ) {
+         /* Number of entry cache pages per backend. */
+         entry_size = (zone_size - db_size) / backend_count;
+-- 
+2.9.4
+

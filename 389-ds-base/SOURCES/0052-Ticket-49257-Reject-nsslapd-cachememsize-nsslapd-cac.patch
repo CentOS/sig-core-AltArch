@@ -1,0 +1,131 @@
+From 0f04c8e7c1219940baf0ae9c1bcb2464ddf079df Mon Sep 17 00:00:00 2001
+From: Mark Reynolds <mreynolds@redhat.com>
+Date: Tue, 16 May 2017 13:19:43 -0400
+Subject: [PATCH] Ticket 49257 - Reject nsslapd-cachememsize &
+ nsslapd-cachesize when nsslapd-cache-autosize is set
+
+Description:  We need to also reject entry cache changes when cache autosizing is being used.
+
+              I also found out that we were not registering the ldbm instance callbacks at startup.
+              So all those functions were only used when creating an instance, and not after it was
+              started.
+
+https://pagure.io/389-ds-base/issue/49257
+
+Reviewed by: tbordaz(Thanks!)
+---
+ ldap/servers/slapd/back-ldbm/instance.c            | 19 +++++++++----
+ .../servers/slapd/back-ldbm/ldbm_instance_config.c | 32 ++++++++++++++++++++--
+ ldap/servers/slapd/back-ldbm/start.c               |  2 +-
+ 3 files changed, 44 insertions(+), 9 deletions(-)
+
+diff --git a/ldap/servers/slapd/back-ldbm/instance.c b/ldap/servers/slapd/back-ldbm/instance.c
+index f79d048..8b38644 100644
+--- a/ldap/servers/slapd/back-ldbm/instance.c
++++ b/ldap/servers/slapd/back-ldbm/instance.c
+@@ -302,12 +302,19 @@ ldbm_instance_startall(struct ldbminfo *li)
+         inst = (ldbm_instance *) object_get_data(inst_obj);
+         ldbm_instance_set_flags(inst);
+         rc1 = ldbm_instance_start(inst->inst_be);
+-    if (rc1 != 0) {
+-        rc = rc1;
+-    } else {
+-        vlv_init(inst);
+-        slapi_mtn_be_started(inst->inst_be);
+-    }
++        if (rc1 != 0) {
++            rc = rc1;
++        } else {
++            if(ldbm_instance_config_load_dse_info(inst) != 0){
++                slapi_log_err(SLAPI_LOG_ERR, "ldbm_instance_startall",
++                    "Loading database instance configuration failed for (%s)\n",
++                    inst->inst_name);
++                rc = -1;
++            } else {
++                vlv_init(inst);
++                slapi_mtn_be_started(inst->inst_be);
++            }
++        }
+         inst_obj = objset_next_obj(li->li_instance_set, inst_obj);
+     }
+ 
+diff --git a/ldap/servers/slapd/back-ldbm/ldbm_instance_config.c b/ldap/servers/slapd/back-ldbm/ldbm_instance_config.c
+index 55f1887..49a6cac 100644
+--- a/ldap/servers/slapd/back-ldbm/ldbm_instance_config.c
++++ b/ldap/servers/slapd/back-ldbm/ldbm_instance_config.c
+@@ -72,6 +72,18 @@ ldbm_instance_config_cachesize_set(void *arg, void *value, char *errorbuf, int p
+     /* Do whatever we can to make sure the data is ok. */
+ 
+     if (apply) {
++        if (CONFIG_PHASE_RUNNING == phase) {
++            if (val > 0 && inst->inst_li->li_cache_autosize) {
++                /* We are auto-tuning the cache, so this change would be overwritten - return an error */
++                slapi_create_errormsg(errorbuf, SLAPI_DSE_RETURNTEXT_SIZE,
++                    "Error: \"nsslapd-cachesize\" can not be updated while \"nsslapd-cache-autosize\" is set "
++                    "in \"cn=config,cn=ldbm database,cn=plugins,cn=config\".");
++                slapi_log_err(SLAPI_LOG_ERR, "ldbm_instance_config_cachesize_set",
++                    "\"nsslapd-cachesize\" can not be set while \"nsslapd-cache-autosize\" is set "
++                    "in \"cn=config,cn=ldbm database,cn=plugins,cn=config\".\n");
++                return LDAP_UNWILLING_TO_PERFORM;
++            }
++        }
+         cache_set_max_entries(&(inst->inst_cache), val);
+     }
+ 
+@@ -87,7 +99,11 @@ ldbm_instance_config_cachememsize_get(void *arg)
+ }
+ 
+ static int 
+-ldbm_instance_config_cachememsize_set(void *arg, void *value, char *errorbuf, int phase, int apply) 
++ldbm_instance_config_cachememsize_set(void *arg,
++                                      void *value,
++                                      char *errorbuf,
++                                      int phase,
++                                      int apply)
+ {
+     ldbm_instance *inst = (ldbm_instance *) arg;
+     int retval = LDAP_SUCCESS;
+@@ -107,6 +123,18 @@ ldbm_instance_config_cachememsize_set(void *arg, void *value, char *errorbuf, in
+      */
+ 
+     if (apply) {
++        if (CONFIG_PHASE_RUNNING == phase) {
++            if (val > 0 && inst->inst_li->li_cache_autosize) {
++                /* We are auto-tuning the cache, so this change would be overwritten - return an error */
++                slapi_create_errormsg(errorbuf, SLAPI_DSE_RETURNTEXT_SIZE,
++                    "Error: \"nsslapd-cachememsize\" can not be updated while \"nsslapd-cache-autosize\" is set "
++                    "in \"cn=config,cn=ldbm database,cn=plugins,cn=config\".");
++                slapi_log_err(SLAPI_LOG_ERR, "ldbm_instance_config_cachememsize_set",
++                    "\"nsslapd-cachememsize\" can not be set while \"nsslapd-cache-autosize\" is set "
++                    "in \"cn=config,cn=ldbm database,cn=plugins,cn=config\".\n");
++                return LDAP_UNWILLING_TO_PERFORM;
++            }
++        }
+         if (val > inst->inst_cache.c_maxsize) {
+             delta = val - inst->inst_cache.c_maxsize;
+             delta_original = delta;
+@@ -825,7 +853,7 @@ ldbm_instance_modify_config_entry_callback(Slapi_PBlock *pb, Slapi_Entry* entryB
+                 continue;
+             }
+ 
+-        /* This assumes there is only one bval for this mod. */
++            /* This assumes there is only one bval for this mod. */
+             if (mods[i]->mod_bvalues == NULL) {
+                 /* This avoids the null pointer deref.
+                  * In ldbm_config.c ldbm_config_set, it checks for the NULL.
+diff --git a/ldap/servers/slapd/back-ldbm/start.c b/ldap/servers/slapd/back-ldbm/start.c
+index 1834a19..d4e8bb8 100644
+--- a/ldap/servers/slapd/back-ldbm/start.c
++++ b/ldap/servers/slapd/back-ldbm/start.c
+@@ -169,7 +169,7 @@ ldbm_back_start_autotune(struct ldbminfo *li) {
+     }
+ 
+     slapi_log_err(SLAPI_LOG_NOTICE, "ldbm_back_start", "found %luk physical memory\n", mi->system_total_bytes / 1024);
+-    slapi_log_err(SLAPI_LOG_NOTICE, "ldbm_back_start", "found %luk avaliable\n", mi->system_available_bytes / 1024);
++    slapi_log_err(SLAPI_LOG_NOTICE, "ldbm_back_start", "found %luk available\n", mi->system_available_bytes / 1024);
+ 
+     /* We've now calculated the autotuning values. Do we need to apply it?
+      * we use the logic of "if size is 0, or autosize is > 0. This way three
+-- 
+2.9.4
+

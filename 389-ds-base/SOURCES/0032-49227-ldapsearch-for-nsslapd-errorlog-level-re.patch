@@ -1,0 +1,221 @@
+From e5f78f9f6a8cab7bfbd33e14912508183f9da283 Mon Sep 17 00:00:00 2001
+From: Mark Reynolds <mreynolds@redhat.com>
+Date: Thu, 20 Apr 2017 15:01:33 -0400
+Subject: [PATCH] Issue 49227 - ldapsearch for nsslapd-errorlog-level returns 
+ incorrect values
+
+Bug Description:  ldapsearch for the error log level returns the internal
+                  bitmask value and not the value set in cn=config.
+
+Fix Description:  When setting the error log level store the initial/untouched
+                  value in the config entry first, then set the bitmasked
+                  global log level variable.
+
+https://pagure.io/389-ds-base/issue/49227
+
+Reviewed by: nhosoi(Thanks!)
+---
+ dirsrvtests/tests/tickets/ticket49227_test.py | 111 ++++++++++++++++++++++++++
+ ldap/servers/slapd/configdse.c                |   4 +-
+ ldap/servers/slapd/libglobs.c                 |  11 +--
+ ldap/servers/slapd/slap.h                     |   3 +-
+ 4 files changed, 121 insertions(+), 8 deletions(-)
+ create mode 100644 dirsrvtests/tests/tickets/ticket49227_test.py
+
+diff --git a/dirsrvtests/tests/tickets/ticket49227_test.py b/dirsrvtests/tests/tickets/ticket49227_test.py
+new file mode 100644
+index 0000000..86e0b9a
+--- /dev/null
++++ b/dirsrvtests/tests/tickets/ticket49227_test.py
+@@ -0,0 +1,111 @@
++import os
++import time
++import ldap
++import logging
++import pytest
++from lib389._constants import *
++from lib389.properties import *
++from lib389.tasks import *
++from lib389.utils import *
++from lib389.topologies import topology_st as topo
++
++DEBUGGING = os.getenv("DEBUGGING", default=False)
++if DEBUGGING:
++    logging.getLogger(__name__).setLevel(logging.DEBUG)
++else:
++    logging.getLogger(__name__).setLevel(logging.INFO)
++log = logging.getLogger(__name__)
++DEFAULT_LEVEL = "16384"
++
++
++def set_level(topo, level):
++    ''' Set the error log level
++    '''
++    try:
++        topo.standalone.modify_s("cn=config", [(ldap.MOD_REPLACE, 'nsslapd-errorlog-level', level)])
++        time.sleep(1)
++    except ldap.LDAPError as e:
++        log.fatal('Failed to set loglevel to %s - error: %s' % (level, str(e)))
++        assert False
++
++
++def get_level(topo):
++    ''' Set the error log level
++    '''
++    try:
++        config = topo.standalone.search_s("cn=config", ldap.SCOPE_BASE, "objectclass=top")
++        time.sleep(1)
++        return config[0].getValue('nsslapd-errorlog-level')
++    except ldap.LDAPError as e:
++        log.fatal('Failed to get loglevel - error: %s' % (str(e)))
++        assert False
++
++
++def get_log_size(topo):
++    ''' Get the errors log size
++    '''
++    statinfo = os.stat(topo.standalone.errlog)
++    return statinfo.st_size
++
++
++def test_ticket49227(topo):
++    """Set the error log to varying levels, and make sure a search for that value
++    reflects the expected value (not the bitmasked value.
++    """
++    log_size = get_log_size(topo)
++
++    # Check the default level
++    level = get_level(topo)
++    if level != DEFAULT_LEVEL:
++        log.fatal('Incorrect default logging level: %s' % (level))
++        assert False
++
++    # Set connection logging
++    set_level(topo, '8')
++    level = get_level(topo)
++    if level != '8':
++        log.fatal('Incorrect connection logging level: %s' % (level))
++        assert False
++
++    # Check the actual log
++    new_size = get_log_size(topo)
++    if new_size == log_size:
++        # Size should be different
++        log.fatal('Connection logging is not working')
++        assert False
++
++    # Set default logging using zero
++    set_level(topo, '0')
++    log_size = get_log_size(topo)
++    level = get_level(topo)
++    if level != DEFAULT_LEVEL:
++        log.fatal('Incorrect default logging level: %s' % (level))
++        assert False
++
++    # Check the actual log
++    new_size = get_log_size(topo)
++    if new_size != log_size:
++        # Size should be the size
++        log.fatal('Connection logging is still on')
++        assert False
++
++    # Set default logging using the default value
++    set_level(topo, DEFAULT_LEVEL)
++    level = get_level(topo)
++    if level != DEFAULT_LEVEL:
++        log.fatal('Incorrect default logging level: %s' % (level))
++        assert False
++
++    # Check the actual log
++    new_size = get_log_size(topo)
++    if new_size != log_size:
++        # Size should be the size
++        log.fatal('Connection logging is still on')
++        assert False
++
++if __name__ == '__main__':
++    # Run isolated
++    # -s for DEBUG mode
++    CURRENT_FILE = os.path.realpath(__file__)
++    pytest.main("-s %s" % CURRENT_FILE)
++
+diff --git a/ldap/servers/slapd/configdse.c b/ldap/servers/slapd/configdse.c
+index 78162c9..08d1ace 100644
+--- a/ldap/servers/slapd/configdse.c
++++ b/ldap/servers/slapd/configdse.c
+@@ -404,12 +404,12 @@ modify_config_dse(Slapi_PBlock *pb, Slapi_Entry* entryBefore, Slapi_Entry* e, in
+ 						config_attr);
+ 					rc = LDAP_UNWILLING_TO_PERFORM;
+ 			} else if (ignore_attr_type(config_attr)) {
+-					slapi_log_err(SLAPI_LOG_WARNING, "modify_config_dse",
++					slapi_log_err(SLAPI_LOG_CONFIG, "modify_config_dse",
+ 						"Modification of attribute \"%s\" is not allowed, ignoring!\n",
+ 						config_attr);
+ 			} else if (SLAPI_IS_MOD_ADD(mods[i]->mod_op)) {
+ 				if (apply_mods) { /* log warning once */
+-					slapi_log_err(SLAPI_LOG_WARNING, "modify_config_dse", 
++					slapi_log_err(SLAPI_LOG_CONFIG, "modify_config_dse",
+ 						"Adding configuration attribute \"%s\"\n",
+ 						config_attr);
+ 				}
+diff --git a/ldap/servers/slapd/libglobs.c b/ldap/servers/slapd/libglobs.c
+index 2fc9fbf..bb51827 100644
+--- a/ldap/servers/slapd/libglobs.c
++++ b/ldap/servers/slapd/libglobs.c
+@@ -308,7 +308,7 @@ static struct config_get_and_set {
+ 	{CONFIG_LOGLEVEL_ATTRIBUTE, config_set_errorlog_level,
+ 		NULL, 0,
+ 		(void**)&global_slapdFrontendConfig.errorloglevel,
+-		CONFIG_SPECIAL_ERRORLOGLEVEL, NULL, SLAPD_DEFAULT_ERRORLOG_LEVEL_STR},
++		CONFIG_SPECIAL_ERRORLOGLEVEL, NULL, SLAPD_DEFAULT_FE_ERRORLOG_LEVEL_STR},
+ 	{CONFIG_ERRORLOG_LOGGING_ENABLED_ATTRIBUTE, NULL,
+ 		log_set_logging, SLAPD_ERROR_LOG,
+ 		(void**)&global_slapdFrontendConfig.errorlog_logging_enabled,
+@@ -1597,7 +1597,7 @@ FrontendConfig_init(void) {
+     cfg->errorlog_minfreespace = SLAPD_DEFAULT_LOG_MINFREESPACE;
+     cfg->errorlog_exptime = SLAPD_DEFAULT_LOG_EXPTIME;
+     cfg->errorlog_exptimeunit = slapi_ch_strdup(SLAPD_INIT_LOG_EXPTIMEUNIT);
+-    cfg->errorloglevel = SLAPD_DEFAULT_ERRORLOG_LEVEL;
++    cfg->errorloglevel = SLAPD_DEFAULT_FE_ERRORLOG_LEVEL;
+ 
+     init_auditlog_logging_enabled = cfg->auditlog_logging_enabled = LDAP_OFF;
+     cfg->auditlog_mode = slapi_ch_strdup(SLAPD_INIT_LOG_MODE);
+@@ -4474,9 +4474,10 @@ config_set_errorlog_level( const char *attrname, char *value, char *errorbuf, in
+   
+   if ( apply ) {
+ 	CFG_LOCK_WRITE(slapdFrontendConfig);
+-	level |= SLAPD_DEFAULT_ERRORLOG_LEVEL; /* Always apply the new default error levels for now */
+-	slapd_ldap_debug = level;
+ 	slapdFrontendConfig->errorloglevel = level;
++	/* Set the internal value - apply the default error level */
++	level |= SLAPD_DEFAULT_ERRORLOG_LEVEL;
++	slapd_ldap_debug = level;
+ 	CFG_UNLOCK_WRITE(slapdFrontendConfig);
+   }
+   return retVal;
+@@ -5771,7 +5772,7 @@ config_get_errorlog_level(){
+   retVal = slapdFrontendConfig->errorloglevel;
+   CFG_UNLOCK_READ(slapdFrontendConfig);
+   
+-  return retVal; 
++  return retVal |= SLAPD_DEFAULT_ERRORLOG_LEVEL;
+ }
+ 
+ /*  return integer -- don't worry about locking similar to config_check_referral_mode 
+diff --git a/ldap/servers/slapd/slap.h b/ldap/servers/slapd/slap.h
+index 5e44cc8..04c9b79 100644
+--- a/ldap/servers/slapd/slap.h
++++ b/ldap/servers/slapd/slap.h
+@@ -343,7 +343,8 @@ typedef void	(*VFPV)(); /* takes undefined arguments */
+  *  LDAP_DEBUG_WARNING | LDAP_DEBUG_NOTICE | LDAP_DEBUG_INFO)
+  */
+ #define SLAPD_DEFAULT_ERRORLOG_LEVEL            266354688
+-#define SLAPD_DEFAULT_ERRORLOG_LEVEL_STR        "266354688"
++#define SLAPD_DEFAULT_FE_ERRORLOG_LEVEL         16384  /* frontend log level */
++#define SLAPD_DEFAULT_FE_ERRORLOG_LEVEL_STR     "16384"
+ #define SLAPD_DEFAULT_ACCESSLOG_LEVEL           256
+ #define SLAPD_DEFAULT_ACCESSLOG_LEVEL_STR       "256"
+ 
+-- 
+2.9.3
+

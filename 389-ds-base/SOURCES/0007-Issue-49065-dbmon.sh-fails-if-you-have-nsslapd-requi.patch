@@ -1,0 +1,174 @@
+From edf3d210e9ba9006f87e0597b052fa925c68ddc2 Mon Sep 17 00:00:00 2001
+From: Mark Reynolds <mreynolds@redhat.com>
+Date: Mon, 20 Mar 2017 17:35:10 -0400
+Subject: [PATCH] Issue 49065 - dbmon.sh fails if you have
+ nsslapd-require-secure-binds enabled
+
+Description:  Add the ability to detect if security is enabled, if so connect using
+              start TLS.  Added a new param SERVID for specifying which instance
+              you want to look at.
+
+https://pagure.io/389-ds-base/issue/49065
+
+Reviewed by: firstyear(Thanks!)
+---
+ Makefile.am                                      |  2 +-
+ ldap/admin/src/scripts/{dbmon.sh => dbmon.sh.in} | 62 ++++++++++++++++++++++--
+ man/man8/dbmon.sh.8                              | 14 +++---
+ 3 files changed, 65 insertions(+), 13 deletions(-)
+ rename ldap/admin/src/scripts/{dbmon.sh => dbmon.sh.in} (81%)
+ mode change 100755 => 100644
+
+diff --git a/Makefile.am b/Makefile.am
+index 9aebb6b..4a4b2d3 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -235,7 +235,7 @@ CLEANFILES =  dberrstrs.h ns-slapd.properties \
+ 	ldap/admin/src/scripts/usn-tombstone-cleanup.pl ldap/admin/src/scripts/verify-db.pl \
+ 	ldap/admin/src/scripts/ds_selinux_port_query ldap/admin/src/scripts/ds_selinux_enabled \
+ 	ldap/admin/src/scripts/dbverify ldap/admin/src/scripts/readnsstate \
+-	doxyfile.stamp \
++	doxyfile.stamp ldap/admin/src/scripts/dbmon.sh \
+ 	$(NULL)
+ 
+ clean-local:
+diff --git a/ldap/admin/src/scripts/dbmon.sh b/ldap/admin/src/scripts/dbmon.sh.in
+old mode 100755
+new mode 100644
+similarity index 81%
+rename from ldap/admin/src/scripts/dbmon.sh
+rename to ldap/admin/src/scripts/dbmon.sh.in
+index 3b8b4d1..4ee6adc
+--- a/ldap/admin/src/scripts/dbmon.sh
++++ b/ldap/admin/src/scripts/dbmon.sh.in
+@@ -8,10 +8,11 @@
+ # END COPYRIGHT BLOCK
+ #
+ 
++. @datadir@/@package_name@/data/DSSharedLib
++
+ DURATION=${DURATION:-0}
+ INCR=${INCR:-1}
+-HOST=${HOST:-localhost}
+-PORT=${PORT:-389}
++SERVID=${SERVID}
+ BINDDN=${BINDDN:-"cn=directory manager"}
+ BINDPW=${BINDPW:-"secret"}
+ DBLIST=${DBLIST:-all}
+@@ -180,10 +181,63 @@ parseldif() {
+ }
+ 
+ dodbmon() {
++    initfile=$(get_init_file "@initconfigdir@" $SERVID)
++    if [ $? -eq 1 ]
++    then
++        echo "You must supply a valid server instance identifier (via SERVID)."
++        echo "Available instances: $initfile"
++        exit 1
++    fi
++
++    . $initfile
++
++    process_dse $CONFIG_DIR $$
++    file="/tmp/DSSharedLib.$$"
++    port=$(grep -i 'nsslapd-port' $file | awk '{print $2}' )
++    host=$(grep -i 'nsslapd-localhost' $file | awk '{print $2}' )
++    security=$(grep -i 'nsslapd-security' $file | awk '{print $2}' )
++    certdir=$(grep -i 'nsslapd-certdir' $file | awk '{print $2}' )
++    rm $file
++
++    if [ -n "$ldapiURL" ]
++    then
++        ldapiURL=`echo "$ldapiURL" | sed -e 's/\//%2f/g'`
++        ldapiURL="ldapi://"$ldapiURL
++    fi
++
++    client_type=`ldapsearch -V 2>&1`;
++    echo "$client_type" | grep -q "OpenLDAP"
++    if  [ $? -eq 0 ]
++    then
++        openldap="yes"
++        export LDAPTLS_CACERTDIR=$certdir
++    fi
++
++    if [ -z $security ]; then
++        security="off"
++    fi
++
+     while [ 1 ] ; do
+         date
+-        ldapsearch -xLLL -h $HOST -p $PORT -D "$BINDDN" -w "$BINDPW" -b "$ldbmdn" '(|(cn=config)(cn=database)(cn=monitor))' \
+-        | parseldif
++        if [ "$security" = "on" ]; then
++            # STARTTLS
++	    if [ "$openldap" = "yes" ]; then
++	        ldapsearch -x -LLL -ZZ -h $host -p $port -D "$BINDDN" -w "$BINDPW" -b "$ldbmdn" '(|(cn=config)(cn=database)(cn=monitor))' \
++                | parseldif
++	    else
++	        ldapsearch -ZZZ -P $certdir  -h $host -p $port -D "$BINDDN" -w "$BINDPW" -b "$ldbmdn" '(|(cn=config)(cn=database)(cn=monitor))' \
++                | parseldif
++	    fi
++        else
++            # LDAP
++            if [ "$openldap" = "yes" ]; then
++	        ldapsearch -x -LLL -h $host -p $port -D "$BINDDN" -w "$BINDPW" -b "$ldbmdn" '(|(cn=config)(cn=database)(cn=monitor))' \
++                | parseldif
++            else
++	        ldapsearch -h $host -p $port -D "$BINDDN" -w "$BINDPW" -b "$ldbmdn" '(|(cn=config)(cn=database)(cn=monitor))' \
++                | parseldif
++            fi
++        fi
+         echo ""
+         sleep $INCR
+     done
+diff --git a/man/man8/dbmon.sh.8 b/man/man8/dbmon.sh.8
+index 49e61d0..ad318a1 100644
+--- a/man/man8/dbmon.sh.8
++++ b/man/man8/dbmon.sh.8
+@@ -2,7 +2,7 @@
+ .\" First parameter, NAME, should be all caps
+ .\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
+ .\" other parameters are allowed: see man(7), man(1)
+-.TH DBMON.SH 8 "Jul 25, 2014"
++.TH DBMON.SH 8 "Mar 20, 2017"
+ .\" Please adjust this date whenever revising the manpage.
+ .\"
+ .\" Some roff macros, for reference:
+@@ -18,7 +18,7 @@
+ .SH NAME 
+ dbmon.sh - Directory Server script for monitoring database and entry cache usage
+ .SH SYNOPSIS
+-[INCR=num] [HOST=hostname] [PORT=num] [BINDDN=binddn] [BINDPW=password] [DBLIST=databases] [INDEXLIST=indexes] [VERBOSE=num] dbmon.sh
++[INCR=num] [SERVID=server_id][BINDDN=binddn] [BINDPW=password] [DBLIST=databases] [INDEXLIST=indexes] [VERBOSE=num] dbmon.sh
+ .SH DESCRIPTION
+ dbmon.sh is a tool used to monitor database and entry cache usage. It is especially useful for database cache and entry/dn cache tuning - how much space is left, is the cache full, how much space on average do I need per entry/dn.
+ .SH OPTIONS
+@@ -31,9 +31,7 @@ All arguments are optional, but you will most likely have to provide BINDPW
+ .TP
+ .B \fBINCR\fR - show results every INCR seconds - default is 1 second
+ .TP
+-.B \fBHOST\fR - name of host or IP address - default is "localhost"
+-.TP
+-.B \fBPORT\fR - port number (LDAP not LDAPS) - default is 389
++.B \fBSERVID\fR - Name of the server instance
+ .TP
+ .B \fBBINDDN\fR - DN to use to bind - must have permission to read everything under cn=config - default is cn=Directory Manager
+ .TP
+@@ -46,11 +44,11 @@ All arguments are optional, but you will most likely have to provide BINDPW
+ .B \fBVERBOSE\fR - output level - 0 == suitable for parsing by a script - 1 == has column headings - 2 == provides detailed descriptions of the data - default is 0
+ 
+ .SH EXAMPLE
+-INCR=1 HOST=ldap.example.com BINDDN="cn=directory manager" BINDPW="secret" VERBOSE=2 dbmon.sh
++INCR=1 SERVID=slapd-localhost BINDDN="cn=directory manager" BINDPW="secret" VERBOSE=2 dbmon.sh
+ 
+ .SH AUTHOR
+ dbmon.sh was written by the 389 Project.
+ .SH "REPORTING BUGS"
+-Report bugs to https://fedorahosted.org/389/newticket.
++Report bugs to https://pagure.io/389-ds-base/new_issue
+ .SH COPYRIGHT
+-Copyright \(co 2014 Red Hat, Inc.
++Copyright \(co 2017 Red Hat, Inc.
+-- 
+2.9.3
+

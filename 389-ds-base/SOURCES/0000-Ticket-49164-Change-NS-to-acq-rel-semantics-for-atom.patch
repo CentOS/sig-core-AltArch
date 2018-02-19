@@ -1,0 +1,67 @@
+From 70230bf894d9c0150dca8dc6fccc2712187f7b86 Mon Sep 17 00:00:00 2001
+From: William Brown <firstyear@redhat.com>
+Date: Mon, 13 Mar 2017 13:29:43 +1000
+Subject: [PATCH 1/5] Ticket 49164 - Change NS to acq-rel semantics for atomics
+
+Bug Description:  We were using seq_cst to guarantee our operations
+as a poc. Changing to acq/rel allows us the same guarantees, but
+with less overheads.
+
+Fix Description:  Change the barrier type.
+
+https://gcc.gnu.org/wiki/Atomic/GCCMM/AtomicSync
+
+https://pagure.io/389-ds-base/issue/49164
+
+Author: wibrown
+
+Review by: mreynolds (Thanks!)
+
+(cherry picked from commit b1b0574d2cdb012ab206999ed51f08d3340386ce)
+---
+ src/nunc-stans/ns/ns_thrpool.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/nunc-stans/ns/ns_thrpool.c b/src/nunc-stans/ns/ns_thrpool.c
+index 744749b..a867b39 100644
+--- a/src/nunc-stans/ns/ns_thrpool.c
++++ b/src/nunc-stans/ns/ns_thrpool.c
+@@ -167,7 +167,7 @@ ns_thrpool_is_shutdown(struct ns_thrpool_t *tp)
+ {
+     /* We need to barrier this somehow? */
+     int32_t result = 0;
+-    __atomic_load(&(tp->shutdown), &result, __ATOMIC_SEQ_CST);
++    __atomic_load(&(tp->shutdown), &result, __ATOMIC_ACQUIRE);
+     return result;
+ }
+ 
+@@ -176,7 +176,7 @@ ns_thrpool_is_event_shutdown(struct ns_thrpool_t *tp)
+ {
+     /* We need to barrier this somehow? */
+     int32_t result = 0;
+-    __atomic_load(&(tp->shutdown_event_loop), &result, __ATOMIC_SEQ_CST);
++    __atomic_load(&(tp->shutdown_event_loop), &result, __ATOMIC_ACQUIRE);
+     return result;
+ }
+ 
+@@ -1402,7 +1402,7 @@ ns_thrpool_destroy(struct ns_thrpool_t *tp)
+ #endif
+     if (tp) {
+         /* Set the flag to shutdown the event loop. */
+-        __atomic_add_fetch(&(tp->shutdown_event_loop), 1, __ATOMIC_SEQ_CST);
++        __atomic_add_fetch(&(tp->shutdown_event_loop), 1, __ATOMIC_RELEASE);
+ 
+         /* Finish the event queue wakeup job.  This has the
+          * side effect of waking up the event loop thread, which
+@@ -1491,7 +1491,7 @@ ns_thrpool_shutdown(struct ns_thrpool_t *tp)
+     }
+     /* Set the shutdown flag.  This will cause the worker
+      * threads to exit after they finish all remaining work. */
+-    __atomic_add_fetch(&(tp->shutdown), 1, __ATOMIC_SEQ_CST);
++    __atomic_add_fetch(&(tp->shutdown), 1, __ATOMIC_RELEASE);
+ 
+     /* Wake up the idle worker threads so they can exit. */
+     pthread_mutex_lock(&(tp->work_q_lock));
+-- 
+2.9.3
+

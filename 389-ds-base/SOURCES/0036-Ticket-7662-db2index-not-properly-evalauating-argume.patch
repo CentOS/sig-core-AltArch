@@ -1,0 +1,72 @@
+From 0ac013079796cafb119379e40f24559187935851 Mon Sep 17 00:00:00 2001
+From: Mark Reynolds <mreynolds@redhat.com>
+Date: Wed, 3 May 2017 14:50:15 -0400
+Subject: [PATCH] Ticket 7662 - db2index not properly evalauating arguments
+
+Description:  Fix a regression where the argument count gets adjusted
+              before it is checked for errors.  The fix is to copy the
+              number before we shift the arguments, and use that copy
+              for the usage check.
+
+https://pagure.io/389-ds-base/issue/47662
+
+Reviewed by: firstyear(Thanks!)
+
+(cherry picked from commit 46011e24580fcee2f438506f91b9fc119306defc)
+---
+ ldap/admin/src/scripts/db2index.in       | 11 ++++++-----
+ ldap/servers/slapd/back-ldbm/ldif2ldbm.c |  2 +-
+ 2 files changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/ldap/admin/src/scripts/db2index.in b/ldap/admin/src/scripts/db2index.in
+index fec082e..04183d3 100755
+--- a/ldap/admin/src/scripts/db2index.in
++++ b/ldap/admin/src/scripts/db2index.in
+@@ -52,6 +52,7 @@ do
+     esac
+ done
+ 
++argnum=$#
+ shift $(($OPTIND - 1))
+ if [ $1 ]
+ then
+@@ -71,18 +72,18 @@ fi
+ 
+ idxall=0
+ print_usage=0
+-if [ -z $servid ] && [ $# -eq 0 ]; then
++if [ -z $servid ] && [ $argnum -eq 0 ]; then
+     idxall=1
+-elif [ "$servid" ] && [ $# -eq 2 ]; then
++elif [ "$servid" ] && [ $argnum -eq 2 ]; then
+     idxall=1
+ elif [ -z $benameopt ] && [ -z $includeSuffix ]; then
+     print_usage=1
+ fi
+-if [ -z $servid ] && [ $# -lt 2 ]; then
++if [ -z $servid ] && [ $argnum -lt 2 ]; then
+     print_usage=1
+-elif [ -n "$servid" ] && [ $# -lt 4 ]; then
++elif [ -n "$servid" ] && [ $argnum -lt 4 ]; then
+     print_usage=1
+-elif [ -n "$servid" ] && [ $# -eq 4 ]; then
++elif [ -n "$servid" ] && [ $argnum -eq 4 ]; then
+     idxall=1
+ fi
+ 
+diff --git a/ldap/servers/slapd/back-ldbm/ldif2ldbm.c b/ldap/servers/slapd/back-ldbm/ldif2ldbm.c
+index f8fed7c..a0710f7 100644
+--- a/ldap/servers/slapd/back-ldbm/ldif2ldbm.c
++++ b/ldap/servers/slapd/back-ldbm/ldif2ldbm.c
+@@ -3225,7 +3225,7 @@ upgradedb_core(Slapi_PBlock *pb, ldbm_instance *inst)
+     run_from_cmdline = (task_flags & SLAPI_TASK_RUNNING_FROM_COMMANDLINE);
+ 
+     be = inst->inst_be;
+-    slapi_log_err(SLAPI_LOG_ERR, "upgradedb_core",
++    slapi_log_err(SLAPI_LOG_INFO, "upgradedb_core",
+                     "%s: Start upgradedb.\n", inst->inst_name);
+ 
+     if (!run_from_cmdline)
+-- 
+2.9.3
+

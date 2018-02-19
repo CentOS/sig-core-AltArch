@@ -1,0 +1,114 @@
+From d2648bbddbf087c4e3803a89cb67541a50682eae Mon Sep 17 00:00:00 2001
+From: William Brown <firstyear@redhat.com>
+Date: Mon, 15 May 2017 09:04:45 +1000
+Subject: [PATCH] Ticket 49231 - force EXTERNAL always
+
+Bug Description:  Because of how our sasl code works, EXTERNAL bypasses
+a number of checks so is always available.
+
+Fix Description:  Force EXTERNAL to the present mech list, regardless
+of the whitelist.
+
+https://pagure.io/389-ds-base/issue/49231
+
+Author: wibrown
+
+Review by: mreynosd (Thanks!)
+
+(cherry picked from commit e6e0db35842fc6612134cff5a08c4968230d1b2f)
+---
+ dirsrvtests/tests/suites/sasl/allowed_mechs.py | 13 +++++++++++--
+ ldap/servers/slapd/charray.c                   | 14 ++++++++++++++
+ ldap/servers/slapd/saslbind.c                  |  9 +++++++++
+ ldap/servers/slapd/slapi-private.h             |  2 ++
+ 4 files changed, 36 insertions(+), 2 deletions(-)
+
+diff --git a/dirsrvtests/tests/suites/sasl/allowed_mechs.py b/dirsrvtests/tests/suites/sasl/allowed_mechs.py
+index a3e385e..7958db4 100644
+--- a/dirsrvtests/tests/suites/sasl/allowed_mechs.py
++++ b/dirsrvtests/tests/suites/sasl/allowed_mechs.py
+@@ -25,12 +25,21 @@ def test_sasl_allowed_mechs(topology_st):
+     assert('EXTERNAL' in orig_mechs)
+ 
+     # Now edit the supported mechs. CHeck them again.
+-    standalone.config.set('nsslapd-allowed-sasl-mechanisms', 'EXTERNAL, PLAIN')
++    standalone.config.set('nsslapd-allowed-sasl-mechanisms', 'PLAIN')
+ 
+     limit_mechs = standalone.rootdse.supported_sasl()
+-    print(limit_mechs)
+     assert('PLAIN' in limit_mechs)
++    # Should always be in the allowed list, even if not set.
+     assert('EXTERNAL' in limit_mechs)
++    # Should not be there!
++    assert('GSSAPI' not in limit_mechs)
++
++    standalone.config.set('nsslapd-allowed-sasl-mechanisms', 'PLAIN, EXTERNAL')
++
++    limit_mechs = standalone.rootdse.supported_sasl()
++    assert('PLAIN' in limit_mechs)
++    assert('EXTERNAL' in limit_mechs)
++    # Should not be there!
+     assert('GSSAPI' not in limit_mechs)
+ 
+     # Do a config reset
+diff --git a/ldap/servers/slapd/charray.c b/ldap/servers/slapd/charray.c
+index 6b89714..9056f16 100644
+--- a/ldap/servers/slapd/charray.c
++++ b/ldap/servers/slapd/charray.c
+@@ -272,6 +272,20 @@ charray_utf8_inlist(
+     return( 0 );
+ }
+ 
++/*
++ * Assert that some str s is in the charray, or add it.
++ */
++void
++charray_assert_present(char ***a, char *s)
++{
++    int result = charray_utf8_inlist(*a, s);
++    /* Not in the list */
++    if (result == 0) {
++        char *sdup = slapi_ch_strdup(s);
++        slapi_ch_array_add_ext(a, sdup);
++    }
++}
++
+ int slapi_ch_array_utf8_inlist(char **a, char *s)
+ {
+ 	return charray_utf8_inlist(a,s);
+diff --git a/ldap/servers/slapd/saslbind.c b/ldap/servers/slapd/saslbind.c
+index 75b83fe..dd0c4fb 100644
+--- a/ldap/servers/slapd/saslbind.c
++++ b/ldap/servers/slapd/saslbind.c
+@@ -794,6 +794,15 @@ char **ids_sasl_listmech(Slapi_PBlock *pb)
+         ret = sup_ret;
+     }
+ 
++    /*
++     * https://pagure.io/389-ds-base/issue/49231
++     * Because of the way that SASL mechs are managed in bind.c and saslbind.c
++     * even if EXTERNAL was *not* in the list of allowed mechs, it was allowed
++     * in the bind process because it bypasses lots of our checking. As a result
++     * we have to always present it.
++     */
++    charray_assert_present(&ret, "EXTERNAL");
++
+     slapi_log_err(SLAPI_LOG_TRACE, "ids_sasl_listmech", "<=\n");
+ 
+     return ret;
+diff --git a/ldap/servers/slapd/slapi-private.h b/ldap/servers/slapd/slapi-private.h
+index 3f732e8..0836d66 100644
+--- a/ldap/servers/slapd/slapi-private.h
++++ b/ldap/servers/slapd/slapi-private.h
+@@ -834,6 +834,8 @@ void charray_subtract( char **a, char **b, char ***c );
+ char **charray_intersection(char **a, char **b);
+ int charray_get_index(char **array, char *s);
+ int charray_normdn_add(char ***chararray, char *dn, char *errstr);
++void charray_assert_present(char ***a, char *s);
++
+ 
+ /******************************************************************************
+  * value array routines.
+-- 
+2.9.4
+

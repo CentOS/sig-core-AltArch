@@ -1,0 +1,296 @@
+From 9be74e83539e204e9a56721da5c22bd9abf38195 Mon Sep 17 00:00:00 2001
+From: Mark Reynolds <mreynolds@redhat.com>
+Date: Wed, 19 Apr 2017 13:41:22 -0400
+Subject: [PATCH] Ticket 49204 - Fix lower bounds on import autosize + On small
+ VM, autotune breaks the access of the suffixes
+
+    Bug Description:
+        ldif2db in some cases may set a cache of 0, which may y break imports.
+
+        Under memory pressure, the amount of available memory at startup
+        can be so low that the configured cachememsize will be rejected
+        (unwilling to perform).
+        This should leave the cachememsize being "0" (default)
+        This conduct to be unable to access the suffix pages.
+
+    Fix Description:
+
+     * autosize set an incorrect percentage which was too high.
+     * we did not check the lower bound of the allocation
+       so we now set that we must have a minimum allocation.
+     * Set entrycache to a minimal value, even if it looks insane
+     * add a cap on reduction of caches, so we always allocate a few pages
+       at least, and prevent returning 0 to the caller.
+
+    https://pagure.io/389-ds-base/issue/49204
+
+    Author: wibrown, tbordaz
+
+    Review by: tbordaz (Thanks mate, great work with this :) )
+---
+ ldap/servers/slapd/back-ldbm/cache.c               |  4 +--
+ ldap/servers/slapd/back-ldbm/dblayer.c             | 33 +++++++++++++---------
+ ldap/servers/slapd/back-ldbm/dblayer.h             | 12 ++++----
+ ldap/servers/slapd/back-ldbm/ldbm_config.c         |  4 +--
+ .../servers/slapd/back-ldbm/ldbm_instance_config.c | 23 +++++++++++++--
+ ldap/servers/slapd/slapi-private.h                 |  2 +-
+ ldap/servers/slapd/util.c                          | 20 +++++++++----
+ 7 files changed, 65 insertions(+), 33 deletions(-)
+
+diff --git a/ldap/servers/slapd/back-ldbm/cache.c b/ldap/servers/slapd/back-ldbm/cache.c
+index 0f0cf3b..c6638a2 100644
+--- a/ldap/servers/slapd/back-ldbm/cache.c
++++ b/ldap/servers/slapd/back-ldbm/cache.c
+@@ -65,7 +65,7 @@
+ 
+ /* static functions */
+ static void entrycache_clear_int(struct cache *cache);
+-static void entrycache_set_max_size(struct cache *cache, size_t bytes);
++static void entrycache_set_max_size(struct cache *cache, uint64_t bytes);
+ static int entrycache_remove_int(struct cache *cache, struct backentry *e);
+ static void entrycache_return(struct cache *cache, struct backentry **bep);
+ static int entrycache_replace(struct cache *cache, struct backentry *olde, struct backentry *newe);
+@@ -77,7 +77,7 @@ static void entry_lru_verify(struct cache *cache, struct backentry *e, int in);
+ 
+ static int dn_same_id(const void *bdn, const void *k);
+ static void dncache_clear_int(struct cache *cache);
+-static void dncache_set_max_size(struct cache *cache, size_t bytes);
++static void dncache_set_max_size(struct cache *cache, uint64_t bytes);
+ static int dncache_remove_int(struct cache *cache, struct backdn *dn);
+ static void dncache_return(struct cache *cache, struct backdn **bdn);
+ static int dncache_replace(struct cache *cache, struct backdn *olddn, struct backdn *newdn);
+diff --git a/ldap/servers/slapd/back-ldbm/dblayer.c b/ldap/servers/slapd/back-ldbm/dblayer.c
+index 3c1fbb0..f834322 100644
+--- a/ldap/servers/slapd/back-ldbm/dblayer.c
++++ b/ldap/servers/slapd/back-ldbm/dblayer.c
+@@ -1237,8 +1237,8 @@ no_diskspace(struct ldbminfo *li, int dbenv_flags)
+     struct statvfs db_buf;
+     int using_region_files = !(dbenv_flags & ( DB_PRIVATE | DB_SYSTEM_MEM));
+     /* value of 10 == 10% == little more than the average overhead calculated for very large files on 64-bit system for bdb 4.7 */
+-    PRUint64 expected_siz = li->li_dbcachesize + li->li_dbcachesize/10; /* dbcache + region files */
+-    PRUint64 fsiz;
++    uint64_t expected_siz = li->li_dbcachesize + li->li_dbcachesize/10; /* dbcache + region files */
++    uint64_t fsiz;
+     char *region_dir;
+ 
+     if (statvfs(li->li_directory, &db_buf) < 0){
+@@ -1263,7 +1263,7 @@ no_diskspace(struct ldbminfo *li, int dbenv_flags)
+                         li->li_dblayer_private->dblayer_dbhome_directory);
+                     return 1;
+                 }
+-                fsiz = ((PRUint64)dbhome_buf.f_bavail) * ((PRUint64)dbhome_buf.f_bsize);
++                fsiz = ((uint64_t)dbhome_buf.f_bavail) * ((uint64_t)dbhome_buf.f_bsize);
+                 region_dir = li->li_dblayer_private->dblayer_dbhome_directory;
+             } else {
+                 /* Shared/private memory.  No need to check disk space, return success */
+@@ -1387,12 +1387,17 @@ dblayer_start(struct ldbminfo *li, int dbmode)
+     /* Sanity check on cache size on platforms which allow us to figure out
+      * the available phys mem */
+     slapi_pal_meminfo *mi = spal_meminfo_get();
+-    if (!util_is_cachesize_sane(mi, &(priv->dblayer_cachesize))) {
++    util_cachesize_result result = util_is_cachesize_sane(mi, &(priv->dblayer_cachesize));
++    if (result == UTIL_CACHESIZE_ERROR) {
++        slapi_log_err(SLAPI_LOG_CRIT, "dblayer_start", "Unable to determine if cachesize was valid!!!");
++    } else if (result == UTIL_CACHESIZE_REDUCED) {
++        /* In some cases we saw this go to 0, prevent this. */
++        if (priv->dblayer_cachesize < MINCACHESIZE) {
++            priv->dblayer_cachesize = MINCACHESIZE;
++        }
+         /* Oops---looks like the admin misconfigured, let's warn them */
+-        slapi_log_err(SLAPI_LOG_WARNING,"dblayer_start", "Likely CONFIGURATION ERROR -"
+-                  "dbcachesize is configured to use more than the available "
+-                  "physical memory, decreased to the largest available size (%"PRIu64" bytes).\n",
+-                  priv->dblayer_cachesize);
++        slapi_log_err(SLAPI_LOG_WARNING, "dblayer_start", "Likely CONFIGURATION ERROR - dbcachesize is configured to use more than the available "
++                  "memory, decreased to (%"PRIu64" bytes).\n", priv->dblayer_cachesize);
+         li->li_dbcachesize = priv->dblayer_cachesize;
+     }
+     spal_meminfo_destroy(mi);
+@@ -3816,7 +3821,7 @@ static const u_int32_t default_flags = DB_NEXT;
+ typedef struct txn_test_iter {
+     DB *db;
+     DBC *cur;
+-    size_t cnt;
++    uint64_t cnt;
+     const char *attr;
+     u_int32_t flags;
+     backend *be;
+@@ -3938,10 +3943,10 @@ static int txn_test_threadmain(void *param)
+     Object *inst_obj;
+     int rc = 0;
+     txn_test_iter **ttilist = NULL;
+-    size_t tticnt = 0;
++    uint64_t tticnt = 0;
+     DB_TXN *txn = NULL;
+     txn_test_cfg cfg = {0};
+-    size_t counter = 0;
++    uint64_t counter = 0;
+     char keybuf[8192];
+     char databuf[8192];
+     int dbattempts = 0;
+@@ -4062,9 +4067,9 @@ retry_txn:
+         if (!rc) {
+             DBT key;
+             DBT data;
+-            size_t ii;
+-            size_t donecnt = 0;
+-            size_t cnt = 0;
++            uint64_t ii;
++            uint64_t donecnt = 0;
++            uint64_t cnt = 0;
+ 
+             /* phase 1 - open a cursor to each db */
+             if (cfg.verbose) {
+diff --git a/ldap/servers/slapd/back-ldbm/dblayer.h b/ldap/servers/slapd/back-ldbm/dblayer.h
+index 816c943..77b04fa 100644
+--- a/ldap/servers/slapd/back-ldbm/dblayer.h
++++ b/ldap/servers/slapd/back-ldbm/dblayer.h
+@@ -90,8 +90,8 @@ struct dblayer_private
+     int dblayer_ncache;
+     int dblayer_previous_ncache;
+     int dblayer_tx_max;
+-    size_t dblayer_cachesize;
+-    size_t dblayer_previous_cachesize; /* Cache size when we last shut down--
++    uint64_t dblayer_cachesize;
++    uint64_t dblayer_previous_cachesize; /* Cache size when we last shut down--
+                                         * used to determine if we delete 
+                                         * the mpool */
+     int dblayer_recovery_required;
+@@ -102,15 +102,15 @@ struct dblayer_private
+     int dblayer_durable_transactions;
+     int dblayer_checkpoint_interval;
+     int dblayer_circular_logging;
+-    size_t dblayer_page_size;       /* db page size if configured,
++    uint64_t dblayer_page_size;       /* db page size if configured,
+                                      * otherwise default to DBLAYER_PAGESIZE */
+-    size_t dblayer_index_page_size; /* db index page size if configured,
++    uint64_t dblayer_index_page_size; /* db index page size if configured,
+                                      * otherwise default to 
+                                      * DBLAYER_INDEX_PAGESIZE */
+     int dblayer_idl_divisor;        /* divide page size by this to get IDL 
+                                      * size */
+-    size_t dblayer_logfile_size;    /* How large can one logfile be ? */
+-    size_t dblayer_logbuf_size;     /* how large log buffer can be */
++    uint64_t dblayer_logfile_size;    /* How large can one logfile be ? */
++    uint64_t dblayer_logbuf_size;     /* how large log buffer can be */
+     int dblayer_file_mode;          /* pmode for files we create */
+     int dblayer_verbose;            /* Get libdb to exhale debugging info */
+     int dblayer_debug;              /* Will libdb emit debugging info into 
+diff --git a/ldap/servers/slapd/back-ldbm/ldbm_config.c b/ldap/servers/slapd/back-ldbm/ldbm_config.c
+index d5120d3..401cd60 100644
+--- a/ldap/servers/slapd/back-ldbm/ldbm_config.c
++++ b/ldap/servers/slapd/back-ldbm/ldbm_config.c
+@@ -1582,9 +1582,9 @@ static config_info ldbm_config[] = {
+     {CONFIG_DB_DEBUG_CHECKPOINTING, CONFIG_TYPE_ONOFF, "off", &ldbm_config_db_debug_checkpointing_get, &ldbm_config_db_debug_checkpointing_set, 0},
+     {CONFIG_DB_HOME_DIRECTORY, CONFIG_TYPE_STRING, "", &ldbm_config_db_home_directory_get, &ldbm_config_db_home_directory_set, 0},
+     {CONFIG_IMPORT_CACHE_AUTOSIZE, CONFIG_TYPE_INT, "-1", &ldbm_config_import_cache_autosize_get, &ldbm_config_import_cache_autosize_set, CONFIG_FLAG_ALWAYS_SHOW|CONFIG_FLAG_ALLOW_RUNNING_CHANGE},
+-    {CONFIG_CACHE_AUTOSIZE, CONFIG_TYPE_INT, "0", &ldbm_config_cache_autosize_get, &ldbm_config_cache_autosize_set, 0},
++    {CONFIG_CACHE_AUTOSIZE, CONFIG_TYPE_INT, "10", &ldbm_config_cache_autosize_get, &ldbm_config_cache_autosize_set, 0},
+     {CONFIG_CACHE_AUTOSIZE_SPLIT, CONFIG_TYPE_INT, "40", &ldbm_config_cache_autosize_split_get, &ldbm_config_cache_autosize_split_set, 0},
+-    {CONFIG_IMPORT_CACHESIZE, CONFIG_TYPE_SIZE_T, "20000000", &ldbm_config_import_cachesize_get, &ldbm_config_import_cachesize_set, CONFIG_FLAG_ALWAYS_SHOW|CONFIG_FLAG_ALLOW_RUNNING_CHANGE},
++    {CONFIG_IMPORT_CACHESIZE, CONFIG_TYPE_SIZE_T, "16777216", &ldbm_config_import_cachesize_get, &ldbm_config_import_cachesize_set, CONFIG_FLAG_ALWAYS_SHOW|CONFIG_FLAG_ALLOW_RUNNING_CHANGE},
+     {CONFIG_IDL_SWITCH, CONFIG_TYPE_STRING, "new", &ldbm_config_idl_get_idl_new, &ldbm_config_idl_set_tune, CONFIG_FLAG_ALWAYS_SHOW},
+     {CONFIG_IDL_UPDATE, CONFIG_TYPE_ONOFF, "on", &ldbm_config_idl_get_update, &ldbm_config_idl_set_update, 0},
+     {CONFIG_BYPASS_FILTER_TEST, CONFIG_TYPE_STRING, "on", &ldbm_config_get_bypass_filter_test, &ldbm_config_set_bypass_filter_test, CONFIG_FLAG_ALWAYS_SHOW|CONFIG_FLAG_ALLOW_RUNNING_CHANGE},
+diff --git a/ldap/servers/slapd/back-ldbm/ldbm_instance_config.c b/ldap/servers/slapd/back-ldbm/ldbm_instance_config.c
+index 62cdbc3..36d830d 100644
+--- a/ldap/servers/slapd/back-ldbm/ldbm_instance_config.c
++++ b/ldap/servers/slapd/back-ldbm/ldbm_instance_config.c
+@@ -93,6 +93,7 @@ ldbm_instance_config_cachememsize_set(void *arg, void *value, char *errorbuf, in
+     int retval = LDAP_SUCCESS;
+     size_t val = (size_t) value;
+     uint64_t delta = 0;
++    uint64_t delta_original = 0;
+ 
+     /* Do whatever we can to make sure the data is ok. */
+     /* There is an error here. We check the new val against our current mem-alloc 
+@@ -108,18 +109,34 @@ ldbm_instance_config_cachememsize_set(void *arg, void *value, char *errorbuf, in
+     if (apply) {
+         if (val > inst->inst_cache.c_maxsize) {
+             delta = val - inst->inst_cache.c_maxsize;
++            delta_original = delta;
+ 
+             util_cachesize_result sane;
+             slapi_pal_meminfo *mi = spal_meminfo_get();
+             sane = util_is_cachesize_sane(mi, &delta);
+             spal_meminfo_destroy(mi);
+ 
+-            if (sane != UTIL_CACHESIZE_VALID){
+-                slapi_create_errormsg(errorbuf, SLAPI_DSE_RETURNTEXT_SIZE, "Error: cachememsize value is too large.");
+-                slapi_log_err(SLAPI_LOG_ERR, "ldbm_instance_config_cachememsize_set", "cachememsize value is too large.\n");
++            if (sane == UTIL_CACHESIZE_ERROR){
++                slapi_create_errormsg(errorbuf, SLAPI_DSE_RETURNTEXT_SIZE, "Error: unable to determine system memory limits.");
++                slapi_log_err(SLAPI_LOG_ERR, "ldbm_instance_config_cachememsize_set", "Enable to determine system memory limits.\n");
+                 return LDAP_UNWILLING_TO_PERFORM;
++            } else if (sane == UTIL_CACHESIZE_REDUCED) {
++                slapi_log_err(SLAPI_LOG_WARNING, "ldbm_instance_config_cachememsize_set", "delta +%"PRIu64" of request %"PRIu64" reduced to %"PRIu64"\n", delta_original, val, delta);
++                /*
++                 * This works as: value = 100
++                 * delta_original to inst, 20;
++                 * delta reduced to 5:
++                 * 100 - (20 - 5) == 85;
++                 * so if you recalculated delta now (val - inst), it would be 5.
++                 */
++                val = val - (delta_original - delta);
+             }
+         }
++        if (inst->inst_cache.c_maxsize < MINCACHESIZE || val < MINCACHESIZE) {
++            slapi_log_err(SLAPI_LOG_ERR, "ldbm_instance_config_cachememsize_set", "force a minimal value %"PRIu64"\n", MINCACHESIZE);
++            /* This value will trigger an autotune next start up, but it should increase only */
++            val = MINCACHESIZE;
++        }
+         cache_set_max_size(&(inst->inst_cache), val, CACHE_TYPE_ENTRY);
+     }
+ 
+diff --git a/ldap/servers/slapd/slapi-private.h b/ldap/servers/slapd/slapi-private.h
+index 0c76580..d9547d8 100644
+--- a/ldap/servers/slapd/slapi-private.h
++++ b/ldap/servers/slapd/slapi-private.h
+@@ -1392,7 +1392,7 @@ typedef enum _util_cachesize_result {
+  * \return util_cachesize_result.
+  * \sa util_cachesize_result, spal_meminfo_get
+  */
+-util_cachesize_result util_is_cachesize_sane(slapi_pal_meminfo *mi, size_t *cachesize);
++util_cachesize_result util_is_cachesize_sane(slapi_pal_meminfo *mi, uint64_t *cachesize);
+ 
+ /**
+  * Retrieve the number of threads the server should run with based on this hardware.
+diff --git a/ldap/servers/slapd/util.c b/ldap/servers/slapd/util.c
+index 012e83d..4ff6d41 100644
+--- a/ldap/servers/slapd/util.c
++++ b/ldap/servers/slapd/util.c
+@@ -1468,16 +1468,26 @@ util_is_cachesize_sane(slapi_pal_meminfo *mi, uint64_t *cachesize)
+         return UTIL_CACHESIZE_ERROR;
+     }
+ 
++    util_cachesize_result result = UTIL_CACHESIZE_VALID;
+     slapi_log_err(SLAPI_LOG_TRACE, "util_is_cachesize_sane", "Available bytes %"PRIu64", requested bytes %"PRIu64"\n", mi->system_available_bytes, *cachesize);
+     if (*cachesize > mi->system_available_bytes) {
+-        /* Since we are ask for more than what's available, we give 3/4 of the remaining.
++        /* Since we are ask for more than what's available, we give 1/2 of the remaining.
+          * the remaining system mem to the cachesize instead, and log a warning
+          */
+-        *cachesize = (mi->system_available_bytes * 0.75);
+-        slapi_log_err(SLAPI_LOG_TRACE, "util_is_cachesize_sane", "Adjusted cachesize to %"PRIu64"\n", *cachesize);
+-        return UTIL_CACHESIZE_REDUCED;
++        uint64_t adjust_cachesize = (mi->system_available_bytes * 0.5);
++        if (adjust_cachesize > *cachesize) {
++            slapi_log_err(SLAPI_LOG_CRIT, "util_is_cachesize_sane", "Invalid adjusted cachesize is greater than request %"PRIu64, adjust_cachesize);
++            return UTIL_CACHESIZE_ERROR;
++        }
++        if (adjust_cachesize < (16 * mi->pagesize_bytes)) {
++            /* At minimum respond with 16 pages - that's 64k on x86_64 */
++            adjust_cachesize = 16 * mi->pagesize_bytes;
++        }
++        *cachesize = adjust_cachesize;
++        slapi_log_err(SLAPI_LOG_TRACE, "util_is_cachesize_sane", "Adjusted cachesize down to %"PRIu64"\n", *cachesize);
++        result = UTIL_CACHESIZE_REDUCED;
+     }
+-    return UTIL_CACHESIZE_VALID;
++    return result;
+ }
+ 
+ long
+-- 
+2.9.3
+

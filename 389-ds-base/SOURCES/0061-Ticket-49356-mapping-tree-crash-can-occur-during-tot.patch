@@ -1,0 +1,502 @@
+From b0954a5df7841330732a5ab532c528a68cf380cf Mon Sep 17 00:00:00 2001
+From: William Brown <firstyear@redhat.com>
+Date: Fri, 18 Aug 2017 13:00:46 +1000
+Subject: [PATCH] Ticket 49356 - mapping tree crash can occur during tot init
+
+Bug Description:  Two faults were found in the handling of the mapping
+tree of 389 directory server. The first fault was that the tree-free
+check was not performed atomically and may cause an incorrect operations
+error to be returned. The second was that during a total init the referral
+would not lock the be, but the pw_verify code assumed a be was locked.
+This caused a segfault.
+
+Fix Description:  Fix the freed check to use atomics. Fix the pw_verify
+to assert be is NULL (which is correct, there is no backend).
+
+https://pagure.io/389-ds-base/issue/49356
+
+Author: wibrown
+
+Review by: mreynolds (THanks!)
+---
+ .../mapping_tree/referral_during_tot_init.py       |  57 ++++++++
+ ldap/servers/slapd/fedse.c                         |  10 ++
+ ldap/servers/slapd/main.c                          |  10 --
+ ldap/servers/slapd/mapping_tree.c                  | 150 +++++++++++----------
+ ldap/servers/slapd/pw_verify.c                     |   8 +-
+ 5 files changed, 150 insertions(+), 85 deletions(-)
+ create mode 100644 dirsrvtests/tests/suites/mapping_tree/referral_during_tot_init.py
+
+diff --git a/dirsrvtests/tests/suites/mapping_tree/referral_during_tot_init.py b/dirsrvtests/tests/suites/mapping_tree/referral_during_tot_init.py
+new file mode 100644
+index 0000000..e5aee7d
+--- /dev/null
++++ b/dirsrvtests/tests/suites/mapping_tree/referral_during_tot_init.py
+@@ -0,0 +1,57 @@
++# --- BEGIN COPYRIGHT BLOCK ---
++# Copyright (C) 2017 Red Hat, Inc.
++# All rights reserved.
++#
++# License: GPL (version 3 or any later version).
++# See LICENSE for details.
++# --- END COPYRIGHT BLOCK ---
++#
++import ldap
++import pytest
++from lib389.topologies import topology_m2
++from lib389._constants import (DEFAULT_SUFFIX, HOST_MASTER_2, PORT_MASTER_2, TASK_WAIT)
++
++from lib389.idm.user import (TEST_USER_PROPERTIES, UserAccounts)
++
++def test_referral_during_tot(topology_m2):
++
++    master1 = topology_m2.ms["master1"]
++    master2 = topology_m2.ms["master2"]
++
++    # Create a bunch of entries on master1
++    ldif_dir = master1.get_ldif_dir()
++    import_ldif = ldif_dir + '/ref_during_tot_import.ldif'
++    master1.buildLDIF(10000, import_ldif)
++
++    master1.stop()
++    try:
++        master1.ldif2db(bename=None, excludeSuffixes=None, encrypt=False, suffixes=[DEFAULT_SUFFIX], import_file=import_ldif)
++    except:
++        pass
++    # master1.tasks.importLDIF(suffix=DEFAULT_SUFFIX, input_file=import_ldif, args={TASK_WAIT: True})
++    master1.start()
++    users = UserAccounts(master1, DEFAULT_SUFFIX, rdn='ou=Accounting')
++
++    u = users.create(properties=TEST_USER_PROPERTIES)
++    u.set('userPassword', 'password')
++
++    binddn = u.dn
++    bindpw = 'password'
++
++    # Now export them to master2
++    master1.agreement.init(DEFAULT_SUFFIX, HOST_MASTER_2, PORT_MASTER_2)
++
++    # While that's happening try to bind as a user to master 2
++    # This should trigger the referral code.
++    for i in range(0, 100):
++        conn = ldap.initialize(master2.toLDAPURL())
++        conn.set_option(ldap.OPT_REFERRALS, False)
++        try:
++            conn.simple_bind_s(binddn, bindpw)
++            conn.unbind_s()
++        except ldap.REFERRAL:
++            pass
++
++    # Done.
++
++
+diff --git a/ldap/servers/slapd/fedse.c b/ldap/servers/slapd/fedse.c
+index 13a3c74..c2a862b 100644
+--- a/ldap/servers/slapd/fedse.c
++++ b/ldap/servers/slapd/fedse.c
+@@ -1853,6 +1853,16 @@ setup_internal_backends(char *configdir)
+ 		be_addsuffix(be,&monitor);
+ 		be_addsuffix(be,&config);
+ 
++        /*
++         * Now that the be's are in place, we can
++         * setup the mapping tree.
++         */
++
++        if (mapping_tree_init()) {
++            slapi_log_err(SLAPI_LOG_EMERG, "setup_internal_backends", "Failed to init mapping tree\n");
++            exit(1);
++        }
++
+ 		add_internal_entries();
+ 
+ 		add_easter_egg_entry();
+diff --git a/ldap/servers/slapd/main.c b/ldap/servers/slapd/main.c
+index 552d54d..1d9afce 100644
+--- a/ldap/servers/slapd/main.c
++++ b/ldap/servers/slapd/main.c
+@@ -1034,16 +1034,6 @@ main( int argc, char **argv)
+ 
+ 		ps_init_psearch_system();   /* must come before plugin_startall() */
+ 
+-		/* Initailize the mapping tree */
+-
+-		if (mapping_tree_init())
+-		{
+-			slapi_log_err(SLAPI_LOG_EMERG, "main", "Failed to init mapping tree\n");
+-			return_value = 1;
+-			goto cleanup;
+-		}
+-
+-
+ 		/* initialize UniqueID generator - must be done once backends are started
+ 		   and event queue is initialized but before plugins are started */
+ 		/* Note: This DN is no need to be normalized. */
+diff --git a/ldap/servers/slapd/mapping_tree.c b/ldap/servers/slapd/mapping_tree.c
+index 1b8d2d9..dfb6584 100644
+--- a/ldap/servers/slapd/mapping_tree.c
++++ b/ldap/servers/slapd/mapping_tree.c
+@@ -88,13 +88,13 @@ struct mt_node
+  *      release backend lock 
+  *
+  */
+-static Slapi_RWLock    *myLock;    /* global lock on the mapping tree structures */
++static Slapi_RWLock *myLock = NULL; /* global lock on the mapping tree structures */
+ 
+ 
+ static mapping_tree_node *mapping_tree_root = NULL;
+-static int mapping_tree_inited = 0;
+-static int mapping_tree_freed = 0;
+-static int extension_type = -1;    /* type returned from the factory */
++static int32_t mapping_tree_inited = 0;
++static int32_t mapping_tree_freed = 0;
++static int extension_type = -1; /* type returned from the factory */
+ 
+ /* The different states a mapping tree node can be in. */
+ #define    MTN_DISABLED                 0    /* The server acts like the node isn't there. */
+@@ -1659,22 +1659,24 @@ add_internal_mapping_tree_node(const char *subtree, Slapi_Backend *be, mapping_t
+ {
+     Slapi_DN *dn;
+     mapping_tree_node *node;
+-    backend ** be_list = (backend **) slapi_ch_malloc(sizeof(backend *));
++    backend **be_list = (backend **)slapi_ch_malloc(sizeof(backend *));
++    int *be_states = (int *)slapi_ch_malloc(sizeof(int));
+ 
+     be_list[0] = be;
++    be_states[0] = SLAPI_BE_STATE_ON;
+ 
+     dn = slapi_sdn_new_dn_byval(subtree);
+-    node= mapping_tree_node_new(
+-            dn,
+-            be_list,
+-            NULL, /* backend_name */
+-            NULL,
+-            1,    /* number of backends at this node */
+-            1,    /* size of backend list structure */
+-            NULL, /* referral */
+-            parent,
+-            MTN_BACKEND,
+-            1, /* The config  node is a private node.
++    node = mapping_tree_node_new(
++        dn,
++        be_list,
++        NULL, /* backend_name */
++        be_states, /* be state */
++        1,    /* number of backends at this node */
++        1,    /* size of backend list structure */
++        NULL, /* referral */
++        parent,
++        MTN_BACKEND,
++        1,                    /* The config  node is a private node.
+                 *  People can't see or change it. */
+             NULL, NULL, NULL, 0); /* no distribution */
+     return node;
+@@ -1722,17 +1724,20 @@ mapping_tree_init()
+     
+     /* we call this function from a single thread, so it should be ok */
+ 
+-    if(mapping_tree_freed){
+-    /* shutdown has been detected */
+-      return 0;
+-    }
+-
+-    if (mapping_tree_inited)
++    if (__atomic_load_4(&mapping_tree_freed, __ATOMIC_RELAXED)) {
++        /* shutdown has been detected */
+         return 0;
++    }
+ 
+-    /* ONREPL - I have moved this up because otherwise we can endup calling this 
++    /* ONREPL - I have moved this up because otherwise we can endup calling this
+      * function recursively */
++    if (myLock != NULL) {
++        return 0;
++    }
++    myLock = slapi_new_rwlock();
++    slapi_rwlock_wrlock(myLock);
+ 
++    /* Should be fenced by the rwlock. */
+     mapping_tree_inited = 1;
+ 
+     slapi_register_supported_control(MTN_CONTROL_USE_ONE_BACKEND_OID,
+@@ -1740,10 +1745,8 @@ mapping_tree_init()
+     slapi_register_supported_control(MTN_CONTROL_USE_ONE_BACKEND_EXT_OID,
+                      SLAPI_OPERATION_SEARCH);
+ 
+-    myLock = slapi_new_rwlock();
+-
+-    be= slapi_be_select_by_instance_name(DSE_BACKEND);
+-    mapping_tree_root= add_internal_mapping_tree_node("", be, NULL);
++    be = slapi_be_select_by_instance_name(DSE_BACKEND);
++    mapping_tree_root = add_internal_mapping_tree_node("", be, NULL);
+ 
+     /* We also need to add the config and schema backends to the mapping tree.
+      * They are special in that users will not know about it's node in the 
+@@ -1757,17 +1760,23 @@ mapping_tree_init()
+     node= add_internal_mapping_tree_node("cn=schema", be, mapping_tree_root);
+     mapping_tree_node_add_child(mapping_tree_root, node);
+ 
+-    /* 
++    slapi_rwlock_unlock(myLock);
++
++    /*
+      * Now we need to look under cn=mapping tree, cn=config to find the rest
+      * of the mapping tree entries.
+      * Builds the mapping tree from entries in the DIT.  This function just
+      * calls mapping_tree_node_get_children with the special case for the
+      * root node.
+      */
+-    if (mapping_tree_node_get_children(mapping_tree_root, 1))
++
++    if (mapping_tree_node_get_children(mapping_tree_root, 1)) {
+         return -1;
++    }
+ 
++    slapi_rwlock_wrlock(myLock);
+     mtn_create_extension(mapping_tree_root);
++    slapi_rwlock_unlock(myLock);
+ 
+     /* setup the dse callback functions for the ldbm instance config entry */
+     {
+@@ -1840,8 +1849,8 @@ mapping_tree_free ()
+      */ 
+     slapi_unregister_backend_state_change_all();
+     /* recursively free tree nodes */
+-    mtn_free_node (&mapping_tree_root);
+-    mapping_tree_freed = 1;
++    mtn_free_node(&mapping_tree_root);
++    __atomic_store_4(&mapping_tree_freed, 1, __ATOMIC_RELAXED);
+ }
+ 
+ /* This function returns the first node to parse when a search is done 
+@@ -2083,14 +2092,12 @@ int slapi_dn_write_needs_referral(Slapi_DN *target_sdn, Slapi_Entry **referral)
+     mapping_tree_node *target_node = NULL;
+     int ret = 0;
+ 
+-    if(mapping_tree_freed){
++    if (__atomic_load_4(&mapping_tree_freed, __ATOMIC_RELAXED)) {
+         /* shutdown detected */
+         goto done;
+     }
+ 
+-    if(!mapping_tree_inited) {
+-        mapping_tree_init();
+-    }
++    PR_ASSERT(mapping_tree_inited == 1);
+ 
+     if (target_sdn) {
+         mtn_lock();
+@@ -2157,8 +2164,8 @@ int slapi_mapping_tree_select(Slapi_PBlock *pb, Slapi_Backend **be, Slapi_Entry
+     int fixup = 0;
+     
+ 
+-    if(mapping_tree_freed){
+-        /* shutdown detected */ 
++    if (__atomic_load_4(&mapping_tree_freed, __ATOMIC_RELAXED)) {
++        /* shutdown detected */
+         return LDAP_OPERATIONS_ERROR;
+     }
+ 
+@@ -2175,9 +2182,7 @@ int slapi_mapping_tree_select(Slapi_PBlock *pb, Slapi_Backend **be, Slapi_Entry
+     target_sdn = operation_get_target_spec (op);
+     fixup = operation_is_flag_set(op, OP_FLAG_TOMBSTONE_FIXUP);
+ 
+-    if(!mapping_tree_inited) {
+-        mapping_tree_init();
+-    } 
++    PR_ASSERT(mapping_tree_inited == 1);
+ 
+     be[0] = NULL;
+     if (referral) {
+@@ -2188,8 +2193,9 @@ int slapi_mapping_tree_select(Slapi_PBlock *pb, Slapi_Backend **be, Slapi_Entry
+ 
+     /* Get the mapping tree node that is the best match for the target dn. */
+     target_node = slapi_get_mapping_tree_node_by_dn(target_sdn);
+-    if (target_node == NULL)
++    if (target_node == NULL) {
+         target_node = mapping_tree_root;
++    }
+ 
+     /* The processing of the base scope root DSE search and all other LDAP operations on "" 
+      *  will be transferred to the internal DSE backend 
+@@ -2266,8 +2272,8 @@ int slapi_mapping_tree_select_all(Slapi_PBlock *pb, Slapi_Backend **be_list,
+     Slapi_DN *sdn = NULL;
+     int flag_partial_result = 0;
+     int op_type;
+-    
+-    if(mapping_tree_freed){
++
++    if (__atomic_load_4(&mapping_tree_freed, __ATOMIC_RELAXED)) {
+         return LDAP_OPERATIONS_ERROR;
+     }
+ 
+@@ -2287,9 +2293,7 @@ int slapi_mapping_tree_select_all(Slapi_PBlock *pb, Slapi_Backend **be_list,
+     slapi_pblock_get(pb, SLAPI_OPERATION_TYPE, &op_type);
+     slapi_pblock_get(pb, SLAPI_SEARCH_SCOPE, &scope);
+ 
+-    if(!mapping_tree_inited){
+-        mapping_tree_init();
+-    } 
++    PR_ASSERT(mapping_tree_inited == 1);
+ 
+     mtn_lock();
+ 
+@@ -2448,8 +2452,8 @@ int slapi_mapping_tree_select_and_check(Slapi_PBlock *pb,char *newdn, Slapi_Back
+     Slapi_Operation *op;
+     int ret;
+     int need_unlock = 0;
+-    
+-    if(mapping_tree_freed){
++
++    if (__atomic_load_4(&mapping_tree_freed, __ATOMIC_RELAXED)) {
+         return LDAP_OPERATIONS_ERROR;
+      }
+ 
+@@ -2635,7 +2639,7 @@ static int mtn_get_be(mapping_tree_node *target_node, Slapi_PBlock *pb,
+     int flag_stop = 0;
+     struct slapi_componentid *cid = NULL;
+ 
+-    if(mapping_tree_freed){
++    if (__atomic_load_4(&mapping_tree_freed, __ATOMIC_RELAXED)) {
+         /* shut down detected */
+         return LDAP_OPERATIONS_ERROR; 
+     }
+@@ -2719,21 +2723,22 @@ static int mtn_get_be(mapping_tree_node *target_node, Slapi_PBlock *pb,
+                     } else {
+                         /* This MTN has not been linked to its backend
+                          * instance yet. */
+-                        target_node->mtn_be[*index] =
+-                            slapi_be_select_by_instance_name(
+-                                target_node->mtn_backend_names[*index]);
+-                        *be = target_node->mtn_be[*index];
+-                        if(*be==NULL) {
+-                            slapi_log_err(SLAPI_LOG_BACKLDBM, "mtn_get_be",
+-                                "Warning: Mapping tree node entry for %s "
+-                                "point to an unknown backend : %s\n",
+-                                slapi_sdn_get_dn(target_node->mtn_subtree),
+-                                target_node->mtn_backend_names[*index]);
+-                            /* Well there's still not backend instance for
+-                             * this MTN, so let's have the default backend
+-                             * deal with this.
+-                             */
+-                            *be = defbackend_get_backend();
++                        /* WARNING: internal memory dse backends don't provide NAMES */
++                        if (target_node->mtn_backend_names != NULL) {
++                            target_node->mtn_be[*index] = slapi_be_select_by_instance_name(target_node->mtn_backend_names[*index]);
++                            *be = target_node->mtn_be[*index];
++                            if (*be == NULL) {
++                                slapi_log_err(SLAPI_LOG_BACKLDBM, "mtn_get_be",
++                                              "Warning: Mapping tree node entry for %s "
++                                              "point to an unknown backend : %s\n",
++                                              slapi_sdn_get_dn(target_node->mtn_subtree),
++                                              target_node->mtn_backend_names[*index]);
++                                /* Well there's still not backend instance for
++                                 * this MTN, so let's have the default backend
++                                 * deal with this.
++                                 */
++                                *be = defbackend_get_backend();
++                            }
+                         }
+                     }
+                 }
+@@ -2745,10 +2750,11 @@ static int mtn_get_be(mapping_tree_node *target_node, Slapi_PBlock *pb,
+             result = LDAP_OPERATIONS_ERROR;
+                     *be = defbackend_get_backend();
+                 }
+-                if (flag_stop)
++                if (flag_stop) {
+                     *index = SLAPI_BE_NO_BACKEND;
+-                else
++                } else {
+                     (*index)++;
++                }
+             }
+         }        
+     } else {
+@@ -2822,7 +2828,7 @@ static mapping_tree_node *best_matching_child(mapping_tree_node *parent,
+     mapping_tree_node *highest_match_node = NULL;
+     mapping_tree_node *current;
+ 
+-    if(mapping_tree_freed){
++    if (__atomic_load_4(&mapping_tree_freed, __ATOMIC_RELAXED)) {
+         /* shutdown detected */
+         return NULL;
+     }
+@@ -2849,7 +2855,7 @@ mtn_get_mapping_tree_node_by_entry(mapping_tree_node* node, const Slapi_DN *dn)
+ {
+     mapping_tree_node *found_node = NULL;
+ 
+-    if(mapping_tree_freed){
++    if (__atomic_load_4(&mapping_tree_freed, __ATOMIC_RELAXED)) {
+         /* shutdown detected */
+         return NULL;
+     }
+@@ -2895,7 +2901,7 @@ slapi_get_mapping_tree_node_by_dn(const Slapi_DN *dn)
+     mapping_tree_node *current_best_match = mapping_tree_root;
+     mapping_tree_node *next_best_match = mapping_tree_root;
+ 
+-    if(mapping_tree_freed){
++    if (__atomic_load_4(&mapping_tree_freed, __ATOMIC_RELAXED)) {
+         /* shutdown detected */
+         return NULL;
+     }
+@@ -2929,7 +2935,7 @@ get_mapping_tree_node_by_name(mapping_tree_node * node, char * be_name)
+     int i;
+     mapping_tree_node *found_node = NULL;
+ 
+-    if(mapping_tree_freed){
++    if (__atomic_load_4(&mapping_tree_freed, __ATOMIC_RELAXED)) {
+         /* shutdown detected */
+         return NULL;
+     }
+@@ -2980,7 +2986,7 @@ slapi_get_mapping_tree_node_configdn (const Slapi_DN *root)
+ {
+     char *dn = NULL;
+ 
+-    if(mapping_tree_freed){
++    if (__atomic_load_4(&mapping_tree_freed, __ATOMIC_RELAXED)) {
+         /* shutdown detected */
+         return NULL;
+     }
+@@ -3007,7 +3013,7 @@ slapi_get_mapping_tree_node_configsdn (const Slapi_DN *root)
+     char *dn = NULL;
+     Slapi_DN *sdn = NULL;
+ 
+-    if(mapping_tree_freed){
++    if (__atomic_load_4(&mapping_tree_freed, __ATOMIC_RELAXED)) {
+         /* shutdown detected */
+         return NULL;
+     }
+diff --git a/ldap/servers/slapd/pw_verify.c b/ldap/servers/slapd/pw_verify.c
+index cb182ed..1f0c18a 100644
+--- a/ldap/servers/slapd/pw_verify.c
++++ b/ldap/servers/slapd/pw_verify.c
+@@ -58,12 +58,14 @@ pw_verify_be_dn(Slapi_PBlock *pb, Slapi_Entry **referral)
+     int rc = SLAPI_BIND_SUCCESS;
+     Slapi_Backend *be = NULL;
+ 
+-    if (slapi_mapping_tree_select(pb, &be, referral, NULL, 0) != LDAP_SUCCESS) {
++    int mt_result = slapi_mapping_tree_select(pb, &be, referral, NULL, 0);
++    if (mt_result != LDAP_SUCCESS) {
+         return SLAPI_BIND_NO_BACKEND;
+     }
+ 
+     if (*referral) {
+-        slapi_be_Unlock(be);
++        /* If we have a referral, this is NULL */
++        PR_ASSERT(be == NULL);
+         return SLAPI_BIND_REFERRAL;
+     }
+ 
+@@ -128,7 +130,7 @@ pw_validate_be_dn(Slapi_PBlock *pb, Slapi_Entry **referral)
+     }
+ 
+     if (*referral) {
+-        slapi_be_Unlock(be);
++        PR_ASSERT(be == NULL);
+         return SLAPI_BIND_REFERRAL;
+     }
+ 
+-- 
+2.9.4
+

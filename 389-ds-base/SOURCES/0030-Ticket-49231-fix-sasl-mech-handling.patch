@@ -1,0 +1,328 @@
+From 88a0ce3c3f89244a77dfa618c8a5064bda30f376 Mon Sep 17 00:00:00 2001
+From: William Brown <firstyear@redhat.com>
+Date: Wed, 26 Apr 2017 15:48:30 +1000
+Subject: [PATCH] Ticket 49231 - fix sasl mech handling
+
+Bug Description:  In our sasl code we had two issues. One was that
+we did not correctly apply the list of sasl allowed mechs to our
+rootdse list in ids_sasl_listmech. The second was that on config
+reset, we did not correctly set null to the value.
+
+Fix Description:  Fix the handling of the mech lists to allow
+reset, and allow the mech list to be updated properly.
+
+https://pagure.io/389-ds-base/issue/49231
+
+Author: wibrown
+
+Review by: mreynolds (Thanks!)
+---
+ dirsrvtests/tests/suites/sasl/allowed_mechs.py | 43 ++++++++++++++++++
+ ldap/servers/slapd/charray.c                   | 48 +++++++++++++++++---
+ ldap/servers/slapd/libglobs.c                  | 62 ++++++++++++++++++++------
+ ldap/servers/slapd/proto-slap.h                |  1 +
+ ldap/servers/slapd/saslbind.c                  | 21 ++++++++-
+ ldap/servers/slapd/slap.h                      |  1 +
+ ldap/servers/slapd/slapi-private.h             |  1 +
+ 7 files changed, 156 insertions(+), 21 deletions(-)
+ create mode 100644 dirsrvtests/tests/suites/sasl/allowed_mechs.py
+
+diff --git a/dirsrvtests/tests/suites/sasl/allowed_mechs.py b/dirsrvtests/tests/suites/sasl/allowed_mechs.py
+new file mode 100644
+index 0000000..a3e385e
+--- /dev/null
++++ b/dirsrvtests/tests/suites/sasl/allowed_mechs.py
+@@ -0,0 +1,43 @@
++# --- BEGIN COPYRIGHT BLOCK ---
++# Copyright (C) 2017 Red Hat, Inc.
++# All rights reserved.
++#
++# License: GPL (version 3 or any later version).
++# See LICENSE for details.
++# --- END COPYRIGHT BLOCK ---
++#
++
++import pytest
++import ldap
++
++import time
++
++from lib389.topologies import topology_st
++
++def test_sasl_allowed_mechs(topology_st):
++    standalone = topology_st.standalone
++
++    # Get the supported mechs. This should contain PLAIN, GSSAPI, EXTERNAL at least
++    orig_mechs = standalone.rootdse.supported_sasl()
++    print(orig_mechs)
++    assert('GSSAPI' in orig_mechs)
++    assert('PLAIN' in orig_mechs)
++    assert('EXTERNAL' in orig_mechs)
++
++    # Now edit the supported mechs. CHeck them again.
++    standalone.config.set('nsslapd-allowed-sasl-mechanisms', 'EXTERNAL, PLAIN')
++
++    limit_mechs = standalone.rootdse.supported_sasl()
++    print(limit_mechs)
++    assert('PLAIN' in limit_mechs)
++    assert('EXTERNAL' in limit_mechs)
++    assert('GSSAPI' not in limit_mechs)
++
++    # Do a config reset
++    standalone.config.reset('nsslapd-allowed-sasl-mechanisms')
++
++    # check the supported list is the same as our first check.
++    final_mechs = standalone.rootdse.supported_sasl()
++    print(final_mechs)
++    assert(set(final_mechs) == set(orig_mechs))
++
+diff --git a/ldap/servers/slapd/charray.c b/ldap/servers/slapd/charray.c
+index 5551dcc..6b89714 100644
+--- a/ldap/servers/slapd/charray.c
++++ b/ldap/servers/slapd/charray.c
+@@ -348,8 +348,9 @@ slapi_str2charray_ext( char *str, char *brkstr, int allow_dups )
+             }
+         }
+ 
+-        if ( !dup_found )
++        if ( !dup_found ) {
+             res[i++] = slapi_ch_strdup( s );
++        }
+     }
+     res[i] = NULL;
+ 
+@@ -413,10 +414,11 @@ charray_subtract(char **a, char **b, char ***c)
+     char **bp, **cp, **tmp;
+     char **p;
+ 
+-    if (c)
++    if (c) {
+         tmp = *c = cool_charray_dup(a);
+-    else
++    } else {
+         tmp = a;
++    }
+ 
+     for (cp = tmp; cp && *cp; cp++) {
+         for (bp = b; bp && *bp; bp++) {
+@@ -433,12 +435,48 @@ charray_subtract(char **a, char **b, char ***c)
+             for (p = cp+1; *p && *p == (char *)SUBTRACT_DEL; p++)
+                 ;
+             *cp = *p;    
+-            if (*p == NULL)
++            if (*p == NULL) {
+                 break;
+-            else
++            } else {
+                 *p = SUBTRACT_DEL;
++            }
++        }
++    }
++}
++
++/*
++ * Provides the intersection of two arrays.
++ * IE if you have:
++ * (A, B, C)
++ * (B, D, E)
++ * result is (B,)
++ * a and b are NOT consumed in the process.
++ */
++char **
++charray_intersection(char **a, char **b) {
++    char **result;
++    size_t rp = 0;
++
++    if (a == NULL || b == NULL) {
++        return NULL;
++    }
++
++    size_t a_len = 0;
++    /* Find how long A is. */
++    for (; a[a_len] != NULL; a_len++);
++
++    /* Allocate our result, it can't be bigger than A */
++    result = (char **)slapi_ch_calloc(1, sizeof(char *) * (a_len + 1));
++
++    /* For each in A, see if it's in b */
++    for (size_t i = 0; a[i] != NULL; i++) {
++        if (charray_get_index(b, a[i]) != -1) {
++            result[rp] = slapi_ch_strdup(a[i]);
++            rp++;
+         }
+     }
++
++    return result;
+ }
+ 
+ int
+diff --git a/ldap/servers/slapd/libglobs.c b/ldap/servers/slapd/libglobs.c
+index 0e818a9..2fc9fbf 100644
+--- a/ldap/servers/slapd/libglobs.c
++++ b/ldap/servers/slapd/libglobs.c
+@@ -7090,9 +7090,30 @@ config_set_entryusn_import_init( const char *attrname, char *value,
+     return retVal;
+ }
+ 
++char **
++config_get_allowed_sasl_mechs_array(void)
++{
++    /*
++     * array of mechs. If is null, returns NULL thanks to ch_array_dup.
++     * Caller must free!
++     */
++    char **retVal;
++    slapdFrontendConfig_t *slapdFrontendConfig = getFrontendConfig();
++
++    CFG_LOCK_READ(slapdFrontendConfig);
++    retVal = slapi_ch_array_dup(slapdFrontendConfig->allowed_sasl_mechs_array);
++    CFG_UNLOCK_READ(slapdFrontendConfig);
++
++    return retVal;
++}
++
+ char *
+-config_get_allowed_sasl_mechs()
++config_get_allowed_sasl_mechs(void)
+ {
++    /*
++     * Space seperated list of allowed mechs
++     * if this is NULL, means *all* mechs are allowed!
++     */
+     char *retVal;
+     slapdFrontendConfig_t *slapdFrontendConfig = getFrontendConfig();
+ 
+@@ -7113,22 +7134,35 @@ config_set_allowed_sasl_mechs(const char *attrname, char *value, char *errorbuf,
+         return LDAP_SUCCESS;
+     }
+ 
+-    /* cyrus sasl doesn't like comma separated lists */
+-    remove_commas(value);
++    /* During a reset, the value is "", so we have to handle this case. */
++    if (strcmp(value, "") != 0) {
++        /* cyrus sasl doesn't like comma separated lists */
++        remove_commas(value);
++
++        if(invalid_sasl_mech(value)){
++            slapi_log_err(SLAPI_LOG_ERR,"config_set_allowed_sasl_mechs",
++                    "Invalid value/character for sasl mechanism (%s).  Use ASCII "
++                    "characters, upto 20 characters, that are upper-case letters, "
++                    "digits, hyphens, or underscores\n", value);
++            return LDAP_UNWILLING_TO_PERFORM;
++        }
+ 
+-    if(invalid_sasl_mech(value)){
+-        slapi_log_err(SLAPI_LOG_ERR,"config_set_allowed_sasl_mechs",
+-                "Invalid value/character for sasl mechanism (%s).  Use ASCII "
+-                "characters, upto 20 characters, that are upper-case letters, "
+-                "digits, hyphens, or underscores\n", value);
+-        return LDAP_UNWILLING_TO_PERFORM;
++        CFG_LOCK_WRITE(slapdFrontendConfig);
++        slapi_ch_free_string(&slapdFrontendConfig->allowed_sasl_mechs);
++        slapi_ch_array_free(slapdFrontendConfig->allowed_sasl_mechs_array);
++        slapdFrontendConfig->allowed_sasl_mechs = slapi_ch_strdup(value);
++        slapdFrontendConfig->allowed_sasl_mechs_array = slapi_str2charray_ext(value, " ", 0);
++        CFG_UNLOCK_WRITE(slapdFrontendConfig);
++    } else {
++        /* If this value is "", we need to set the list to *all* possible mechs */
++        CFG_LOCK_WRITE(slapdFrontendConfig);
++        slapi_ch_free_string(&slapdFrontendConfig->allowed_sasl_mechs);
++        slapi_ch_array_free(slapdFrontendConfig->allowed_sasl_mechs_array);
++        slapdFrontendConfig->allowed_sasl_mechs = NULL;
++        slapdFrontendConfig->allowed_sasl_mechs_array = NULL;
++        CFG_UNLOCK_WRITE(slapdFrontendConfig);
+     }
+ 
+-    CFG_LOCK_WRITE(slapdFrontendConfig);
+-    slapi_ch_free_string(&slapdFrontendConfig->allowed_sasl_mechs);
+-    slapdFrontendConfig->allowed_sasl_mechs = slapi_ch_strdup(value);
+-    CFG_UNLOCK_WRITE(slapdFrontendConfig);
+-
+     return LDAP_SUCCESS;
+ }
+ 
+diff --git a/ldap/servers/slapd/proto-slap.h b/ldap/servers/slapd/proto-slap.h
+index fdb4bf0..9696ead 100644
+--- a/ldap/servers/slapd/proto-slap.h
++++ b/ldap/servers/slapd/proto-slap.h
+@@ -553,6 +553,7 @@ size_t config_get_ndn_cache_size(void);
+ int config_get_ndn_cache_enabled(void);
+ int config_get_return_orig_type_switch(void);
+ char *config_get_allowed_sasl_mechs(void);
++char **config_get_allowed_sasl_mechs_array(void);
+ int config_set_allowed_sasl_mechs(const char *attrname, char *value, char *errorbuf, int apply);
+ int config_get_schemamod(void);
+ int config_set_ignore_vattrs(const char *attrname, char *value, char *errorbuf, int apply);
+diff --git a/ldap/servers/slapd/saslbind.c b/ldap/servers/slapd/saslbind.c
+index 2d6fb64..6e544e6 100644
+--- a/ldap/servers/slapd/saslbind.c
++++ b/ldap/servers/slapd/saslbind.c
+@@ -744,7 +744,10 @@ void ids_sasl_server_new(Connection *conn)
+  */
+ char **ids_sasl_listmech(Slapi_PBlock *pb)
+ {
+-    char **ret, **others;
++    char **ret;
++    char **config_ret;
++    char **sup_ret;
++    char **others;
+     const char *str;
+     char *dupstr;
+     sasl_conn_t *sasl_conn;
+@@ -754,7 +757,7 @@ char **ids_sasl_listmech(Slapi_PBlock *pb)
+     PR_ASSERT(pb);
+ 
+     /* hard-wired mechanisms and slapi plugin registered mechanisms */
+-    ret = slapi_get_supported_saslmechanisms_copy();
++    sup_ret = slapi_get_supported_saslmechanisms_copy();
+ 
+     if (pb->pb_conn == NULL) return ret;
+ 
+@@ -777,6 +780,20 @@ char **ids_sasl_listmech(Slapi_PBlock *pb)
+     }
+     PR_ExitMonitor(pb->pb_conn->c_mutex);
+ 
++    /* Get the servers "allowed" list */
++    config_ret = config_get_allowed_sasl_mechs_array();
++
++    /* Remove any content that isn't in the allowed list */
++    if (config_ret != NULL) {
++        /* Get the set of supported mechs in the insection of the two */
++        ret = charray_intersection(sup_ret, config_ret);
++        charray_free(sup_ret);
++        charray_free(config_ret);
++    } else {
++        /* The allowed list was empty, just take our supported list. */
++        ret = sup_ret;
++    }
++
+     slapi_log_err(SLAPI_LOG_TRACE, "ids_sasl_listmech", "<=\n");
+ 
+     return ret;
+diff --git a/ldap/servers/slapd/slap.h b/ldap/servers/slapd/slap.h
+index abfad20..5e44cc8 100644
+--- a/ldap/servers/slapd/slap.h
++++ b/ldap/servers/slapd/slap.h
+@@ -2577,6 +2577,7 @@ typedef struct _slapdFrontendConfig {
+   int pagedsizelimit;
+   char *default_naming_context; /* Default naming context (normalized) */
+   char *allowed_sasl_mechs;     /* comma/space separated list of allowed sasl mechs */
++  char **allowed_sasl_mechs_array;     /* Array of allow sasl mechs */
+   int sasl_max_bufsize;         /* The max receive buffer size for SASL */
+ 
+   /* disk monitoring */
+diff --git a/ldap/servers/slapd/slapi-private.h b/ldap/servers/slapd/slapi-private.h
+index d9547d8..3f732e8 100644
+--- a/ldap/servers/slapd/slapi-private.h
++++ b/ldap/servers/slapd/slapi-private.h
+@@ -831,6 +831,7 @@ int charray_remove(char **a, const char *s, int freeit);
+ char ** cool_charray_dup( char **a );
+ void cool_charray_free( char **array );
+ void charray_subtract( char **a, char **b, char ***c );
++char **charray_intersection(char **a, char **b);
+ int charray_get_index(char **array, char *s);
+ int charray_normdn_add(char ***chararray, char *dn, char *errstr);
+ 
+-- 
+2.9.3
+

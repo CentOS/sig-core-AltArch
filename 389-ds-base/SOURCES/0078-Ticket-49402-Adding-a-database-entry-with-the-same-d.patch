@@ -1,0 +1,41 @@
+From bc190eeaaffbb514f69664b4d033dc593a78683b Mon Sep 17 00:00:00 2001
+From: Mark Reynolds <mreynolds@redhat.com>
+Date: Mon, 16 Oct 2017 12:52:46 -0400
+Subject: [PATCH] Ticket 49402 - Adding a database entry with the same database
+ name that was deleted hangs server at shutdown
+
+Bug Description:  At shutdown, after a backend was deleted, which also had a import
+                  task run, the server hangs at shutdown.  The issue is that the
+                  import task destructor used the ldbm inst struct to see if it was
+                  busy, but the inst was freed and the destructor was checking invalid
+                  memory which caused a false positive on the "busy" check.
+
+Fix Description:  Do not check if the instance is busy to tell if it's okay to remove
+                  the task, instead just check the task's state.
+
+https://pagure.io/389-ds-base/issue/49402
+
+Reviewed by: lkrispen(Thanks!)
+
+(cherry picked from commit bc6dbf15c160ac7e6c553133b2b936a981cfb7b6)
+(cherry picked from commit 2ef4e813b8f6b92908ff553a704808cbbd425b5d)
+---
+ ldap/servers/slapd/back-ldbm/import.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/ldap/servers/slapd/back-ldbm/import.c b/ldap/servers/slapd/back-ldbm/import.c
+index 7161bace1..f60df194b 100644
+--- a/ldap/servers/slapd/back-ldbm/import.c
++++ b/ldap/servers/slapd/back-ldbm/import.c
+@@ -234,7 +234,7 @@ static void import_task_destroy(Slapi_Task *task)
+         return;
+     }
+ 
+-    while(is_instance_busy(job->inst)){
++    while (task->task_state == SLAPI_TASK_RUNNING) {
+         /* wait for the job to finish before freeing it */
+         DS_Sleep(PR_SecondsToInterval(1));
+     }
+-- 
+2.13.6
+

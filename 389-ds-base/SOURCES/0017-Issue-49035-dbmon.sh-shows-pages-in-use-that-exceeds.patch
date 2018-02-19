@@ -1,0 +1,38 @@
+From c14b2d88497724c4e19e5fae89bb40c95a61e1cb Mon Sep 17 00:00:00 2001
+From: Mark Reynolds <mreynolds@redhat.com>
+Date: Thu, 30 Mar 2017 15:26:00 -0400
+Subject: [PATCH] Issue 49035 - dbmon.sh shows pages-in-use that exceeds the
+ cache size
+
+Bug Description:  dbmon shows negative free cache stats because the pages-in-use exceeds
+                  the expected size of the cache.  This is because on caches smaller
+                  than 500mb, libdb automatically increases the size by ~25%.  The tool
+                  is only checking the configured db cache size, and in this case its
+                  actaully larger than what was conigured in dse.ldif.
+
+Fix Description:  dbmon.sh should use the libdb's "cache size in bytes", instead of
+                  nsslapd-dbcachesize - as it could be different.
+
+https://pagure.io/389-ds-base/issue/49035
+
+Reviewed by: nhosoi & wibrown (Thanks!!)
+---
+ ldap/admin/src/scripts/dbmon.sh.in | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/ldap/admin/src/scripts/dbmon.sh.in b/ldap/admin/src/scripts/dbmon.sh.in
+index 4ee6adc..46796e2 100644
+--- a/ldap/admin/src/scripts/dbmon.sh.in
++++ b/ldap/admin/src/scripts/dbmon.sh.in
+@@ -47,7 +47,7 @@ parseldif() {
+         }
+         /^[^ ]|^$/ {origline = $0; $0 = unwrapline; unwrapline = origline}
+         /^ / {sub(/^ /, ""); unwrapline = unwrapline $0; next}
+-        /^nsslapd-dbcachesize/ { dbcachesize=$2 }
++        /^nsslapd-db-cache-size-bytes/ { dbcachesize=$2 }
+         /^nsslapd-db-page-size/ { pagesize=$2 }
+         /^dbcachehitratio/ { dbhitratio=$2 }
+         /^dbcachepagein/ { dbcachepagein=$2 }
+-- 
+2.9.3
+

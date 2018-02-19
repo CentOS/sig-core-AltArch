@@ -1,0 +1,71 @@
+From a00917eec0bcef75180eaf4dd9b360519b9e2644 Mon Sep 17 00:00:00 2001
+From: Mark Reynolds <mreynolds@redhat.com>
+Date: Tue, 14 Mar 2017 14:35:05 -0400
+Subject: [PATCH 2/5] Issue 49170 - sync plugin thread count not handled
+ correctly
+
+Bug Description:  If sync repl connections get aborted the thread_count is
+                  not properly updated which leads to the server hanging
+                  on shutdown.
+
+Fix Description:  When connections get aborted we still need to shutdown
+                  the result thread cleanly:  remove the req, update thread
+                  count, etc.
+
+https://pagure.io/389-ds-base/issue/49170
+
+Reviewed by: nhosoi(Thanks!)
+
+(cherry picked from commit 770fcf4349ccf9e07ff0e1cf0d6991927ec9ba75)
+---
+ ldap/servers/plugins/sync/sync_persist.c | 17 ++++++++---------
+ 1 file changed, 8 insertions(+), 9 deletions(-)
+
+diff --git a/ldap/servers/plugins/sync/sync_persist.c b/ldap/servers/plugins/sync/sync_persist.c
+index d0c8da2..667a529 100644
+--- a/ldap/servers/plugins/sync/sync_persist.c
++++ b/ldap/servers/plugins/sync/sync_persist.c
+@@ -548,16 +548,16 @@ sync_send_results( void *arg )
+ 	slapi_pblock_get(req->req_pblock, SLAPI_CONNECTION, &conn);
+ 	if (NULL == conn) {
+ 		slapi_log_err(SLAPI_LOG_ERR, SYNC_PLUGIN_SUBSYSTEM,
+-						"sync_send_results - conn=%" NSPRIu64 " op=%d Null connection - aborted\n",
+-						connid, opid);
+-		return;
++			"sync_send_results - conn=%" NSPRIu64 " op=%d Null connection - aborted\n",
++			connid, opid);
++		goto done;
+ 	}
+ 	conn_acq_flag = sync_acquire_connection (conn);
+ 	if (conn_acq_flag) {
+ 		slapi_log_err(SLAPI_LOG_ERR, SYNC_PLUGIN_SUBSYSTEM,
+-						"sync_send_results - conn=%" NSPRIu64 " op=%d Could not acquire the connection - aborted\n",
+-						connid, opid);
+-		return;
++			"sync_send_results - conn=%" NSPRIu64 " op=%d Could not acquire the connection - aborted\n",
++			connid, opid);
++		goto done;
+ 	}
+ 
+ 	PR_Lock( sync_request_list->sync_req_cvarlock );
+@@ -658,15 +658,14 @@ sync_send_results( void *arg )
+ 		}
+ 	}
+ 	PR_Unlock( sync_request_list->sync_req_cvarlock );
+-	sync_remove_request( req );
+ 
+ 	/* indicate the end of search */
+-
+ 	sync_release_connection(req->req_pblock, conn, op, conn_acq_flag == 0);
+ 
++done:
++	sync_remove_request( req );
+ 	PR_DestroyLock ( req->req_lock );
+ 	req->req_lock = NULL;
+-
+ 	slapi_ch_free((void **) &req->req_pblock );
+ 	slapi_ch_free((void **) &req->req_orig_base );
+ 	slapi_filter_free(req->req_filter, 1);
+-- 
+2.9.3
+

@@ -1,0 +1,200 @@
+From 4f90e73538f1faf101733fcd95392bb77ba9467c Mon Sep 17 00:00:00 2001
+From: William Brown <firstyear@redhat.com>
+Date: Wed, 22 Mar 2017 14:10:11 +1000
+Subject: [PATCH] Ticket 49174 - nunc-stans can not use negative timeout
+
+Bug Description:  FreeIPA regularly sets up service accounts with
+an nsIdleTimeout of -1. As a result of an issue with NS and libevent
+this would cause an instant timeout and disconnect of the service
+account.
+
+Fix Description:  Correctly check that jobs are registered to NS.
+Add validation to NS for negative timeouts. During the job registration,
+we force the timeout to be a valid value.
+
+https://pagure.io/389-ds-base/issue/49174
+
+Author: wibrown
+
+Review by: mreynolds(Thanks!!!)
+
+Signed-off-by: Mark Reynolds <mreynolds@redhat.com>
+---
+ ldap/servers/slapd/daemon.c           | 39 ++++++++++++++++++++++++++++-------
+ src/nunc-stans/ns/ns_event_fw_event.c |  8 -------
+ src/nunc-stans/ns/ns_thrpool.c        | 16 ++++++++++++++
+ src/nunc-stans/test/test_nuncstans.c  | 20 ++++++++++++++++++
+ 4 files changed, 68 insertions(+), 15 deletions(-)
+
+diff --git a/ldap/servers/slapd/daemon.c b/ldap/servers/slapd/daemon.c
+index e17a858..a4ea4c0 100644
+--- a/ldap/servers/slapd/daemon.c
++++ b/ldap/servers/slapd/daemon.c
+@@ -1891,15 +1891,32 @@ ns_connection_post_io_or_closing(Connection *conn)
+ 			tv.tv_usec = slapd_wakeup_timer * 1000;
+ 			conn->c_ns_close_jobs++; /* now 1 active closure job */
+ 			connection_acquire_nolock_ext(conn, 1 /* allow acquire even when closing */); /* event framework now has a reference */
+-			ns_add_timeout_job(conn->c_tp, &tv, NS_JOB_TIMER,
++			PRStatus job_result = ns_add_timeout_job(conn->c_tp, &tv, NS_JOB_TIMER,
+ 					   ns_handle_closure, conn, NULL);
+-			slapi_log_err(SLAPI_LOG_CONNS, "ns_connection_post_io_or_closing", "post closure job "
+-				"for conn %" NSPRIu64 " for fd=%d\n", conn->c_connid, conn->c_sd);
++#ifdef DEBUG
++			PR_ASSERT(job_result == PR_SUCCESS);
++#endif
++			if (job_result != PR_SUCCESS) {
++				slapi_log_err(SLAPI_LOG_WARNING, "ns_connection_post_io_or_closing", "post closure job "
++					"for conn %" NSPRIu64 " for fd=%d failed to be added to event queue\n", conn->c_connid, conn->c_sd);
++			} else {
++				slapi_log_err(SLAPI_LOG_CONNS, "ns_connection_post_io_or_closing", "post closure job "
++					"for conn %" NSPRIu64 " for fd=%d\n", conn->c_connid, conn->c_sd);
++			}
+ 			
+ 		}
+ 	} else {
+ 		/* process event normally - wait for I/O until idletimeout */
+-		tv.tv_sec = conn->c_idletimeout;
++		/* With nunc-stans there is a quirk. When we have idleTimeout of -1
++		 * which is set on some IPA bind dns for infinite, this causes libevent 
++		 * to *instantly* timeout. So if we detect < 0, we set 0 to this timeout, to
++		 * catch all possible times that an admin could set.
++		 */
++		if (conn->c_idletimeout < 0) {
++			tv.tv_sec = 0;
++		} else {
++			tv.tv_sec = conn->c_idletimeout;
++		}
+ 		tv.tv_usec = 0;
+ #ifdef DEBUG
+ 		PR_ASSERT(0 == connection_acquire_nolock(conn));
+@@ -1913,11 +1930,19 @@ ns_connection_post_io_or_closing(Connection *conn)
+ 			return;
+ 		}
+ #endif
+-		ns_add_io_timeout_job(conn->c_tp, conn->c_prfd, &tv,
++		PRStatus job_result = ns_add_io_timeout_job(conn->c_tp, conn->c_prfd, &tv,
+ 				      NS_JOB_READ|NS_JOB_PRESERVE_FD,
+ 				      ns_handle_pr_read_ready, conn, NULL);
+-		slapi_log_err(SLAPI_LOG_CONNS, "ns_connection_post_io_or_closing", "post I/O job for "
+-			"conn %" NSPRIu64 " for fd=%d\n", conn->c_connid, conn->c_sd);
++#ifdef DEBUG
++		PR_ASSERT(job_result == PR_SUCCESS);
++#endif
++		if (job_result != PR_SUCCESS) {
++			slapi_log_err(SLAPI_LOG_WARNING, "ns_connection_post_io_or_closing", "post I/O job for "
++				"conn %" NSPRIu64 " for fd=%d failed to be added to event queue\n", conn->c_connid, conn->c_sd);
++		} else {
++			slapi_log_err(SLAPI_LOG_CONNS, "ns_connection_post_io_or_closing", "post I/O job for "
++				"conn %" NSPRIu64 " for fd=%d\n", conn->c_connid, conn->c_sd);
++		}
+ 	}
+ #endif
+ }
+diff --git a/src/nunc-stans/ns/ns_event_fw_event.c b/src/nunc-stans/ns/ns_event_fw_event.c
+index 3acbaf7..76936de 100644
+--- a/src/nunc-stans/ns/ns_event_fw_event.c
++++ b/src/nunc-stans/ns/ns_event_fw_event.c
+@@ -48,7 +48,6 @@ typedef struct event ns_event_fw_sig_t;
+ #include "ns_event_fw.h"
+ #include <syslog.h>
+ 
+-
+ static void
+ event_logger_cb(int severity, const char *msg)
+ {
+@@ -248,13 +247,6 @@ ns_event_fw_mod_io(
+     }
+     if (events) {
+         job->ns_event_fw_fd->ev_events = events;
+-
+-#ifdef DEBUG_FSM
+-        /* REALLY make sure that we aren't being re-added */
+-        if (event_pending(job->ns_event_fw_fd, events, tv)) {
+-            abort();
+-        }
+-#endif
+         event_add(job->ns_event_fw_fd, tv);
+     } else {
+         /* setting the job_type to remove IO events will remove it from the event system */
+diff --git a/src/nunc-stans/ns/ns_thrpool.c b/src/nunc-stans/ns/ns_thrpool.c
+index a867b39..9d87384 100644
+--- a/src/nunc-stans/ns/ns_thrpool.c
++++ b/src/nunc-stans/ns/ns_thrpool.c
+@@ -180,6 +180,14 @@ ns_thrpool_is_event_shutdown(struct ns_thrpool_t *tp)
+     return result;
+ }
+ 
++static int32_t
++validate_event_timeout(struct timeval *tv) {
++    if (tv->tv_sec < 0 || tv->tv_usec < 0) {
++        /* If we get here, you have done something WRONG */
++        return 1;
++    }
++    return 0;
++}
+ 
+ static void
+ job_queue_cleanup(void *arg) {
+@@ -864,6 +872,10 @@ ns_add_timeout_job(ns_thrpool_t *tp, struct timeval *tv, ns_job_type_t job_type,
+         return PR_FAILURE;
+     }
+ 
++    if (validate_event_timeout(tv)) {
++        return PR_FAILURE;
++    }
++
+     /* get an event context for a timer job */
+     _job = alloc_timeout_context(tp, tv, job_type, func, data);
+     if (!_job) {
+@@ -900,6 +912,10 @@ ns_add_io_timeout_job(ns_thrpool_t *tp, PRFileDesc *fd, struct timeval *tv,
+         return PR_FAILURE;
+     }
+ 
++    if (validate_event_timeout(tv)) {
++        return PR_FAILURE;
++    }
++
+     /* Don't allow an accept job to be run outside of the event thread.
+      * We do this so a listener job won't shut down while still processing
+      * current connections in other threads.
+diff --git a/src/nunc-stans/test/test_nuncstans.c b/src/nunc-stans/test/test_nuncstans.c
+index 8eef9e6..2795302 100644
+--- a/src/nunc-stans/test/test_nuncstans.c
++++ b/src/nunc-stans/test/test_nuncstans.c
+@@ -385,6 +385,23 @@ ns_job_signal_cb_test(void **state)
+     assert_int_equal(ns_job_done(job), 0);
+ }
+ 
++/*
++ * Test that given a timeout of -1, we fail to create a job.
++ */
++
++static void
++ns_job_neg_timeout_test(void **state)
++{
++    struct ns_thrpool_t *tp = *state;
++
++    struct timeval tv = { -1, 0 };
++
++    PR_ASSERT(PR_FAILURE == ns_add_io_timeout_job(tp, 0, &tv, NS_JOB_THREAD, ns_init_do_nothing_cb, NULL, NULL));
++
++    PR_ASSERT(PR_FAILURE == ns_add_timeout_job(tp, &tv, NS_JOB_THREAD, ns_init_do_nothing_cb, NULL, NULL));
++
++}
++
+ int
+ main(void)
+ {
+@@ -410,6 +427,9 @@ main(void)
+         cmocka_unit_test_setup_teardown(ns_job_signal_cb_test,
+                                         ns_test_setup,
+                                         ns_test_teardown),
++        cmocka_unit_test_setup_teardown(ns_job_neg_timeout_test,
++                                        ns_test_setup,
++                                        ns_test_teardown),
+     };
+     return cmocka_run_group_tests(tests, NULL, NULL);
+ }
+-- 
+2.9.3
+
