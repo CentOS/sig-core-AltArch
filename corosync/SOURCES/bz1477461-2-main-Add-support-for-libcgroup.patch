@@ -1,0 +1,288 @@
+From c56086c701d08fc17cf6d8ef603caf505a4021b7 Mon Sep 17 00:00:00 2001
+From: Jan Friesse <jfriesse@redhat.com>
+Date: Fri, 28 Jul 2017 16:32:58 +0200
+Subject: [PATCH] main: Add support for libcgroup
+
+When corosync is started in environment where it ends in cgroup without
+properly set rt_runtime_us it's impossible to get RT priority.
+
+Already implemented workaround is to use higher non-RT priority.
+
+This patch implements another solution. It moves corosync into root cpu
+cgroup. Root cpu cgroup hopefully has enough RT budget.
+
+Another solution was mentioned on ML
+https://lists.freedesktop.org/archives/systemd-devel/2017-July/039353.html
+but this means to generate some "random" values.
+
+Signed-off-by: Jan Friesse <jfriesse@redhat.com>
+Reviewed-by: Fabio M. Di Nitto <fdinitto@redhat.com>
+Reviewed-by: Christine Caulfield <ccaulfie@redhat.com>
+---
+ configure.ac     |   11 ++++++
+ corosync.spec.in |    7 ++++
+ exec/Makefile.am |    5 +++
+ exec/main.c      |  105 ++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ man/corosync.8   |    6 +++-
+ 5 files changed, 131 insertions(+), 3 deletions(-)
+
+diff --git a/configure.ac b/configure.ac
+index 81fc91b..e60bf1b 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -416,6 +416,10 @@ AC_ARG_ENABLE([qnetd],
+ 	[  --enable-qnetd                  : Quorum Net Daemon support ],,
+ 	[ enable_qnetd="no" ])
+ AM_CONDITIONAL(BUILD_QNETD, test x$enable_qnetd = xyes)
++AC_ARG_ENABLE([libcgroup],
++	[  --enable-libcgroup                  : Enable libcgroup support ],,
++	[ enable_libcgroup="no" ])
++AM_CONDITIONAL(ENABLE_LIBCGROUP, test x$enable_libcgroup = xyes)
+ 
+ # *FLAGS handling goes here
+ 
+@@ -548,6 +552,13 @@ if test "x${enable_snmp}" = xyes; then
+ fi
+ AM_CONDITIONAL(BUILD_SNMP, test "${do_snmp}" = "1")
+ 
++if test "x${enable_libcgroup}" = xyes; then
++    PKG_CHECK_MODULES([libcgroup], [libcgroup])
++    AC_DEFINE_UNQUOTED([HAVE_LIBCGROUP], 1, [have libcgroup])
++    PACKAGE_FEATURES="$PACKAGE_FEATURES libcgroup"
++    WITH_LIST="$WITH_LIST --with libcgroup"
++fi
++
+ # extra warnings
+ EXTRA_WARNINGS=""
+ 
+diff --git a/corosync.spec.in b/corosync.spec.in
+index 97c8e03..49d7b7e 100644
+--- a/corosync.spec.in
++++ b/corosync.spec.in
+@@ -17,6 +17,7 @@
+ %bcond_with runautogen
+ %bcond_with qdevices
+ %bcond_with qnetd
++%bcond_with libcgroup
+ 
+ %global gitver %{?numcomm:.%{numcomm}}%{?alphatag:.%{alphatag}}%{?dirty:.%{dirty}}
+ %global gittarver %{?numcomm:.%{numcomm}}%{?alphatag:-%{alphatag}}%{?dirty:-%{dirty}}
+@@ -74,6 +75,9 @@ Requires: nss-tools
+ %if %{with qnetd}
+ BuildRequires: sed
+ %endif
++%if %{with libcgroup}
++BuildRequires: libcgroup-devel
++%endif
+ 
+ BuildRoot: %(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
+ 
+@@ -125,6 +129,9 @@ export rdmacm_LIBS=-lrdmacm \
+ %if %{with qnetd}
+ 	--enable-qnetd \
+ %endif
++%if %{with libcgroup}
++	--enable-libcgroup \
++%endif
+ 	--with-initddir=%{_initrddir} \
+ 	--with-systemddir=%{_unitdir} \
+ 	--with-upstartdir=%{_sysconfdir}/init \
+diff --git a/exec/Makefile.am b/exec/Makefile.am
+index 9ca7720..670daf6 100644
+--- a/exec/Makefile.am
++++ b/exec/Makefile.am
+@@ -78,5 +78,10 @@ corosync_LDADD		= libtotem_pg.la ../common_lib/libcorosync_common.la \
+ 
+ corosync_DEPENDENCIES	= libtotem_pg.la ../common_lib/libcorosync_common.la
+ 
++if ENABLE_LIBCGROUP
++corosync_CFLAGS		+= $(libcgroup_CFLAGS)
++corosync_LDADD		+= $(libcgroup_LIBS)
++endif
++
+ lint:
+ 	-splint $(LINT_FLAGS) $(CPPFLAGS) $(CFLAGS) *.c
+diff --git a/exec/main.c b/exec/main.c
+index 60c01a4..b3e7478 100644
+--- a/exec/main.c
++++ b/exec/main.c
+@@ -110,6 +110,10 @@
+ #include <corosync/logsys.h>
+ #include <corosync/icmap.h>
+ 
++#ifdef HAVE_LIBCGROUP
++#include <libcgroup.h>
++#endif
++
+ #include "quorum.h"
+ #include "totemsrp.h"
+ #include "logconfig.h"
+@@ -1134,12 +1138,95 @@ error_close:
+ 	return (err);
+ }
+ 
++static int corosync_move_to_root_cgroup(void) {
++	int res = -1;
++#ifdef HAVE_LIBCGROUP
++	int cg_ret;
++	struct cgroup *root_cgroup = NULL;
++	struct cgroup_controller *root_cpu_cgroup_controller = NULL;
++	char *current_cgroup_path = NULL;
++
++	cg_ret = cgroup_init();
++	if (cg_ret) {
++		log_printf(LOGSYS_LEVEL_WARNING, "Unable to initialize libcgroup: %s ",
++		    cgroup_strerror(cg_ret));
++
++		goto exit_res;
++	}
++
++	cg_ret = cgroup_get_current_controller_path(getpid(), "cpu", &current_cgroup_path);
++	if (cg_ret) {
++		log_printf(LOGSYS_LEVEL_WARNING, "Unable to get current cpu cgroup path: %s ",
++		    cgroup_strerror(cg_ret));
++
++		goto exit_res;
++	}
++
++	if (strcmp(current_cgroup_path, "/") == 0) {
++		log_printf(LOGSYS_LEVEL_DEBUG, "Corosync is already in root cgroup path");
++
++		res = 0;
++		goto exit_res;
++	}
++
++	root_cgroup = cgroup_new_cgroup("/");
++	if (root_cgroup == NULL) {
++		log_printf(LOGSYS_LEVEL_WARNING, "Can't create root cgroup");
++
++		goto exit_res;
++	}
++
++	root_cpu_cgroup_controller = cgroup_add_controller(root_cgroup, "cpu");
++	if (root_cpu_cgroup_controller == NULL) {
++		log_printf(LOGSYS_LEVEL_WARNING, "Can't create root cgroup cpu controller");
++
++		goto exit_res;
++	}
++
++	cg_ret = cgroup_attach_task(root_cgroup);
++	if (cg_ret) {
++		log_printf(LOGSYS_LEVEL_WARNING, "Can't attach task to root cgroup: %s ",
++		    cgroup_strerror(cg_ret));
++
++		goto exit_res;
++	}
++
++	cg_ret = cgroup_get_current_controller_path(getpid(), "cpu", &current_cgroup_path);
++	if (cg_ret) {
++		log_printf(LOGSYS_LEVEL_WARNING, "Unable to get current cpu cgroup path: %s ",
++		    cgroup_strerror(cg_ret));
++
++		goto exit_res;
++	}
++
++	if (strcmp(current_cgroup_path, "/") == 0) {
++		log_printf(LOGSYS_LEVEL_NOTICE, "Corosync sucesfully moved to root cgroup");
++		res = 0;
++	} else {
++		log_printf(LOGSYS_LEVEL_WARNING, "Can't move Corosync to root cgroup");
++	}
++
++exit_res:
++	if (root_cgroup != NULL) {
++		cgroup_free(&root_cgroup);
++	}
++
++	/*
++	 * libcgroup doesn't define something like cgroup_fini so there is no way how to clean
++	 * it's cache. It has to be called when libcgroup authors decide to implement it.
++	 */
++
++#endif
++	 return (res);
++}
++
++
+ int main (int argc, char **argv, char **envp)
+ {
+ 	const char *error_string;
+ 	struct totem_config totem_config;
+ 	int res, ch;
+-	int background, sched_rr, prio, testonly;
++	int background, sched_rr, prio, testonly, move_to_root_cgroup;
+ 	struct stat stat_out;
+ 	enum e_corosync_done flock_err;
+ 	uint64_t totem_config_warnings;
+@@ -1153,8 +1240,9 @@ int main (int argc, char **argv, char **envp)
+ 	sched_rr = 1;
+ 	prio = 0;
+ 	testonly = 0;
++	move_to_root_cgroup = 1;
+ 
+-	while ((ch = getopt (argc, argv, "fP:prtv")) != EOF) {
++	while ((ch = getopt (argc, argv, "fP:pRrtv")) != EOF) {
+ 
+ 		switch (ch) {
+ 			case 'f':
+@@ -1179,6 +1267,9 @@ int main (int argc, char **argv, char **envp)
+ 					prio = tmpli;
+ 				}
+ 				break;
++			case 'R':
++				move_to_root_cgroup = 0;
++				break;
+ 			case 'r':
+ 				sched_rr = 1;
+ 				break;
+@@ -1198,6 +1289,7 @@ int main (int argc, char **argv, char **envp)
+ 					"        -f     : Start application in foreground.\n"\
+ 					"        -p     : Do not set realtime scheduling.\n"\
+ 					"        -r     : Set round robin realtime scheduling (default).\n"\
++					"        -R     : Do not try move corosync to root cpu cgroup (valid when built with libcgroup)\n" \
+ 					"        -P num : Set priority of process (no effect when -r is used)\n"\
+ 					"        -t     : Test configuration and exit.\n"\
+ 					"        -v     : Display version and SVN revision of Corosync and exit.\n");
+@@ -1312,6 +1404,15 @@ int main (int argc, char **argv, char **envp)
+ 		corosync_exit_error (COROSYNC_DONE_EXIT);
+ 	}
+ 
++
++	/*
++	 * Try to move corosync into root cpu cgroup. Failure is not fatal and
++	 * error is deliberately ignored.
++	 */
++	if (move_to_root_cgroup) {
++		(void)corosync_move_to_root_cgroup();
++	}
++
+ 	/*
+ 	 * Set round robin realtime scheduling with priority 99
+ 	 */
+diff --git a/man/corosync.8 b/man/corosync.8
+index dc596d1..7bce65e 100644
+--- a/man/corosync.8
++++ b/man/corosync.8
+@@ -35,7 +35,7 @@
+ .SH NAME
+ corosync \- The Corosync Cluster Engine.
+ .SH SYNOPSIS
+-.B "corosync [\-f] [\-P num] [\-p] [\-r] [\-t] [\-v]"
++.B "corosync [\-f] [\-P num] [\-p] [\-r] [-R] [\-t] [\-v]"
+ .SH DESCRIPTION
+ .B corosync
+ Corosync provides clustering infrastructure such as membership, messaging and quorum.
+@@ -62,6 +62,10 @@ meaning maximal / minimal priority (so minimal / maximal nice value).
+ Set round robin realtime scheduling with maximal priority (default). When setting
+ of scheduler fails, fallback to set maximal priority.
+ .TP
++.B -R
++Do not try to move Corosync to root cpu cgroup. This feature is available only
++for corosync with libcgroup enabled during the build.
++.TP
+ .B -t
+ Test configuration and then exit.
+ .TP
+-- 
+1.7.1
+

@@ -1,0 +1,81 @@
+From b0c850f308d44ddcdf1a1f881c1e1142ad489385 Mon Sep 17 00:00:00 2001
+From: Jan Friesse <jfriesse@redhat.com>
+Date: Tue, 30 Aug 2016 16:57:31 +0200
+Subject: [PATCH] Qnetd LMS: Fix two partition use case
+
+Solves situation when in 2 node cluster tie-breaker node dies. Because
+code contains two bugs, other node got NACK instead of ACK.
+
+- Algo timer is not stack, so calling abort and schedule in timer
+callback without setting reschedule is noop.
+- It's needed to check not only what current node thinks about
+membership, but also what other nodes thinks. If views diverge -> wait.
+
+Thanks Christine Caulfield <ccaulfie@redhat.com> for fixing the English
+in the comments somewhat.
+
+Signed-off-by: Jan Friesse <jfriesse@redhat.com>
+Reviewed-by: Christine Caulfield <ccaulfie@redhat.com>
+---
+ qdevices/qnetd-algo-lms.c   |   12 ++++++++++++
+ qdevices/qnetd-algo-utils.c |   14 ++++++++++++++
+ 2 files changed, 26 insertions(+), 0 deletions(-)
+
+diff --git a/qdevices/qnetd-algo-lms.c b/qdevices/qnetd-algo-lms.c
+index 55a1bb2..cdd86c4 100644
+--- a/qdevices/qnetd-algo-lms.c
++++ b/qdevices/qnetd-algo-lms.c
+@@ -361,6 +361,18 @@ qnetd_algo_lms_timer_callback(struct qnetd_client *client, int *reschedule_timer
+ 	    (*result_vote == TLV_VOTE_ACK || *result_vote == TLV_VOTE_NACK)) {
+ 		*send_vote = 1;
+ 	}
++
++	if (ret == TLV_REPLY_ERROR_CODE_NO_ERROR &&
++	    *result_vote == TLV_VOTE_WAIT_FOR_REPLY) {
++		/*
++		 * Reschedule was called in the do_lms_algorithm but algo_timer is
++		 * not stack based so there can only be one. So if do_lms aborted
++		 * the active timer, and scheduled it again the timer would be aborted
++		 * if reschedule_timer was not set.
++		 */
++		*reschedule_timer = 1;
++	}
++
+ 	return ret;
+ }
+ 
+diff --git a/qdevices/qnetd-algo-utils.c b/qdevices/qnetd-algo-utils.c
+index 440f81f..e26b40a 100644
+--- a/qdevices/qnetd-algo-utils.c
++++ b/qdevices/qnetd-algo-utils.c
+@@ -65,6 +65,19 @@ qnetd_algo_all_ring_ids_match(struct qnetd_client *client, const struct tlv_ring
+ 			}
+ 		}
+ 
++		if (in_our_partition == 0) {
++			/*
++			 * Also try to look from the other side to see if we are
++			 * not in the other node's membership list.
++			 * Because if so it may mean the membership lists are not equal
++			 */
++			TAILQ_FOREACH(node_info, &other_client->last_membership_node_list, entries) {
++				if (node_info->node_id == client->node_id) {
++					in_our_partition = 1;
++				}
++			}
++		}
++
+ 		/*
+ 		 * If the other nodes on our side of a partition have a different ring ID then
+ 		 * we need to wait until they have all caught up before making a decision
+@@ -74,6 +87,7 @@ qnetd_algo_all_ring_ids_match(struct qnetd_client *client, const struct tlv_ring
+ 			return (-1); /* ring IDs don't match */
+ 		}
+ 	}
++
+ 	return (0);
+ }
+ 
+-- 
+1.7.1
+

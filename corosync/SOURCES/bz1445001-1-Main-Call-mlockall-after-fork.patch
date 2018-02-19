@@ -1,0 +1,51 @@
+From 238e2e62d8b960e7c10bfa0a8281d78ec99f3a26 Mon Sep 17 00:00:00 2001
+From: Andrew Price <anprice@redhat.com>
+Date: Tue, 25 Apr 2017 14:44:33 +0200
+Subject: [PATCH] Main: Call mlockall after fork
+
+Man page of mlockall is clear:
+Memory locks are not inherited by a child created via fork(2) and are
+automatically removed (unlocked) during an execve(2) or when the
+process terminates.
+
+So calling mlockall before corosync_tty_detach is noop when corosync is
+executed as a daemon (corosync -f was not affected).
+
+This regression is caused by ed7d054e552b4cb2a0cb502b65f84310ce6da844
+(setprio for logsys/qblog was correct, mlockall was not).
+
+Solution is to move corosync_mlockall call on correct place.
+
+Signed-off-by: Andrew Price <anprice@redhat.com>
+Reviewed-by: Christine Caulfield <ccaulfie@redhat.com>
+Reviewed-by: Jan Friesse <jfriesse@redhat.com>
+(cherry picked from commit 86012ebb45c85df277eb8fe5dc5223e2fdebf25c)
+---
+ exec/main.c |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/exec/main.c b/exec/main.c
+index d43cac6..602c788 100644
+--- a/exec/main.c
++++ b/exec/main.c
+@@ -1177,8 +1177,6 @@ int main (int argc, char **argv, char **envp)
+ 		corosync_setscheduler ();
+ 	}
+ 
+-	corosync_mlockall ();
+-
+ 	/*
+ 	 * Other signals are registered later via qb_loop_signal_add
+ 	 */
+@@ -1310,6 +1308,8 @@ int main (int argc, char **argv, char **envp)
+ 		corosync_tty_detach ();
+ 	}
+ 
++	corosync_mlockall ();
++
+ 	corosync_poll_handle = qb_loop_create ();
+ 
+ 	memset(&scheduler_pause_timeout_data, 0, sizeof(scheduler_pause_timeout_data));
+-- 
+1.7.1
+
