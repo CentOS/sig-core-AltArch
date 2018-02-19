@@ -762,6 +762,7 @@ make \
   NSS_LIBS="%{NSS_LIBS} -lfreebl" \
   NSS_CFLAGS="%{NSS_CFLAGS}" \
   ECC_JUST_SUITE_B="true" \
+  ARM32JIT="false" \
   SYSTEM_GSETTINGS="true" \
   BUILD_JAXP=false BUILD_JAXWS=false BUILD_LANGTOOLS=false BUILD_JDK=false BUILD_CORBA=false \
   ALT_JDK_IMPORT_PATH=${JDK_TO_BUILD_WITH} ALT_OUTPUTDIR=${PWD}/bootstrap \
@@ -1394,6 +1395,8 @@ exit 0
 %{_sysconfdir}/.java/.systemPrefs
 %{_jvmdir}/%{sdkdir}/jre-abrt
 
+# Ugly workaround for perms issues
+%attr(644,root,root) %{_jvmdir}/%{jredir}/lib/resources.jar
 
 %files devel
 %defattr(-,root,root,-)
@@ -1469,6 +1472,10 @@ exit 0
 %{_jvmdir}/%{jredir}/lib/accessibility.properties
 
 %changelog
+* Wed Aug 30 2017 Fabian Arrotin <arrfab@centos.org> - 1:1.7.0.141-2.6.10-1
+- disabled ARM32JIT. the 8032051 security patch was not yet made for arm32. (jacco@redsleeve.org)
+- Ugly workaround for wrong perms on resources.jar
+
 * Tue Nov 28 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.7.0.161-2.6.12.0
 - Remove superfluous %%1 from policy JAR file path.
 - Resolves: rhbz#1499207
