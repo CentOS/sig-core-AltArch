@@ -1,0 +1,732 @@
+diff -up wrk/ode-initval2/bsimp.c.wrk wrk/ode-initval2/bsimp.c
+diff -U0 wrk/ode-initval2/ChangeLog.wrk wrk/ode-initval2/ChangeLog
+--- wrk/ode-initval2/ChangeLog.wrk	2013-01-29 13:40:22.470035141 +0100
++++ wrk/ode-initval2/ChangeLog	2013-01-29 12:58:21.000000000 +0100
+@@ -0,0 +1,52 @@
++2013-01-27  Tuomo Keskitalo  <tuomo.keskitalo@iki.fi>
++
++	* msbdf.c: Corrected bug which enabled order to be changed 
++	by two (first by stability enhancement, then by order evaluation
++	after a rejected step). Thanks for Frantisek Kluknavsky and
++	Andreas Schwab for bug reports!
++	
++	* msbdf.c: Added more state variables explicitly to be reset in 
++	msbdf_reset. 
++
++	*msbdf.c: Added abscorscaled to remove division of abscor for 
++	use in msbdf_eval_order and subsequent backwards multiplication.
++	
++	*test.c: test_extreme_problems: Increased ringmod case tolerances 
++	from 1e-7 to 1e-12 to increase precision. Because that
++	increases computational burden, I also decreased end time 
++	from 1e-3 to 1e-5. That decreased the acidity of the test 
++	significantly, but the test case is now more appropriate 
++	for normal "make check". Thanks for Frantisek Kluknavsky
++	for pointing out bad design of the test case.
++
++2012-09-10  Rhys Ulerich  <rhys.ulerich@gmail.com>
++
++	* test.c: Correct two out-of-order declarations.
++	Thanks to Brian Gladman for spotting the problem.
++
++2012-03-10  Tuomo Keskitalo  <tuomo.keskitalo@iki.fi>
++
++	* driver.c: Added function gsl_odeiv2_driver_reset_hstart to
++	allow resetting step size, possibly change its sign, too.
++	Check for non-zero hstart in initializations.
++
++	* test.c: Modified test_driver to carry out tests with all
++	steppers. Small printout changes.
++
++2012-01-21  Tuomo Keskitalo  <tuomo.keskitalo@iki.fi>
++
++	* rkf45.c: Bug correction: Set gives_exact_dydt_out to 1 in
++	rkf45_type
++
++2012-01-14  Tuomo Keskitalo  <tuomo.keskitalo@iki.fi>
++
++	* evolve.c: Modified initial derivative evaluation in evolve_apply
++	to reuse previously calculated values. This saves calls to the
++	user function. Thanks for Illes Farkas for pointing out redundant
++	function calls!
++
++2011-06-28  Brian Gough  <bjg@network-theory.co.uk>
++
++	* rk4imp.c (rk4imp_apply): use M_SQRT3 instead of sqrt(3) in array
++	initialiser.
++
+diff -up wrk/ode-initval2/control.c.wrk wrk/ode-initval2/control.c
+diff -up wrk/ode-initval2/control_utils.c.wrk wrk/ode-initval2/control_utils.c
+diff -up wrk/ode-initval2/cscal.c.wrk wrk/ode-initval2/cscal.c
+diff -up wrk/ode-initval2/cstd.c.wrk wrk/ode-initval2/cstd.c
+diff -up wrk/ode-initval2/driver.c.wrk wrk/ode-initval2/driver.c
+--- wrk/ode-initval2/driver.c.wrk	2013-01-29 13:40:22.508035371 +0100
++++ wrk/ode-initval2/driver.c	2013-01-29 13:07:29.000000000 +0100
+@@ -81,7 +81,7 @@ driver_alloc (const gsl_odeiv2_system *
+       GSL_ERROR_NULL ("failed to allocate evolve object", GSL_ENOMEM);
+     }
+ 
+-  if (hstart >= 0.0 || hstart < 0.0)
++  if (hstart > 0.0 || hstart < 0.0)
+     {
+       state->h = hstart;
+     }
+@@ -459,6 +459,29 @@ gsl_odeiv2_driver_reset (gsl_odeiv2_driv
+   return GSL_SUCCESS;
+ }
+ 
++int
++gsl_odeiv2_driver_reset_hstart (gsl_odeiv2_driver * d, const double hstart)
++{
++  /* Resets current driver and sets initial step size to hstart */
++
++  gsl_odeiv2_driver_reset (d);
++
++  if ((d->hmin > fabs (hstart)) || (fabs (hstart) > d->hmax))
++    {
++      GSL_ERROR_NULL ("hmin <= fabs(h) <= hmax required", GSL_EINVAL);
++    }
++
++  if (hstart > 0.0 || hstart < 0.0)
++    {
++      d->h = hstart;
++    }
++  else
++    {
++      GSL_ERROR_NULL ("invalid hstart", GSL_EINVAL);
++    }
++
++  return GSL_SUCCESS;
++}
+ 
+ void
+ gsl_odeiv2_driver_free (gsl_odeiv2_driver * state)
+diff -up wrk/ode-initval2/evolve.c.wrk wrk/ode-initval2/evolve.c
+--- wrk/ode-initval2/evolve.c.wrk	2013-01-29 13:40:22.482035214 +0100
++++ wrk/ode-initval2/evolve.c	2013-01-29 13:07:32.000000000 +0100
+@@ -138,16 +138,24 @@ gsl_odeiv2_evolve_apply (gsl_odeiv2_evol
+ 
+   DBL_MEMCPY (e->y0, y, e->dimension);
+ 
+-  /* Calculate initial dydt once if the method can benefit. */
+-
++  /* Calculate initial dydt once or reuse previous value if the method
++     can benefit. */
++  
+   if (step->type->can_use_dydt_in)
+     {
+-      int status = GSL_ODEIV_FN_EVAL (dydt, t0, y, e->dydt_in);
++      if (e->count == 0)
++	{
++	  int status = GSL_ODEIV_FN_EVAL (dydt, t0, y, e->dydt_in);
+ 
+-      if (status)
+-        {
+-          return status;
+-        }
++	  if (status)
++	    {
++	      return status;
++	    }
++	}
++      else
++	{
++	  DBL_MEMCPY (e->dydt_in, e->dydt_out, e->dimension);
++	}
+     }
+ 
+ try_step:
+diff -up wrk/ode-initval2/gsl_odeiv2.h.wrk wrk/ode-initval2/gsl_odeiv2.h
+--- wrk/ode-initval2/gsl_odeiv2.h.wrk	2013-01-29 13:40:22.468035129 +0100
++++ wrk/ode-initval2/gsl_odeiv2.h	2013-01-29 13:07:52.000000000 +0100
+@@ -326,6 +326,7 @@ int gsl_odeiv2_driver_apply_fixed_step (
+                                         const unsigned long int n,
+                                         double y[]);
+ int gsl_odeiv2_driver_reset (gsl_odeiv2_driver * d);
++int gsl_odeiv2_driver_reset_hstart (gsl_odeiv2_driver * d, const double hstart);
+ void gsl_odeiv2_driver_free (gsl_odeiv2_driver * state);
+ 
+ __END_DECLS
+diff -up wrk/ode-initval2/Makefile.am.wrk wrk/ode-initval2/Makefile.am
+diff -up wrk/ode-initval2/Makefile.in.wrk wrk/ode-initval2/Makefile.in
+diff -up wrk/ode-initval2/modnewton1.c.wrk wrk/ode-initval2/modnewton1.c
+diff -up wrk/ode-initval2/msadams.c.wrk wrk/ode-initval2/msadams.c
+diff -up wrk/ode-initval2/msbdf.c.wrk wrk/ode-initval2/msbdf.c
+--- wrk/ode-initval2/msbdf.c.wrk	2013-01-29 13:40:22.473035159 +0100
++++ wrk/ode-initval2/msbdf.c	2013-01-28 10:42:35.000000000 +0100
+@@ -82,6 +82,7 @@ typedef struct
+   size_t *ordprevbackup;        /* backup of ordprev */
+   double *errlev;               /* desired error level of y */
+   gsl_vector *abscor;           /* absolute y values for correction */
++  gsl_vector *abscorscaled;     /* scaled abscor for order evaluation */
+   gsl_vector *relcor;           /* relative y values for correction */
+   gsl_vector *svec;             /* saved abscor & work area */
+   gsl_vector *tempvec;          /* work area */
+@@ -91,7 +92,6 @@ typedef struct
+   gsl_matrix *M;                /* Newton iteration matrix */
+   gsl_permutation *p;           /* permutation for LU decomposition of M */
+   gsl_vector *rhs;              /* right hand side equations (-G) */
+-
+   long int ni;                  /* stepper call counter */
+   size_t ord;                   /* current order of method */
+   double tprev;                 /* t point of previous call */
+@@ -446,6 +446,33 @@ msbdf_alloc (size_t dim)
+       GSL_ERROR_NULL ("failed to allocate space for rhs", GSL_ENOMEM);
+     }
+ 
++  state->abscorscaled = gsl_vector_alloc (dim);
++
++  if (state->abscorscaled == 0)
++    {
++      gsl_vector_free (state->rhs); 
++      gsl_permutation_free (state->p);
++      gsl_matrix_free (state->M);
++      free (state->dfdt);
++      gsl_matrix_free (state->dfdy);
++      gsl_vector_free (state->tempvec);
++      gsl_vector_free (state->svec);
++      gsl_vector_free (state->relcor);
++      gsl_vector_free (state->abscor);
++      free (state->errlev);
++      free (state->ordprevbackup);
++      free (state->ordprev);
++      free (state->hprevbackup);
++      free (state->hprev);
++      free (state->l);
++      free (state->ytmp2);
++      free (state->ytmp);
++      free (state->zbackup);
++      free (state->z);
++      free (state);
++      GSL_ERROR_NULL ("failed to allocate space for abscorscaled", GSL_ENOMEM);
++    }
++
+   msbdf_reset ((void *) state, dim);
+ 
+   state->driver = NULL;
+@@ -926,14 +953,14 @@ msbdf_corrector (void *vstate, const gsl
+ }
+ 
+ static int
+-msbdf_eval_order (gsl_vector * abscor, gsl_vector * tempvec,
++msbdf_eval_order (gsl_vector * abscorscaled, gsl_vector * tempvec,
+                   gsl_vector * svec, const double errcoeff,
+                   const size_t dim, const double errlev[],
+                   const double ordm1coeff, const double ordp1coeff,
+                   const double ordp1coeffprev, const double ordp2coeff,
+                   const double hprev[],
+                   const double h, const double z[],
+-                  size_t * ord, size_t * ordwait)
++                  size_t * ord)
+ {
+   /* Evaluates and executes change in method order (current, current-1
+      or current+1). Order which maximizes the step length is selected.
+@@ -953,7 +980,7 @@ msbdf_eval_order (gsl_vector * abscor, g
+ 
+   /* Relative step length estimate for current order */
+ 
+-  ordest = 1.0 / (pow (bias * gsl_blas_dnrm2 (abscor) / sqrt (dim)
++  ordest = 1.0 / (pow (bias * gsl_blas_dnrm2 (abscorscaled) / sqrt (dim)
+                        * errcoeff, 1.0 / (*ord + 1)) + safety);
+ 
+   /* Relative step length estimate for order ord - 1 */
+@@ -983,7 +1010,7 @@ msbdf_eval_order (gsl_vector * abscor, g
+       for (i = 0; i < dim; i++)
+         {
+           gsl_vector_set (svec, i, gsl_vector_get (svec, i) * c +
+-                          gsl_vector_get (abscor, i));
++                          gsl_vector_get (abscorscaled, i));
+         }
+ 
+       ordp1est = 1.0 / (pow (bias2 * gsl_blas_dnrm2 (svec) / sqrt (dim)
+@@ -1020,8 +1047,6 @@ msbdf_eval_order (gsl_vector * abscor, g
+ #endif
+     }
+ 
+-  *ordwait = *ord + 2;
+-
+   return GSL_SUCCESS;
+ }
+ 
+@@ -1096,6 +1121,7 @@ msbdf_apply (void *vstate, size_t dim, d
+   size_t *const ordprevbackup = state->ordprevbackup;
+   double *const errlev = state->errlev;
+   gsl_vector *const abscor = state->abscor;
++  gsl_vector *const abscorscaled = state->abscorscaled;
+   gsl_vector *const relcor = state->relcor;
+   gsl_vector *const svec = state->svec;
+   gsl_vector *const tempvec = state->tempvec;
+@@ -1591,13 +1617,16 @@ msbdf_apply (void *vstate, size_t dim, d
+       }
+   }
+ 
+-  /* Scale abscor with errlev for later use in norm calculations */
++  /* Scale abscor with errlev for later use in norm calculations
++     in order evaluation in msbdf_eval_order
++   */
+   {
+     size_t i;
+ 
+     for (i = 0; i < dim; i++)
+       {
+-        gsl_vector_set (abscor, i, gsl_vector_get (abscor, i) / errlev[i]);
++        gsl_vector_set (abscorscaled, i, 
++                        gsl_vector_get (abscor, i) / errlev[i]);
+       }
+   }
+ 
+@@ -1613,27 +1642,28 @@ msbdf_apply (void *vstate, size_t dim, d
+ 
+       for (i = 0; i < dim; i++)
+         {
+-          gsl_vector_set (svec, i, gsl_vector_get (abscor, i));
++          gsl_vector_set (svec, i, gsl_vector_get (abscorscaled, i));
+         }
+     }
+ 
+-  /* Consider and execute order change for next step */
++  /* Consider and execute order change for next step if order is unchanged. */
+ 
+-  if (state->ordwait == 0)
+-    {
+-      msbdf_eval_order (abscor, tempvec, svec, errcoeff, dim, errlev,
+-                        ordm1coeff, ordp1coeff,
+-                        state->ordp1coeffprev, ordp2coeff,
+-                        hprev, h, z, &(state->ord), &(state->ordwait));
+-    }
++  if (state->ordwait == 0) 
++  { 
++    if (ord - ordprev[0] == 0)
++      {
++        msbdf_eval_order (abscorscaled, tempvec, svec, errcoeff, dim, errlev,
++                          ordm1coeff, ordp1coeff,
++                          state->ordp1coeffprev, ordp2coeff,
++                          hprev, h, z, &(state->ord));
+ 
+-  /* Undo scaling of abscor for possible order increase on next step */
+-  {
+-    size_t i;
+-    
+-    for (i = 0; i < dim; i++)
++        state->ordwait = state->ord + 2;
++      }
++    else
+       {
+-        gsl_vector_set (abscor, i, gsl_vector_get (abscor, i) * errlev[i]);
++        /* Postpone order evaluation if order has been modified elsewhere */
++    
++        state->ordwait = 2;
+       }
+   }
+   
+@@ -1701,10 +1731,13 @@ msbdf_reset (void *vstate, size_t dim)
+   state->ordwaitbackup = 2;
+   state->failord = 0;
+   state->failt = GSL_NAN;
++  state->tprev = GSL_NAN;  
+   state->gammaprev = 1.0;
++  state->gammaprevbackup = 1.0;
+   state->nJ = 0;
+   state->nM = 0;
+   state->failcount = 0;
++  state->ordp1coeffprev = 0.0;
+ 
+   DBL_ZERO_MEMSET (state->hprev, MSBDF_MAX_ORD);
+   DBL_ZERO_MEMSET (state->hprevbackup, MSBDF_MAX_ORD);
+diff -up wrk/ode-initval2/odeiv_util.h.wrk wrk/ode-initval2/odeiv_util.h
+diff -up wrk/ode-initval2/rk1imp.c.wrk wrk/ode-initval2/rk1imp.c
+diff -up wrk/ode-initval2/rk2.c.wrk wrk/ode-initval2/rk2.c
+diff -up wrk/ode-initval2/rk2imp.c.wrk wrk/ode-initval2/rk2imp.c
+diff -up wrk/ode-initval2/rk4.c.wrk wrk/ode-initval2/rk4.c
+diff -up wrk/ode-initval2/rk4imp.c.wrk wrk/ode-initval2/rk4imp.c
+--- wrk/ode-initval2/rk4imp.c.wrk	2013-01-29 13:40:22.479035196 +0100
++++ wrk/ode-initval2/rk4imp.c	2013-01-29 13:08:32.000000000 +0100
+@@ -249,7 +249,7 @@ rk4imp_apply (void *vstate, size_t dim,
+   gsl_matrix *A = state->A;
+ 
+   const double b[] = { 0.5, 0.5 };
+-  const double c[] = { (3 - sqrt (3)) / 6, (3 + sqrt (3)) / 6 };
++  const double c[] = { (3.0 - M_SQRT3) / 6.0, (3.0 + M_SQRT3) / 6.0 };
+ 
+   gsl_matrix_set (A, 0, 0, 1.0 / 4);
+   gsl_matrix_set (A, 0, 1, (3 - 2 * sqrt (3)) / 12);
+diff -up wrk/ode-initval2/rk8pd.c.wrk wrk/ode-initval2/rk8pd.c
+diff -up wrk/ode-initval2/rkck.c.wrk wrk/ode-initval2/rkck.c
+diff -up wrk/ode-initval2/rkf45.c.wrk wrk/ode-initval2/rkf45.c
+--- wrk/ode-initval2/rkf45.c.wrk	2013-01-29 13:40:22.464035105 +0100
++++ wrk/ode-initval2/rkf45.c	2013-01-29 13:08:45.000000000 +0100
+@@ -369,7 +369,7 @@ rkf45_free (void *vstate)
+ 
+ static const gsl_odeiv2_step_type rkf45_type = { "rkf45",       /* name */
+   1,                            /* can use dydt_in */
+-  0,                            /* gives exact dydt_out */
++  1,                            /* gives exact dydt_out */
+   &rkf45_alloc,
+   &rkf45_apply,
+   &stepper_set_driver_null,
+diff -up wrk/ode-initval2/rksubs.c.wrk wrk/ode-initval2/rksubs.c
+diff -up wrk/ode-initval2/step.c.wrk wrk/ode-initval2/step.c
+diff -up wrk/ode-initval2/step_utils.c.wrk wrk/ode-initval2/step_utils.c
+diff -up wrk/ode-initval2/test.c.wrk wrk/ode-initval2/test.c
+--- wrk/ode-initval2/test.c.wrk	2013-01-29 13:40:22.487035244 +0100
++++ wrk/ode-initval2/test.c	2013-01-28 10:42:50.000000000 +0100
+@@ -163,7 +163,7 @@ rhs_xsin (double t, const double y[], do
+   static int n = 0, m = 0;
+   extern int nfe;
+   nfe += 1;
+-  
++
+   if (rhs_xsin_reset)
+     {
+       rhs_xsin_reset = 0;
+@@ -1073,6 +1073,7 @@ test_odeiv_stepper (const gsl_odeiv2_ste
+ 
+   {
+     int s = gsl_odeiv2_step_apply (d->s, t, h, y, yerr, 0, 0, sys);
++
+     if (s != GSL_SUCCESS)
+       {
+         gsl_test (s, "test_odeiv_stepper: %s step_apply returned %d", desc,
+@@ -1191,13 +1192,13 @@ test_evolve_system (const gsl_odeiv2_ste
+       if (s != GSL_SUCCESS)
+         {
+           /* check that t and y are unchanged */
+-          gsl_test_abs (t, t_orig, 0.0, "%s, t must be restored on failure",
++          gsl_test_abs (t, t_orig, 0.0, "%s t must be restored on failure",
+                         gsl_odeiv2_step_name (d->s));
+ 
+           for (i = 0; i < sys->dimension; i++)
+             {
+               gsl_test_abs (y[i], y_orig[i], 0.0,
+-                            "%s, y must be restored on failure",
++                            "%s y must be restored on failure",
+                             gsl_odeiv2_step_name (d->s), desc, i);
+             }
+ 
+@@ -1259,11 +1260,11 @@ sys_driver (const gsl_odeiv2_step_type *
+   gsl_odeiv2_driver *d =
+     gsl_odeiv2_driver_alloc_standard_new (sys, T, h, epsabs, epsrel,
+                                           1.0, 0.0);
+-  
++
+   extern int nfe, nje;
+   nfe = 0;
+   nje = 0;
+-  
++
+   while (t < t1)
+     {
+       s = gsl_odeiv2_evolve_apply (d->e, d->c, d->s, sys, &t, t1, &h, y);
+@@ -1570,7 +1571,8 @@ test_user_break (const gsl_odeiv2_step_t
+ 
+   int s = gsl_odeiv2_driver_apply (d, &t, t1, y);
+ 
+-  gsl_test ((s - GSL_EBADFUNC), "test_user_break returned %d", s);
++  gsl_test ((s - GSL_EBADFUNC), "%s test_user_break returned %d",
++            gsl_odeiv2_step_name (d->s), s);
+ 
+   gsl_odeiv2_driver_free (d);
+ }
+@@ -1938,17 +1940,15 @@ test_extreme_problems (void)
+   const size_t sd[] = { 4, 3, NRINGMOD };
+ 
+   /* Integration interval for problems */
++  
+   const double start[CONST_EXTREME_NPROB] = { 0.0 };
+-  const double end[CONST_EXTREME_NPROB] = { 1e11, 1e11, 1e-3 };
++  const double end[CONST_EXTREME_NPROB] = { 1e11, 1e11, 1e-5 };
+ 
+   const double epsabs[CONST_EXTREME_NPROB] =
+-    { 1e1 * GSL_DBL_MIN, 1e1 * GSL_DBL_MIN, 1e-7 };
+-  const double epsrel[CONST_EXTREME_NPROB] = { 1e-12, 1e-12, 1e-7 };
++    { 1e1 * GSL_DBL_MIN, 1e1 * GSL_DBL_MIN, 1e-12 };
++  const double epsrel[CONST_EXTREME_NPROB] = { 1e-12, 1e-12, 1e-12 };
+   const double initstepsize[CONST_EXTREME_NPROB] = { 1e-5, 1e-5, 1e-10 };
+ 
+-  /* Problem specific tolerance modification coefficients */
+-  const double pec[CONST_EXTREME_NPROB] = { 1.0, 1.0, 1e1 };
+-
+   /* Steppers */
+ 
+   steppers[0] = gsl_odeiv2_step_bsimp;
+@@ -2024,7 +2024,7 @@ test_extreme_problems (void)
+             const double val1 = y[k];
+             const double val2 = y[sd[p] * i + k];
+             gsl_test_rel (val1, val2,
+-                          (pec[p] * GSL_MAX (err_target[0], err_target[i])),
++                          (GSL_MAX (err_target[0], err_target[i])),
+                           "%s/%s %s [%d]",
+                           steppers[0]->name, steppers[i]->name,
+                           probname[p], k);
+@@ -2033,57 +2033,81 @@ test_extreme_problems (void)
+ }
+ 
+ void
+-test_driver (void)
++test_driver (const gsl_odeiv2_step_type * T)
+ {
+   /* Tests for gsl_odeiv2_driver object */
++
+   int s;
+   const double tol = 1e-8;
+   const double hmax = 1e-2;
+ 
+   double y[] = { 1.0, 0.0 };
+   double t = 0.0;
++  const double tinit = 0.0;
+   const double t1 = 8.25;
+   const double t2 = 100;
+   const double t3 = -2.5;
+   const size_t minsteps = ceil (t1 / hmax);
+   const size_t maxsteps = 20;
+   const double hmin = 1e-10;
+-  const size_t nfsteps = 100;
+-  
+-  gsl_odeiv2_driver *d =
+-    gsl_odeiv2_driver_alloc_y_new (&rhs_func_sin, gsl_odeiv2_step_rkf45,
+-                                   1e-3, tol, tol);
++
++  const unsigned long int nfsteps = 100000;
++  const double hfixed = 0.000025;
++
++  gsl_odeiv2_driver *d = gsl_odeiv2_driver_alloc_y_new (&rhs_func_sin, T,
++                                                        1e-3, tol, tol);
+   gsl_odeiv2_driver_set_hmax (d, hmax);
+ 
+   s = gsl_odeiv2_driver_apply (d, &t, t1, y);
+ 
+   if (s != GSL_SUCCESS)
+     {
+-      gsl_test (s, "test_driver apply returned %d", s);
++      gsl_test (s, "%s test_driver apply returned %d",
++                gsl_odeiv2_step_name (d->s), s);
+     }
+ 
+   /* Test that result is correct */
+ 
+-  gsl_test_rel (y[0], cos (t1), d->n * tol, "test_driver y0 ");
+-  gsl_test_rel (y[1], sin (t1), d->n * tol, "test_driver y1 ");
++  gsl_test_rel (y[0], cos (t1), d->n * tol, "%s test_driver y0",
++                gsl_odeiv2_step_name (d->s));
++  gsl_test_rel (y[1], sin (t1), d->n * tol, "%s test_driver y1",
++                gsl_odeiv2_step_name (d->s));
+ 
+   /* Test that maximum step length is obeyed */
+ 
+   if (d->n < minsteps)
+     {
+-      gsl_test (1, "test_driver steps %d < minsteps %d \n", d->n, minsteps);
++      gsl_test (1, "%s test_driver steps %d < minsteps %d \n",
++                gsl_odeiv2_step_name (d->s), d->n, minsteps);
+     }
+   else
+     {
+-      gsl_test (0, "test_driver max step length test");
++      gsl_test (0, "%s test_driver max step length test",
++                gsl_odeiv2_step_name (d->s));
+     }
+ 
++  /* Test changing integration direction from forward to backward */
++
++  gsl_odeiv2_driver_reset_hstart (d, -1e-3);
++
++  s = gsl_odeiv2_driver_apply (d, &t, tinit, y);
++
++  if (s != GSL_SUCCESS)
++    {
++      gsl_test (s, "%s test_driver apply returned %d",
++                gsl_odeiv2_step_name (d->s), s);
++    }
++
++  gsl_test_rel (y[0], cos (tinit), d->n * tol,
++                "%s test_driver y0", gsl_odeiv2_step_name (d->s));
++  gsl_test_rel (y[1], sin (tinit), d->n * tol,
++                "%s test_driver y1", gsl_odeiv2_step_name (d->s));
++
+   gsl_odeiv2_driver_free (d);
+ 
+   /* Test that maximum number of steps is obeyed */
+ 
+-  d = gsl_odeiv2_driver_alloc_y_new (&rhs_func_sin, gsl_odeiv2_step_rkf45,
+-                                     1e-3, tol, tol);
++  d = gsl_odeiv2_driver_alloc_y_new (&rhs_func_sin, T, 1e-3, tol, tol);
+   gsl_odeiv2_driver_set_hmax (d, hmax);
+   gsl_odeiv2_driver_set_nmax (d, maxsteps);
+ 
+@@ -2091,19 +2115,20 @@ test_driver (void)
+ 
+   if (d->n != maxsteps + 1)
+     {
+-      gsl_test (1, "test_driver steps %d, expected %d", d->n, maxsteps + 1);
++      gsl_test (1, "%s test_driver steps %d, expected %d",
++                gsl_odeiv2_step_name (d->s), d->n, maxsteps + 1);
+     }
+   else
+     {
+-      gsl_test (0, "test_driver max steps test");
++      gsl_test (0, "%s test_driver max steps test",
++                gsl_odeiv2_step_name (d->s));
+     }
+ 
+   gsl_odeiv2_driver_free (d);
+ 
+   /* Test that minimum step length is obeyed */
+ 
+-  d = gsl_odeiv2_driver_alloc_y_new (&rhs_func_broken, gsl_odeiv2_step_rk8pd,
+-                                     1e-3, tol, tol);
++  d = gsl_odeiv2_driver_alloc_y_new (&rhs_func_broken, T, 1e-3, tol, tol);
+ 
+   gsl_odeiv2_driver_set_hmin (d, hmin);
+   y[0] = 0.0;
+@@ -2113,77 +2138,87 @@ test_driver (void)
+ 
+   if (s != GSL_ENOPROG)
+     {
+-      gsl_test (1, "test_driver min step test returned %d", s);
++      gsl_test (1, "%s test_driver min step test returned %d",
++                gsl_odeiv2_step_name (d->s), s);
+     }
+   else
+     {
+-      gsl_test (0, "test_driver min step test");
++      gsl_test (0, "%s test_driver min step test",
++                gsl_odeiv2_step_name (d->s));
+     }
+ 
+   gsl_odeiv2_driver_free (d);
+ 
+   /* Test negative integration direction */
+ 
+-  d = gsl_odeiv2_driver_alloc_y_new (&rhs_func_sin, gsl_odeiv2_step_rkf45,
+-                                     -1e-3, tol, tol);
++  d = gsl_odeiv2_driver_alloc_y_new (&rhs_func_sin, T, -1e-3, tol, tol);
+ 
+   y[0] = 1.0;
+   y[1] = 0.0;
+   t = 2.5;
+ 
+-  gsl_odeiv2_driver_set_nmax (d, 1000);
+   s = gsl_odeiv2_driver_apply (d, &t, t3, y);
+ 
+   {
+-    const double tol = 1e-6;
++    const double tol = 1e-3;
+     const double test = fabs (t - t3);
+     const double val = fabs (sin (-5.0) - y[1]);
+ 
+     if (test > GSL_DBL_EPSILON)
+       {
+         gsl_test (1,
+-                  "test_driver negative dir diff %e, expected less than %e",
+-                  test, GSL_DBL_EPSILON);
++                  "%s test_driver negative dir diff %e, expected less than %e",
++                  gsl_odeiv2_step_name (d->s), test, GSL_DBL_EPSILON);
+       }
+     else if (val > tol)
+       {
+-        gsl_test (1, "test_driver negative dir val %e, expected less than %e",
+-                  val, tol);
++        gsl_test (1,
++                  "%s test_driver negative dir val %e, expected less than %e",
++                  gsl_odeiv2_step_name (d->s), val, tol);
+       }
+     else
+       {
+-        gsl_test (s, "test_driver negative direction test");
++        gsl_test (s, "%s test_driver negative direction test",
++                  gsl_odeiv2_step_name (d->s));
+       }
+   }
+ 
+   /* Test driver_apply_fixed_step */
+ 
+-  s = gsl_odeiv2_driver_apply_fixed_step (d, &t, 0.025, nfsteps, y);
++  gsl_odeiv2_driver_reset_hstart (d, 1e-3);
++  s = gsl_odeiv2_driver_apply_fixed_step (d, &t, hfixed, nfsteps, y);
++
++  if (s != GSL_SUCCESS)
++    {
++      gsl_test (s, "%s test_driver apply_fixed_step returned %d",
++                gsl_odeiv2_step_name (d->s), s);
++    }
+ 
+   {
+-    const double tol = 1e-6;
++    const double tol = 1e-3;
+     const double val = fabs (sin (-2.5) - y[1]);
+ 
+     if (fabs (t) > nfsteps * GSL_DBL_EPSILON)
+       {
+         gsl_test (1,
+-                  "test_driver apply_fixed_step diff %e, expected less than %e",
+-                  fabs (t), nfsteps * GSL_DBL_EPSILON);
++                  "%s test_driver apply_fixed_step t %e, expected less than %e",
++                  gsl_odeiv2_step_name (d->s), fabs (t),
++                  nfsteps * GSL_DBL_EPSILON);
+       }
+     else if (val > tol)
+       {
+         gsl_test (1,
+-                  "test_driver apply_fixed_step val %e, expected less than %e",
+-                  val, tol);
++                  "%s test_driver apply_fixed_step val %e, expected less than %e",
++                  gsl_odeiv2_step_name (d->s), val, tol);
+       }
+     else
+       {
+-        gsl_test (s, "test_driver apply_fixed_step test");
++        gsl_test (s, "%s test_driver apply_fixed_step test",
++                  gsl_odeiv2_step_name (d->s));
+       }
+   }
+ 
+   gsl_odeiv2_driver_free (d);
+-
+ }
+ 
+ void
+@@ -2407,7 +2442,7 @@ main (void)
+ {
+ 
+   /* Benchmark routine to compare stepper performance */
+-  /* benchmark_precision(); return 0;*/
++  /* benchmark_precision(); return 0; */
+ 
+   /* Test single problem, for debugging purposes */
+   /* test_evolve_temp (gsl_odeiv2_step_msadams, 1e-3, 1e-8); return 0; */
+@@ -2453,10 +2488,6 @@ main (void)
+   for (i = 0; p[i].type != 0; i++)
+     {
+       test_stepper (p[i].type);
+-    }
+-
+-  for (i = 0; p[i].type != 0; i++)
+-    {
+       test_evolve_linear (p[i].type, p[i].h, 1e-10);
+       test_evolve_exp (p[i].type, p[i].h, 1e-5);
+       test_evolve_sin (p[i].type, p[i].h, 1e-8);
+@@ -2468,6 +2499,7 @@ main (void)
+       test_broken (p[i].type, p[i].h, 1e-8);
+       test_stepsize_fail (p[i].type, p[i].h);
+       test_user_break (p[i].type, p[i].h);
++      test_driver (p[i].type);
+     }
+ 
+   /* Derivative test for explicit steppers */
+@@ -2493,14 +2525,12 @@ main (void)
+     }
+ 
+   /* Special tests */
+-  
++
+   test_nonstiff_problems ();
+ 
+   test_stiff_problems ();
+ 
+   test_extreme_problems ();
+ 
+-  test_driver ();
+-  
+   exit (gsl_test_summary ());
+ }
+diff -up wrk/ode-initval2/TODO.wrk wrk/ode-initval2/TODO
