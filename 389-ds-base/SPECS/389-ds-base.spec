@@ -11,7 +11,7 @@
 %global use_Socket6 0
 %global use_nunc_stans 1
 
-%if %{_arch} != "s390x" && %{_arch} != "s390"
+%ifnarch s390 s390x %{arm}
 %global use_tcmalloc 1
 %else
 %global use_tcmalloc 0
@@ -608,6 +608,9 @@ fi
 %{_sysconfdir}/%{pkgname}/dirsrvtests
 
 %changelog
+* Thu Aug 31 2017 Fabian Arrotin <arrfab@centos.org> - - 1.3.6.1-26
+- Disabled tcmalloc for armhfp (jacco@redsleeve.org)
+
 * Tue Jan 16 2018 Mark Reynolds <mreynolds@redhat.com> - 1.3.6.1-26
 - Bump version to 1.3.6.1-25
 - Resolves: Bug 1534430 - crash in slapi_filter_sprintf 
