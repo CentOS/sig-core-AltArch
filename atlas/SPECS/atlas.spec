@@ -298,7 +298,7 @@ ix86 architecture.
 #beware - arch constant can change between releases
 %define arch_option -A 46 
 %define threads_option -t 2
-%global armflags -mfpu=neon -mfloat-abi=hard
+%global armflags -DATL_ARM_HARDFP=1
 %global mode %{nil}
 %else
 %global mode -b %{__isa_bits}
@@ -341,6 +341,14 @@ cp %{SOURCE12} CONFIG/ARCHS/
 cp %{SOURCE14} CONFIG/ARCHS/
 #cp %{SOURCE8} CONFIG/ARCHS/
 #cp %{SOURCE9} CONFIG/ARCHS/
+
+%ifarch %{arm}
+# Set arm flags in atlcomp.txt
+sed -i -e 's,-mfpu=vfpv3,-mfpu=neon,' CONFIG/src/atlcomp.txt
+sed -i -e 's,-mfloat-abi=softfp,-mfloat-abi=hard,' CONFIG/src/atlcomp.txt
+# Some extra arm flags not needed
+sed -i -e 's,-mfpu=vfpv3,,' tune/blas/gemm/CASES/*.flg
+%endif
 
 %ifarch ppc ppc64
 %patch99 -p2
@@ -797,6 +805,9 @@ fi
 %endif
 
 %changelog
+* Wed Aug 09 2017 Fabian Arrotin <arrfab@centos.org> - 3.10.1-12
+- Changed armflags to be able to build on armhfp/armv7hl
+
 * Wed Mar 15 2017 Jakub Martisko <jamartis@redhat.com> - 3.10.1-12
 - cleanup: merge the application of ppc patches from previous commit
   into single block
