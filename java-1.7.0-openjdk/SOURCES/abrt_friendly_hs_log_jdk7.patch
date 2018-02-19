@@ -1,0 +1,35 @@
+--- openjdk/hotspot/src/share/vm/utilities/vmError.cpp	2012-02-02 16:17:24.476664897 +0100
++++ openjdk/hotspot/src/share/vm/utilities/vmError.cpp	2012-02-02 16:17:24.476664897 +0100
+@@ -929,6 +929,7 @@
+         }
+       }
+ 
++      /*
+       if (fd == -1) {
+         const char *cwd = os::get_current_directory(buffer, sizeof(buffer));
+         size_t len = strlen(cwd);
+@@ -938,6 +939,24 @@
+                      os::file_separator(), os::current_process_id());
+         fd = open(buffer, O_RDWR | O_CREAT | O_EXCL, 0666);
+       }
++      */
++
++      if (fd == -1) {
++        const char * tmpdir = os::get_temp_directory();
++        // try temp directory if it exists.
++        if (tmpdir != NULL && tmpdir[0] != '\0') {
++          jio_snprintf(buffer, sizeof(buffer), "%s%sjvm-%u",
++                       tmpdir, os::file_separator(), os::current_process_id());
++          // if mkdir() failed, hs_err will be created in temporary directory
++          if (!mkdir(buffer, 0700)) { // only read+execute flags are needed
++                                      // but we need to write into the directory too
++            jio_snprintf(buffer, sizeof(buffer), "%s%sjvm-%u%shs_error.log",
++                           tmpdir, os::file_separator(), os::current_process_id(),
++                           os::file_separator());
++            fd = open(buffer, O_WRONLY | O_CREAT | O_EXCL, 0444); // read-only file 
++          }
++        }
++      }
+ 
+       if (fd == -1) {
+         const char * tmpdir = os::get_temp_directory();

@@ -1,0 +1,206 @@
+diff --git a/src/share/classes/sun/security/pkcs11/P11Signature.java b/src/share/classes/sun/security/pkcs11/P11Signature.java
+--- openjdk/jdk/src/share/classes/sun/security/pkcs11/P11Signature.java
++++ openjdk/jdk/src/share/classes/sun/security/pkcs11/P11Signature.java
+@@ -87,8 +87,8 @@
+     // name of the key algorithm, currently either RSA or DSA
+     private final String keyAlgorithm;
+ 
+-    // mechanism id
+-    private final long mechanism;
++    // mechanism
++    private final CK_MECHANISM mechanism;
+ 
+     // digest algorithm OID, if we encode RSA signature ourselves
+     private final ObjectIdentifier digestOID;
+@@ -138,11 +138,62 @@
+         super();
+         this.token = token;
+         this.algorithm = algorithm;
+-        this.mechanism = mechanism;
++        CK_MECHANISM ckMechanism = new CK_MECHANISM(mechanism);
++        final CK_RSA_PKCS_PSS_PARAMS mechParams;
+         byte[] buffer = null;
+         ObjectIdentifier digestOID = null;
+         MessageDigest md = null;
+         switch ((int)mechanism) {
++        case (int)CKM_SHA1_RSA_PKCS_PSS:
++            mechParams = new CK_RSA_PKCS_PSS_PARAMS();
++            mechParams.hashAlg = CKM_SHA_1;
++            mechParams.mgf = CKG_MGF1_SHA1;
++            mechParams.sLen = 20;
++            ckMechanism = new CK_MECHANISM(mechanism, mechParams);
++            this.keyAlgorithm = "RSA";
++            this.type = T_UPDATE;
++            buffer = new byte[1];
++            break;
++        case (int)CKM_SHA224_RSA_PKCS_PSS:
++            mechParams = new CK_RSA_PKCS_PSS_PARAMS();
++            mechParams.hashAlg = CKM_SHA224;
++            mechParams.mgf = CKG_MGF1_SHA224;
++            mechParams.sLen = 28;
++            ckMechanism = new CK_MECHANISM(mechanism, mechParams);
++            this.keyAlgorithm = "RSA";
++            this.type = T_UPDATE;
++            buffer = new byte[1];
++            break;
++        case (int)CKM_SHA256_RSA_PKCS_PSS:
++            mechParams = new CK_RSA_PKCS_PSS_PARAMS();
++            mechParams.hashAlg = CKM_SHA256;
++            mechParams.mgf = CKG_MGF1_SHA256;
++            mechParams.sLen = 32;
++            ckMechanism = new CK_MECHANISM(mechanism, mechParams);
++            this.keyAlgorithm = "RSA";
++            this.type = T_UPDATE;
++            buffer = new byte[1];
++            break;
++        case (int)CKM_SHA384_RSA_PKCS_PSS:
++            mechParams = new CK_RSA_PKCS_PSS_PARAMS();
++            mechParams.hashAlg = CKM_SHA384;
++            mechParams.mgf = CKG_MGF1_SHA384;
++            mechParams.sLen = 48;
++            ckMechanism = new CK_MECHANISM(mechanism, mechParams);
++            this.keyAlgorithm = "RSA";
++            this.type = T_UPDATE;
++            buffer = new byte[1];
++            break;
++        case (int)CKM_SHA512_RSA_PKCS_PSS:
++            mechParams = new CK_RSA_PKCS_PSS_PARAMS();
++            mechParams.hashAlg = CKM_SHA512;
++            mechParams.mgf = CKG_MGF1_SHA512;
++            mechParams.sLen = 64;
++            ckMechanism = new CK_MECHANISM(mechanism, mechParams);
++            this.keyAlgorithm = "RSA";
++            this.type = T_UPDATE;
++            buffer = new byte[1];
++            break;
+         case (int)CKM_MD2_RSA_PKCS:
+         case (int)CKM_MD5_RSA_PKCS:
+         case (int)CKM_SHA1_RSA_PKCS:
+@@ -232,6 +283,7 @@
+         default:
+             throw new ProviderException("Unknown mechanism: " + mechanism);
+         }
++        this.mechanism = ckMechanism;
+         this.buffer = buffer;
+         this.digestOID = digestOID;
+         this.md = md;
+@@ -309,10 +361,10 @@
+             }
+             if (mode == M_SIGN) {
+                 token.p11.C_SignInit(session.id(),
+-                        new CK_MECHANISM(mechanism), p11Key.keyID);
++                        mechanism, p11Key.keyID);
+             } else {
+                 token.p11.C_VerifyInit(session.id(),
+-                        new CK_MECHANISM(mechanism), p11Key.keyID);
++                        mechanism, p11Key.keyID);
+             }
+             initialized = true;
+         } catch (PKCS11Exception e) {
+@@ -350,7 +402,8 @@
+         } else if (algorithm.equals("SHA512withRSA")) {
+             encodedLength = 83;
+         } else {
+-            throw new ProviderException("Unknown signature algo: " + algorithm);
++            encodedLength = 0;
++            //throw new ProviderException("Unknown signature algo: " + algorithm);
+         }
+         if (encodedLength > maxDataSize) {
+             throw new InvalidKeyException
+@@ -523,7 +576,7 @@
+                 if (type == T_DIGEST) {
+                     digest = md.digest();
+                 } else { // T_RAW
+-                    if (mechanism == CKM_DSA) {
++                    if (mechanism.mechanism == CKM_DSA) {
+                         if (bytesProcessed != buffer.length) {
+                             throw new SignatureException
+                             ("Data for RawDSA must be exactly 20 bytes long");
+@@ -543,7 +596,7 @@
+                     signature = token.p11.C_Sign(session.id(), digest);
+                 } else { // RSA
+                     byte[] data = encodeSignature(digest);
+-                    if (mechanism == CKM_RSA_X_509) {
++                    if (mechanism.mechanism == CKM_RSA_X_509) {
+                         data = pkcs1Pad(data);
+                     }
+                     signature = token.p11.C_Sign(session.id(), data);
+@@ -578,7 +631,7 @@
+                 if (type == T_DIGEST) {
+                     digest = md.digest();
+                 } else { // T_RAW
+-                    if (mechanism == CKM_DSA) {
++                    if (mechanism.mechanism == CKM_DSA) {
+                         if (bytesProcessed != buffer.length) {
+                             throw new SignatureException
+                             ("Data for RawDSA must be exactly 20 bytes long");
+@@ -598,7 +651,7 @@
+                     token.p11.C_Verify(session.id(), digest, signature);
+                 } else { // RSA
+                     byte[] data = encodeSignature(digest);
+-                    if (mechanism == CKM_RSA_X_509) {
++                    if (mechanism.mechanism == CKM_RSA_X_509) {
+                         data = pkcs1Pad(data);
+                     }
+                     token.p11.C_Verify(session.id(), data, signature);
+diff --git a/src/share/classes/sun/security/pkcs11/SunPKCS11.java b/src/share/classes/sun/security/pkcs11/SunPKCS11.java
+--- openjdk/jdk/src/share/classes/sun/security/pkcs11/SunPKCS11.java
++++ openjdk/jdk/src/share/classes/sun/security/pkcs11/SunPKCS11.java
+@@ -729,6 +729,16 @@
+         d(SIG, "SHA512withRSA", P11Signature,
+                 s("1.2.840.113549.1.1.13", "OID.1.2.840.113549.1.1.13"),
+                 m(CKM_SHA512_RSA_PKCS, CKM_RSA_PKCS, CKM_RSA_X_509));
++        d(SIG, "SHA1withRSAandMGF1", P11Signature,
++                m(CKM_SHA1_RSA_PKCS_PSS));
++        d(SIG, "SHA224withRSAandMGF1", P11Signature,
++                m(CKM_SHA224_RSA_PKCS_PSS));
++        d(SIG, "SHA256withRSAandMGF1", P11Signature,
++                m(CKM_SHA256_RSA_PKCS_PSS));
++        d(SIG, "SHA384withRSAandMGF1", P11Signature,
++                m(CKM_SHA384_RSA_PKCS_PSS));
++        d(SIG, "SHA512withRSAandMGF1", P11Signature,
++                m(CKM_SHA512_RSA_PKCS_PSS));
+ 
+         /*
+          * TLS 1.2 uses a different hash algorithm than 1.0/1.1 for the
+diff --git a/src/share/classes/sun/security/pkcs11/wrapper/CK_MECHANISM.java b/src/share/classes/sun/security/pkcs11/wrapper/CK_MECHANISM.java
+--- openjdk/jdk/src/share/classes/sun/security/pkcs11/wrapper/CK_MECHANISM.java
++++ openjdk/jdk/src/share/classes/sun/security/pkcs11/wrapper/CK_MECHANISM.java
+@@ -112,6 +112,10 @@
+         init(mechanism, params);
+     }
+ 
++    public CK_MECHANISM(long mechanism, CK_RSA_PKCS_PSS_PARAMS params) {
++        init(mechanism, params);
++    }
++
+     public CK_MECHANISM(long mechanism, CK_SSL3_KEY_MAT_PARAMS params) {
+         init(mechanism, params);
+     }
+diff --git a/src/share/classes/sun/security/pkcs11/wrapper/PKCS11Constants.java b/src/share/classes/sun/security/pkcs11/wrapper/PKCS11Constants.java
+--- openjdk/jdk/src/share/classes/sun/security/pkcs11/wrapper/PKCS11Constants.java
++++ openjdk/jdk/src/share/classes/sun/security/pkcs11/wrapper/PKCS11Constants.java
+@@ -458,6 +458,12 @@
+     public static final long  CKM_SHA384_RSA_PKCS            = 0x00000041L;
+     public static final long  CKM_SHA512_RSA_PKCS            = 0x00000042L;
+ 
++    // v2.30
++    public static final long  CKM_SHA256_RSA_PKCS_PSS        = 0x00000043L;
++    public static final long  CKM_SHA384_RSA_PKCS_PSS        = 0x00000044L;
++    public static final long  CKM_SHA512_RSA_PKCS_PSS        = 0x00000045L;
++
++
+     public static final long  CKM_RC2_KEY_GEN                = 0x00000100L;
+     public static final long  CKM_RC2_ECB                    = 0x00000101L;
+     public static final long  CKM_RC2_CBC                    = 0x00000102L;
+@@ -911,6 +917,10 @@
+ 
+     /* The following MGFs are defined */
+     public static final long  CKG_MGF1_SHA1       =  0x00000001L;
++    public static final long  CKG_MGF1_SHA256     =  0x00000002L;
++    public static final long  CKG_MGF1_SHA384     =  0x00000003L;
++    public static final long  CKG_MGF1_SHA512     =  0x00000004L;
++
+     // new for v2.20 amendment 3
+     public static final long  CKG_MGF1_SHA224     = 0x00000005L;
+ 
