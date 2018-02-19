@@ -60,7 +60,7 @@ Patch26: bz1484264-3-totemcrypto-Use-different-method-to-import-key.patch
 Patch27: bz1484264-4-totemcrypto-Fix-compiler-warning.patch
 
 %if 0%{?rhel}
-ExclusiveArch: i686 x86_64 s390x ppc64le
+ExclusiveArch: i686 x86_64 s390x ppc64le armv7hl
 %endif
 
 # Runtime bits
@@ -574,6 +574,9 @@ fi
 %endif
 
 %changelog
+* Wed Aug 09 2017 Fabian Arrotin <arrfab@centos.org> 2.4.0-9
+- Added armhfp to supported arches (for centos userland)
+
 * Thu Aug 24 2017 Jan Friesse <jfriesse@redhat.com> 2.4.0-9.2
 - Resolves: rhbz#1484264
 
