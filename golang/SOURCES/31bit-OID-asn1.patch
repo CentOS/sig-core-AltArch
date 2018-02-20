@@ -1,0 +1,83 @@
+From 94aba76639cf4d5e30975d846bb0368db8202269 Mon Sep 17 00:00:00 2001
+From: Monis Khan <mkhan@redhat.com>
+Date: Wed, 12 Apr 2017 16:00:58 -0400
+Subject: [PATCH] encoding/asn1: support 31 bit identifiers with OID
+
+The current implementation uses a max of 28 bits when decoding an
+ObjectIdentifier.  This change makes it so that an int64 is used to
+accumulate up to 35 bits.  If the resulting data would not overflow
+an int32, it is used as an int.  Thus up to 31 bits may be used to
+represent each subidentifier of an ObjectIdentifier.
+
+Fixes #19933
+
+Change-Id: I95d74b64b24cdb1339ff13421055bce61c80243c
+Reviewed-on: https://go-review.googlesource.com/40436
+Reviewed-by: Adam Langley <agl@golang.org>
+Run-TryBot: Adam Langley <agl@golang.org>
+---
+ src/encoding/asn1/asn1.go      | 15 ++++++++++++---
+ src/encoding/asn1/asn1_test.go |  3 +++
+ 2 files changed, 15 insertions(+), 3 deletions(-)
+
+diff --git a/src/encoding/asn1/asn1.go b/src/encoding/asn1/asn1.go
+index c2c0ee420ac..65f018d0148 100644
+--- a/src/encoding/asn1/asn1.go
++++ b/src/encoding/asn1/asn1.go
+@@ -22,6 +22,7 @@ package asn1
+ import (
+ 	"errors"
+ 	"fmt"
++	"math"
+ 	"math/big"
+ 	"reflect"
+ 	"strconv"
+@@ -293,16 +294,24 @@ type Flag bool
+ // given byte slice. It returns the value and the new offset.
+ func parseBase128Int(bytes []byte, initOffset int) (ret, offset int, err error) {
+ 	offset = initOffset
++	var ret64 int64
+ 	for shifted := 0; offset < len(bytes); shifted++ {
+-		if shifted == 4 {
++		// 5 * 7 bits per byte == 35 bits of data
++		// Thus the representation is either non-minimal or too large for an int32
++		if shifted == 5 {
+ 			err = StructuralError{"base 128 integer too large"}
+ 			return
+ 		}
+-		ret <<= 7
++		ret64 <<= 7
+ 		b := bytes[offset]
+-		ret |= int(b & 0x7f)
++		ret64 |= int64(b & 0x7f)
+ 		offset++
+ 		if b&0x80 == 0 {
++			ret = int(ret64)
++			// Ensure that the returned value fits in an int on all platforms
++			if ret64 > math.MaxInt32 {
++				err = StructuralError{"base 128 integer too large"}
++			}
+ 			return
+ 		}
+ 	}
+diff --git a/src/encoding/asn1/asn1_test.go b/src/encoding/asn1/asn1_test.go
+index 9976656df89..2dd799f2362 100644
+--- a/src/encoding/asn1/asn1_test.go
++++ b/src/encoding/asn1/asn1_test.go
+@@ -7,6 +7,7 @@ package asn1
+ import (
+ 	"bytes"
+ 	"fmt"
++	"math"
+ 	"math/big"
+ 	"reflect"
+ 	"strings"
+@@ -386,6 +387,8 @@ var tagAndLengthData = []tagAndLengthTest{
+ 	{[]byte{0xa0, 0x81, 0x7f}, false, tagAndLength{}},
+ 	// Tag numbers which would overflow int32 are rejected. (The value below is 2^31.)
+ 	{[]byte{0x1f, 0x88, 0x80, 0x80, 0x80, 0x00, 0x00}, false, tagAndLength{}},
++	// Tag numbers that fit in an int32 are valid. (The value below is 2^31 - 1.)
++	{[]byte{0x1f, 0x87, 0xFF, 0xFF, 0xFF, 0x7F, 0x00}, true, tagAndLength{tag: math.MaxInt32}},
+ 	// Long tag number form may not be used for tags that fit in short form.
+ 	{[]byte{0x1f, 0x1e, 0x00}, false, tagAndLength{}},
+ }
