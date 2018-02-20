@@ -25,7 +25,7 @@
 # Define GOROOT macros
 %global goroot          /usr/lib/%{name}
 %global gopath          %{_datadir}/gocode
-%global golang_arches   x86_64 aarch64 ppc64le s390x
+%global golang_arches   x86_64 aarch64 ppc64le s390x %{arm}
 
 # Golang build options.
 
@@ -66,6 +66,10 @@
 
 %ifarch x86_64
 %global gohostarch  amd64
+%endif
+
+%ifarch %{arm}
+%global gohostarch  arm
 %endif
 
 %ifarch aarch64
@@ -474,6 +478,9 @@ fi
 %endif
 
 %changelog
+* Tue Jan 30 2018 Fabian Arrotin <arrfab@centos.org> - 1.8.3-1
+- added armv7hl in %{golang_arches}
+
 * Wed May 31 2017 Jakub Čajka <jcajka@redhat.com> - 1.8.3-1
 - bump to 1.8.3
 - fix CVE-2017-8932
