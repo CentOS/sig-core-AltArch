@@ -1,0 +1,131 @@
+From 36384816c56d666bbf3492ddcc531bf4c4a38674 Mon Sep 17 00:00:00 2001
+From: Nageswara R Sastry <rnsastry@linux.vnet.ibm.com>
+Date: Thu, 23 May 2013 09:14:10 -0400
+Subject: [PATCH 03/03] Subject: [PATCH] pyparted: export ped_disk_new
+ functionality
+
+Fixed Block Access (FBA) DASDs are mainframe-specific disk devices
+which are layed out as a sequence of 512-byte sectors. In contrast
+to ECKD DASDs, these disks do not require formatting and resemble
+the LBA layout of non-mainframe disks. Despite this resemblance,
+the Linux kernel applies special handling during partition detection
+for FBA DASDs, resulting in a single, immutable partition being
+reported.
+
+While actual FBA DASD hardware is no longer available, the z/VM
+hypervisor can simulate FBA DASD disks, backed by either ECKD or
+SCSI devices.
+
+This patch adds support for FBA DASD partitions and successful
+installation by Anaconda.
+
+Signed-off-by: Nageswara R Sastry <rnsastry@linux.vnet.ibm.com>
+---
+ include/pydisk.h       |  1 +
+ src/_pedmodule.c       |  7 +++++++
+ src/parted/__init__.py |  9 +++++++++
+ src/pydisk.c           | 32 ++++++++++++++++++++++++++++++++
+ 4 files changed, 49 insertions(+)
+
+diff --git a/include/pydisk.h b/include/pydisk.h
+index c0bf92e..a2bcc4f 100644
+--- a/include/pydisk.h
++++ b/include/pydisk.h
+@@ -152,6 +152,7 @@ PyObject *py_ped_disk_get_partition(PyObject *, PyObject *);
+ PyObject *py_ped_disk_get_partition_by_sector(PyObject *, PyObject *);
+ PyObject *py_ped_disk_extended_partition(PyObject *, PyObject *);
+ PyObject *py_ped_disk_new_fresh(PyObject *, PyObject *);
++PyObject *py_ped_disk_new(PyObject *, PyObject *);
+ 
+ #endif /* PYDISK_H_INCLUDED */
+ 
+diff --git a/src/_pedmodule.c b/src/_pedmodule.c
+index add0e8c..efdf831 100644
+--- a/src/_pedmodule.c
++++ b/src/_pedmodule.c
+@@ -162,6 +162,11 @@ PyDoc_STRVAR(disk_new_fresh_doc,
+ "will have to use the commit_to_dev() method to write the new label to\n"
+ "the disk.");
+ 
++PyDoc_STRVAR(disk_new_doc,
++"disk_new(Device) -> Disk\n\n"
++"Given the Device, create a new Disk object. And probe, read the details of\n"
++"the disk.");
++
+ PyDoc_STRVAR(disk_flag_get_name_doc,
+ "disk_flag_get_name(integer) -> string\n\n"
+ "Return a name for a disk flag constant.  If an invalid flag is provided,\n"
+@@ -252,6 +257,8 @@ static struct PyMethodDef PyPedModuleMethods[] = {
+                             METH_VARARGS, partition_flag_next_doc},
+     {"disk_new_fresh", (PyCFunction) py_ped_disk_new_fresh,
+                        METH_VARARGS, disk_new_fresh_doc},
++    {"disk_new", (PyCFunction) py_ped_disk_new,
++                       METH_VARARGS, disk_new_doc},
+     {"disk_flag_get_name", (PyCFunction) py_ped_disk_flag_get_name,
+                                 METH_VARARGS, disk_flag_get_name_doc},
+     {"disk_flag_get_by_name", (PyCFunction) py_ped_disk_flag_get_by_name,
+diff --git a/src/parted/__init__.py b/src/parted/__init__.py
+index 01f9575..0eb23d2 100644
+--- a/src/parted/__init__.py
++++ b/src/parted/__init__.py
+@@ -418,6 +418,15 @@ def freshDisk(device, ty):
+     return Disk(PedDisk=peddisk)
+ 
+ @localeC
++def newDisk(device):
++    """Return a Disk object for this Device. Read the partition table off
++       a device (if one is found)."""
++    from _ped import disk_new
++
++    peddisk = disk_new(device.getPedDevice())
++    return Disk(PedDisk=peddisk)
++
++@localeC
+ def version():
+     """Return a dict containing the pyparted and libparted versions."""
+     from _ped import libparted_version
+diff --git a/src/pydisk.c b/src/pydisk.c
+index f58eeef..4e70f55 100644
+--- a/src/pydisk.c
++++ b/src/pydisk.c
+@@ -2004,5 +2004,37 @@ PyObject *py_ped_disk_new_fresh(PyObject *s, PyObject *args) {
+     return (PyObject *) ret;
+ }
+ 
++PyObject *py_ped_disk_new(PyObject *s, PyObject *args) {
++    _ped_Device *in_device = NULL;
++    PedDevice *device = NULL;
++    PedDisk *disk = NULL;
++    _ped_Disk *ret = NULL;
++
++    if (!PyArg_ParseTuple(args, "O!", &_ped_Device_Type_obj, &in_device)) {
++        return NULL;
++    }
++
++    if ((device = _ped_Device2PedDevice((PyObject *) in_device)) == NULL) {
++        return NULL;
++    }
++
++    if ((disk = ped_disk_new(device)) == NULL) {
++        if (partedExnRaised) {
++            partedExnRaised = 0;
++
++            if (!PyErr_ExceptionMatches(PartedException) &&
++                !PyErr_ExceptionMatches(PyExc_NotImplementedError))
++                PyErr_SetString(DiskException, partedExnMessage);
++        } else {
++            PyErr_Format(DiskException, "Could not create new disk label on %s", disk->dev->path);
++        }
++
++        return NULL;
++    }
++
++    ret = PedDisk2_ped_Disk(disk);
++    return (PyObject *) ret;
++}
++
+ /* vim:tw=78:ts=4:et:sw=4
+  */
+-- 
+1.8.1.2
+

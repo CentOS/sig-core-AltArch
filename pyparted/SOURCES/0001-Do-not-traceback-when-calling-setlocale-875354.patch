@@ -1,0 +1,42 @@
+From a43c9ca4e0fb600d425f50d11287f7c4fddee5f3 Mon Sep 17 00:00:00 2001
+From: Chris Lumens <clumens@redhat.com>
+Date: Fri, 14 Dec 2012 13:06:43 -0500
+Subject: [PATCH 01/03] Do not traceback when calling setlocale (#875354).
+
+This is just a debugging luxury.  It's not worth additional tracebacks.
+---
+ src/parted/decorators.py | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/src/parted/decorators.py b/src/parted/decorators.py
+index 2b583ad..737f72c 100644
+--- a/src/parted/decorators.py
++++ b/src/parted/decorators.py
+@@ -24,13 +24,22 @@ import locale
+ import functools
+ 
+ def localeC(fn):
++    # setlocale is not thread-safe, and anaconda (at least) may call this from
++    # another thread.  This is just a luxury to have untranslated tracebacks,
++    # so it's not worth tracebacking itself.
++    def _setlocale(l):
++        try:
++            locale.setlocale(locale.LC_MESSAGES, l)
++        except:
++            pass
++
+     @functools.wraps(fn)
+     def new(*args, **kwds):
+         oldlocale = locale.getlocale(locale.LC_MESSAGES)
+-        locale.setlocale(locale.LC_MESSAGES, 'C')
++        _setlocale('C')
+         try:
+             ret = fn(*args, **kwds)
+         finally:
+-            locale.setlocale(locale.LC_MESSAGES, oldlocale)
++            _setlocale(oldlocale)
+         return ret
+     return new
+-- 
+1.8.1.2
+
