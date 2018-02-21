@@ -21,6 +21,7 @@ Patch10: 0005-PyInt_FromLong-doesn-t-exist-in-python3-so-always-us.patch
 Patch11: 0006-Remember-to-pass-the-arguments-to-the-exception-hand.patch
 Patch12: 0007-Put-new-_ped-constants-and-functions-into-the-parted.patch
 
+Patch10001: pyparted-3.9-arm.patch
 
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(id -u -n)
 BuildRequires: python-devel
@@ -52,6 +53,8 @@ partition tables.
 %patch11 -p 1
 %patch12 -p 1
 
+%patch10001 -p 1
+
 %build
 make %{?_smp_mflags}
 
@@ -73,6 +76,9 @@ rm -rf %{buildroot}
 %{python_sitearch}/%{name}-%{version}-*.egg-info
 
 %changelog
+* Wed Feb 21 2018 Fabian Arrotin <arrfab@centos.org> - 1:3.9-13
+- Added pyparted-3.9-arm.patch to allow building for c7 armhfp (jacco@redsleeve.org)
+
 * Tue Jun 23 2015 David Cantrell <dcantrell@redhat.com> - 1:3.9-13
 - Rebuild
   Resolves: rhbz#1188163
