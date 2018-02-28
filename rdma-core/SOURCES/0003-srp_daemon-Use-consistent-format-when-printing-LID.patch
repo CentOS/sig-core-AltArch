@@ -1,0 +1,107 @@
+From 043b3900b51e73beedc6cd3769e055a5a95a26b3 Mon Sep 17 00:00:00 2001
+From: Hal Rosenstock <hal@dev.mellanox.co.il>
+Date: Thu, 13 Apr 2017 11:54:30 -0400
+Subject: [PATCH 3/3] srp_daemon: Use consistent format when printing LID
+
+Some LIDs are formatted in hex and others in decimal.
+Be consistent (use hex LID formatting).
+
+Signed-off-by: Hal Rosenstock <hal@mellanox.com>
+---
+ srp_daemon/srp_daemon.c       | 14 +++++++-------
+ srp_daemon/srp_handle_traps.c |  4 ++--
+ srp_daemon/srp_sync.c         |  2 +-
+ 3 files changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/srp_daemon/srp_daemon.c b/srp_daemon/srp_daemon.c
+index 1cf2815..bafc4a6 100644
+--- a/srp_daemon/srp_daemon.c
++++ b/srp_daemon/srp_daemon.c
+@@ -632,8 +632,8 @@ recv:
+ 			ret = umad_status(in_mad);
+ 			if (ret) {
+ 				pr_err(
+-					"bad MAD status (%u) from lid %d\n",
+-					ret, (uint16_t) be16toh(out_mad->hdr.addr.lid));
++					"bad MAD status (%u) from lid %#x\n",
++					ret, be16toh(out_mad->hdr.addr.lid));
+ 				return -ret;
+ 			}
+ 
+@@ -935,7 +935,7 @@ static int do_port(struct resources *res, uint16_t pkey, uint16_t dlid,
+ 
+ 	ret = get_iou_info(umad_res, dlid, &iou_info);
+ 	if (ret < 0) {
+-		pr_err("failed to get iou info for dlid %x\n", dlid);
++		pr_err("failed to get iou info for dlid %#x\n", dlid);
+ 		goto out;
+ 	}
+ 
+@@ -1214,7 +1214,7 @@ static int do_dm_port_list(struct resources *res)
+ 		num_pkeys = get_shared_pkeys(res, be16toh(port_info->endport_lid),
+ 					     pkeys);
+ 		if (num_pkeys < 0) {
+-			pr_err("failed to get shared P_Keys with LID %x\n",
++			pr_err("failed to get shared P_Keys with LID %#x\n",
+ 			       be16toh(port_info->endport_lid));
+ 			free(in_mad_buf);
+ 			return num_pkeys;
+@@ -1235,7 +1235,7 @@ void handle_port(struct resources *res, uint16_t pkey, uint16_t lid, uint64_t h_
+ 	uint64_t subnet_prefix;
+ 	int isdm;
+ 
+- 	pr_debug("enter handle_port for lid %d\n", lid);
++	pr_debug("enter handle_port for lid %#x\n", lid);
+ 	if (get_port_info(umad_res, lid, &subnet_prefix, &isdm))
+ 		return;
+ 
+@@ -1292,7 +1292,7 @@ static int do_full_port_list(struct resources *res)
+ 		num_pkeys = get_shared_pkeys(res, be16toh(node->lid),
+ 					     pkeys);
+ 		if (num_pkeys < 0) {
+-			pr_err("failed to get shared P_Keys with LID %x\n",
++			pr_err("failed to get shared P_Keys with LID %#x\n",
+ 			       be16toh(node->lid));
+ 			free(in_mad_buf);
+ 			return num_pkeys;
+@@ -2180,7 +2180,7 @@ catas_start:
+ 					/* unexpected error - do a full rescan */
+ 					schedule_rescan(res->sync_res, 0);
+ 				else {
+-					pr_debug("lid is %d\n", lid);
++					pr_debug("lid is %#x\n", lid);
+ 
+ 					srp_sleep(0, 100);
+ 					handle_port(res, pkey, lid,
+diff --git a/srp_daemon/srp_handle_traps.c b/srp_daemon/srp_handle_traps.c
+index 4d03c08..f4280ad 100644
+--- a/srp_daemon/srp_handle_traps.c
++++ b/srp_daemon/srp_handle_traps.c
+@@ -559,9 +559,9 @@ static int register_to_trap(struct sync_resources *sync_res,
+ 	static uint64_t trans_id = 0x0000FFFF;
+ 
+ 	if (subscribe)
+-		pr_debug("Registering to trap:%d (sm in %d)\n", trap_num, dest_lid);
++		pr_debug("Registering to trap:%d (sm in %#x)\n", trap_num, dest_lid);
+ 	else
+-		pr_debug("Deregistering from trap:%d (sm in %d)\n", trap_num, dest_lid);
++		pr_debug("Deregistering from trap:%d (sm in %#x)\n", trap_num, dest_lid);
+ 
+ 	memset(res->send_buf, 0, SEND_SIZE);
+ 
+diff --git a/srp_daemon/srp_sync.c b/srp_daemon/srp_sync.c
+index 369cf70..44826f0 100644
+--- a/srp_daemon/srp_sync.c
++++ b/srp_daemon/srp_sync.c
+@@ -170,7 +170,7 @@ void push_lid_to_list(struct sync_resources *res, uint16_t lid, uint16_t pkey)
+ 
+ 	for (i=0; i < res->next_task; ++i)
+ 		if (res->tasks[i].lid == lid && res->tasks[i].pkey == pkey) {
+-			pr_debug("lid %d is already in task list\n", lid);
++			pr_debug("lid %#x is already in task list\n", lid);
+ 			pthread_mutex_unlock(&res->mutex);
+ 			return;
+ 		}
+-- 
+1.8.3.1
+

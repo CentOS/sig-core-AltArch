@@ -1,0 +1,46 @@
+From aec9bc1d8581134239f54959cde3c16503016d1d Mon Sep 17 00:00:00 2001
+From: Jarod Wilson <jarod@redhat.com>
+Date: Mon, 22 May 2017 09:49:12 -0400
+Subject: [PATCH rdma-core] libibumad: clean up htonll/ntohnll handling
+
+Only ntohll was being checked to see if it wasn't defined, and was then
+redefining htonll as well as ntohll. This was causing some problems for
+the compile of the opa-ff package. Simple enough to rearrange this code a
+bit such that htonll and ntohll are handled entirely independent of one
+another.
+
+Reported-by: Honggang Li <honli@redhat.com>
+Signed-off-by: Jarod Wilson <jarod@redhat.com>
+---
+ libibumad/umad.h | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/libibumad/umad.h b/libibumad/umad.h
+index 81811380..479165a8 100644
+--- a/libibumad/umad.h
++++ b/libibumad/umad.h
+@@ -247,15 +247,17 @@ static inline void umad_free(void *umad)
+ 	free(umad);
+ }
+ 
++/* Users should use the glibc functions directly, not these wrappers */
+ #ifndef ntohll
+-#undef htonll
+ #undef ntohll
+-/* Users should use the glibc functions directly, not these wrappers */
+-static inline __attribute__((deprecated)) uint64_t htonll(uint64_t x) { return htobe64(x); }
+ static inline __attribute__((deprecated)) uint64_t ntohll(uint64_t x) { return be64toh(x); }
+-#define htonll htonll
+ #define ntohll ntohll
+ #endif
++#ifndef htonll
++#undef htonll
++static inline __attribute__((deprecated)) uint64_t htonll(uint64_t x) { return htobe64(x); }
++#define htonll htonll
++#endif
+ 
+ END_C_DECLS
+ #endif				/* _UMAD_H */
+-- 
+2.12.1
+
