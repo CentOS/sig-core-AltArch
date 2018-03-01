@@ -693,7 +693,7 @@ DISABLE_TESTS=""
 %ifarch armv7l armv7hl armv7hnl
 # test_call_double(DL::TestDL) fails on ARM HardFP
 # http://bugs.ruby-lang.org/issues/6592
-DISABLE_TESTS="-x test_dl2.rb $DISABLE_TESTS"
+DISABLE_TESTS="-x test_dl2.rb -x test_fiber.rb -x test_const.rb $DISABLE_TESTS"
 %endif
 
 # test_debug(TestRubyOptions) fails due to LoadError reported in debug mode,
@@ -1016,6 +1016,8 @@ OPENSSL_ENABLE_MD5_VERIFY=1 make check TESTS="-v $DISABLE_TESTS"
 %{ruby_libdir}/tkextlib
 
 %changelog
+* Thu Mar  1 2018 Johnny Hughes <johnny@centos.org> - 2.0.0.648-33
+- Modify to build on armhfp
 * Mon Feb 19 2018 Vít Ondruch <vondruch@redhat.com> - 2.0.0.648-33
 - Fix always passing WEBrick test.
 
