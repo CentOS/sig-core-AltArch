@@ -53,7 +53,7 @@ Obsoletes: rdma-ndd < %{version}-%{release}
 Conflicts: infiniband-diags <= 1.6.5
 Requires: pciutils
 # 32-bit arm is missing required arch-specific memory barriers,
-ExcludeArch: %{arm}
+#ExcludeArch: %{arm}
 
 # Since we recommend developers use Ninja, so should packagers, for consistency.
 %define CMAKE_FLAGS %{nil}
@@ -111,8 +111,10 @@ Provides: libipathverbs-static = %{version}-%{release}
 Obsoletes: libipathverbs-static < %{version}-%{release}
 Provides: libmlx4-static = %{version}-%{release}
 Obsoletes: libmlx4-static < %{version}-%{release}
+%ifnarch %{arm}
 Provides: libmlx5-static = %{version}-%{release}
 Obsoletes: libmlx5-static < %{version}-%{release}
+%endif
 Provides: libnes-static = %{version}-%{release}
 Obsoletes: libnes-static < %{version}-%{release}
 Provides: libocrdma-static = %{version}-%{release}
@@ -142,7 +144,7 @@ Provides: libipathverbs = %{version}-%{release}
 Obsoletes: libipathverbs < %{version}-%{release}
 Provides: libmlx4 = %{version}-%{release}
 Obsoletes: libmlx4 < %{version}-%{release}
-%ifnarch s390x s390
+%ifnarch s390x s390 %{arm}
 Provides: libmlx5 = %{version}-%{release}
 Obsoletes: libmlx5 < %{version}-%{release}
 %endif
@@ -431,7 +433,7 @@ rm -f %{buildroot}/%{_sysconfdir}/libibverbs.d/hns.driver
 %{_mandir}/man3/rdma*
 %{_mandir}/man3/umad*
 %{_mandir}/man3/*_to_ibv_rate.*
-%ifnarch s390x s390
+%ifnarch s390x s390 %{arm}
 %{_mandir}/man3/mlx5dv*
 %endif
 %{_mandir}/man7/rdma_cm.*
@@ -441,7 +443,7 @@ rm -f %{buildroot}/%{_sysconfdir}/libibverbs.d/hns.driver
 %dir %{_libdir}/libibverbs
 %{_libdir}/libibverbs*.so.*
 %{_libdir}/libibverbs/*.so
-%ifnarch s390x s390
+%ifnarch s390x s390 %{arm}
 %{_libdir}/libmlx5.so.*
 %endif
 %config(noreplace) %{_sysconfdir}/libibverbs.d/*.driver
@@ -449,7 +451,7 @@ rm -f %{buildroot}/%{_sysconfdir}/libibverbs.d/hns.driver
 %doc %{_docdir}/%{name}-%{version}/rxe.md
 %{_bindir}/rxe_cfg
 %{_mandir}/man7/rxe*
-%ifnarch s390x s390
+%ifnarch s390x s390 %{arm}
 %{_mandir}/man7/mlx5dv*
 %endif
 %{_mandir}/man8/rxe*
@@ -530,6 +532,9 @@ rm -f %{buildroot}/%{_sysconfdir}/libibverbs.d/hns.driver
 %doc %{_docdir}/%{name}-%{version}/ibsrpdm.md
 
 %changelog
+* Wed Feb 28 2018 Pablo Greco <pablo@fliagreco.com.ar> 13-7
+- Update to build on armv7hl, based on fedora spec
+
 * Tue May 30 2017 Jarod Wilson <jarod@redhat.com> 13-7
 - Add support for mlx5 Expand raw packet capabilities
 - Resolves: rhbz#1456561
