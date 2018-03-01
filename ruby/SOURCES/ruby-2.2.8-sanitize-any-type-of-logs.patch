@@ -1,0 +1,164 @@
+From 8a81d04d2588d9c7a898473b431a0dabcab39fbd Mon Sep 17 00:00:00 2001
+From: usa <usa@b2dd03c8-39d4-4d8f-98ff-823fe69b080e>
+Date: Thu, 14 Sep 2017 11:37:47 +0000
+Subject: [PATCH] merge revision(s) 59897:
+
+	lib/webrick/log.rb: sanitize any type of logs
+
+	It had failed to sanitize some type of exception messages.  Reported and
+	patched by Yusuke Endoh (mame) at https://hackerone.com/reports/223363
+
+git-svn-id: svn+ssh://ci.ruby-lang.org/ruby/branches/ruby_2_2@59902 b2dd03c8-39d4-4d8f-98ff-823fe69b080e
+---
+ ChangeLog                     |    7 +++++++
+ lib/webrick/httpstatus.rb     |    4 ----
+ lib/webrick/log.rb            |    4 ++--
+ test/webrick/test_httpauth.rb |   36 ++++++++++++++++++++++++++++++++++++
+ 4 files changed, 45 insertions(+), 6 deletions(-)
+
+diff --git a/ChangeLog b/ChangeLog
+index a4594f678f8c..7561c35eb705 100644
+--- a/ChangeLog
++++ b/ChangeLog
+@@ -4,6 +4,13 @@
+ 	  protocol list.
+ 	  The protocol list from OpenSSL is not null-terminated.
+ 	  patched by Kazuki Yamaguchi [Bug #11810] [ruby-core:72082]
++
++Thu Sep 14 20:36:54 2017  Yusuke Endoh  <mame@ruby-lang.org>
++
++	lib/webrick/log.rb: sanitize any type of logs
++
++	It had failed to sanitize some type of exception messages.  Reported and
++	patched by Yusuke Endoh (mame) at https://hackerone.com/reports/223363
+ 
+ Thu Sep 14 20:33:52 2017  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+ 
+diff --git a/lib/webrick/httpstatus.rb b/lib/webrick/httpstatus.rb
+index 7ffda64cf0f9..5dc136f88f70 100644
+--- a/lib/webrick/httpstatus.rb
++++ b/lib/webrick/httpstatus.rb
+@@ -20,10 +20,6 @@ module HTTPStatus
+     ##
+     # Root of the HTTP status class hierarchy
+     class Status < StandardError
+-      def initialize(*args) # :nodoc:
+-        args[0] = AccessLog.escape(args[0]) unless args.empty?
+-        super(*args)
+-      end
+       class << self
+         attr_reader :code, :reason_phrase # :nodoc:
+       end
+diff --git a/lib/webrick/log.rb b/lib/webrick/log.rb
+index 41cde4a74084..4f069ac0c549 100644
+--- a/lib/webrick/log.rb
++++ b/lib/webrick/log.rb
+@@ -117,10 +117,10 @@ def debug?; @level >= DEBUG; end
+     # * Otherwise it will return +arg+.inspect.
+     def format(arg)
+       if arg.is_a?(Exception)
+-        "#{arg.class}: #{arg.message}\n\t" <<
++        "#{arg.class}: #{AccessLog.escape(arg.message)}\n\t" <<
+         arg.backtrace.join("\n\t") << "\n"
+       elsif arg.respond_to?(:to_str)
+-        arg.to_str
++        AccessLog.escape(arg.to_str)
+       else
+         arg.inspect
+       end
+diff --git a/test/webrick/test_httpauth.rb b/test/webrick/test_httpauth.rb
+index 27c37f36770b..0aebb7a231c7 100644
+--- a/test/webrick/test_httpauth.rb
++++ b/test/webrick/test_httpauth.rb
+@@ -79,6 +79,43 @@ def test_basic_auth3
+       WEBrick::HTTPAuth::Htpasswd.new(tmpfile.path)
+     }
+     tmpfile.close(true)
++  end
++
++  def test_bad_username_with_control_characters
++    log_tester = lambda {|log, access_log|
++      assert_equal(2, log.length)
++      assert_match(/ERROR Basic WEBrick's realm: foo\\ebar: the user is not allowed./, log[0])
++      assert_match(/ERROR WEBrick::HTTPStatus::Unauthorized/, log[1])
++    }
++    TestWEBrick.start_httpserver_with_log({}, log_tester) {|server, addr, port, log|
++      realm = "WEBrick's realm"
++      path = "/basic_auth"
++
++      Tempfile.open("test_webrick_auth") {|tmpfile|
++        tmpfile.close
++        tmp_pass = WEBrick::HTTPAuth::Htpasswd.new(tmpfile.path)
++        tmp_pass.set_passwd(realm, "webrick", "supersecretpassword")
++        tmp_pass.set_passwd(realm, "foo", "supersecretpassword")
++        tmp_pass.flush
++
++        htpasswd = WEBrick::HTTPAuth::Htpasswd.new(tmpfile.path)
++        users = []
++        htpasswd.each{|user, pass| users << user }
++        server.mount_proc(path){|req, res|
++          auth = WEBrick::HTTPAuth::BasicAuth.new(
++            :Realm => realm, :UserDB => htpasswd,
++            :Logger => server.logger
++          )
++          auth.authenticate(req, res)
++          res.body = "hoge"
++        }
++        http = Net::HTTP.new(addr, port)
++        g = Net::HTTP::Get.new(path)
++        g.basic_auth("foo\ebar", "passwd")
++        http.request(g){|res| assert_not_equal("hoge", res.body, log.call) }
++        File.unlink tmpfile.path rescue nil
++      }
++    }
+   end
+ 
+   DIGESTRES_ = /
+diff --git a/test/webrick/utils.rb b/test/webrick/utils.rb
+index e1c2344fb1aa..0e94ad34da71 100644
+--- a/test/webrick/utils.rb
++++ b/test/webrick/utils.rb
+@@ -54,4 +54,43 @@
+   def start_httpproxy(config={}, &block)
+     start_server(WEBrick::HTTPProxyServer, config, &block)
+   end
++
++  DefaultLogTester = lambda {|log, access_log| assert_equal([], log) }
++
++  def start_server_with_log(klass, config={}, log_tester=DefaultLogTester, &block)
++    log_ary = []
++    access_log_ary = []
++    log = proc { "webrick log start:\n" + (log_ary+access_log_ary).join.gsub(/^/, "  ").chomp + "\nwebrick log end" }
++    server = klass.new({
++      :BindAddress => "127.0.0.1", :Port => 0,
++      :ServerType => Thread,
++      :Logger => WEBrick::Log.new(log_ary, WEBrick::BasicLog::WARN),
++      :AccessLog => [[access_log_ary, ""]]
++    }.update(config))
++    server_thread = server.start
++    server_thread2 = Thread.new {
++      server_thread.join
++      if log_tester
++        log_tester.call(log_ary, access_log_ary)
++      end
++    }
++    addr = server.listeners[0].addr
++    client_thread = Thread.new {
++      begin
++        block.yield([server, addr[3], addr[1], log])
++      ensure
++        server.shutdown
++      end
++    }
++    client_thread.join
++    server_thread2.join
++  end
++
++  def start_httpserver_with_log(config={}, log_tester=DefaultLogTester, &block)
++    start_server_with_log(WEBrick::HTTPServer, config, log_tester, &block)
++  end
++
++  def start_httpproxy_with_log(config={}, log_tester=DefaultLogTester, &block)
++    start_server_with_log(WEBrick::HTTPProxyServer, config, log_tester, &block)
++  end
+ end

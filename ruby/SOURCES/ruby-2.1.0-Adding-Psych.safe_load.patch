@@ -1,0 +1,904 @@
+From 7ceafcbdf5bd2155704839f97b869e689f66feeb Mon Sep 17 00:00:00 2001
+From: tenderlove <tenderlove@b2dd03c8-39d4-4d8f-98ff-823fe69b080e>
+Date: Tue, 14 May 2013 17:26:41 +0000
+Subject: [PATCH] * ext/psych/lib/psych.rb: Adding Psych.safe_load for loading
+ a user   defined, restricted subset of Ruby object types. *
+ ext/psych/lib/psych/class_loader.rb: A class loader for   encapsulating the
+ logic for which objects are allowed to be   deserialized. *
+ ext/psych/lib/psych/deprecated.rb: Changes to use the class loader *
+ ext/psych/lib/psych/exception.rb: ditto * ext/psych/lib/psych/json/stream.rb:
+ ditto * ext/psych/lib/psych/nodes/node.rb: ditto *
+ ext/psych/lib/psych/scalar_scanner.rb: ditto * ext/psych/lib/psych/stream.rb:
+ ditto * ext/psych/lib/psych/streaming.rb: ditto *
+ ext/psych/lib/psych/visitors/json_tree.rb: ditto *
+ ext/psych/lib/psych/visitors/to_ruby.rb: ditto *
+ ext/psych/lib/psych/visitors/yaml_tree.rb: ditto * ext/psych/psych_to_ruby.c:
+ ditto * test/psych/helper.rb: ditto * test/psych/test_safe_load.rb: tests for
+ restricted subset. * test/psych/test_scalar_scanner.rb: ditto *
+ test/psych/visitors/test_to_ruby.rb: ditto *
+ test/psych/visitors/test_yaml_tree.rb: ditto
+
+git-svn-id: svn+ssh://ci.ruby-lang.org/ruby/trunk@40750 b2dd03c8-39d4-4d8f-98ff-823fe69b080e
+---
+ ChangeLog                                 |  24 +++++++
+ ext/psych/lib/psych.rb                    |  57 +++++++++++++++--
+ ext/psych/lib/psych/class_loader.rb       | 101 ++++++++++++++++++++++++++++++
+ ext/psych/lib/psych/deprecated.rb         |   3 +-
+ ext/psych/lib/psych/exception.rb          |   6 ++
+ ext/psych/lib/psych/json/stream.rb        |   1 +
+ ext/psych/lib/psych/nodes/node.rb         |   4 +-
+ ext/psych/lib/psych/scalar_scanner.rb     |  19 +++---
+ ext/psych/lib/psych/stream.rb             |   1 +
+ ext/psych/lib/psych/streaming.rb          |  15 +++--
+ ext/psych/lib/psych/visitors/json_tree.rb |   7 ++-
+ ext/psych/lib/psych/visitors/to_ruby.rb   |  79 +++++++++++++----------
+ ext/psych/lib/psych/visitors/yaml_tree.rb |  13 +++-
+ ext/psych/psych_to_ruby.c                 |   4 +-
+ test/psych/helper.rb                      |   2 +-
+ test/psych/test_safe_load.rb              |  97 ++++++++++++++++++++++++++++
+ test/psych/test_scalar_scanner.rb         |   2 +-
+ test/psych/visitors/test_to_ruby.rb       |   4 +-
+ test/psych/visitors/test_yaml_tree.rb     |   4 +-
+ 19 files changed, 383 insertions(+), 60 deletions(-)
+ create mode 100644 ext/psych/lib/psych/class_loader.rb
+ create mode 100644 test/psych/test_safe_load.rb
+
+diff --git a/ChangeLog b/ChangeLog
+index be56f61d3a19..e8ad02a53921 100644
+--- a/ChangeLog
++++ b/ChangeLog
+@@ -3137,6 +3137,30 @@
+ 
+ 	* include/ruby/intern.h: should include sys/time.h for struct timeval
+ 	  if it exists. [ruby-list:49363]
++
++Wed May 15 02:22:16 2013  Aaron Patterson <aaron@tenderlovemaking.com>
++
++	* ext/psych/lib/psych.rb: Adding Psych.safe_load for loading a user
++	  defined, restricted subset of Ruby object types.
++	* ext/psych/lib/psych/class_loader.rb: A class loader for
++	  encapsulating the logic for which objects are allowed to be
++	  deserialized.
++	* ext/psych/lib/psych/deprecated.rb: Changes to use the class loader
++	* ext/psych/lib/psych/exception.rb: ditto
++	* ext/psych/lib/psych/json/stream.rb: ditto
++	* ext/psych/lib/psych/nodes/node.rb: ditto
++	* ext/psych/lib/psych/scalar_scanner.rb: ditto
++	* ext/psych/lib/psych/stream.rb: ditto
++	* ext/psych/lib/psych/streaming.rb: ditto
++	* ext/psych/lib/psych/visitors/json_tree.rb: ditto
++	* ext/psych/lib/psych/visitors/to_ruby.rb: ditto
++	* ext/psych/lib/psych/visitors/yaml_tree.rb: ditto
++	* ext/psych/psych_to_ruby.c: ditto
++	* test/psych/helper.rb: ditto
++	* test/psych/test_safe_load.rb: tests for restricted subset.
++	* test/psych/test_scalar_scanner.rb: ditto
++	* test/psych/visitors/test_to_ruby.rb: ditto
++	* test/psych/visitors/test_yaml_tree.rb: ditto
+ 
+ Tue May 14 20:21:41 2013  Eric Hodel  <drbrain@segment7.net>
+ 
+diff --git a/ext/psych/lib/psych.rb b/ext/psych/lib/psych.rb
+index 66a0641f39d8..711b3c1377dc 100644
+--- a/ext/psych/lib/psych.rb
++++ b/ext/psych/lib/psych.rb
+@@ -124,6 +124,55 @@ def self.load yaml, filename = nil
+     result ? result.to_ruby : result
+   end
+ 
++  ###
++  # Safely load the yaml string in +yaml+.  By default, only the following
++  # classes are allowed to be deserialized:
++  #
++  # * TrueClass
++  # * FalseClass
++  # * NilClass
++  # * Numeric
++  # * String
++  # * Array
++  # * Hash
++  #
++  # Recursive data structures are not allowed by default.  Arbitrary classes
++  # can be allowed by adding those classes to the +whitelist+.  They are
++  # additive.  For example, to allow Date deserialization:
++  #
++  #   Psych.safe_load(yaml, [Date])
++  #
++  # Now the Date class can be loaded in addition to the classes listed above.
++  #
++  # Aliases can be explicitly allowed by changing the +aliases+ parameter.
++  # For example:
++  #
++  #   x = []
++  #   x << x
++  #   yaml = Psych.dump x
++  #   Psych.safe_load yaml               # => raises an exception
++  #   Psych.safe_load yaml, [], [], true # => loads the aliases
++  #
++  # A Psych::DisallowedClass exception will be raised if the yaml contains a
++  # class that isn't in the whitelist.
++  #
++  # A Psych::BadAlias exception will be raised if the yaml contains aliases
++  # but the +aliases+ parameter is set to false.
++  def self.safe_load yaml, whitelist_classes = [], whitelist_symbols = [], aliases = false, filename = nil
++    result = parse(yaml, filename)
++    return unless result
++
++    class_loader = ClassLoader::Restricted.new(whitelist_classes.map(&:to_s),
++                                               whitelist_symbols.map(&:to_s))
++    scanner      = ScalarScanner.new class_loader
++    if aliases
++      visitor = Visitors::ToRuby.new scanner, class_loader
++    else
++      visitor = Visitors::NoAliasRuby.new scanner, class_loader
++    end
++    visitor.accept result
++  end
++
+   ###
+   # Parse a YAML string in +yaml+.  Returns the first object of a YAML AST.
+   # +filename+ is used in the exception message if a Psych::SyntaxError is
+@@ -234,7 +283,7 @@ def self.dump o, io = nil, options = {}
+       io      = nil
+     end
+ 
+-    visitor = Psych::Visitors::YAMLTree.new options
++    visitor = Psych::Visitors::YAMLTree.create options
+     visitor << o
+     visitor.tree.yaml io, options
+   end
+@@ -246,7 +295,7 @@ def self.dump o, io = nil, options = {}
+   #
+   #   Psych.dump_stream("foo\n  ", {}) # => "--- ! \"foo\\n  \"\n--- {}\n"
+   def self.dump_stream *objects
+-    visitor = Psych::Visitors::YAMLTree.new {}
++    visitor = Psych::Visitors::YAMLTree.create({})
+     objects.each do |o|
+       visitor << o
+     end
+@@ -256,7 +305,7 @@ def self.dump_stream *objects
+   ###
+   # Dump Ruby object +o+ to a JSON string.
+   def self.to_json o
+-    visitor = Psych::Visitors::JSONTree.new
++    visitor = Psych::Visitors::JSONTree.create
+     visitor << o
+     visitor.tree.yaml
+   end
+@@ -314,7 +363,7 @@ def self.remove_type type_tag
+   @load_tags = {}
+   @dump_tags = {}
+   def self.add_tag tag, klass
+-    @load_tags[tag] = klass
++    @load_tags[tag] = klass.name
+     @dump_tags[klass] = tag
+   end
+ 
+diff --git a/ext/psych/lib/psych/class_loader.rb b/ext/psych/lib/psych/class_loader.rb
+new file mode 100644
+index 000000000000..46c6b9362790
+--- /dev/null
++++ b/ext/psych/lib/psych/class_loader.rb
+@@ -0,0 +1,101 @@
++require 'psych/omap'
++require 'psych/set'
++
++module Psych
++  class ClassLoader # :nodoc:
++    BIG_DECIMAL = 'BigDecimal'
++    COMPLEX     = 'Complex'
++    DATE        = 'Date'
++    DATE_TIME   = 'DateTime'
++    EXCEPTION   = 'Exception'
++    OBJECT      = 'Object'
++    PSYCH_OMAP  = 'Psych::Omap'
++    PSYCH_SET   = 'Psych::Set'
++    RANGE       = 'Range'
++    RATIONAL    = 'Rational'
++    REGEXP      = 'Regexp'
++    STRUCT      = 'Struct'
++    SYMBOL      = 'Symbol'
++
++    def initialize
++      @cache = CACHE.dup
++    end
++
++    def load klassname
++      return nil if !klassname || klassname.empty?
++
++      find klassname
++    end
++
++    def symbolize sym
++      symbol
++      sym.to_sym
++    end
++
++    constants.each do |const|
++      konst = const_get const
++      define_method(const.to_s.downcase) do
++        load konst
++      end
++    end
++
++    private
++
++    def find klassname
++      @cache[klassname] ||= resolve(klassname)
++    end
++
++    def resolve klassname
++      name    = klassname
++      retried = false
++
++      begin
++        path2class(name)
++      rescue ArgumentError, NameError => ex
++        unless retried
++          name    = "Struct::#{name}"
++          retried = ex
++          retry
++        end
++        raise retried
++      end
++    end
++
++    CACHE = Hash[constants.map { |const|
++      val = const_get const
++      begin
++        [val, ::Object.const_get(val)]
++      rescue
++        nil
++      end
++    }.compact]
++
++    class Restricted < ClassLoader
++      def initialize classes, symbols
++        @classes = classes
++        @symbols = symbols
++        super()
++      end
++
++      def symbolize sym
++        return super if @symbols.empty?
++
++        if @symbols.include? sym
++          super
++        else
++          raise DisallowedClass, 'Symbol'
++        end
++      end
++
++      private
++
++      def find klassname
++        if @classes.include? klassname
++          super
++        else
++          raise DisallowedClass, klassname
++        end
++      end
++    end
++  end
++end
+diff --git a/ext/psych/lib/psych/deprecated.rb b/ext/psych/lib/psych/deprecated.rb
+index 1e42859b22fe..8c310b320738 100644
+--- a/ext/psych/lib/psych/deprecated.rb
++++ b/ext/psych/lib/psych/deprecated.rb
+@@ -35,7 +35,8 @@ def self.detect_implicit thing
+     warn "#{caller[0]}: detect_implicit is deprecated" if $VERBOSE
+     return '' unless String === thing
+     return 'null' if '' == thing
+-    ScalarScanner.new.tokenize(thing).class.name.downcase
++    ss = ScalarScanner.new(ClassLoader.new)
++    ss.tokenize(thing).class.name.downcase
+   end
+ 
+   def self.add_ruby_type type_tag, &block
+diff --git a/ext/psych/lib/psych/exception.rb b/ext/psych/lib/psych/exception.rb
+index d96c527cfba7..ce9d2caf3fb2 100644
+--- a/ext/psych/lib/psych/exception.rb
++++ b/ext/psych/lib/psych/exception.rb
+@@ -4,4 +4,10 @@ class Exception < RuntimeError
+ 
+   class BadAlias < Exception
+   end
++
++  class DisallowedClass < Exception
++    def initialize klass_name
++      super "Tried to load unspecified class: #{klass_name}"
++    end
++  end
+ end
+diff --git a/ext/psych/lib/psych/json/stream.rb b/ext/psych/lib/psych/json/stream.rb
+index be1a0a8a8240..fe2a6e911650 100644
+--- a/ext/psych/lib/psych/json/stream.rb
++++ b/ext/psych/lib/psych/json/stream.rb
+@@ -6,6 +6,7 @@ module JSON
+     class Stream < Psych::Visitors::JSONTree
+       include Psych::JSON::RubyEvents
+       include Psych::Streaming
++      extend Psych::Streaming::ClassMethods
+ 
+       class Emitter < Psych::Stream::Emitter # :nodoc:
+         include Psych::JSON::YAMLEvents
+diff --git a/ext/psych/lib/psych/nodes/node.rb b/ext/psych/lib/psych/nodes/node.rb
+index 0cefe44e446d..83233a61fdd3 100644
+--- a/ext/psych/lib/psych/nodes/node.rb
++++ b/ext/psych/lib/psych/nodes/node.rb
+@@ -1,4 +1,6 @@
+ require 'stringio'
++require 'psych/class_loader'
++require 'psych/scalar_scanner'
+ 
+ module Psych
+   module Nodes
+@@ -32,7 +34,7 @@ def each &block
+       #
+       # See also Psych::Visitors::ToRuby
+       def to_ruby
+-        Visitors::ToRuby.new.accept self
++        Visitors::ToRuby.create.accept(self)
+       end
+       alias :transform :to_ruby
+ 
+diff --git a/ext/psych/lib/psych/scalar_scanner.rb b/ext/psych/lib/psych/scalar_scanner.rb
+index 8aa594e3337c..5935e26b288a 100644
+--- a/ext/psych/lib/psych/scalar_scanner.rb
++++ b/ext/psych/lib/psych/scalar_scanner.rb
+@@ -19,10 +19,13 @@ class ScalarScanner
+                   |[-+]?(?:0|[1-9][0-9_]*) (?# base 10)
+                   |[-+]?0x[0-9a-fA-F_]+    (?# base 16))$/x
+ 
++    attr_reader :class_loader
++
+     # Create a new scanner
+-    def initialize
++    def initialize class_loader
+       @string_cache = {}
+       @symbol_cache = {}
++      @class_loader = class_loader
+     end
+ 
+     # Tokenize +string+ returning the ruby object
+@@ -63,7 +66,7 @@ def tokenize string
+       when /^\d{4}-(?:1[012]|0\d|\d)-(?:[12]\d|3[01]|0\d|\d)$/
+         require 'date'
+         begin
+-          Date.strptime(string, '%Y-%m-%d')
++          class_loader.date.strptime(string, '%Y-%m-%d')
+         rescue ArgumentError
+           string
+         end
+@@ -75,9 +78,9 @@ def tokenize string
+         Float::NAN
+       when /^:./
+         if string =~ /^:(["'])(.*)\1/
+-          @symbol_cache[string] = $2.sub(/^:/, '').to_sym
++          @symbol_cache[string] = class_loader.symbolize($2.sub(/^:/, ''))
+         else
+-          @symbol_cache[string] = string.sub(/^:/, '').to_sym
++          @symbol_cache[string] = class_loader.symbolize(string.sub(/^:/, ''))
+         end
+       when /^[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+$/
+         i = 0
+@@ -117,6 +120,8 @@ def parse_int string
+     ###
+     # Parse and return a Time from +string+
+     def parse_time string
++      klass = class_loader.load 'Time'
++
+       date, time = *(string.split(/[ tT]/, 2))
+       (yy, m, dd) = date.split('-').map { |x| x.to_i }
+       md = time.match(/(\d+:\d+:\d+)(?:\.(\d*))?\s*(Z|[-+]\d+(:\d\d)?)?/)
+@@ -124,10 +129,10 @@ def parse_time string
+       (hh, mm, ss) = md[1].split(':').map { |x| x.to_i }
+       us = (md[2] ? Rational("0.#{md[2]}") : 0) * 1000000
+ 
+-      time = Time.utc(yy, m, dd, hh, mm, ss, us)
++      time = klass.utc(yy, m, dd, hh, mm, ss, us)
+ 
+       return time if 'Z' == md[3]
+-      return Time.at(time.to_i, us) unless md[3]
++      return klass.at(time.to_i, us) unless md[3]
+ 
+       tz = md[3].match(/^([+\-]?\d{1,2})\:?(\d{1,2})?$/)[1..-1].compact.map { |digit| Integer(digit, 10) }
+       offset = tz.first * 3600
+@@ -138,7 +143,7 @@ def parse_time string
+         offset += ((tz[1] || 0) * 60)
+       end
+ 
+-      Time.at((time - offset).to_i, us)
++      klass.at((time - offset).to_i, us)
+     end
+   end
+ end
+diff --git a/ext/psych/lib/psych/stream.rb b/ext/psych/lib/psych/stream.rb
+index 567c1bb790f9..88c4c4cb4e18 100644
+--- a/ext/psych/lib/psych/stream.rb
++++ b/ext/psych/lib/psych/stream.rb
+@@ -32,5 +32,6 @@ def streaming?
+     end
+ 
+     include Psych::Streaming
++    extend Psych::Streaming::ClassMethods
+   end
+ end
+diff --git a/ext/psych/lib/psych/streaming.rb b/ext/psych/lib/psych/streaming.rb
+index c6fa109d5a61..9d94eb549f26 100644
+--- a/ext/psych/lib/psych/streaming.rb
++++ b/ext/psych/lib/psych/streaming.rb
+@@ -1,10 +1,15 @@
+ module Psych
+   module Streaming
+-    ###
+-    # Create a new streaming emitter.  Emitter will print to +io+.  See
+-    # Psych::Stream for an example.
+-    def initialize io
+-      super({}, self.class.const_get(:Emitter).new(io))
++    module ClassMethods
++      ###
++      # Create a new streaming emitter.  Emitter will print to +io+.  See
++      # Psych::Stream for an example.
++      def new io
++        emitter      = const_get(:Emitter).new(io)
++        class_loader = ClassLoader.new
++        ss           = ScalarScanner.new class_loader
++        super(emitter, ss, {})
++      end
+     end
+ 
+     ###
+diff --git a/ext/psych/lib/psych/visitors/json_tree.rb b/ext/psych/lib/psych/visitors/json_tree.rb
+index 0350dd1faae0..0127ac8aa8c1 100644
+--- a/ext/psych/lib/psych/visitors/json_tree.rb
++++ b/ext/psych/lib/psych/visitors/json_tree.rb
+@@ -5,8 +5,11 @@ module Visitors
+     class JSONTree < YAMLTree
+       include Psych::JSON::RubyEvents
+ 
+-      def initialize options = {}, emitter = Psych::JSON::TreeBuilder.new
+-        super
++      def self.create options = {}
++        emitter = Psych::JSON::TreeBuilder.new
++        class_loader = ClassLoader.new
++        ss           = ScalarScanner.new class_loader
++        new(emitter, ss, options)
+       end
+ 
+       def accept target
+diff --git a/ext/psych/lib/psych/visitors/to_ruby.rb b/ext/psych/lib/psych/visitors/to_ruby.rb
+index 75c7bc0c550a..f770bb80aa3a 100644
+--- a/ext/psych/lib/psych/visitors/to_ruby.rb
++++ b/ext/psych/lib/psych/visitors/to_ruby.rb
+@@ -1,4 +1,5 @@
+ require 'psych/scalar_scanner'
++require 'psych/class_loader'
+ require 'psych/exception'
+ 
+ unless defined?(Regexp::NOENCODING)
+@@ -10,11 +11,20 @@ module Visitors
+     ###
+     # This class walks a YAML AST, converting each node to ruby
+     class ToRuby < Psych::Visitors::Visitor
+-      def initialize ss = ScalarScanner.new
++      def self.create
++        class_loader = ClassLoader.new
++        scanner      = ScalarScanner.new class_loader
++        new(scanner, class_loader)
++      end
++
++      attr_reader :class_loader
++
++      def initialize ss, class_loader
+         super()
+         @st = {}
+         @ss = ss
+         @domain_types = Psych.domain_types
++        @class_loader = class_loader
+       end
+ 
+       def accept target
+@@ -33,7 +43,7 @@ def accept target
+       end
+ 
+       def deserialize o
+-        if klass = Psych.load_tags[o.tag]
++        if klass = resolve_class(Psych.load_tags[o.tag])
+           instance = klass.allocate
+ 
+           if instance.respond_to?(:init_with)
+@@ -60,19 +70,23 @@ def deserialize o
+           end
+         when '!ruby/object:BigDecimal'
+           require 'bigdecimal'
+-          BigDecimal._load o.value
++          class_loader.big_decimal._load o.value
+         when "!ruby/object:DateTime"
++          class_loader.date_time
+           require 'date'
+           @ss.parse_time(o.value).to_datetime
+         when "!ruby/object:Complex"
++          class_loader.complex
+           Complex(o.value)
+         when "!ruby/object:Rational"
++          class_loader.rational
+           Rational(o.value)
+         when "!ruby/class", "!ruby/module"
+           resolve_class o.value
+         when "tag:yaml.org,2002:float", "!float"
+           Float(@ss.tokenize(o.value))
+         when "!ruby/regexp"
++          klass = class_loader.regexp
+           o.value =~ /^\/(.*)\/([mixn]*)$/
+           source  = $1
+           options = 0
+@@ -86,15 +100,16 @@ def deserialize o
+             else lang = option
+             end
+           end
+-          Regexp.new(*[source, options, lang].compact)
++          klass.new(*[source, options, lang].compact)
+         when "!ruby/range"
++          klass = class_loader.range
+           args = o.value.split(/([.]{2,3})/, 2).map { |s|
+             accept Nodes::Scalar.new(s)
+           }
+           args.push(args.delete_at(1) == '...')
+-          Range.new(*args)
++          klass.new(*args)
+         when /^!ruby\/sym(bol)?:?(.*)?$/
+-          o.value.to_sym
++          class_loader.symbolize o.value
+         else
+           @ss.tokenize o.value
+         end
+@@ -106,7 +121,7 @@ def visit_Psych_Nodes_Scalar o
+       end
+ 
+       def visit_Psych_Nodes_Sequence o
+-        if klass = Psych.load_tags[o.tag]
++        if klass = resolve_class(Psych.load_tags[o.tag])
+           instance = klass.allocate
+ 
+           if instance.respond_to?(:init_with)
+@@ -138,22 +153,24 @@ def visit_Psych_Nodes_Sequence o
+       end
+ 
+       def visit_Psych_Nodes_Mapping o
+-        return revive(Psych.load_tags[o.tag], o) if Psych.load_tags[o.tag]
++        if Psych.load_tags[o.tag]
++          return revive(resolve_class(Psych.load_tags[o.tag]), o)
++        end
+         return revive_hash({}, o) unless o.tag
+ 
+         case o.tag
+         when /^!ruby\/struct:?(.*)?$/
+-          klass = resolve_class($1)
++          klass = resolve_class($1) if $1
+ 
+           if klass
+             s = register(o, klass.allocate)
+ 
+             members = {}
+-            struct_members = s.members.map { |x| x.to_sym }
++            struct_members = s.members.map { |x| class_loader.symbolize x }
+             o.children.each_slice(2) do |k,v|
+               member = accept(k)
+               value  = accept(v)
+-              if struct_members.include?(member.to_sym)
++              if struct_members.include?(class_loader.symbolize(member))
+                 s.send("#{member}=", value)
+               else
+                 members[member.to_s.sub(/^@/, '')] = value
+@@ -161,22 +178,27 @@ def visit_Psych_Nodes_Mapping o
+             end
+             init_with(s, members, o)
+           else
++            klass = class_loader.struct
+             members = o.children.map { |c| accept c }
+             h = Hash[*members]
+-            Struct.new(*h.map { |k,v| k.to_sym }).new(*h.map { |k,v| v })
++            klass.new(*h.map { |k,v|
++              class_loader.symbolize k
++            }).new(*h.map { |k,v| v })
+           end
+ 
+         when /^!ruby\/object:?(.*)?$/
+           name = $1 || 'Object'
+ 
+           if name == 'Complex'
++            class_loader.complex
+             h = Hash[*o.children.map { |c| accept c }]
+             register o, Complex(h['real'], h['image'])
+           elsif name == 'Rational'
++            class_loader.rational
+             h = Hash[*o.children.map { |c| accept c }]
+             register o, Rational(h['numerator'], h['denominator'])
+           else
+-            obj = revive((resolve_class(name) || Object), o)
++            obj = revive((resolve_class(name) || class_loader.object), o)
+             obj
+           end
+ 
+@@ -204,18 +226,19 @@ def visit_Psych_Nodes_Mapping o
+           list
+ 
+         when '!ruby/range'
++          klass = class_loader.range
+           h = Hash[*o.children.map { |c| accept c }]
+-          register o, Range.new(h['begin'], h['end'], h['excl'])
++          register o, klass.new(h['begin'], h['end'], h['excl'])
+ 
+         when /^!ruby\/exception:?(.*)?$/
+           h = Hash[*o.children.map { |c| accept c }]
+ 
+-          e = build_exception((resolve_class($1) || Exception),
++          e = build_exception((resolve_class($1) || class_loader.exception),
+                               h.delete('message'))
+           init_with(e, h, o)
+ 
+         when '!set', 'tag:yaml.org,2002:set'
+-          set = Psych::Set.new
++          set = class_loader.psych_set.new
+           @st[o.anchor] = set if o.anchor
+           o.children.each_slice(2) do |k,v|
+             set[accept(k)] = accept(v)
+@@ -226,7 +249,7 @@ def visit_Psych_Nodes_Mapping o
+           revive_hash resolve_class($1).new, o
+ 
+         when '!omap', 'tag:yaml.org,2002:omap'
+-          map = register(o, Psych::Omap.new)
++          map = register(o, class_loader.psych_omap.new)
+           o.children.each_slice(2) do |l,r|
+             map[accept(l)] = accept r
+           end
+@@ -326,21 +349,13 @@ def init_with o, h, node
+ 
+       # Convert +klassname+ to a Class
+       def resolve_class klassname
+-        return nil unless klassname and not klassname.empty?
+-
+-        name    = klassname
+-        retried = false
+-
+-        begin
+-          path2class(name)
+-        rescue ArgumentError, NameError => ex
+-          unless retried
+-            name    = "Struct::#{name}"
+-            retried = ex
+-            retry
+-          end
+-          raise retried
+-        end
++        class_loader.load klassname
++      end
++    end
++
++    class NoAliasRuby < ToRuby
++      def visit_Psych_Nodes_Alias o
++        raise BadAlias, "Unknown alias: #{o.anchor}"
+       end
+     end
+   end
+diff --git a/ext/psych/lib/psych/visitors/yaml_tree.rb b/ext/psych/lib/psych/visitors/yaml_tree.rb
+index 96640e026719..ddd745b34a9c 100644
+--- a/ext/psych/lib/psych/visitors/yaml_tree.rb
++++ b/ext/psych/lib/psych/visitors/yaml_tree.rb
+@@ -1,3 +1,7 @@
++require 'psych/tree_builder'
++require 'psych/scalar_scanner'
++require 'psych/class_loader'
++
+ module Psych
+   module Visitors
+     ###
+@@ -36,7 +40,14 @@ def node_for target
+       alias :finished? :finished
+       alias :started? :started
+ 
+-      def initialize options = {}, emitter = TreeBuilder.new, ss = ScalarScanner.new
++      def self.create options = {}, emitter = nil
++        emitter      ||= TreeBuilder.new
++        class_loader = ClassLoader.new
++        ss           = ScalarScanner.new class_loader
++        new(emitter, ss, options)
++      end
++
++      def initialize emitter, ss, options
+         super()
+         @started  = false
+         @finished = false
+diff --git a/ext/psych/psych_to_ruby.c b/ext/psych/psych_to_ruby.c
+index ed5245e12e7a..3cc87a965ec1 100644
+--- a/ext/psych/psych_to_ruby.c
++++ b/ext/psych/psych_to_ruby.c
+@@ -31,11 +31,13 @@ static VALUE path2class(VALUE self, VALUE path)
+ void Init_psych_to_ruby(void)
+ {
+     VALUE psych     = rb_define_module("Psych");
++    VALUE class_loader  = rb_define_class_under(psych, "ClassLoader", rb_cObject);
++
+     VALUE visitors  = rb_define_module_under(psych, "Visitors");
+     VALUE visitor   = rb_define_class_under(visitors, "Visitor", rb_cObject);
+     cPsychVisitorsToRuby = rb_define_class_under(visitors, "ToRuby", visitor);
+ 
+     rb_define_private_method(cPsychVisitorsToRuby, "build_exception", build_exception, 2);
+-    rb_define_private_method(cPsychVisitorsToRuby, "path2class", path2class, 1);
++    rb_define_private_method(class_loader, "path2class", path2class, 1);
+ }
+ /* vim: set noet sws=4 sw=4: */
+diff --git a/test/psych/helper.rb b/test/psych/helper.rb
+index 77ab0bb9d71c..f9b73cf5b588 100644
+--- a/test/psych/helper.rb
++++ b/test/psych/helper.rb
+@@ -31,7 +31,7 @@ def assert_parse_only( obj, yaml )
+     end
+ 
+     def assert_cycle( obj )
+-      v = Visitors::YAMLTree.new
++      v = Visitors::YAMLTree.create
+       v << obj
+       assert_equal(obj, Psych.load(v.tree.yaml))
+       assert_equal( obj, Psych::load(Psych.dump(obj)))
+diff --git a/test/psych/test_safe_load.rb b/test/psych/test_safe_load.rb
+new file mode 100644
+index 000000000000..dd299c0ebf40
+--- /dev/null
++++ b/test/psych/test_safe_load.rb
+@@ -0,0 +1,97 @@
++require 'psych/helper'
++
++module Psych
++  class TestSafeLoad < TestCase
++    class Foo; end
++
++    [1, 2.2, {}, [], "foo"].each do |obj|
++      define_method(:"test_basic_#{obj.class}") do
++        assert_safe_cycle obj
++      end
++    end
++
++    def test_no_recursion
++      x = []
++      x << x
++      assert_raises(Psych::BadAlias) do
++        Psych.safe_load Psych.dump(x)
++      end
++    end
++
++    def test_explicit_recursion
++      x = []
++      x << x
++      assert_equal(x, Psych.safe_load(Psych.dump(x), [], [], true))
++    end
++
++    def test_symbol_whitelist
++      yml = Psych.dump :foo
++      assert_raises(Psych::DisallowedClass) do
++        Psych.safe_load yml
++      end
++      assert_equal(:foo, Psych.safe_load(yml, [Symbol], [:foo]))
++    end
++
++    def test_symbol
++      assert_raises(Psych::DisallowedClass) do
++        assert_safe_cycle :foo
++      end
++      assert_raises(Psych::DisallowedClass) do
++        Psych.safe_load '--- !ruby/symbol foo', []
++      end
++      assert_safe_cycle :foo, [Symbol]
++      assert_safe_cycle :foo, %w{ Symbol }
++      assert_equal :foo, Psych.safe_load('--- !ruby/symbol foo', [Symbol])
++    end
++
++    def test_foo
++      assert_raises(Psych::DisallowedClass) do
++        Psych.safe_load '--- !ruby/object:Foo {}', [Foo]
++      end
++      assert_raises(Psych::DisallowedClass) do
++        assert_safe_cycle Foo.new
++      end
++      assert_kind_of(Foo, Psych.safe_load(Psych.dump(Foo.new), [Foo]))
++    end
++
++    X = Struct.new(:x)
++    def test_struct_depends_on_sym
++      assert_safe_cycle(X.new, [X, Symbol])
++      assert_raises(Psych::DisallowedClass) do
++        cycle X.new, [X]
++      end
++    end
++
++    def test_anon_struct
++      assert Psych.safe_load(<<-eoyml, [Struct, Symbol])
++--- !ruby/struct
++  foo: bar
++                      eoyml
++
++      assert_raises(Psych::DisallowedClass) do
++        Psych.safe_load(<<-eoyml, [Struct])
++--- !ruby/struct
++  foo: bar
++                      eoyml
++      end
++
++      assert_raises(Psych::DisallowedClass) do
++        Psych.safe_load(<<-eoyml, [Symbol])
++--- !ruby/struct
++  foo: bar
++                      eoyml
++      end
++    end
++
++    private
++
++    def cycle object, whitelist = []
++      Psych.safe_load(Psych.dump(object), whitelist)
++    end
++
++    def assert_safe_cycle object, whitelist = []
++      other = cycle object, whitelist
++      assert_equal object, other
++    end
++  end
++end
+diff --git a/test/psych/test_scalar_scanner.rb b/test/psych/test_scalar_scanner.rb
+index a7bf17c912b6..e8e423cb053d 100644
+--- a/test/psych/test_scalar_scanner.rb
++++ b/test/psych/test_scalar_scanner.rb
+@@ -7,7 +7,7 @@ class TestScalarScanner < TestCase
+ 
+     def setup
+       super
+-      @ss = Psych::ScalarScanner.new
++      @ss = Psych::ScalarScanner.new ClassLoader.new
+     end
+ 
+     def test_scan_time
+diff --git a/test/psych/visitors/test_to_ruby.rb b/test/psych/visitors/test_to_ruby.rb
+index 022cc2d2d4ea..c13d980468d4 100644
+--- a/test/psych/visitors/test_to_ruby.rb
++++ b/test/psych/visitors/test_to_ruby.rb
+@@ -6,7 +6,7 @@ module Visitors
+     class TestToRuby < TestCase
+       def setup
+         super
+-        @visitor = ToRuby.new
++        @visitor = ToRuby.create
+       end
+ 
+       def test_object
+@@ -88,7 +88,7 @@ def test_anon_struct
+       end
+ 
+       def test_exception
+-        exc = Exception.new 'hello'
++        exc = ::Exception.new 'hello'
+ 
+         mapping = Nodes::Mapping.new nil, '!ruby/exception'
+         mapping.children << Nodes::Scalar.new('message')
+diff --git a/test/psych/visitors/test_yaml_tree.rb b/test/psych/visitors/test_yaml_tree.rb
+index 496cdd05cc34..40702bce796f 100644
+--- a/test/psych/visitors/test_yaml_tree.rb
++++ b/test/psych/visitors/test_yaml_tree.rb
+@@ -5,7 +5,7 @@ module Visitors
+     class TestYAMLTree < TestCase
+       def setup
+         super
+-        @v = Visitors::YAMLTree.new
++        @v = Visitors::YAMLTree.create
+       end
+ 
+       def test_tree_can_be_called_twice
+@@ -18,7 +18,7 @@ def test_tree_can_be_called_twice
+       def test_yaml_tree_can_take_an_emitter
+         io = StringIO.new
+         e  = Psych::Emitter.new io
+-        v = Visitors::YAMLTree.new({}, e)
++        v = Visitors::YAMLTree.create({}, e)
+         v.start
+         v << "hello world"
+         v.finish

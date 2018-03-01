@@ -1,0 +1,156 @@
+From ba0d5f7a6df6ba5545c3ce0b09e107e10d082d49 Mon Sep 17 00:00:00 2001
+From: nobu <nobu@b2dd03c8-39d4-4d8f-98ff-823fe69b080e>
+Date: Wed, 20 Dec 2017 04:18:31 +0000
+Subject: [PATCH 1/3] Fixed command Injection
+
+* resolv.rb (Resolv::Hosts#lazy_initialize): fixed potential
+  command Injection in Hosts::new() by use of Kernel#open.
+  [Fix GH-1777] [ruby-core:84347] [Bug #14205]
+
+From: Drigg3r <drigg3r@yandex.com>
+
+git-svn-id: svn+ssh://ci.ruby-lang.org/ruby/trunk@61349 b2dd03c8-39d4-4d8f-98ff-823fe69b080e
+---
+ lib/resolv.rb | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/resolv.rb b/lib/resolv.rb
+index 1044b95e68..56183b837d 100644
+--- a/lib/resolv.rb
++++ b/lib/resolv.rb
+@@ -186,7 +186,7 @@ def lazy_initialize # :nodoc:
+         unless @initialized
+           @name2addr = {}
+           @addr2name = {}
+-          open(@filename, 'rb') {|f|
++          File.open(@filename, 'rb') {|f|
+             f.each {|line|
+               line.sub!(/#.*/, '')
+               addr, hostname, *aliases = line.split(/\s+/)
+-- 
+2.15.1
+
+
+From 0b6213635018ef73567388c1095ad1c556e1f4ee Mon Sep 17 00:00:00 2001
+From: nobu <nobu@b2dd03c8-39d4-4d8f-98ff-823fe69b080e>
+Date: Wed, 20 Dec 2017 04:25:01 +0000
+Subject: [PATCH 2/3] Fixed command Injection
+
+* lib/resolv.rb (Resolv::Config.parse_resolv_conf): fixed
+  potential command injection by use of Kernel#open.
+  [ruby-core:84347] [Bug #14205]
+
+git-svn-id: svn+ssh://ci.ruby-lang.org/ruby/trunk@61351 b2dd03c8-39d4-4d8f-98ff-823fe69b080e
+---
+ lib/resolv.rb            |  2 +-
+ test/resolv/test_addr.rb | 11 +++++++++++
+ test/resolv/test_dns.rb  | 10 ++++++++++
+ 3 files changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/lib/resolv.rb b/lib/resolv.rb
+index 56183b837d..48ee400efe 100644
+--- a/lib/resolv.rb
++++ b/lib/resolv.rb
+@@ -904,7 +904,7 @@ def Config.parse_resolv_conf(filename)
+         nameserver = []
+         search = nil
+         ndots = 1
+-        open(filename, 'rb') {|f|
++        File.open(filename, 'rb') {|f|
+           f.each {|line|
+             line.sub!(/[#;].*/, '')
+             keyword, *args = line.split(/\s+/)
+diff --git a/test/resolv/test_addr.rb b/test/resolv/test_addr.rb
+index 4a2df5bfca..78a28c9633 100644
+--- a/test/resolv/test_addr.rb
++++ b/test/resolv/test_addr.rb
+@@ -26,4 +26,15 @@ def test_invalid_byte_comment
+       end
+     end
+   end
++
++  def test_hosts_by_command
++    Dir.mktmpdir do |dir|
++      Dir.chdir(dir) do
++        hosts = Resolv::Hosts.new("|echo error")
++        assert_raise(Errno::ENOENT) do
++          hosts.each_name("") {}
++        end
++      end
++    end
++  end
+ end
+diff --git a/test/resolv/test_dns.rb b/test/resolv/test_dns.rb
+index f21a094b20..8236078374 100644
+--- a/test/resolv/test_dns.rb
++++ b/test/resolv/test_dns.rb
+@@ -176,6 +176,16 @@ def test_invalid_byte_comment
+     end
+   end
+ 
++  def test_resolv_conf_by_command
++    Dir.mktmpdir do |dir|
++      Dir.chdir(dir) do
++        assert_raise(Errno::ENOENT) do
++          Resolv::DNS::Config.parse_resolv_conf("|echo foo")
++        end
++      end
++    end
++  end
++
+   def test_dots_diffences
+     name1 = Resolv::DNS::Name.create("example.org")
+     name2 = Resolv::DNS::Name.create("ex.ampl.eo.rg")
+-- 
+2.15.1
+
+
+From dd71a5a9a459dbda9b9a4786f6a0b5bd59a81aae Mon Sep 17 00:00:00 2001
+From: usa <usa@b2dd03c8-39d4-4d8f-98ff-823fe69b080e>
+Date: Wed, 20 Dec 2017 16:04:41 +0000
+Subject: [PATCH 3/3] fix test errors on Windows
+
+	* test/resolv/test_addr.rb (test_hosts_by_command): on Windows, `|` is
+	  invalid charactor for path and raises `Errno::EINVAL` if trying to
+	  open.
+
+	* test/resolv/test_dns.rb (test_resolv_conf_by_command): ditto.
+
+	cf. [Bug #14205]
+
+
+git-svn-id: svn+ssh://ci.ruby-lang.org/ruby/trunk@61374 b2dd03c8-39d4-4d8f-98ff-823fe69b080e
+---
+ test/resolv/test_addr.rb | 2 +-
+ test/resolv/test_dns.rb  | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/test/resolv/test_addr.rb b/test/resolv/test_addr.rb
+index 78a28c9633..14ec2651ab 100644
+--- a/test/resolv/test_addr.rb
++++ b/test/resolv/test_addr.rb
+@@ -31,7 +31,7 @@ def test_hosts_by_command
+     Dir.mktmpdir do |dir|
+       Dir.chdir(dir) do
+         hosts = Resolv::Hosts.new("|echo error")
+-        assert_raise(Errno::ENOENT) do
++        assert_raise(Errno::ENOENT, Errno::EINVAL) do
+           hosts.each_name("") {}
+         end
+       end
+diff --git a/test/resolv/test_dns.rb b/test/resolv/test_dns.rb
+index 8236078374..1b44f32807 100644
+--- a/test/resolv/test_dns.rb
++++ b/test/resolv/test_dns.rb
+@@ -179,7 +179,7 @@ def test_invalid_byte_comment
+   def test_resolv_conf_by_command
+     Dir.mktmpdir do |dir|
+       Dir.chdir(dir) do
+-        assert_raise(Errno::ENOENT) do
++        assert_raise(Errno::ENOENT, Errno::EINVAL) do
+           Resolv::DNS::Config.parse_resolv_conf("|echo foo")
+         end
+       end
+-- 
+2.15.1
+
