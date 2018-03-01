@@ -762,6 +762,7 @@ make \
   NSS_LIBS="%{NSS_LIBS} -lfreebl" \
   NSS_CFLAGS="%{NSS_CFLAGS}" \
   ECC_JUST_SUITE_B="true" \
+  ARM32JIT="false" \
   SYSTEM_GSETTINGS="true" \
   BUILD_JAXP=false BUILD_JAXWS=false BUILD_LANGTOOLS=false BUILD_JDK=false BUILD_CORBA=false \
   ALT_JDK_IMPORT_PATH=${JDK_TO_BUILD_WITH} ALT_OUTPUTDIR=${PWD}/bootstrap \
@@ -1394,6 +1395,8 @@ exit 0
 %{_sysconfdir}/.java/.systemPrefs
 %{_jvmdir}/%{sdkdir}/jre-abrt
 
+# Ugly workaround for perms issues
+%attr(644,root,root) %{_jvmdir}/%{jredir}/lib/resources.jar
 
 %files devel
 %defattr(-,root,root,-)
@@ -1469,6 +1472,9 @@ exit 0
 %{_jvmdir}/%{jredir}/lib/accessibility.properties
 
 %changelog
+* Tue Feb 27 2018 Johnny Hughes <johnny@centos.org> - 1:1.7.0.171-2.6.13.0
+- Mod to build on armhfp
+
 * Thu Feb 15 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.7.0.171-2.6.13.0
 - Fix missing return statement in src/os_cpu/linux_zero/vm/os_linux_zero.cpp (non-LP64 only)
 - Resolves: rhbz#1528233
