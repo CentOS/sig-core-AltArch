@@ -14,7 +14,7 @@
     %global have_usbredir 0
 %endif
 
-%ifnarch s390 s390x
+%ifnarch s390 s390x %{arm}
     %global have_librdma 1
     %global have_tcmalloc 1
 %endif
@@ -40,6 +40,9 @@
 %endif
 %ifarch aarch64
     %global kvm_target    aarch64
+%endif
+%ifarch %{arm}
+    %global kvm_target    arm
 %endif
 
 #Versions of various parts:
@@ -82,7 +85,7 @@ Epoch: 10
 License: GPLv2+ and LGPLv2+ and BSD
 Group: Development/Tools
 URL: http://www.qemu.org/
-ExclusiveArch: x86_64 %{power64} aarch64 s390x
+ExclusiveArch: x86_64 %{power64} aarch64 s390x %{arm}
 Requires: seabios-bin >= 1.7.2.2-5
 Requires: sgabios-bin
 Requires: seavgabios-bin
@@ -6035,6 +6038,9 @@ sh %{_sysconfdir}/sysconfig/modules/kvm.modules &> /dev/null || :
 %{_mandir}/man8/qemu-nbd.8*
 
 %changelog
+* Sat Mar 03 2018 Fabian Arrotin <arrfab@centos.org> - - 1.5.3-141.el7_4.5
+- Added kvm_target arm (Jacco@redsleeve.org)
+
 * Wed Nov 29 2017 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-141.el7_4.5
 - kvm-vfio-pci-Only-mmap-TARGET_PAGE_SIZE-regions.patch [bz#1515110]
 - Resolves: bz#1515110
