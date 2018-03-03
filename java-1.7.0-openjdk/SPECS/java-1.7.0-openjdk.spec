@@ -5,7 +5,7 @@
 # conflicting) files in the -debuginfo package
 %undefine _missing_build_ids_terminate_build
 
-%global icedtea_version 2.6.12
+%global icedtea_version 2.6.13
 %global hg_tag icedtea-{icedtea_version}
 
 %global aarch64			aarch64 arm64 armv8
@@ -154,8 +154,8 @@
 
 # Standard JPackage naming and versioning defines.
 %global origin          openjdk
-%global updatever       161
-%global buildver        00
+%global updatever       171
+%global buildver        01
 # Keep priority on 7digits in case updatever>9
 %global priority        1700%{updatever}
 %global javaver         1.7.0
@@ -304,8 +304,8 @@ Patch400: rh1022017.patch
 Patch500: pr2809.patch
 # PR3393, RH1273760: Support using RSAandMGF1 with the SHA hash algorithms in the PKCS11 provider (will appear in 2.7.0)
 Patch501: pr3393-rh1273760.patch
-# PR3497: AArch64: Adapt to 8002074: Support for AES on SPARC
-Patch502: pr3497.patch
+# 8197981: Missing return statement in __sync_val_compare_and_swap_8
+Patch502: 8197981.patch
 
 # End of tmp patches
 
@@ -1472,9 +1472,28 @@ exit 0
 %{_jvmdir}/%{jredir}/lib/accessibility.properties
 
 %changelog
-* Wed Aug 30 2017 Fabian Arrotin <arrfab@centos.org> - 1:1.7.0.141-2.6.10-1
-- disabled ARM32JIT. the 8032051 security patch was not yet made for arm32. (jacco@redsleeve.org)
-- Ugly workaround for wrong perms on resources.jar
+* Tue Feb 27 2018 Johnny Hughes <johnny@centos.org> - 1:1.7.0.171-2.6.13.0
+- Mod to build on armhfp
+
+* Thu Feb 15 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.7.0.171-2.6.13.0
+- Fix missing return statement in src/os_cpu/linux_zero/vm/os_linux_zero.cpp (non-LP64 only)
+- Resolves: rhbz#1528233
+
+* Thu Feb 15 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.7.0.171-2.6.13.0
+- Update to new tarball with AArch64 return value fixes, dropping local patch.
+- Resolves: rhbz#1528233
+
+* Wed Feb 14 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.7.0.171-2.6.13.0
+- Extend pr3393-rh1273760.patch so Token.getMechanismInfo can handle CK_MECHANISM
+- Resolves: rhbz#1528233
+
+* Tue Feb 13 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.7.0.171-2.6.13.0
+- Bump to 2.6.13 and u171b01.
+- Update java-1.7.0-openjdk-java-access-bridge-security.patch to apply after 8186080
+- Drop PR3497 AArch64 patch now applied upstream.
+- Update RC4 patch (8076221/PR2809) to apply after 8148108 (DH lower limit increase)
+- Fix file path in rh1022017.patch.
+- Resolves: rhbz#1528233
 
 * Tue Nov 28 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.7.0.161-2.6.12.0
 - Remove superfluous %%1 from policy JAR file path.

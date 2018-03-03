@@ -26,7 +26,7 @@
 %endif
 
 
-%global release 30
+%global release 33
 %{!?release_string:%global release_string %{?development_release:0.}%{release}%{?development_release:.%{development_release}}%{?dist}}
 
 %global rubygems_version 2.0.14.1
@@ -197,6 +197,47 @@ Patch35: ruby-2.1.0-fix-hostname-size-limit.patch
 Patch36: ruby-2.2.4-check-length-of-selected-NPN-protocol.patch
 # https://bugs.ruby-lang.org/issues/11810
 Patch37: ruby-2.2.6-fix-parsing-protocol-list.patch
+# CVE-2017-0903: Fix unsafe object deserialization through YAML formatted gem
+# specifications.
+# https://bugs.ruby-lang.org/issues/14003
+Patch38: ruby-2.4.3-CVE-2017-0903-Fix-unsafe-object-deserialization-vulnerability.patch
+# CVE-2017-0899 - Fix an ANSI escape sequence vulnerability.
+# CVE-2017-0900 - Fix a DOS vulernerability in the query command.
+# CVE-2017-0901 - Fix a vulnerability in the gem installer that allowed
+#   a malicious gem to overwrite arbitrary files.
+# CVE-2017-0902 - Fix a DNS request hijacking vulnerability.
+# https://bugs.ruby-lang.org/issues/13842
+Patch39: ruby-2.2.8-lib-rubygems-fix-several-vulnerabilities-in-RubyGems.patch
+# CVE-2017-0898 - Buffer underrun vulnerability in Kernel.sprintf
+# https://bugs.ruby-lang.org/issues/13499
+Patch40: ruby-2.2.8-Buffer-underrun-vulnerability-in-Kernel.sprintf.patch
+# CVE-2017-10784 - Escape sequence injection vulnerability in the Basic
+#   authentication of WEBrick
+# https://github.com/ruby/ruby/commit/8a81d04d2588d9c7a898473b431a0dabcab39fbd
+Patch41: ruby-2.2.8-sanitize-any-type-of-logs.patch
+# CVE-2017-14064 - Arbitrary heap exposure during a JSON.generate call
+# https://bugs.ruby-lang.org/issues/13853
+Patch42: ruby-2.2.8-Fix-arbitrary-heap-exposure-during-a-JSON.generate-call.patch
+# CVE-2017-17405 - Command injection vulnerability in Net::FTP
+# https://bugs.ruby-lang.org/issues/14185
+Patch43: ruby-2.2.9-Fix-a-command-injection-vulnerability-in-Net-FTP.patch
+# CVE-2017-14033 - Buffer underrun in OpenSSL ASN1 decode.
+# https://github.com/ruby/ruby/commit/5450329ad1778d72f117b68e5edb97ae1bf4d438
+Patch44: ruby-2.2.8-asn1-fix-out-of-bounds-read-in-decoding-constructed-objects.patch
+# CVE-2017-17790 - Command injection in lib/resolv.rb:lazy_initialize() allows
+# arbitrary code execution
+# https://bugs.ruby-lang.org/issues/14205
+Patch45: ruby-2.5.0-Fixed-command-Injection.patch
+# Patch for CVE-2017-0903 depends on Psych.safe_load method, which should be
+# available in Psych 2.0.0, which is being part of Ruby 2.0.0, but that is
+# apparently not true :/
+# https://github.com/ruby/ruby/commit/476a62fbbec0c8b7dafb74827447cfb4ebd7dd06
+Patch46: ruby-2.1.0-there-should-be-only-one-exception.patch
+# https://github.com/ruby/ruby/commit/7ceafcbdf5bd2155704839f97b869e689f66feeb
+Patch47: ruby-2.1.0-Adding-Psych.safe_load.patch
+# Recent tzdata change breaks Ruby test suite.
+# https://bugs.ruby-lang.org/issues/14438
+Patch48: ruby-2.5.0-Disable-Tokyo-TZ-tests.patch
 
 Requires: %{name}-libs%{?_isa} = %{version}-%{release}
 Requires: ruby(rubygems) >= %{rubygems_version}
@@ -476,6 +517,17 @@ Tcl/Tk interface for the object-oriented scripting language Ruby.
 %patch35 -p1
 %patch36 -p1
 %patch37 -p1
+%patch38 -p1
+%patch39 -p1
+%patch40 -p1
+%patch41 -p1
+%patch42 -p1
+%patch43 -p1
+%patch44 -p1
+%patch45 -p1
+%patch46 -p1
+%patch47 -p1
+%patch48 -p1
 
 # Provide an example of usage of the tapset:
 cp -a %{SOURCE3} .
@@ -964,8 +1016,55 @@ OPENSSL_ENABLE_MD5_VERIFY=1 make check TESTS="-v $DISABLE_TESTS"
 %{ruby_libdir}/tkextlib
 
 %changelog
-* Wed Aug 09 2017 Fabian Arrotin <arrfab@centos.org> - 2.0.0.648-30
-- Disabled test_const and test_fiber on armhfp/.el7 (platform too slow)
+* Thu Mar  1 2018 Johnny Hughes <johnny@centos.org> - 2.0.0.648-33
+- Modify to build on armhfp
+* Mon Feb 19 2018 Vít Ondruch <vondruch@redhat.com> - 2.0.0.648-33
+- Fix always passing WEBrick test.
+
+* Fri Feb 16 2018 Vít Ondruch <vondruch@redhat.com> - 2.0.0.648-32
+- Add Psych.safe_load
+  * ruby-2.1.0-there-should-be-only-one-exception.patch
+  * ruby-2.1.0-Adding-Psych.safe_load.patch
+  Related: CVE-2017-0903
+- Disable Tokyo TZ tests broken by recen tzdata update.
+  * ruby-2.5.0-Disable-Tokyo-TZ-tests.patch
+  Related: CVE-2017-0903
+
+* Mon Jan 15 2018 Vít Ondruch <vondruch@redhat.com> - 2.0.0.648-31
+- Fix unsafe object deserialization in RubyGems (CVE-2017-0903).
+  * ruby-2.4.3-CVE-2017-0903-Fix-unsafe-object-deserialization
+      -vulnerability.patch
+  Resolves: CVE-2017-0903
+- Fix an ANSI escape sequence vulnerability (CVE-2017-0899).
+  Resolves: CVE-2017-0899
+- Fix a DOS vulernerability in the query command (CVE-2017-0900).
+  Resolves: CVE-2017-0900
+- Fix a vulnerability in the gem installer that allowed a malicious gem
+    to overwrite arbitrary files (CVE-2017-0901).
+  Resolves: CVE-2017-0901
+- Fix a DNS request hijacking vulnerability (CVE-2017-0902).
+  * ruby-2.2.8-lib-rubygems-fix-several-vulnerabilities-in-RubyGems.patch
+  Resolves: CVE-2017-0902
+- Fix buffer underrun vulnerability in Kernel.sprintf (CVE-2017-0898).
+  * ruby-2.2.8-Buffer-underrun-vulnerability-in-Kernel.sprintf.patch
+  Resolves: CVE-2017-0898
+- Escape sequence injection vulnerability in the Basic
+    authentication of WEBrick (CVE-2017-10784).
+  * ruby-2.2.8-sanitize-any-type-of-logs.patch
+  Resolves: CVE-2017-10784
+- Arbitrary heap exposure during a JSON.generate call (CVE-2017-14064).
+  * ruby-2.2.8-Fix-arbitrary-heap-exposure-during-a-JSON.generate-call.patch
+  Resolves: CVE-2017-14064
+- Command injection vulnerability in Net::FTP (CVE-2017-17405).
+  * ruby-2.2.9-Fix-a-command-injection-vulnerability-in-Net-FTP.patch
+  Resolves: CVE-2017-17405
+- Buffer underrun in OpenSSL ASN1 decode (CVE-2017-14033).
+  * ruby-2.2.8-asn1-fix-out-of-bounds-read-in-decoding-constructed-objects.patch
+  Resolves: CVE-2017-14033
+- Command injection in lib/resolv.rb:lazy_initialize() allows arbitrary code
+    execution(CVE-2017-17790).
+  * ruby-2.5.0-Fixed-command-Injection.patch
+  Resolves: CVE-2017-17790
 
 * Wed Mar 01 2017 Vít Ondruch <vondruch@redhat.com> - 2.0.0.648-30
 - Fix test_npn_protocol_selection_ary and test_npn_protocol_selection_enum
