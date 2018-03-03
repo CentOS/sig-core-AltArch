@@ -1,0 +1,60 @@
+From d2291657a3d6100be53008fe8206c9e72b37c584 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Wed, 22 Jun 2016 01:06:15 +0200
+Subject: [PATCH] block/iscsi: avoid potential overflow of acb->task->cdb
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <20160622010615.10307-1-famz@redhat.com>
+Patchwork-id: 70730
+O-Subject: [RHEL-7.3 qemu-kvm PATCH] block/iscsi: avoid potential overflow of acb->task->cdb
+Bugzilla: 1340929
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Peter Lieven <pl@kamp.de>
+
+at least in the path via virtio-blk the maximum size is not
+restricted.
+
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Peter Lieven <pl@kamp.de>
+Message-Id: <1464080368-29584-1-git-send-email-pl@kamp.de>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit a6b3167fa0e825aebb5a7cd8b437b6d41584a196)
+
+ Conflicts:
+	block/iscsi.c
+
+Upstream uses qemu_aio_unref, downstream uses qemu_aio_release.
+
+Also, context in conflict because downstream doesn't have 4bb17ab51
+(iscsi: Emulate commands in iscsi_aio_ioctl as iscsi_ioctl).
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/iscsi.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/block/iscsi.c b/block/iscsi.c
+index 92dc1dd..d472ee8 100644
+--- a/block/iscsi.c
++++ b/block/iscsi.c
+@@ -698,6 +698,13 @@ static BlockDriverAIOCB *iscsi_aio_ioctl(BlockDriverState *bs,
+     acb->buf         = NULL;
+     acb->ioh         = buf;
+ 
++    if (acb->ioh->cmd_len > SCSI_CDB_MAX_SIZE) {
++        error_report("iSCSI: ioctl error CDB exceeds max size (%d > %d)",
++                     acb->ioh->cmd_len, SCSI_CDB_MAX_SIZE);
++        qemu_aio_release(acb);
++        return NULL;
++    }
++
+     acb->task = malloc(sizeof(struct scsi_task));
+     if (acb->task == NULL) {
+         error_report("iSCSI: Failed to allocate task for scsi command. %s",
+-- 
+1.8.3.1
+

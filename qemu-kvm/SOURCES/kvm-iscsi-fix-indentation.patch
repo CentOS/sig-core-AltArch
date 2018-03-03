@@ -1,0 +1,97 @@
+From 2f080efe2f5055117b1083c01618305dd08e4aa9 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Fri, 4 Apr 2014 05:55:56 +0200
+Subject: [PATCH 01/12] iscsi: fix indentation
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1396590962-25815-2-git-send-email-famz@redhat.com>
+Patchwork-id: 58338
+O-Subject: [RHEL-7 0day qemu-kvm PATCH 1/7] iscsi: fix indentation
+Bugzilla: 1083413
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 35cb1748d54c8e56881a5e10138b3eb090f3a6bc)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ block/iscsi.c | 45 +++++++++++++++++++++++----------------------
+ 1 file changed, 23 insertions(+), 22 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/iscsi.c |   45 +++++++++++++++++++++++----------------------
+ 1 files changed, 23 insertions(+), 22 deletions(-)
+
+diff --git a/block/iscsi.c b/block/iscsi.c
+index 64a8295..082956c 100644
+--- a/block/iscsi.c
++++ b/block/iscsi.c
+@@ -1245,35 +1245,36 @@ static QemuOptsList runtime_opts = {
+     },
+ };
+ 
+-static struct scsi_task *iscsi_do_inquiry(struct iscsi_context *iscsi,
+-                                          int lun, int evpd, int pc) {
+-        int full_size;
+-        struct scsi_task *task = NULL;
+-        task = iscsi_inquiry_sync(iscsi, lun, evpd, pc, 64);
++static struct scsi_task *iscsi_do_inquiry(struct iscsi_context *iscsi, int lun,
++                                          int evpd, int pc)
++{
++    int full_size;
++    struct scsi_task *task = NULL;
++    task = iscsi_inquiry_sync(iscsi, lun, evpd, pc, 64);
++    if (task == NULL || task->status != SCSI_STATUS_GOOD) {
++        goto fail;
++    }
++    full_size = scsi_datain_getfullsize(task);
++    if (full_size > task->datain.size) {
++        scsi_free_scsi_task(task);
++
++        /* we need more data for the full list */
++        task = iscsi_inquiry_sync(iscsi, lun, evpd, pc, full_size);
+         if (task == NULL || task->status != SCSI_STATUS_GOOD) {
+             goto fail;
+         }
+-        full_size = scsi_datain_getfullsize(task);
+-        if (full_size > task->datain.size) {
+-            scsi_free_scsi_task(task);
+-
+-            /* we need more data for the full list */
+-            task = iscsi_inquiry_sync(iscsi, lun, evpd, pc, full_size);
+-            if (task == NULL || task->status != SCSI_STATUS_GOOD) {
+-                goto fail;
+-            }
+-        }
++    }
+ 
+-        return task;
++    return task;
+ 
+ fail:
+-        error_report("iSCSI: Inquiry command failed : %s",
+-                     iscsi_get_error(iscsi));
+-        if (task) {
+-            scsi_free_scsi_task(task);
+-            return NULL;
+-        }
++    error_report("iSCSI: Inquiry command failed : %s",
++                 iscsi_get_error(iscsi));
++    if (task) {
++        scsi_free_scsi_task(task);
+         return NULL;
++    }
++    return NULL;
+ }
+ 
+ /*
+-- 
+1.7.1
+

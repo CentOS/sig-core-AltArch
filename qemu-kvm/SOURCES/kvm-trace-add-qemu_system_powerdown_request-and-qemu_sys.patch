@@ -1,0 +1,110 @@
+From 5e18df4d60ba22586ec4f4d80804ee8d4e41372e Mon Sep 17 00:00:00 2001
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Thu, 23 Oct 2014 10:03:09 +0200
+Subject: [PATCH 01/16] trace: add qemu_system_powerdown_request and
+ qemu_system_shutdown_request trace events
+
+Message-id: <1414058589-12881-1-git-send-email-stefanha@redhat.com>
+Patchwork-id: 61833
+O-Subject: [RHEL7.2 qemu-kvm PATCH] trace: add qemu_system_powerdown_request and qemu_system_shutdown_request trace events
+Bugzilla: 1155671
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+From: Yang Zhiyong <yangzy.fnst@cn.fujitsu.com>
+
+Bugzilla: 1155671
+Brew: https://brewweb.devel.redhat.com/taskinfo?taskID=8153235
+Upstream: merged
+
+We have the experience that the guest doesn't stop successfully
+though it was instructed to shut down.
+
+The root cause may be not in QEMU mostly.  However, QEMU is often
+suspected at the beginning just because the issue occurred in
+virtualization environment.
+
+Therefore, we need to affirm that QEMU received the shutdown
+request and raised ACPI irq from "virsh shutdown" command,
+virt-manger or stopping QEMU process to the VM .
+So that we can affirm the problems was belonged to the Guset OS
+rather than the QEMU itself.
+
+When we stop guests by "virsh shutdown" command or virt-manger,
+or stopping QEMU process, qemu_system_powerdown_request() or
+qemu_system_shutdown_request() is called. Then the below functions
+in main_loop_should_exit() of Vl.c are called roughly in the
+following order.
+
+	if (qemu_powerdown_requested())
+		qemu_system_powerdown()
+			monitor_protocol_event(QEVENT_POWERDOWN, NULL)
+
+	OR
+
+	if(qemu_shutdown_requested()}
+		monitor_protocol_event(QEVENT_SHUTDOWN, NULL);
+
+The tracepoint of monitor_protocol_event() already exists, but no
+tracepoints are defined for qemu_system_powerdown_request() and
+qemu_system_shutdown_request(). So this patch adds two tracepoints for
+the two functions. We believe that it will become much easier to
+isolate the problem mentioned above by these tracepoints.
+
+Signed-off-by: Yang Zhiyong <yangzy.fnst@cn.fujitsu.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit bc78cff9757782501db15d39828e6af4186fe331)
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	trace-events
+
+Context conflict, easy to resolve.
+---
+ trace-events | 2 ++
+ vl.c         | 2 ++
+ 2 files changed, 4 insertions(+)
+---
+ trace-events | 2 ++
+ vl.c         | 2 ++
+ 2 files changed, 4 insertions(+)
+
+diff --git a/trace-events b/trace-events
+index e7bb7e0..b43132c 100644
+--- a/trace-events
++++ b/trace-events
+@@ -477,6 +477,8 @@ runstate_set(int new_state) "new state %d"
+ g_malloc(size_t size, void *ptr) "size %zu ptr %p"
+ g_realloc(void *ptr, size_t size, void *newptr) "ptr %p size %zu newptr %p"
+ g_free(void *ptr) "ptr %p"
++qemu_system_shutdown_request(void) ""
++qemu_system_powerdown_request(void) ""
+ 
+ # block/qcow2.c
+ qcow2_writev_start_req(void *co, int64_t sector, int nb_sectors) "co %p sector %" PRIx64 " nb_sectors %d"
+diff --git a/vl.c b/vl.c
+index 2932d7c..2b3dc88 100644
+--- a/vl.c
++++ b/vl.c
+@@ -1894,6 +1894,7 @@ void qemu_system_killed(int signal, pid_t pid)
+ 
+ void qemu_system_shutdown_request(void)
+ {
++    trace_qemu_system_shutdown_request();
+     shutdown_requested = 1;
+     qemu_notify_event();
+ }
+@@ -1906,6 +1907,7 @@ static void qemu_system_powerdown(void)
+ 
+ void qemu_system_powerdown_request(void)
+ {
++    trace_qemu_system_powerdown_request();
+     powerdown_requested = 1;
+     qemu_notify_event();
+ }
+-- 
+1.8.3.1
+

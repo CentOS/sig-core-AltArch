@@ -1,0 +1,140 @@
+From bfea65d6f229fd65c78ae4daaddf0d0711d0aedd Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Thu, 21 Nov 2013 16:27:19 +0100
+Subject: [PATCH 09/14] improve debuggability of BLOCK_IO_ERROR / BLOCK_JOB_ERROR (RHEL 6->7 fwd)
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1385051239-3677-4-git-send-email-lersek@redhat.com>
+Patchwork-id: 55837
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 3/3] improve debuggability of BLOCK_IO_ERROR / BLOCK_JOB_ERROR (RHEL 6->7 fwd)
+Bugzilla: 895041
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Jiri Denemark <jdenemar@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=895041
+
+Forward-port of RHEL-6-only commit
+
+  commit 1a2b98f958fb770b70fa5a244e86c93655400858
+  Author: Luiz Capitulino <lcapitulino@redhat.com>
+  Date:   Thu Nov 4 13:51:42 2010 -0200
+
+      QMP: Improve debuggability of the BLOCK_IO_ERROR event
+
+Again, the code & docs are extended to BLOCK_JOB_ERROR.
+
+In the printf() added to bdrv_emit_qmp_error_event() I could have
+scavenged the static global "monitor_event_names", but I would have had
+to make it extern (or rather add a public getter function), which I deemed
+too much.
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+---
+ block.c            | 19 +++++++++++++++++++
+ QMP/qmp-events.txt | 20 ++++++++++++++++++--
+ 2 files changed, 37 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ QMP/qmp-events.txt |   20 ++++++++++++++++++--
+ block.c            |   19 +++++++++++++++++++
+ 2 files changed, 37 insertions(+), 2 deletions(-)
+
+diff --git a/QMP/qmp-events.txt b/QMP/qmp-events.txt
+index c8c6d75..fc4b7db 100644
+--- a/QMP/qmp-events.txt
++++ b/QMP/qmp-events.txt
+@@ -59,6 +59,11 @@ Data:
+     "eperm": errno EPERM
+     "enospc": errno ENOSPC
+     "eother": any other errno (other than EIO, EPERM, ENOSPC)
++- "__com.redhat_debug_info": RHEL7 extension containing debug information for
++                             humans, applications should NOT read any
++                             information from this member (json-object):
++    - "errno": errno value (json-int)
++    - "message": error message returned by strerror() (json-string)
+ 
+ Example:
+ 
+@@ -66,7 +71,10 @@ Example:
+     "data": { "device": "ide0-hd1",
+               "operation": "write",
+               "action": "stop",
+-              "__com.redhat_reason": "enospc" },
++              "__com.redhat_reason": "enospc",
++              "__com.redhat_debug_info": {
++                  "message": "No space left on device",
++                  "errno": 28 } }
+     "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
+ 
+ Note: If action is "stop", a STOP event will eventually follow the
+@@ -144,6 +152,11 @@ Data:
+     "eperm": errno EPERM
+     "enospc": errno ENOSPC
+     "eother": any other errno (other than EIO, EPERM, ENOSPC)
++- "__com.redhat_debug_info": RHEL7 extension containing debug information for
++                             humans, applications should NOT read any
++                             information from this member (json-object):
++    - "errno": errno value (json-int)
++    - "message": error message returned by strerror() (json-string)
+ 
+ Example:
+ 
+@@ -151,7 +164,10 @@ Example:
+     "data": { "device": "ide0-hd1",
+               "operation": "write",
+               "action": "stop",
+-              "__com.redhat_reason": "enospc" },
++              "__com.redhat_reason": "enospc",
++              "__com.redhat_debug_info": {
++                  "message": "No space left on device",
++                  "errno": 28 } }
+     "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
+ 
+ BLOCK_JOB_READY
+diff --git a/block.c b/block.c
+index 68755bf..8ef07bb 100644
+--- a/block.c
++++ b/block.c
+@@ -1748,6 +1748,18 @@ static void bdrv_put_rhel7_reason(QDict *event, int error)
+     qdict_put(event, BDRV_REASON_KEY, qstring_from_str(reason));
+ }
+ 
++#define BDRV_DEBUG_KEY  RFQDN_REDHAT "debug_info"
++
++/* RHEL7 vendor extension */
++static void bdrv_put_rhel7_debug_info(QDict *event, int error)
++{
++    QObject *info;
++
++    info = qobject_from_jsonf("{ 'errno': %d, 'message': %s }", error,
++                               strerror(error));
++    qdict_put_obj(event, BDRV_DEBUG_KEY, info);
++}
++
+ void bdrv_emit_qmp_error_event(const BlockDriverState *bdrv,
+                                enum MonitorEvent ev,
+                                BlockErrorAction action,
+@@ -1771,11 +1783,18 @@ void bdrv_emit_qmp_error_event(const BlockDriverState *bdrv,
+         abort();
+     }
+ 
++    fprintf(stderr, "%s error in device '%s': %s (%d)\n",
++                     ev == QEVENT_BLOCK_IO_ERROR  ? "block I/O" :
++                     ev == QEVENT_BLOCK_JOB_ERROR ? "block job" :
++                     "other block",
++                     bdrv->device_name, strerror(error), error);
++
+     data = qobject_from_jsonf("{ 'device': %s, 'action': %s, 'operation': %s }",
+                               bdrv->device_name,
+                               action_str,
+                               is_read ? "read" : "write");
+     bdrv_put_rhel7_reason(qobject_to_qdict(data), error);
++    bdrv_put_rhel7_debug_info(qobject_to_qdict(data), error);
+     monitor_protocol_event(ev, data);
+ 
+     qobject_decref(data);
+-- 
+1.7.1
+

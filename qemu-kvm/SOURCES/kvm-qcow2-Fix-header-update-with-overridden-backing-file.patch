@@ -1,0 +1,288 @@
+From 8538f7d5ace7b8ddb751d61a17c4a822b2333b39 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:22:35 +0200
+Subject: [PATCH 41/42] qcow2: Fix header update with overridden backing file
+
+Message-id: <1434212556-3927-42-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66060
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 41/42] qcow2: Fix header update with overridden backing file
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+BZ: 1129893
+
+In recent qemu versions, it is possible to override the backing file
+name and format that is stored in the image file with values given at
+runtime. In such cases, the temporary override could end up in the
+image header if the qcow2 header was updated, while obviously correct
+behaviour would be to leave the on-disk backing file path/format
+unchanged.
+
+Fix this and add a test case for it.
+
+Reported-by: Michael Tokarev <mjt@tls.msk.ru>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Message-id: 1428411796-2852-1-git-send-email-kwolf@redhat.com
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit e4603fe139e2161464d7e75faa3a650e31f057fc)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	tests/qemu-iotests/group
+	tests/qemu-iotests/130
+	tests/qemu-iotests/130.out
+
+common.qemu does not exist downstream, so the HMP commit case cannot be
+tested. _filter_img_info does not exist either, so just omit it and add
+the additional cluster_size line to the test output (this test is
+qcow2-specific anyway).
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2.c              | 29 ++++++++++++++-----
+ block/qcow2.h              |  6 ++++
+ tests/qemu-iotests/130     | 71 ++++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/130.out | 28 ++++++++++++++++++
+ tests/qemu-iotests/group   |  1 +
+ 5 files changed, 128 insertions(+), 7 deletions(-)
+ create mode 100755 tests/qemu-iotests/130
+ create mode 100644 tests/qemu-iotests/130.out
+
+diff --git a/block/qcow2.c b/block/qcow2.c
+index 991c41f..61f7e57 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -139,6 +139,7 @@ static int qcow2_read_extensions(BlockDriverState *bs, uint64_t start_offset,
+                 return 3;
+             }
+             bs->backing_format[ext.len] = '\0';
++            s->image_backing_format = g_strdup(bs->backing_format);
+ #ifdef DEBUG_EXT
+             printf("Qcow2: Got format extension %s\n", bs->backing_format);
+ #endif
+@@ -734,6 +735,7 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
+             goto fail;
+         }
+         bs->backing_file[len] = '\0';
++        s->image_backing_file = g_strdup(bs->backing_file);
+     }
+ 
+     /* Internal snapshots */
+@@ -1249,6 +1251,9 @@ static void qcow2_close(BlockDriverState *bs)
+     g_free(s->unknown_header_fields);
+     cleanup_unknown_header_ext(bs);
+ 
++    g_free(s->image_backing_file);
++    g_free(s->image_backing_format);
++
+     g_free(s->cluster_cache);
+     qemu_vfree(s->cluster_data);
+     qcow2_refcount_close(bs);
+@@ -1399,9 +1404,10 @@ int qcow2_update_header(BlockDriverState *bs)
+     }
+ 
+     /* Backing file format header extension */
+-    if (*bs->backing_format) {
++    if (s->image_backing_format) {
+         ret = header_ext_add(buf, QCOW2_EXT_MAGIC_BACKING_FORMAT,
+-                             bs->backing_format, strlen(bs->backing_format),
++                             s->image_backing_format,
++                             strlen(s->image_backing_format),
+                              buflen);
+         if (ret < 0) {
+             goto fail;
+@@ -1459,8 +1465,8 @@ int qcow2_update_header(BlockDriverState *bs)
+     buflen -= ret;
+ 
+     /* Backing file name */
+-    if (*bs->backing_file) {
+-        size_t backing_file_len = strlen(bs->backing_file);
++    if (s->image_backing_file) {
++        size_t backing_file_len = strlen(s->image_backing_file);
+ 
+         if (buflen < backing_file_len) {
+             ret = -ENOSPC;
+@@ -1468,7 +1474,7 @@ int qcow2_update_header(BlockDriverState *bs)
+         }
+ 
+         /* Using strncpy is ok here, since buf is not NUL-terminated. */
+-        strncpy(buf, bs->backing_file, buflen);
++        strncpy(buf, s->image_backing_file, buflen);
+ 
+         header->backing_file_offset = cpu_to_be64(buf - ((char*) header));
+         header->backing_file_size   = cpu_to_be32(backing_file_len);
+@@ -1489,9 +1495,17 @@ fail:
+ static int qcow2_change_backing_file(BlockDriverState *bs,
+     const char *backing_file, const char *backing_fmt)
+ {
++    BDRVQcowState *s = bs->opaque;
++
+     pstrcpy(bs->backing_file, sizeof(bs->backing_file), backing_file ?: "");
+     pstrcpy(bs->backing_format, sizeof(bs->backing_format), backing_fmt ?: "");
+ 
++    g_free(s->image_backing_file);
++    g_free(s->image_backing_format);
++
++    s->image_backing_file = backing_file ? g_strdup(bs->backing_file) : NULL;
++    s->image_backing_format = backing_fmt ? g_strdup(bs->backing_format) : NULL;
++
+     return qcow2_update_header(bs);
+ }
+ 
+@@ -2286,8 +2300,9 @@ static int qcow2_amend_options(BlockDriverState *bs,
+     }
+ 
+     if (backing_file || backing_format) {
+-        ret = qcow2_change_backing_file(bs, backing_file ?: bs->backing_file,
+-                                        backing_format ?: bs->backing_format);
++        ret = qcow2_change_backing_file(bs,
++                    backing_file ?: s->image_backing_file,
++                    backing_format ?: s->image_backing_format);
+         if (ret < 0) {
+             return ret;
+         }
+diff --git a/block/qcow2.h b/block/qcow2.h
+index b210a7f..dd3e768 100644
+--- a/block/qcow2.h
++++ b/block/qcow2.h
+@@ -263,6 +263,12 @@ typedef struct BDRVQcowState {
+     QLIST_HEAD(, Qcow2UnknownHeaderExtension) unknown_header_ext;
+     QTAILQ_HEAD (, Qcow2DiscardRegion) discards;
+     bool cache_discards;
++
++    /* Backing file path and format as stored in the image (this is not the
++     * effective path/format, which may be the result of a runtime option
++     * override) */
++    char *image_backing_file;
++    char *image_backing_format;
+ } BDRVQcowState;
+ 
+ /* XXX: use std qcow open function ? */
+diff --git a/tests/qemu-iotests/130 b/tests/qemu-iotests/130
+new file mode 100755
+index 0000000..68dbb48
+--- /dev/null
++++ b/tests/qemu-iotests/130
+@@ -0,0 +1,71 @@
++#!/bin/bash
++#
++# Test that temporary backing file overrides (on the command line or in
++# blockdev-add) don't replace the original path stored in the image during
++# header updates.
++#
++# Copyright (C) 2015 Red Hat, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++
++# creator
++owner=kwolf@redhat.com
++
++seq="$(basename $0)"
++echo "QA output created by $seq"
++
++here="$PWD"
++tmp=/tmp/$$
++status=1	# failure is the default!
++
++_cleanup()
++{
++    _cleanup_test_img
++}
++trap "_cleanup; exit \$status" 0 1 2 3 15
++
++# get standard environment, filters and checks
++. ./common.rc
++. ./common.filter
++
++_supported_fmt qcow2
++_supported_proto generic
++_supported_os Linux
++
++
++TEST_IMG="$TEST_IMG.orig" _make_test_img 64M
++TEST_IMG="$TEST_IMG.base" _make_test_img 64M
++_make_test_img 64M
++_img_info
++
++echo
++echo "=== Marking image dirty (lazy refcounts) ==="
++echo
++
++# Test that a backing file isn't written
++_make_test_img 64M
++$QEMU_IO -c "open -o backing.file.filename=$TEST_IMG.base,lazy-refcounts=on $TEST_IMG" -c "write 0 4k" | _filter_qemu_io
++_img_info
++
++# Make sure that if there was a backing file that was just overridden on the
++# command line, that backing file is retained, with the right format
++_make_test_img -F raw -b "$TEST_IMG.orig" 64M
++$QEMU_IO -c "open -o backing.file.filename=$TEST_IMG.base,backing.driver=$IMGFMT,lazy-refcounts=on $TEST_IMG" -c "write 0 4k" | _filter_qemu_io
++_img_info
++
++# success, all done
++echo '*** done'
++rm -f $seq.full
++status=0
+diff --git a/tests/qemu-iotests/130.out b/tests/qemu-iotests/130.out
+new file mode 100644
+index 0000000..bd489dd
+--- /dev/null
++++ b/tests/qemu-iotests/130.out
+@@ -0,0 +1,28 @@
++QA output created by 130
++Formatting 'TEST_DIR/t.IMGFMT.orig', fmt=IMGFMT size=67108864
++Formatting 'TEST_DIR/t.IMGFMT.base', fmt=IMGFMT size=67108864
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864
++image: TEST_DIR/t.IMGFMT
++file format: IMGFMT
++virtual size: 64M (67108864 bytes)
++cluster_size: 65536
++
++=== Marking image dirty (lazy refcounts) ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864
++wrote 4096/4096 bytes at offset 0
++4 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++image: TEST_DIR/t.IMGFMT
++file format: IMGFMT
++virtual size: 64M (67108864 bytes)
++cluster_size: 65536
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 backing_file='TEST_DIR/t.IMGFMT.orig' backing_fmt='raw'
++wrote 4096/4096 bytes at offset 0
++4 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++image: TEST_DIR/t.IMGFMT
++file format: IMGFMT
++virtual size: 64M (67108864 bytes)
++cluster_size: 65536
++backing file: TEST_DIR/t.IMGFMT.orig
++backing file format: raw
++*** done
+diff --git a/tests/qemu-iotests/group b/tests/qemu-iotests/group
+index dbb2a36..739c266 100644
+--- a/tests/qemu-iotests/group
++++ b/tests/qemu-iotests/group
+@@ -90,3 +90,4 @@
+ 108 rw auto quick
+ 114 rw auto quick
+ 121 rw auto
++130 rw auto quick
+-- 
+1.8.3.1
+

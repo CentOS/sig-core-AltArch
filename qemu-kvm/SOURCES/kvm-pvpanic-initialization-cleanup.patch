@@ -1,0 +1,115 @@
+From ed600bcecaa095b7cd0a6b5f52caaa3312fab840 Mon Sep 17 00:00:00 2001
+From: Marcel Apfelbaum <marcel.a@redhat.com>
+Date: Wed, 6 Nov 2013 16:32:31 +0100
+Subject: [PATCH 72/81] pvpanic: initialization cleanup
+
+RH-Author: Marcel Apfelbaum <marcel.a@redhat.com>
+Message-id: <1383755557-21590-4-git-send-email-marcel.a@redhat.com>
+Patchwork-id: 55548
+O-Subject: [RHEL-7 qemu-kvm PATCH v3 3/9] pvpanic: initialization cleanup
+Bugzilla: 990601
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+
+From: "Michael S. Tsirkin" <mst@redhat.com>
+
+Avoid use of static variables: PC systems
+initialize pvpanic device through pvpanic_init,
+so we can simply create the fw_cfg file at that point.
+This also makes it possible to skip device
+creation completely if fw_cfg is not there, e.g. for xen -
+so the ports it reserves are not discoverable by guests.
+
+Also, make pvpanic_init void since callers ignore return
+status anyway.
+
+Cc: Stefano Stabellini <stefano.stabellini@eu.citrix.com>
+Cc: Laszlo Ersek <lersek@redhat.com>
+Cc: Paul Durrant <Paul.Durrant@citrix.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit bc3e6a0d6c8ab6cd7cd4b576ed567756f1dcabd2)
+Signed-off-by: Marcel Apfelbaum <marcel.a@redhat.com>
+
+Conflicts:
+	hw/misc/pvpanic.c
+
+Signed-off-by: Marcel Apfelbaum <marcel.a@redhat.com>
+---
+ hw/misc/pvpanic.c    | 32 +++++++++++++++++---------------
+ include/hw/i386/pc.h |  2 +-
+ 2 files changed, 18 insertions(+), 16 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/pvpanic.c    |   32 +++++++++++++++++---------------
+ include/hw/i386/pc.h |    2 +-
+ 2 files changed, 18 insertions(+), 16 deletions(-)
+
+diff --git a/hw/misc/pvpanic.c b/hw/misc/pvpanic.c
+index ddd8bdd..8263225 100644
+--- a/hw/misc/pvpanic.c
++++ b/hw/misc/pvpanic.c
+@@ -89,29 +89,31 @@ static const MemoryRegionOps pvpanic_ops = {
+ static int pvpanic_isa_initfn(ISADevice *dev)
+ {
+     PVPanicState *s = ISA_PVPANIC_DEVICE(dev);
+-    static bool port_configured;
+-    FWCfgState *fw_cfg;
+ 
+     memory_region_init_io(&s->io, &pvpanic_ops, s, "pvpanic", 1);
+     isa_register_ioport(dev, &s->io, s->ioport);
+ 
+-    if (!port_configured) {
+-        fw_cfg = fw_cfg_find();
+-        if (fw_cfg) {
+-            fw_cfg_add_file(fw_cfg, "etc/pvpanic-port",
+-                            g_memdup(&s->ioport, sizeof(s->ioport)),
+-                            sizeof(s->ioport));
+-            port_configured = true;
+-        }
+-    }
+-
+     return 0;
+ }
+ 
+-int pvpanic_init(ISABus *bus)
++static void pvpanic_fw_cfg(ISADevice *dev, FWCfgState *fw_cfg)
+ {
+-    isa_create_simple(bus, TYPE_ISA_PVPANIC_DEVICE);
+-    return 0;
++    PVPanicState *s = ISA_PVPANIC_DEVICE(dev);
++
++    fw_cfg_add_file(fw_cfg, "etc/pvpanic-port",
++                    g_memdup(&s->ioport, sizeof(s->ioport)),
++                    sizeof(s->ioport));
++}
++
++void pvpanic_init(ISABus *bus)
++{
++    ISADevice *dev;
++    FWCfgState *fw_cfg = fw_cfg_find();
++    if (!fw_cfg) {
++        return;
++    }
++    dev = isa_create_simple (bus, TYPE_ISA_PVPANIC_DEVICE);
++    pvpanic_fw_cfg(dev, fw_cfg);
+ }
+ 
+ static Property pvpanic_isa_properties[] = {
+diff --git a/include/hw/i386/pc.h b/include/hw/i386/pc.h
+index 45487ba..72f6882 100644
+--- a/include/hw/i386/pc.h
++++ b/include/hw/i386/pc.h
+@@ -175,7 +175,7 @@ static inline bool isa_ne2000_init(ISABus *bus, int base, int irq, NICInfo *nd)
+ void pc_system_firmware_init(MemoryRegion *rom_memory);
+ 
+ /* pvpanic.c */
+-int pvpanic_init(ISABus *bus);
++void pvpanic_init(ISABus *bus);
+ 
+ /* e820 types */
+ #define E820_RAM        1
+-- 
+1.7.1
+

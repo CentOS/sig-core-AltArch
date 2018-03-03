@@ -1,0 +1,230 @@
+From 5fcb6627be0a9a6744546adab5e638d4a265d2b7 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Tue, 7 Jan 2014 21:57:09 +0100
+Subject: [PATCH 04/14] block: Image file option amendment
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1389131839-12920-5-git-send-email-mreitz@redhat.com>
+Patchwork-id: 56540
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 04/14] block: Image file option amendment
+Bugzilla: 1033490
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1033490
+
+This patch adds the "amend" option to qemu-img which allows changing
+image options on existing image files. It also adds the generic bdrv
+implementation which is basically just a wrapper for the image format
+specific function.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 6f176b48f9f98820ed192a1355cc1c7c08ddf46b)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+
+Conflicts:
+	block.c
+	qemu-img.c
+
+Conflicts because d616b224745b2c522f965cf8de7da17b553b959a has not yet
+been backported. This is a single additional function which is missing
+from the context in this case, therefore later backporting of that
+commit would be trivial and obvious to resolve.
+
+Conflicts in qemu-img.c, because it is bdrv_delete() downstream for now,
+rather than bdrv_unref().
+---
+ block.c                   |  8 +++++
+ include/block/block.h     |  2 ++
+ include/block/block_int.h |  3 ++
+ qemu-img-cmds.hx          |  6 ++++
+ qemu-img.c                | 84 +++++++++++++++++++++++++++++++++++++++++++++++
+ qemu-img.texi             |  5 +++
+ 6 files changed, 108 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c                   |    8 ++++
+ include/block/block.h     |    2 +
+ include/block/block_int.h |    3 ++
+ qemu-img-cmds.hx          |    6 +++
+ qemu-img.c                |   84 +++++++++++++++++++++++++++++++++++++++++++++
+ qemu-img.texi             |    5 +++
+ 6 files changed, 108 insertions(+), 0 deletions(-)
+
+diff --git a/block.c b/block.c
+index 1ac1ab3..cc7afd4 100644
+--- a/block.c
++++ b/block.c
+@@ -4980,3 +4980,11 @@ AioContext *bdrv_get_aio_context(BlockDriverState *bs)
+     /* Currently BlockDriverState always uses the main loop AioContext */
+     return qemu_get_aio_context();
+ }
++
++int bdrv_amend_options(BlockDriverState *bs, QEMUOptionParameter *options)
++{
++    if (bs->drv->bdrv_amend_options == NULL) {
++        return -ENOTSUP;
++    }
++    return bs->drv->bdrv_amend_options(bs, options);
++}
+diff --git a/include/block/block.h b/include/block/block.h
+index bcf71e2..e7f718c 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -280,6 +280,8 @@ typedef enum {
+ 
+ int bdrv_check(BlockDriverState *bs, BdrvCheckResult *res, BdrvCheckMode fix);
+ 
++int bdrv_amend_options(BlockDriverState *bs_new, QEMUOptionParameter *options);
++
+ /* async block I/O */
+ typedef void BlockDriverDirtyHandler(BlockDriverState *bs, int64_t sector,
+                                      int sector_num);
+diff --git a/include/block/block_int.h b/include/block/block_int.h
+index 71c8b53..d49a317 100644
+--- a/include/block/block_int.h
++++ b/include/block/block_int.h
+@@ -202,6 +202,9 @@ struct BlockDriver {
+     int (*bdrv_check)(BlockDriverState* bs, BdrvCheckResult *result,
+         BdrvCheckMode fix);
+ 
++    int (*bdrv_amend_options)(BlockDriverState *bs,
++        QEMUOptionParameter *options);
++
+     void (*bdrv_debug_event)(BlockDriverState *bs, BlkDebugEvent event);
+ 
+     /* TODO Better pass a option string/QDict/QemuOpts to add any rule? */
+diff --git a/qemu-img-cmds.hx b/qemu-img-cmds.hx
+index 0c36e59..da1d965 100644
+--- a/qemu-img-cmds.hx
++++ b/qemu-img-cmds.hx
+@@ -67,5 +67,11 @@ DEF("resize", img_resize,
+     "resize [-q] filename [+ | -]size")
+ STEXI
+ @item resize [-q] @var{filename} [+ | -]@var{size}
++ETEXI
++
++DEF("amend", img_amend,
++    "amend [-q] [-f fmt] -o options filename")
++STEXI
++@item amend [-q] [-f @var{fmt}] -o @var{options} @var{filename}
+ @end table
+ ETEXI
+diff --git a/qemu-img.c b/qemu-img.c
+index 1fe175b..f0f70e4 100644
+--- a/qemu-img.c
++++ b/qemu-img.c
+@@ -2566,6 +2566,90 @@ out:
+     return 0;
+ }
+ 
++static int img_amend(int argc, char **argv)
++{
++    int c, ret = 0;
++    char *options = NULL;
++    QEMUOptionParameter *create_options = NULL, *options_param = NULL;
++    const char *fmt = NULL, *filename;
++    bool quiet = false;
++    BlockDriverState *bs = NULL;
++
++    for (;;) {
++        c = getopt(argc, argv, "hqf:o:");
++        if (c == -1) {
++            break;
++        }
++
++        switch (c) {
++            case 'h':
++            case '?':
++                help();
++                break;
++            case 'o':
++                options = optarg;
++                break;
++            case 'f':
++                fmt = optarg;
++                break;
++            case 'q':
++                quiet = true;
++                break;
++        }
++    }
++
++    if (optind != argc - 1) {
++        help();
++    }
++
++    if (!options) {
++        help();
++    }
++
++    filename = argv[argc - 1];
++
++    bs = bdrv_new_open(filename, fmt, BDRV_O_FLAGS | BDRV_O_RDWR, true, quiet);
++    if (!bs) {
++        error_report("Could not open image '%s'", filename);
++        ret = -1;
++        goto out;
++    }
++
++    fmt = bs->drv->format_name;
++
++    if (is_help_option(options)) {
++        ret = print_block_option_help(filename, fmt);
++        goto out;
++    }
++
++    create_options = append_option_parameters(create_options,
++            bs->drv->create_options);
++    options_param = parse_option_parameters(options, create_options,
++            options_param);
++    if (options_param == NULL) {
++        error_report("Invalid options for file format '%s'", fmt);
++        ret = -1;
++        goto out;
++    }
++
++    ret = bdrv_amend_options(bs, options_param);
++    if (ret < 0) {
++        error_report("Error while amending options: %s", strerror(-ret));
++        goto out;
++    }
++
++out:
++    if (bs) {
++        bdrv_delete(bs);
++    }
++    free_option_parameters(create_options);
++    free_option_parameters(options_param);
++    if (ret) {
++        return 1;
++    }
++    return 0;
++}
++
+ static const img_cmd_t img_cmds[] = {
+ #define DEF(option, callback, arg_string)        \
+     { option, callback },
+diff --git a/qemu-img.texi b/qemu-img.texi
+index dc578bb..da36975 100644
+--- a/qemu-img.texi
++++ b/qemu-img.texi
+@@ -356,6 +356,11 @@ sizes accordingly.  Failure to do so will result in data loss!
+ After using this command to grow a disk image, you must use file system and
+ partitioning tools inside the VM to actually begin using the new space on the
+ device.
++
++@item amend [-f @var{fmt}] -o @var{options} @var{filename}
++
++Amends the image format specific @var{options} for the image file
++@var{filename}. Not all file formats support this operation.
+ @end table
+ @c man end
+ 
+-- 
+1.7.1
+

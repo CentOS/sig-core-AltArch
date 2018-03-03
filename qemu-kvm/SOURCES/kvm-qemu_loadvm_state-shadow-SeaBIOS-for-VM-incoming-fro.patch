@@ -1,0 +1,167 @@
+From 9f136b4ed4ecd83a2de6ffa52775286b106bb5f5 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Thu, 17 Apr 2014 11:13:59 +0200
+Subject: [PATCH 10/12] qemu_loadvm_state(): shadow SeaBIOS for VM incoming from RHEL-6 host
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1397733239-8835-1-git-send-email-lersek@redhat.com>
+Patchwork-id: 58498
+O-Subject: [RHEL-7.0 0day qemu-kvm PATCH v2] qemu_loadvm_state(): shadow SeaBIOS for VM incoming from RHEL-6 host
+Bugzilla: 1027565
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1027565
+Brew:     https://brewweb.devel.redhat.com/taskinfo?taskID=7352678
+
+RHEL-only patch.
+
+SeaBIOS's shadowing logic has no effect on "pc.ram" (only on "pc.bios" and
+"pc.rom") when it runs on the RHEL-6 emulator. When such a guest is
+migrated to the RHEL-7 emulator, where the PAM registers actually work,
+these two UMBs under 1MB simply disappear from the guest's view, breaking
+reboot and S3 resume.
+
+Tested extensively by QE.
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+---
+
+Notes:
+    Changes in v2:
+    - print message to stderr when we shadow the UMBs manually [Dave]
+    - also copy C and D segments from pc.rom to pc.ram
+    - move to qemu_loadvm_state() from ram_load() -- we must shadow only
+      when all RAMBlocks have been loaded [Dave]
+
+ include/sysemu/sysemu.h |  1 +
+ hw/i386/pc_piix.c       |  1 +
+ savevm.c                | 66 +++++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 68 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/pc_piix.c       |    1 +
+ include/sysemu/sysemu.h |    1 +
+ savevm.c                |   66 +++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 68 insertions(+), 0 deletions(-)
+
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index 940816f..fea98b6 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -954,6 +954,7 @@ static void pc_compat_rhel650(QEMUMachineInitArgs *args)
+     rom_file_has_mr = false; 
+     has_acpi_build = false;
+     gigabyte_align = false;
++    shadow_bios_after_incoming = true;
+ }
+ 
+ static void pc_init_rhel650(QEMUMachineInitArgs *args)
+diff --git a/include/sysemu/sysemu.h b/include/sysemu/sysemu.h
+index 8dc0a4c..07181ac 100644
+--- a/include/sysemu/sysemu.h
++++ b/include/sysemu/sysemu.h
+@@ -84,6 +84,7 @@ void qemu_savevm_state_complete(QEMUFile *f);
+ void qemu_savevm_state_cancel(void);
+ uint64_t qemu_savevm_state_pending(QEMUFile *f, uint64_t max_size);
+ int qemu_loadvm_state(QEMUFile *f);
++extern bool shadow_bios_after_incoming;
+ 
+ /* SLIRP */
+ void do_info_slirp(Monitor *mon);
+diff --git a/savevm.c b/savevm.c
+index 4d92a7b..6efbb75 100644
+--- a/savevm.c
++++ b/savevm.c
+@@ -52,6 +52,8 @@
+ #define ARP_PTYPE_IP 0x0800
+ #define ARP_OP_REQUEST_REV 0x3
+ 
++bool shadow_bios_after_incoming;
++
+ static int announce_self_create(uint8_t *buf,
+ 				uint8_t *mac_addr)
+ {
+@@ -2195,6 +2197,63 @@ typedef struct LoadStateEntry {
+     int version_id;
+ } LoadStateEntry;
+ 
++static void shadow_bios(void)
++{
++    RAMBlock *block, *ram, *oprom, *bios;
++    size_t one_meg, oprom_size, bios_size;
++    uint8_t *cd_seg_host, *ef_seg_host;
++
++    ram = NULL;
++    oprom = NULL;
++    bios = NULL;
++    QTAILQ_FOREACH(block, &ram_list.blocks, next) {
++        if (strcmp("pc.ram", block->idstr) == 0) {
++            assert(ram == NULL);
++            ram = block;
++        } else if (strcmp("pc.rom", block->idstr) == 0) {
++            assert(oprom == NULL);
++            oprom = block;
++        } else if (strcmp("pc.bios", block->idstr) == 0) {
++            assert(bios == NULL);
++            bios = block;
++        }
++    }
++    assert(ram != NULL);
++    assert(oprom != NULL);
++    assert(bios != NULL);
++    assert(memory_region_is_ram(ram->mr));
++    assert(memory_region_is_ram(oprom->mr));
++    assert(memory_region_is_ram(bios->mr));
++    assert(int128_eq(ram->mr->size, int128_make64(ram->length)));
++    assert(int128_eq(oprom->mr->size, int128_make64(oprom->length)));
++    assert(int128_eq(bios->mr->size, int128_make64(bios->length)));
++
++    one_meg = 1024 * 1024;
++    oprom_size = 128 * 1024;
++    bios_size = 128 * 1024;
++    assert(ram->length >= one_meg);
++    assert(oprom->length == oprom_size);
++    assert(bios->length == bios_size);
++
++    ef_seg_host = memory_region_get_ram_ptr(ram->mr) + (one_meg - bios_size);
++    cd_seg_host = ef_seg_host - oprom_size;
++
++    /* This is a crude hack, but we must distinguish a rhel6.x.0 machtype guest
++     * coming in from a RHEL-6 emulator (where shadowing has had no effect on
++     * "pc.ram") from a similar guest coming in from a RHEL-7 emulator (where
++     * shadowing has worked). In the latter case we must not trample the live
++     * SeaBIOS variables in "pc.ram".
++     */
++    if (buffer_is_zero(ef_seg_host, bios_size)) {
++        fprintf(stderr, "copying E and F segments from pc.bios to pc.ram\n");
++        memcpy(ef_seg_host, memory_region_get_ram_ptr(bios->mr), bios_size);
++    }
++    if (buffer_is_zero(cd_seg_host, oprom_size)) {
++        fprintf(stderr, "copying C and D segments from pc.rom to pc.ram\n");
++        memcpy(cd_seg_host, memory_region_get_ram_ptr(oprom->mr), oprom_size);
++    }
++}
++
+ int qemu_loadvm_state(QEMUFile *f)
+ {
+     QLIST_HEAD(, LoadStateEntry) loadvm_handlers =
+@@ -2297,6 +2356,13 @@ int qemu_loadvm_state(QEMUFile *f)
+         }
+     }
+ 
++    /* Supplement SeaBIOS's shadowing now, because it was useless when the
++     * incoming VM started on the RHEL-6 emulator.
++     */
++    if (shadow_bios_after_incoming) {
++        shadow_bios();
++    }
++
+     cpu_synchronize_all_post_init();
+ 
+     ret = 0;
+-- 
+1.7.1
+

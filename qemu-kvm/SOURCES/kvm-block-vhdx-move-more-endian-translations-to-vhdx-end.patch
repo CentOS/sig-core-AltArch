@@ -1,0 +1,191 @@
+From 71ef58e93b4a9aafa838117bdaeebc72c2b826c3 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Wed, 20 Nov 2013 19:44:02 +0100
+Subject: [PATCH 19/25] block: vhdx - move more endian translations to vhdx-endian.c
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <e18245e69af41489c6172765a45640076f8b2379.1384975172.git.jcody@redhat.com>
+Patchwork-id: 55812
+O-Subject: [RHEL7 qemu-kvm PATCH 19/26] block: vhdx - move more endian translations to vhdx-endian.c
+Bugzilla: 879234
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+In preparation for vhdx_create(), move more endian translation
+functions out to vhdx-endian.c.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit c325ee1de84dde5b2a90c30e1b788defa31c5d53)
+---
+ block/vhdx-endian.c | 75 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ block/vhdx.c        | 20 +++-----------
+ block/vhdx.h        |  9 ++++++-
+ 3 files changed, 87 insertions(+), 17 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vhdx-endian.c |   75 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ block/vhdx.c        |   20 +++-----------
+ block/vhdx.h        |    9 +++++-
+ 3 files changed, 87 insertions(+), 17 deletions(-)
+
+diff --git a/block/vhdx-endian.c b/block/vhdx-endian.c
+index 3e93e63..fe879ed 100644
+--- a/block/vhdx-endian.c
++++ b/block/vhdx-endian.c
+@@ -139,3 +139,78 @@ void vhdx_log_entry_hdr_le_export(VHDXLogEntryHeader *hdr)
+ }
+ 
+ 
++/* Region table entries */
++void vhdx_region_header_le_import(VHDXRegionTableHeader *hdr)
++{
++    assert(hdr != NULL);
++
++    le32_to_cpus(&hdr->signature);
++    le32_to_cpus(&hdr->checksum);
++    le32_to_cpus(&hdr->entry_count);
++}
++
++void vhdx_region_header_le_export(VHDXRegionTableHeader *hdr)
++{
++    assert(hdr != NULL);
++
++    cpu_to_le32s(&hdr->signature);
++    cpu_to_le32s(&hdr->checksum);
++    cpu_to_le32s(&hdr->entry_count);
++}
++
++void vhdx_region_entry_le_import(VHDXRegionTableEntry *e)
++{
++    assert(e != NULL);
++
++    leguid_to_cpus(&e->guid);
++    le64_to_cpus(&e->file_offset);
++    le32_to_cpus(&e->length);
++    le32_to_cpus(&e->data_bits);
++}
++
++void vhdx_region_entry_le_export(VHDXRegionTableEntry *e)
++{
++    assert(e != NULL);
++
++    cpu_to_leguids(&e->guid);
++    cpu_to_le64s(&e->file_offset);
++    cpu_to_le32s(&e->length);
++    cpu_to_le32s(&e->data_bits);
++}
++
++
++/* Metadata headers & table */
++void vhdx_metadata_header_le_import(VHDXMetadataTableHeader *hdr)
++{
++    assert(hdr != NULL);
++
++    le64_to_cpus(&hdr->signature);
++    le16_to_cpus(&hdr->entry_count);
++}
++
++void vhdx_metadata_header_le_export(VHDXMetadataTableHeader *hdr)
++{
++    assert(hdr != NULL);
++
++    cpu_to_le64s(&hdr->signature);
++    cpu_to_le16s(&hdr->entry_count);
++}
++
++void vhdx_metadata_entry_le_import(VHDXMetadataTableEntry *e)
++{
++    assert(e != NULL);
++
++    leguid_to_cpus(&e->item_id);
++    le32_to_cpus(&e->offset);
++    le32_to_cpus(&e->length);
++    le32_to_cpus(&e->data_bits);
++}
++void vhdx_metadata_entry_le_export(VHDXMetadataTableEntry *e)
++{
++    assert(e != NULL);
++
++    cpu_to_leguids(&e->item_id);
++    cpu_to_le32s(&e->offset);
++    cpu_to_le32s(&e->length);
++    cpu_to_le32s(&e->data_bits);
++}
+diff --git a/block/vhdx.c b/block/vhdx.c
+index 97099aa..9d51176 100644
+--- a/block/vhdx.c
++++ b/block/vhdx.c
+@@ -472,10 +472,7 @@ static int vhdx_open_region_tables(BlockDriverState *bs, BDRVVHDXState *s)
+         goto fail;
+     }
+     memcpy(&s->rt, buffer, sizeof(s->rt));
+-    le32_to_cpus(&s->rt.signature);
+-    le32_to_cpus(&s->rt.checksum);
+-    le32_to_cpus(&s->rt.entry_count);
+-    le32_to_cpus(&s->rt.reserved);
++    vhdx_region_header_le_import(&s->rt);
+     offset += sizeof(s->rt);
+ 
+     if (!vhdx_checksum_is_valid(buffer, VHDX_HEADER_BLOCK_SIZE, 4) ||
+@@ -494,10 +491,7 @@ static int vhdx_open_region_tables(BlockDriverState *bs, BDRVVHDXState *s)
+         memcpy(&rt_entry, buffer + offset, sizeof(rt_entry));
+         offset += sizeof(rt_entry);
+ 
+-        leguid_to_cpus(&rt_entry.guid);
+-        le64_to_cpus(&rt_entry.file_offset);
+-        le32_to_cpus(&rt_entry.length);
+-        le32_to_cpus(&rt_entry.data_bits);
++        vhdx_region_entry_le_import(&rt_entry);
+ 
+         /* check for region overlap between these entries, and any
+          * other memory regions in the file */
+@@ -587,9 +581,7 @@ static int vhdx_parse_metadata(BlockDriverState *bs, BDRVVHDXState *s)
+     memcpy(&s->metadata_hdr, buffer, sizeof(s->metadata_hdr));
+     offset += sizeof(s->metadata_hdr);
+ 
+-    le64_to_cpus(&s->metadata_hdr.signature);
+-    le16_to_cpus(&s->metadata_hdr.reserved);
+-    le16_to_cpus(&s->metadata_hdr.entry_count);
++    vhdx_metadata_header_le_import(&s->metadata_hdr);
+ 
+     if (memcmp(&s->metadata_hdr.signature, "metadata", 8)) {
+         ret = -EINVAL;
+@@ -608,11 +600,7 @@ static int vhdx_parse_metadata(BlockDriverState *bs, BDRVVHDXState *s)
+         memcpy(&md_entry, buffer + offset, sizeof(md_entry));
+         offset += sizeof(md_entry);
+ 
+-        leguid_to_cpus(&md_entry.item_id);
+-        le32_to_cpus(&md_entry.offset);
+-        le32_to_cpus(&md_entry.length);
+-        le32_to_cpus(&md_entry.data_bits);
+-        le32_to_cpus(&md_entry.reserved2);
++        vhdx_metadata_entry_le_import(&md_entry);
+ 
+         if (guid_eq(md_entry.item_id, file_param_guid)) {
+             if (s->metadata_entries.present & META_FILE_PARAMETER_PRESENT) {
+diff --git a/block/vhdx.h b/block/vhdx.h
+index 7deb7fd..0acad37 100644
+--- a/block/vhdx.h
++++ b/block/vhdx.h
+@@ -421,7 +421,14 @@ void vhdx_log_desc_le_export(VHDXLogDescriptor *d);
+ void vhdx_log_data_le_export(VHDXLogDataSector *d);
+ void vhdx_log_entry_hdr_le_import(VHDXLogEntryHeader *hdr);
+ void vhdx_log_entry_hdr_le_export(VHDXLogEntryHeader *hdr);
+-
++void vhdx_region_header_le_import(VHDXRegionTableHeader *hdr);
++void vhdx_region_header_le_export(VHDXRegionTableHeader *hdr);
++void vhdx_region_entry_le_import(VHDXRegionTableEntry *e);
++void vhdx_region_entry_le_export(VHDXRegionTableEntry *e);
++void vhdx_metadata_header_le_import(VHDXMetadataTableHeader *hdr);
++void vhdx_metadata_header_le_export(VHDXMetadataTableHeader *hdr);
++void vhdx_metadata_entry_le_import(VHDXMetadataTableEntry *e);
++void vhdx_metadata_entry_le_export(VHDXMetadataTableEntry *e);
+ int vhdx_user_visible_write(BlockDriverState *bs, BDRVVHDXState *s);
+ 
+ #endif
+-- 
+1.7.1
+

@@ -1,0 +1,51 @@
+From 8396435dbcd13dc27c7f1c7576499354be48d2c7 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Mon, 27 Mar 2017 10:01:19 +0200
+Subject: [PATCH 4/7] cirrus: fix cirrus_invalidate_region
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1490608882-10242-5-git-send-email-kraxel@redhat.com>
+Patchwork-id: 74552
+O-Subject: [RHEL-7.4 qemu-kvm PATCH v2 4/7] cirrus: fix cirrus_invalidate_region
+Bugzilla: 1430060
+RH-Acked-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+off_cur_end is exclusive, so off_cur_end == cirrus_addr_mask is valid.
+Fix calculation to make sure to allow that, otherwise the assert added
+by commit f153b563f8cf121aebf5a2fff5f0110faf58ccb3 can trigger for valid
+blits.
+
+Test case: boot windows nt 4.0
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: 1489579606-26020-1-git-send-email-kraxel@redhat.com
+(cherry picked from commit e048dac616748273c2153490e9fdf1da242f0cad)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/display/cirrus_vga.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/hw/display/cirrus_vga.c b/hw/display/cirrus_vga.c
+index 86b4c8b..aab6e02 100644
+--- a/hw/display/cirrus_vga.c
++++ b/hw/display/cirrus_vga.c
+@@ -661,11 +661,11 @@ static void cirrus_invalidate_region(CirrusVGAState * s, int off_begin,
+     }
+ 
+     for (y = 0; y < lines; y++) {
+-	off_cur = off_begin;
+-	off_cur_end = (off_cur + bytesperline) & s->cirrus_addr_mask;
++        off_cur = off_begin;
++        off_cur_end = ((off_cur + bytesperline - 1) & s->cirrus_addr_mask) + 1;
+         assert(off_cur_end >= off_cur);
+         memory_region_set_dirty(&s->vga.vram, off_cur, off_cur_end - off_cur);
+-	off_begin += off_pitch;
++        off_begin += off_pitch;
+     }
+ }
+ 
+-- 
+1.8.3.1
+

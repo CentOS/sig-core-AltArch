@@ -1,0 +1,61 @@
+From 3ab144fe22a867a0ffcce396302b62b0f2ac4c29 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Fri, 1 Nov 2013 14:23:16 +0100
+Subject: [PATCH 28/81] qcow2: Unset zero_beyond_eof in save_vmstate
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383315797-30938-3-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55217
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 2/3] qcow2: Unset zero_beyond_eof in save_vmstate
+Bugzilla: 1025740
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+
+BZ: 1025740
+
+Saving the VM state is done using bdrv_pwrite. This function may perform
+a read-modify-write, which in this case results in data being read from
+beyond the end of the virtual disk. Since we are actually trying to
+access an area which is not a part of the virtual disk, zero_beyond_eof
+has to be set to false before performing the partial write, otherwise
+the VM state may become corrupted.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 6e13610aa454beba52944e8df6d93158d68ab911)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2.c |    3 +++
+ 1 files changed, 3 insertions(+), 0 deletions(-)
+
+diff --git a/block/qcow2.c b/block/qcow2.c
+index f4adf35..c2728c9 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -1718,12 +1718,15 @@ static int qcow2_save_vmstate(BlockDriverState *bs, QEMUIOVector *qiov,
+     BDRVQcowState *s = bs->opaque;
+     int64_t total_sectors = bs->total_sectors;
+     int growable = bs->growable;
++    bool zero_beyond_eof = bs->zero_beyond_eof;
+     int ret;
+ 
+     BLKDBG_EVENT(bs->file, BLKDBG_VMSTATE_SAVE);
+     bs->growable = 1;
++    bs->zero_beyond_eof = false;
+     ret = bdrv_pwritev(bs, qcow2_vm_state_offset(s) + pos, qiov);
+     bs->growable = growable;
++    bs->zero_beyond_eof = zero_beyond_eof;
+ 
+     /* bdrv_co_do_writev will have increased the total_sectors value to include
+      * the VM state - the VM state is however not an actual part of the block
+-- 
+1.7.1
+

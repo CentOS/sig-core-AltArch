@@ -1,0 +1,104 @@
+From d54fad56d67682c441b6e79a14df9ab9867a7b21 Mon Sep 17 00:00:00 2001
+Message-Id: <d54fad56d67682c441b6e79a14df9ab9867a7b21.1387382496.git.minovotn@redhat.com>
+In-Reply-To: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+References: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+From: Nigel Croxon <ncroxon@redhat.com>
+Date: Thu, 14 Nov 2013 22:53:12 +0100
+Subject: [PATCH 36/46] rdma: clean up of qemu_rdma_cleanup()
+
+RH-Author: Nigel Croxon <ncroxon@redhat.com>
+Message-id: <1384469598-13137-37-git-send-email-ncroxon@redhat.com>
+Patchwork-id: 55726
+O-Subject: [RHEL7.0 PATCH 36/42] rdma: clean up of qemu_rdma_cleanup()
+Bugzilla: 1011720
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: 1011720
+https://bugzilla.redhat.com/show_bug.cgi?id=1011720
+
+>From commit ID:
+commit 5a91337cdf343b94474f8bbecab85a8c00f6d2a1
+Author: Isaku Yamahata <yamahata@private.email.ne.jp>
+Date:   Tue Aug 13 11:12:43 2013 +0900
+
+    rdma: clean up of qemu_rdma_cleanup()
+
+    - It can't be determined by RDMAContext::cm_id != NULL if the connection
+      is established or not.
+    - RDMAContext::cm_id is leaked and not destroyed because it is set to NULL
+      too early.
+    - RDMAContext::qp is created by rdma_create_qp() so that it should be destroyed
+      by rdma_destroy_qp(). not ibv_destroy_qp()
+
+    Cc: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Isaku Yamahata <yamahata@private.email.ne.jp>
+    Signed-off-by: Juan Quintela <quintela@redhat.com>
+---
+ migration-rdma.c |    9 ++++++---
+ 1 files changed, 6 insertions(+), 3 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ migration-rdma.c | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/migration-rdma.c b/migration-rdma.c
+index 943496f..be3d984 100644
+--- a/migration-rdma.c
++++ b/migration-rdma.c
+@@ -356,6 +356,7 @@ typedef struct RDMAContext {
+      */
+     struct rdma_cm_id *cm_id;               /* connection manager ID */
+     struct rdma_cm_id *listen_id;
++    bool connected;
+ 
+     struct ibv_context          *verbs;
+     struct rdma_event_channel   *channel;
+@@ -2194,7 +2195,7 @@ static void qemu_rdma_cleanup(RDMAContext *rdma)
+     struct rdma_cm_event *cm_event;
+     int ret, idx;
+ 
+-    if (rdma->cm_id) {
++    if (rdma->cm_id && rdma->connected) {
+         if (rdma->error_state) {
+             RDMAControlHeader head = { .len = 0,
+                                        .type = RDMA_CONTROL_ERROR,
+@@ -2213,7 +2214,7 @@ static void qemu_rdma_cleanup(RDMAContext *rdma)
+             }
+         }
+         DDPRINTF("Disconnected.\n");
+-        rdma->cm_id = NULL;
++        rdma->connected = false;
+     }
+ 
+     g_free(rdma->block);
+@@ -2235,7 +2236,7 @@ static void qemu_rdma_cleanup(RDMAContext *rdma)
+     }
+ 
+     if (rdma->qp) {
+-        ibv_destroy_qp(rdma->qp);
++        rdma_destroy_qp(rdma->cm_id);
+         rdma->qp = NULL;
+     }
+     if (rdma->cq) {
+@@ -2372,6 +2373,7 @@ static int qemu_rdma_connect(RDMAContext *rdma, Error **errp)
+         rdma->cm_id = NULL;
+         goto err_rdma_source_connect;
+     }
++    rdma->connected = true;
+ 
+     memcpy(&cap, cm_event->param.conn.private_data, sizeof(cap));
+     network_to_caps(&cap);
+@@ -2906,6 +2908,7 @@ static int qemu_rdma_accept(RDMAContext *rdma)
+     }
+ 
+     rdma_ack_cm_event(cm_event);
++    rdma->connected = true;
+ 
+     ret = qemu_rdma_post_recv_control(rdma, RDMA_WRID_READY);
+     if (ret) {
+-- 
+1.7.11.7
+

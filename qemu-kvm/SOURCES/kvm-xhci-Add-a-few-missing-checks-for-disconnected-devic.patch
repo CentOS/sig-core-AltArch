@@ -1,0 +1,79 @@
+From d6c5ce73edbc928cce19a095a27e2feff9db8884 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Fri, 11 Jul 2014 14:20:52 +0200
+Subject: [PATCH 18/43] xhci: Add a few missing checks for disconnected devices
+
+Message-id: <1405088470-24115-20-git-send-email-kraxel@redhat.com>
+Patchwork-id: 59827
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 19/37] xhci: Add a few missing checks for disconnected devices
+Bugzilla: 980833
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Hans de Goede <hdegoede@redhat.com>
+
+One of the reworks of qemu's usb core made changes to usb-port's disconnect
+handling. Now ports with a device will always have a non 0 dev member, but
+if the device is not attached (which is possible with usb redirection),
+dev->attached will be 0.
+
+So supplement all checks for dev to also check dev->attached, and add an
+extra check in a path where a device check was completely missing.
+
+This fixes various crashes (asserts triggering) I've been seeing when xhci
+attached usb devices get disconnected at the wrong time.
+
+Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit de9de157fbb9aa66380ab1973dd6ecf12fbd8b25)
+---
+ hw/usb/hcd-xhci.c | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/hcd-xhci.c | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/hw/usb/hcd-xhci.c b/hw/usb/hcd-xhci.c
+index ef0c073..944b255 100644
+--- a/hw/usb/hcd-xhci.c
++++ b/hw/usb/hcd-xhci.c
+@@ -1498,7 +1498,8 @@ static TRBCCode xhci_reset_ep(XHCIState *xhci, unsigned int slotid,
+     }
+ 
+     if (!xhci->slots[slotid-1].uport ||
+-        !xhci->slots[slotid-1].uport->dev) {
++        !xhci->slots[slotid-1].uport->dev ||
++        !xhci->slots[slotid-1].uport->dev->attached) {
+         return CC_USB_TRANSACTION_ERROR;
+     }
+ 
+@@ -1985,6 +1986,14 @@ static void xhci_kick_ep(XHCIState *xhci, unsigned int slotid,
+         return;
+     }
+ 
++    /* If the device has been detached, but the guest has not noticed this
++       yet the 2 above checks will succeed, but we must NOT continue */
++    if (!xhci->slots[slotid - 1].uport ||
++        !xhci->slots[slotid - 1].uport->dev ||
++        !xhci->slots[slotid - 1].uport->dev->attached) {
++        return;
++    }
++
+     if (epctx->retry) {
+         XHCITransfer *xfer = epctx->retry;
+ 
+@@ -2209,7 +2218,7 @@ static TRBCCode xhci_address_slot(XHCIState *xhci, unsigned int slotid,
+     trace_usb_xhci_slot_address(slotid, uport->path);
+ 
+     dev = uport->dev;
+-    if (!dev) {
++    if (!dev || !dev->attached) {
+         fprintf(stderr, "xhci: port %s not connected\n", uport->path);
+         return CC_USB_TRANSACTION_ERROR;
+     }
+-- 
+1.8.3.1
+

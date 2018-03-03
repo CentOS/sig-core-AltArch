@@ -1,0 +1,108 @@
+From 24a604e857d2797c3da9852bcbea75f2f9e6961c Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Fri, 22 Jul 2016 09:34:38 +0200
+Subject: [PATCH 1/4] qxl: factor out qxl_get_check_slot_offset
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1469180081-28522-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 71317
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 1/4] qxl: factor out qxl_get_check_slot_offset
+Bugzilla: 1355730
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+New helper function which translates a qxl physical address into
+memory slot and offset.  Also applies sanity checks.  Factored out
+from qxl_phys2virt.  No functional change.
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: 1466597244-5938-1-git-send-email-kraxel@redhat.com
+(cherry picked from commit 726bdf653aca9b87e28c9a56dd94c4667ddfacbc)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/display/qxl.c | 59 ++++++++++++++++++++++++++++++++++++--------------------
+ 1 file changed, 38 insertions(+), 21 deletions(-)
+
+diff --git a/hw/display/qxl.c b/hw/display/qxl.c
+index 748dfce..5e1ecd8 100644
+--- a/hw/display/qxl.c
++++ b/hw/display/qxl.c
+@@ -1326,36 +1326,53 @@ static void qxl_reset_surfaces(PCIQXLDevice *d)
+ }
+ 
+ /* can be also called from spice server thread context */
+-void *qxl_phys2virt(PCIQXLDevice *qxl, QXLPHYSICAL pqxl, int group_id)
++static bool qxl_get_check_slot_offset(PCIQXLDevice *qxl, QXLPHYSICAL pqxl,
++                                      uint32_t *s, uint64_t *o)
+ {
+     uint64_t phys   = le64_to_cpu(pqxl);
+     uint32_t slot   = (phys >> (64 -  8)) & 0xff;
+     uint64_t offset = phys & 0xffffffffffff;
+ 
+-    switch (group_id) {
+-    case MEMSLOT_GROUP_HOST:
+-        return (void *)(intptr_t)offset;
+-    case MEMSLOT_GROUP_GUEST:
+-        if (slot >= NUM_MEMSLOTS) {
+-            qxl_set_guest_bug(qxl, "slot too large %d >= %d", slot,
+-                              NUM_MEMSLOTS);
+-            return NULL;
+-        }
+-        if (!qxl->guest_slots[slot].active) {
+-            qxl_set_guest_bug(qxl, "inactive slot %d\n", slot);
+-            return NULL;
+-        }
+-        if (offset < qxl->guest_slots[slot].delta) {
+-            qxl_set_guest_bug(qxl,
++    if (slot >= NUM_MEMSLOTS) {
++        qxl_set_guest_bug(qxl, "slot too large %d >= %d", slot,
++                          NUM_MEMSLOTS);
++        return false;
++    }
++    if (!qxl->guest_slots[slot].active) {
++        qxl_set_guest_bug(qxl, "inactive slot %d\n", slot);
++        return false;
++    }
++    if (offset < qxl->guest_slots[slot].delta) {
++        qxl_set_guest_bug(qxl,
+                           "slot %d offset %"PRIu64" < delta %"PRIu64"\n",
+                           slot, offset, qxl->guest_slots[slot].delta);
+-            return NULL;
+-        }
+-        offset -= qxl->guest_slots[slot].delta;
+-        if (offset > qxl->guest_slots[slot].size) {
+-            qxl_set_guest_bug(qxl,
++        return false;
++    }
++    offset -= qxl->guest_slots[slot].delta;
++    if (offset > qxl->guest_slots[slot].size) {
++        qxl_set_guest_bug(qxl,
+                           "slot %d offset %"PRIu64" > size %"PRIu64"\n",
+                           slot, offset, qxl->guest_slots[slot].size);
++        return false;
++    }
++
++    *s = slot;
++    *o = offset;
++    return true;
++}
++
++/* can be also called from spice server thread context */
++void *qxl_phys2virt(PCIQXLDevice *qxl, QXLPHYSICAL pqxl, int group_id)
++{
++    uint64_t offset;
++    uint32_t slot;
++
++    switch (group_id) {
++    case MEMSLOT_GROUP_HOST:
++        offset = le64_to_cpu(pqxl) & 0xffffffffffff;
++        return (void *)(intptr_t)offset;
++    case MEMSLOT_GROUP_GUEST:
++        if (!qxl_get_check_slot_offset(qxl, pqxl, &slot, &offset)) {
+             return NULL;
+         }
+         return qxl->guest_slots[slot].ptr + offset;
+-- 
+1.8.3.1
+

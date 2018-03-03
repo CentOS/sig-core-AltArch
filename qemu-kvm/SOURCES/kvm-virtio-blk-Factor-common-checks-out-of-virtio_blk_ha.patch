@@ -1,0 +1,74 @@
+From 08530984c8ea08a6e0494e91576ff24917c46e14 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Fri, 31 Oct 2014 16:29:52 +0100
+Subject: [PATCH 15/19] virtio-blk: Factor common checks out of
+ virtio_blk_handle_read/write()
+
+Message-id: <1414772996-17272-2-git-send-email-armbru@redhat.com>
+Patchwork-id: 62018
+O-Subject: [PATCH RHEL-7.1 qemu-kvm 1/5] virtio-blk: Factor common checks out of virtio_blk_handle_read/write()
+Bugzilla: 1085232
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit d0e14376eefc40b07c8fb42c132c2202c66dcb0b)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/block/virtio-blk.c | 24 ++++++++++++++----------
+ 1 file changed, 14 insertions(+), 10 deletions(-)
+
+diff --git a/hw/block/virtio-blk.c b/hw/block/virtio-blk.c
+index a96207d..0f1d3ec 100644
+--- a/hw/block/virtio-blk.c
++++ b/hw/block/virtio-blk.c
+@@ -281,6 +281,18 @@ static void virtio_blk_handle_flush(VirtIOBlockReq *req, MultiReqBuffer *mrb)
+     bdrv_aio_flush(req->dev->bs, virtio_blk_flush_complete, req);
+ }
+ 
++static bool virtio_blk_sect_range_ok(VirtIOBlock *dev,
++                                     uint64_t sector, size_t size)
++{
++    if (sector & dev->sector_mask) {
++        return false;
++    }
++    if (size % dev->conf->logical_block_size) {
++        return false;
++    }
++    return true;
++}
++
+ static void virtio_blk_handle_write(VirtIOBlockReq *req, MultiReqBuffer *mrb)
+ {
+     BlockRequest *blkreq;
+@@ -292,11 +304,7 @@ static void virtio_blk_handle_write(VirtIOBlockReq *req, MultiReqBuffer *mrb)
+ 
+     trace_virtio_blk_handle_write(req, sector, req->qiov.size / 512);
+ 
+-    if (sector & req->dev->sector_mask) {
+-        virtio_blk_rw_complete(req, -EIO);
+-        return;
+-    }
+-    if (req->qiov.size % req->dev->conf->logical_block_size) {
++    if (!virtio_blk_sect_range_ok(req->dev, sector, req->qiov.size)) {
+         virtio_blk_rw_complete(req, -EIO);
+         return;
+     }
+@@ -326,11 +334,7 @@ static void virtio_blk_handle_read(VirtIOBlockReq *req)
+ 
+     trace_virtio_blk_handle_read(req, sector, req->qiov.size / 512);
+ 
+-    if (sector & req->dev->sector_mask) {
+-        virtio_blk_rw_complete(req, -EIO);
+-        return;
+-    }
+-    if (req->qiov.size % req->dev->conf->logical_block_size) {
++    if (!virtio_blk_sect_range_ok(req->dev, sector, req->qiov.size)) {
+         virtio_blk_rw_complete(req, -EIO);
+         return;
+     }
+-- 
+1.8.3.1
+

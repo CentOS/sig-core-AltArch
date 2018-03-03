@@ -1,0 +1,63 @@
+From 1e5cc3d3a5f9bf21d1df2967ac76b15d0e384950 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Tue, 18 Nov 2014 15:30:16 +0100
+Subject: [PATCH 37/41] block/raw-posix: use seek_hole ahead of fiemap
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Message-id: <1416324620-16229-4-git-send-email-mreitz@redhat.com>
+Patchwork-id: 62438
+O-Subject: [RHEL-7.1/7.0.z qemu-kvm PATCH v3 3/7] block/raw-posix: use seek_hole ahead of fiemap
+Bugzilla: 1160237
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+From: Tony Breeds <tony@bakeyournoodle.com>
+
+try_fiemap() uses FIEMAP_FLAG_SYNC which has a significant performance
+impact.
+
+Prefer seek_hole() over fiemap() to avoid this impact where possible.
+seek_hole is more widely used and, arguably, has potential to be
+optimised in the kernel.
+
+Reported-By: Michael Steffens <michael_steffens@posteo.de>
+Signed-off-by: Tony Breeds <tony@bakeyournoodle.com>
+Cc: Kevin Wolf <kwolf@redhat.com>
+Cc: Markus Armbruster <armbru@redhat.com>
+Cc: Stefan Hajnoczi <stefanha@redhat.com>
+Cc: Max Reitz <mreitz@redhat.com>
+Cc: Pádraig Brady <pbrady@redhat.com>
+Cc: Eric Blake <eblake@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 7c15903789953ead14a417882657d52dc0c19a24)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/raw-posix.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/block/raw-posix.c b/block/raw-posix.c
+index 8d31628..781ebf3 100644
+--- a/block/raw-posix.c
++++ b/block/raw-posix.c
+@@ -1414,9 +1414,9 @@ static int64_t coroutine_fn raw_co_get_block_status(BlockDriverState *bs,
+ 
+     start = sector_num * BDRV_SECTOR_SIZE;
+ 
+-    ret = try_fiemap(bs, start, &data, &hole, nb_sectors, pnum);
++    ret = try_seek_hole(bs, start, &data, &hole, pnum);
+     if (ret < 0) {
+-        ret = try_seek_hole(bs, start, &data, &hole, pnum);
++        ret = try_fiemap(bs, start, &data, &hole, nb_sectors, pnum);
+         if (ret < 0) {
+             /* Assume everything is allocated. */
+             data = 0;
+-- 
+1.8.3.1
+

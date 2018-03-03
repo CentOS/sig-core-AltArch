@@ -1,0 +1,80 @@
+From 7f2252627e64e975707b01eb1f4da7c2015ca457 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 2 Jun 2014 13:54:43 +0200
+Subject: [PATCH 26/31] qcow: correctly propagate errors
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1401717288-3918-2-git-send-email-kwolf@redhat.com>
+Patchwork-id: 59096
+O-Subject: [RHEL-7.1/7.0.z qemu-kvm PATCH 1/6] qcow: correctly propagate errors
+Bugzilla: 1097229 1097230
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1097230
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit b6d5066d32f9e6c3d7508c1af9ae78327a927120)
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block/qcow.c | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow.c |   12 ++++++------
+ 1 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/block/qcow.c b/block/qcow.c
+index c470e05..b57b900 100644
+--- a/block/qcow.c
++++ b/block/qcow.c
+@@ -119,17 +119,19 @@ static int qcow_open(BlockDriverState *bs, QDict *options, int flags,
+     if (header.version != QCOW_VERSION) {
+         char version[64];
+         snprintf(version, sizeof(version), "QCOW version %d", header.version);
+-        qerror_report(QERR_UNKNOWN_BLOCK_FORMAT_FEATURE,
+-            bs->device_name, "qcow", version);
++        error_set(errp, QERR_UNKNOWN_BLOCK_FORMAT_FEATURE,
++                  bs->device_name, "qcow", version);
+         ret = -ENOTSUP;
+         goto fail;
+     }
+ 
+     if (header.size <= 1 || header.cluster_bits < 9) {
++        error_setg(errp, "invalid value in qcow header");
+         ret = -EINVAL;
+         goto fail;
+     }
+     if (header.crypt_method > QCOW_CRYPT_AES) {
++        error_setg(errp, "invalid encryption method in qcow header");
+         ret = -EINVAL;
+         goto fail;
+     }
+@@ -686,15 +688,13 @@ static int qcow_create(const char *filename, QEMUOptionParameter *options,
+ 
+     ret = bdrv_create_file(filename, options, &local_err);
+     if (ret < 0) {
+-        qerror_report_err(local_err);
+-        error_free(local_err);
++        error_propagate(errp, local_err);
+         return ret;
+     }
+ 
+     ret = bdrv_file_open(&qcow_bs, filename, NULL, BDRV_O_RDWR, &local_err);
+     if (ret < 0) {
+-        qerror_report_err(local_err);
+-        error_free(local_err);
++        error_propagate(errp, local_err);
+         return ret;
+     }
+ 
+-- 
+1.7.1
+

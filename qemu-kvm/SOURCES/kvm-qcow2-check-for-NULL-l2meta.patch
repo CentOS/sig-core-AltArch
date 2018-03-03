@@ -1,0 +1,111 @@
+From 11e8c9b1857d272cfe6f38e83ae70478c15214eb Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 15 Feb 2014 16:03:49 +0100
+Subject: [PATCH 4/5] qcow2: check for NULL l2meta
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1392480230-24011-4-git-send-email-mreitz@redhat.com>
+Patchwork-id: 57294
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 3/4] qcow2: check for NULL l2meta
+Bugzilla: 1055848
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+From: Hu Tao <hutao@cn.fujitsu.com>
+
+BZ: 1049176
+BZ: 1055848
+
+In the case of a metadata preallocation with a large cluster size,
+qcow2_alloc_cluster_offset() can allocate nothing and returns a
+NULL l2meta. This patch checks for it and link2 l2 with only valid
+l2meta.
+
+Replace 9 and 512 with BDRV_SECTOR_BITS, BDRV_SECTOR_SIZE
+respectively while at the function.
+
+Signed-off-by: Hu Tao <hutao@cn.fujitsu.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 7c2bbf4aa66ca5a9fc2ca147e0e6cb6f407a3aa2)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2.c | 31 ++++++++++++++++---------------
+ 1 file changed, 16 insertions(+), 15 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2.c |   31 ++++++++++++++++---------------
+ 1 files changed, 16 insertions(+), 15 deletions(-)
+
+diff --git a/block/qcow2.c b/block/qcow2.c
+index fe950b4..daad932 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -1404,34 +1404,34 @@ static int preallocate(BlockDriverState *bs)
+     int ret;
+     QCowL2Meta *meta;
+ 
+-    nb_sectors = bdrv_getlength(bs) >> 9;
++    nb_sectors = bdrv_getlength(bs) >> BDRV_SECTOR_BITS;
+     offset = 0;
+ 
+     while (nb_sectors) {
+-        num = MIN(nb_sectors, INT_MAX >> 9);
++        num = MIN(nb_sectors, INT_MAX >> BDRV_SECTOR_BITS);
+         ret = qcow2_alloc_cluster_offset(bs, offset, &num,
+                                          &host_offset, &meta);
+         if (ret < 0) {
+             return ret;
+         }
+ 
+-        ret = qcow2_alloc_cluster_link_l2(bs, meta);
+-        if (ret < 0) {
+-            qcow2_free_any_clusters(bs, meta->alloc_offset, meta->nb_clusters,
+-                                    QCOW2_DISCARD_NEVER);
+-            return ret;
+-        }
+-
+-        /* There are no dependent requests, but we need to remove our request
+-         * from the list of in-flight requests */
+         if (meta != NULL) {
++            ret = qcow2_alloc_cluster_link_l2(bs, meta);
++            if (ret < 0) {
++                qcow2_free_any_clusters(bs, meta->alloc_offset,
++                                        meta->nb_clusters, QCOW2_DISCARD_NEVER);
++                return ret;
++            }
++
++            /* There are no dependent requests, but we need to remove our
++             * request from the list of in-flight requests */
+             QLIST_REMOVE(meta, next_in_flight);
+         }
+ 
+         /* TODO Preallocate data if requested */
+ 
+         nb_sectors -= num;
+-        offset += num << 9;
++        offset += num << BDRV_SECTOR_BITS;
+     }
+ 
+     /*
+@@ -1440,9 +1440,10 @@ static int preallocate(BlockDriverState *bs)
+      * EOF). Extend the image to the last allocated sector.
+      */
+     if (host_offset != 0) {
+-        uint8_t buf[512];
+-        memset(buf, 0, 512);
+-        ret = bdrv_write(bs->file, (host_offset >> 9) + num - 1, buf, 1);
++        uint8_t buf[BDRV_SECTOR_SIZE];
++        memset(buf, 0, BDRV_SECTOR_SIZE);
++        ret = bdrv_write(bs->file, (host_offset >> BDRV_SECTOR_BITS) + num - 1,
++                         buf, 1);
+         if (ret < 0) {
+             return ret;
+         }
+-- 
+1.7.1
+

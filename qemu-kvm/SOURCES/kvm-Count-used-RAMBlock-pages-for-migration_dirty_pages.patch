@@ -1,0 +1,87 @@
+From 20a401a160bb959469e95cc809b53609eedccb40 Mon Sep 17 00:00:00 2001
+From: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+Date: Thu, 8 May 2014 11:27:33 +0200
+Subject: [PATCH 08/31] Count used RAMBlock pages for migration_dirty_pages
+
+RH-Author: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+Message-id: <1399548453-9181-2-git-send-email-dgilbert@redhat.com>
+Patchwork-id: 58746
+O-Subject: [RHEL7.1/RHEL7.0.z qemu-kvm PATCH 1/1] Count used RAMBlock pages for migration_dirty_pages
+Bugzilla: 1074913
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+
+This is a fix for a bug* triggered by a migration after hot unplugging
+a few virtio-net NICs, that caused migration never to converge, because
+'migration_dirty_pages' is incorrectly initialised.
+
+'migration_dirty_pages' is used as a tally of the number of outstanding
+dirty pages, to give the migration code an idea of how much more data
+will need to be transferred, and thus whether it can end the iterative
+phase.
+
+It was initialised to the total size of the RAMBlock address space,
+however hotunplug can leave this space sparse, and hence
+migration_dirty_pages ended up too large.
+
+Signed-off-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+
+(* https://bugzilla.redhat.com/show_bug.cgi?id=1074913 )
+
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit e30d1d8c7195848abb28a8c734a82b845b8b456a)
+---
+ arch_init.c | 21 +++++++++++++++++----
+ 1 file changed, 17 insertions(+), 4 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ arch_init.c |   21 +++++++++++++++++----
+ 1 files changed, 17 insertions(+), 4 deletions(-)
+
+diff --git a/arch_init.c b/arch_init.c
+index 22f7def..b88d686 100644
+--- a/arch_init.c
++++ b/arch_init.c
+@@ -728,11 +728,8 @@ static void reset_ram_globals(void)
+ static int ram_save_setup(QEMUFile *f, void *opaque)
+ {
+     RAMBlock *block;
+-    int64_t ram_pages = last_ram_offset() >> TARGET_PAGE_BITS;
++    int64_t ram_bitmap_pages; /* Size of bitmap in pages, including gaps */
+ 
+-    migration_bitmap = bitmap_new(ram_pages);
+-    bitmap_set(migration_bitmap, 0, ram_pages);
+-    migration_dirty_pages = ram_pages;
+     mig_throttle_on = false;
+     dirty_rate_high_cnt = 0;
+ 
+@@ -771,6 +768,22 @@ static int ram_save_setup(QEMUFile *f, void *opaque)
+     bytes_transferred = 0;
+     reset_ram_globals();
+ 
++    ram_bitmap_pages = last_ram_offset() >> TARGET_PAGE_BITS;
++    migration_bitmap = bitmap_new(ram_bitmap_pages);
++    bitmap_set(migration_bitmap, 0, ram_bitmap_pages);
++
++    /*
++     * Count the total number of pages used by ram blocks not including any
++     * gaps due to alignment or unplugs.
++     */
++    migration_dirty_pages = 0;
++    QTAILQ_FOREACH(block, &ram_list.blocks, next) {
++        uint64_t block_pages;
++
++        block_pages = block->length >> TARGET_PAGE_BITS;
++        migration_dirty_pages += block_pages;
++    }
++
+     memory_global_dirty_log_start();
+     migration_bitmap_sync();
+     qemu_mutex_unlock_iothread();
+-- 
+1.7.1
+

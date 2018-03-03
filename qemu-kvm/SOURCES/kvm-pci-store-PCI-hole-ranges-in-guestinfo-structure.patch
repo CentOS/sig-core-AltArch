@@ -1,0 +1,292 @@
+From 43d319c65b1a27349fd329cb2f9c6f5c54f32379 Mon Sep 17 00:00:00 2001
+Message-Id: <43d319c65b1a27349fd329cb2f9c6f5c54f32379.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:17:22 +0100
+Subject: [PATCH 13/56] pci: store PCI hole ranges in guestinfo structure
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-14-git-send-email-mst@redhat.com>
+Patchwork-id: 56318
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 13/57] pci: store PCI hole ranges in guestinfo structure
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Will be used to pass hole ranges to guests.
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 3459a625215449b67b9c67d9151ff72892d0a42a)
+
+Conflicts:
+	hw/i386/pc_piix.c
+	hw/i386/pc_q35.c
+---
+ include/hw/i386/pc.h      | 19 ++++++++++++++++++-
+ include/hw/pci-host/q35.h |  2 ++
+ include/qemu/typedefs.h   |  1 +
+ hw/i386/pc.c              | 46 +++++++++++++++++++++++++++++++++++++++++++++-
+ hw/i386/pc_piix.c         | 14 +++++++++++++-
+ hw/i386/pc_q35.c          |  6 +++++-
+ hw/pci-host/q35.c         |  8 ++++++++
+ 7 files changed, 92 insertions(+), 4 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/i386/pc.c              | 46 +++++++++++++++++++++++++++++++++++++++++++++-
+ hw/i386/pc_piix.c         | 14 +++++++++++++-
+ hw/i386/pc_q35.c          |  6 +++++-
+ hw/pci-host/q35.c         |  8 ++++++++
+ include/hw/i386/pc.h      | 19 ++++++++++++++++++-
+ include/hw/pci-host/q35.h |  2 ++
+ include/qemu/typedefs.h   |  1 +
+ 7 files changed, 92 insertions(+), 4 deletions(-)
+
+diff --git a/hw/i386/pc.c b/hw/i386/pc.c
+index 2948781..68a8e1b 100644
+--- a/hw/i386/pc.c
++++ b/hw/i386/pc.c
+@@ -985,6 +985,48 @@ void pc_cpus_init(const char *cpu_model, DeviceState *icc_bridge)
+     }
+ }
+ 
++typedef struct PcGuestInfoState {
++    PcGuestInfo info;
++    Notifier machine_done;
++} PcGuestInfoState;
++
++static
++void pc_guest_info_machine_done(Notifier *notifier, void *data)
++{
++    PcGuestInfoState *guest_info_state = container_of(notifier,
++                                                      PcGuestInfoState,
++                                                      machine_done);
++}
++
++PcGuestInfo *pc_guest_info_init(ram_addr_t below_4g_mem_size,
++                                ram_addr_t above_4g_mem_size)
++{
++    PcGuestInfoState *guest_info_state = g_malloc0(sizeof *guest_info_state);
++    PcGuestInfo *guest_info = &guest_info_state->info;
++
++    guest_info->pci_info.w32.end = IO_APIC_DEFAULT_ADDRESS;
++    if (sizeof(hwaddr) == 4) {
++        guest_info->pci_info.w64.begin = 0;
++        guest_info->pci_info.w64.end = 0;
++    } else {
++        /*
++         * BIOS does not set MTRR entries for the 64 bit window, so no need to
++         * align address to power of two.  Align address at 1G, this makes sure
++         * it can be exactly covered with a PAT entry even when using huge
++         * pages.
++         */
++        guest_info->pci_info.w64.begin =
++            ROUND_UP((0x1ULL << 32) + above_4g_mem_size, 0x1ULL << 30);
++        guest_info->pci_info.w64.end = guest_info->pci_info.w64.begin +
++            (0x1ULL << 62);
++        assert(guest_info->pci_info.w64.begin <= guest_info->pci_info.w64.end);
++    }
++
++    guest_info_state->machine_done.notify = pc_guest_info_machine_done;
++    qemu_add_machine_init_done_notifier(&guest_info_state->machine_done);
++    return guest_info;
++}
++
+ void pc_acpi_init(const char *default_dsdt)
+ {
+     char *filename;
+@@ -1026,7 +1068,8 @@ FWCfgState *pc_memory_init(MemoryRegion *system_memory,
+                            ram_addr_t below_4g_mem_size,
+                            ram_addr_t above_4g_mem_size,
+                            MemoryRegion *rom_memory,
+-                           MemoryRegion **ram_memory)
++                           MemoryRegion **ram_memory,
++                           PcGuestInfo *guest_info)
+ {
+     int linux_boot, i;
+     MemoryRegion *ram, *option_rom_mr;
+@@ -1078,6 +1121,7 @@ FWCfgState *pc_memory_init(MemoryRegion *system_memory,
+     for (i = 0; i < nb_option_roms; i++) {
+         rom_add_option(option_rom[i].name, option_rom[i].bootindex);
+     }
++    guest_info->fw_cfg = fw_cfg;
+     return fw_cfg;
+ }
+ 
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index 07848c1..3a77998 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -87,6 +87,7 @@ static void pc_init1(QEMUMachineInitArgs *args,
+     MemoryRegion *rom_memory;
+     DeviceState *icc_bridge;
+     FWCfgState *fw_cfg = NULL;
++    PcGuestInfo *guest_info;
+ 
+     icc_bridge = qdev_create(NULL, TYPE_ICC_BRIDGE);
+     object_property_add_child(qdev_get_machine(), "icc-bridge",
+@@ -120,13 +121,24 @@ static void pc_init1(QEMUMachineInitArgs *args,
+         smbios_set_type1_defaults("Red Hat", "KVM", args->machine->desc);
+     }
+ 
++    guest_info = pc_guest_info_init(below_4g_mem_size, above_4g_mem_size);
++
++    /* Set PCI window size the way seabios has always done it. */
++    /* Power of 2 so bios can cover it with a single MTRR */
++    if (ram_size <= 0x80000000)
++        guest_info->pci_info.w32.begin = 0x80000000;
++    else if (ram_size <= 0xc0000000)
++        guest_info->pci_info.w32.begin = 0xc0000000;
++    else
++        guest_info->pci_info.w32.begin = 0xe0000000;
++
+     /* allocate ram and load rom/bios */
+     if (!xen_enabled()) {
+         fw_cfg = pc_memory_init(system_memory,
+                        args->kernel_filename, args->kernel_cmdline,
+                        args->initrd_filename,
+                        below_4g_mem_size, above_4g_mem_size,
+-                       rom_memory, &ram_memory);
++                       rom_memory, &ram_memory, guest_info);
+     }
+ 
+     gsi_state = g_malloc0(sizeof(*gsi_state));
+diff --git a/hw/i386/pc_q35.c b/hw/i386/pc_q35.c
+index 8fa6793..9fab93c 100644
+--- a/hw/i386/pc_q35.c
++++ b/hw/i386/pc_q35.c
+@@ -73,6 +73,7 @@ static void pc_q35_init(QEMUMachineInitArgs *args)
+     ICH9LPCState *ich9_lpc;
+     PCIDevice *ahci;
+     DeviceState *icc_bridge;
++    PcGuestInfo *guest_info;
+ 
+     icc_bridge = qdev_create(NULL, TYPE_ICC_BRIDGE);
+     object_property_add_child(qdev_get_machine(), "icc-bridge",
+@@ -106,13 +107,15 @@ static void pc_q35_init(QEMUMachineInitArgs *args)
+         smbios_set_type1_defaults("Red Hat", "KVM", args->machine->desc);
+     }
+ 
++    guest_info = pc_guest_info_init(below_4g_mem_size, above_4g_mem_size);
++
+     /* allocate ram and load rom/bios */
+     if (!xen_enabled()) {
+         pc_memory_init(get_system_memory(),
+                        args->kernel_filename, args->kernel_cmdline,
+                        args->initrd_filename,
+                        below_4g_mem_size, above_4g_mem_size,
+-                       rom_memory, &ram_memory);
++                       rom_memory, &ram_memory, guest_info);
+     }
+ 
+     /* irq lines */
+@@ -134,6 +137,7 @@ static void pc_q35_init(QEMUMachineInitArgs *args)
+     q35_host->mch.address_space_io = get_system_io();
+     q35_host->mch.below_4g_mem_size = below_4g_mem_size;
+     q35_host->mch.above_4g_mem_size = above_4g_mem_size;
++    q35_host->mch.guest_info = guest_info;
+     /* pci */
+     qdev_init_nofail(DEVICE(q35_host));
+     host_bus = q35_host->host.pci.bus;
+diff --git a/hw/pci-host/q35.c b/hw/pci-host/q35.c
+index ed934c3..0989fc5 100644
+--- a/hw/pci-host/q35.c
++++ b/hw/pci-host/q35.c
+@@ -245,6 +245,14 @@ static int mch_init(PCIDevice *d)
+     hwaddr pci_hole64_size;
+     MCHPCIState *mch = MCH_PCI_DEVICE(d);
+ 
++    /* Leave enough space for the biggest MCFG BAR */
++    /* TODO: this matches current bios behaviour, but
++     * it's not a power of two, which means an MTRR
++     * can't cover it exactly.
++     */
++    mch->guest_info->pci_info.w32.begin = MCH_HOST_BRIDGE_PCIEXBAR_DEFAULT +
++        MCH_HOST_BRIDGE_PCIEXBAR_MAX;
++
+     /* setup pci memory regions */
+     memory_region_init_alias(&mch->pci_hole, "pci-hole",
+                              mch->pci_address_space,
+diff --git a/include/hw/i386/pc.h b/include/hw/i386/pc.h
+index 2cf7baa..2518db6 100644
+--- a/include/hw/i386/pc.h
++++ b/include/hw/i386/pc.h
+@@ -10,8 +10,20 @@
+ #include "exec/memory.h"
+ #include "hw/i386/ioapic.h"
+ 
++#include "qemu/range.h"
++
+ /* PC-style peripherals (also used by other machines).  */
+ 
++typedef struct PcPciInfo {
++    Range w32;
++    Range w64;
++} PcPciInfo;
++
++struct PcGuestInfo {
++    PcPciInfo pci_info;
++    FWCfgState *fw_cfg;
++};
++
+ /* parallel.c */
+ static inline bool parallel_init(ISABus *bus, int index, CharDriverState *chr)
+ {
+@@ -84,6 +96,10 @@ void pc_acpi_smi_interrupt(void *opaque, int irq, int level);
+ void pc_cpus_init(const char *cpu_model, DeviceState *icc_bridge);
+ void pc_hot_add_cpu(const int64_t id, Error **errp);
+ void pc_acpi_init(const char *default_dsdt);
++
++PcGuestInfo *pc_guest_info_init(ram_addr_t below_4g_mem_size,
++                                ram_addr_t above_4g_mem_size);
++
+ FWCfgState *pc_memory_init(MemoryRegion *system_memory,
+                            const char *kernel_filename,
+                            const char *kernel_cmdline,
+@@ -91,7 +107,8 @@ FWCfgState *pc_memory_init(MemoryRegion *system_memory,
+                            ram_addr_t below_4g_mem_size,
+                            ram_addr_t above_4g_mem_size,
+                            MemoryRegion *rom_memory,
+-                           MemoryRegion **ram_memory);
++                           MemoryRegion **ram_memory,
++                           PcGuestInfo *guest_info);
+ qemu_irq *pc_allocate_cpu_irq(void);
+ DeviceState *pc_vga_init(ISABus *isa_bus, PCIBus *pci_bus);
+ void pc_basic_device_init(ISABus *isa_bus, qemu_irq *gsi,
+diff --git a/include/hw/pci-host/q35.h b/include/hw/pci-host/q35.h
+index e182c82..b083831 100644
+--- a/include/hw/pci-host/q35.h
++++ b/include/hw/pci-host/q35.h
+@@ -55,6 +55,7 @@ typedef struct MCHPCIState {
+     uint8_t smm_enabled;
+     ram_addr_t below_4g_mem_size;
+     ram_addr_t above_4g_mem_size;
++    PcGuestInfo *guest_info;
+ } MCHPCIState;
+ 
+ typedef struct Q35PCIHost {
+@@ -81,6 +82,7 @@ typedef struct Q35PCIHost {
+ #define MCH_HOST_BRIDGE_PCIEXBAR               0x60    /* 64bit register */
+ #define MCH_HOST_BRIDGE_PCIEXBAR_SIZE          8       /* 64bit register */
+ #define MCH_HOST_BRIDGE_PCIEXBAR_DEFAULT       0xb0000000
++#define MCH_HOST_BRIDGE_PCIEXBAR_MAX           (0x10000000) /* 256M */
+ #define MCH_HOST_BRIDGE_PCIEXBAR_ADMSK         Q35_MASK(64, 35, 28)
+ #define MCH_HOST_BRIDGE_PCIEXBAR_128ADMSK      ((uint64_t)(1 << 26))
+ #define MCH_HOST_BRIDGE_PCIEXBAR_64ADMSK       ((uint64_t)(1 << 25))
+diff --git a/include/qemu/typedefs.h b/include/qemu/typedefs.h
+index a332d88..70d250f 100644
+--- a/include/qemu/typedefs.h
++++ b/include/qemu/typedefs.h
+@@ -64,6 +64,7 @@ typedef struct VirtIODevice VirtIODevice;
+ typedef struct QEMUSGList QEMUSGList;
+ typedef struct SHPCDevice SHPCDevice;
+ typedef struct FWCfgState FWCfgState;
++typedef struct PcGuestInfo PcGuestInfo;
+ typedef struct Range Range;
+ 
+ #endif /* QEMU_TYPEDEFS_H */
+-- 
+1.7.11.7
+

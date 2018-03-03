@@ -1,0 +1,61 @@
+From 48aa83a2a3e42665e3e3e390909ebc147e234f73 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Fri, 17 Jan 2014 17:07:57 +0100
+Subject: [PATCH 07/11] qdev: Do not let the user try to device_add when it cannot work
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1389978479-30595-8-git-send-email-armbru@redhat.com>
+Patchwork-id: 56788
+O-Subject: [PATCH 7.0 qemu-kvm 7/9] qdev: Do not let the user try to device_add when it cannot work
+Bugzilla: 669524
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+
+Such devices have always been unavailable and omitted from the list of
+available devices shown by device_add help.  Until commit 18b6dad
+silently broke the former, setting up nasty traps for unwary users,
+like this one:
+
+    $ qemu-system-x86_64 -nodefaults -monitor stdio -display none
+    QEMU 1.6.50 monitor - type 'help' for more information
+    (qemu) device_add apic
+    Segmentation fault (core dumped)
+
+I call that a regression.  Fix it.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Marcel Apfelbaum <marcel.a@redhat.com>
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit 7ea5e78f3d8d64e99c4017ea211b7518f2629756)
+---
+ qdev-monitor.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qdev-monitor.c |    5 +++++
+ 1 files changed, 5 insertions(+), 0 deletions(-)
+
+diff --git a/qdev-monitor.c b/qdev-monitor.c
+index eb05b4c..da7fe0d 100644
+--- a/qdev-monitor.c
++++ b/qdev-monitor.c
+@@ -490,6 +490,11 @@ DeviceState *qdev_device_add(QemuOpts *opts)
+     }
+ 
+     dc = DEVICE_CLASS(oc);
++    if (dc->cannot_instantiate_with_device_add_yet) {
++        qerror_report(QERR_INVALID_PARAMETER_VALUE, "driver",
++                      "pluggable device type");
++        return NULL;
++    }
+ 
+     /* find bus */
+     path = qemu_opt_get(opts, "bus");
+-- 
+1.7.1
+

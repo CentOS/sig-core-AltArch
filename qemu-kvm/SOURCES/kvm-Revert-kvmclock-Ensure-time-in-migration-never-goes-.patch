@@ -1,0 +1,106 @@
+From 62ac85ec7c8e41b0454bdec0e0a9c7d5adc39280 Mon Sep 17 00:00:00 2001
+From: "Dr. David Alan Gilbert (git)" <dgilbert@redhat.com>
+Date: Wed, 22 Oct 2014 09:46:34 +0200
+Subject: [PATCH 3/6] Revert "kvmclock: Ensure time in migration never goes
+ backward"
+
+Message-id: <1413971197-4624-3-git-send-email-dgilbert@redhat.com>
+Patchwork-id: 61788
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 2/5] Revert "kvmclock: Ensure time in migration never goes backward"
+Bugzilla: 1098602 1130428
+RH-Acked-by: Marcelo Tosatti <mtosatti@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+
+This reverts commit 4b6035c2a739bc4c086abbb36f0883a1178a8f1c.
+
+The equivalent upstream revert is Paolo's fa666c10f2f3e15685ff
+
+Signed-off-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/kvm/clock.c | 49 -------------------------------------------------
+ 1 file changed, 49 deletions(-)
+
+diff --git a/hw/i386/kvm/clock.c b/hw/i386/kvm/clock.c
+index 1f2a26e..6d6f3a7 100644
+--- a/hw/i386/kvm/clock.c
++++ b/hw/i386/kvm/clock.c
+@@ -14,7 +14,6 @@
+  */
+ 
+ #include "qemu-common.h"
+-#include "qemu/host-utils.h"
+ #include "sysemu/sysemu.h"
+ #include "sysemu/kvm.h"
+ #include "hw/sysbus.h"
+@@ -29,48 +28,6 @@ typedef struct KVMClockState {
+     bool clock_valid;
+ } KVMClockState;
+ 
+-struct pvclock_vcpu_time_info {
+-    uint32_t   version;
+-    uint32_t   pad0;
+-    uint64_t   tsc_timestamp;
+-    uint64_t   system_time;
+-    uint32_t   tsc_to_system_mul;
+-    int8_t     tsc_shift;
+-    uint8_t    flags;
+-    uint8_t    pad[2];
+-} __attribute__((__packed__)); /* 32 bytes */
+-
+-static uint64_t kvmclock_current_nsec(KVMClockState *s)
+-{
+-    CPUArchState *acpu = first_cpu;
+-    CPUState *cpu = ENV_GET_CPU(acpu);
+-    CPUX86State *env = cpu->env_ptr;
+-    hwaddr kvmclock_struct_pa = env->system_time_msr & ~1ULL;
+-    uint64_t migration_tsc = env->tsc;
+-    struct pvclock_vcpu_time_info time;
+-    uint64_t delta;
+-    uint64_t nsec_lo;
+-    uint64_t nsec_hi;
+-    uint64_t nsec;
+-
+-    if (!(env->system_time_msr & 1ULL)) {
+-        /* KVM clock not active */
+-        return 0;
+-    }
+-
+-    cpu_physical_memory_read(kvmclock_struct_pa, &time, sizeof(time));
+-
+-    delta = migration_tsc - time.tsc_timestamp;
+-    if (time.tsc_shift < 0) {
+-        delta >>= -time.tsc_shift;
+-    } else {
+-        delta <<= time.tsc_shift;
+-    }
+-
+-    mulu64(&nsec_lo, &nsec_hi, delta, time.tsc_to_system_mul);
+-    nsec = (nsec_lo >> 32) | (nsec_hi << 32);
+-    return nsec + time.system_time;
+-}
+ 
+ static void kvmclock_vm_state_change(void *opaque, int running,
+                                      RunState state)
+@@ -82,15 +39,9 @@ static void kvmclock_vm_state_change(void *opaque, int running,
+ 
+     if (running) {
+         struct kvm_clock_data data;
+-        uint64_t time_at_migration = kvmclock_current_nsec(s);
+ 
+         s->clock_valid = false;
+ 
+-	/* We can't rely on the migrated clock value, just discard it */
+-	if (time_at_migration) {
+-	        s->clock = time_at_migration;
+-	}
+-
+         data.clock = s->clock;
+         data.flags = 0;
+         ret = kvm_vm_ioctl(kvm_state, KVM_SET_CLOCK, &data);
+-- 
+1.8.3.1
+

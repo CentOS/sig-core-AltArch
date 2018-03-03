@@ -1,0 +1,122 @@
+From 42d65e8b2ebd637035fd3ccb5306cbdd37808cd3 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Wed, 6 Nov 2013 16:53:37 +0100
+Subject: [PATCH 80/87] qcow2: Add support for ImageInfoSpecific
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383756824-6921-15-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55569
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 14/21] qcow2: Add support for ImageInfoSpecific
+Bugzilla: 980771
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+BZ: 980771
+
+Add a new ImageInfoSpecificQCow2 type as a subtype of ImageInfoSpecific.
+This contains the compatibility level as a string and an optional
+lazy_refcounts boolean (optional means mandatory for compat >= 1.1 and
+not available for compat == 0.10).
+
+Also, add qcow2_get_specific_info, which returns this information.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 37764dfb71c4d0d058b71ba33340c6beab7d5a66)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2.c    | 28 ++++++++++++++++++++++++++++
+ qapi-schema.json | 16 ++++++++++++++++
+ 2 files changed, 44 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2.c    |   28 ++++++++++++++++++++++++++++
+ qapi-schema.json |   16 ++++++++++++++++
+ 2 files changed, 44 insertions(+), 0 deletions(-)
+
+diff --git a/block/qcow2.c b/block/qcow2.c
+index 01b535d..f852d64 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -1889,6 +1889,33 @@ static int qcow2_get_info(BlockDriverState *bs, BlockDriverInfo *bdi)
+     return 0;
+ }
+ 
++static ImageInfoSpecific *qcow2_get_specific_info(BlockDriverState *bs)
++{
++    BDRVQcowState *s = bs->opaque;
++    ImageInfoSpecific *spec_info = g_new(ImageInfoSpecific, 1);
++
++    *spec_info = (ImageInfoSpecific){
++        .kind  = IMAGE_INFO_SPECIFIC_KIND_QCOW2,
++        {
++            .qcow2 = g_new(ImageInfoSpecificQCow2, 1),
++        },
++    };
++    if (s->qcow_version == 2) {
++        *spec_info->qcow2 = (ImageInfoSpecificQCow2){
++            .compat = g_strdup("0.10"),
++        };
++    } else if (s->qcow_version == 3) {
++        *spec_info->qcow2 = (ImageInfoSpecificQCow2){
++            .compat             = g_strdup("1.1"),
++            .lazy_refcounts     = s->compatible_features &
++                                  QCOW2_COMPAT_LAZY_REFCOUNTS,
++            .has_lazy_refcounts = true,
++        };
++    }
++
++    return spec_info;
++}
++
+ #if 0
+ static void dump_refcounts(BlockDriverState *bs)
+ {
+@@ -2024,6 +2051,7 @@ static BlockDriver bdrv_qcow2 = {
+     .bdrv_snapshot_list     = qcow2_snapshot_list,
+     .bdrv_snapshot_load_tmp     = qcow2_snapshot_load_tmp,
+     .bdrv_get_info      = qcow2_get_info,
++    .bdrv_get_specific_info = qcow2_get_specific_info,
+ 
+     .bdrv_save_vmstate    = qcow2_save_vmstate,
+     .bdrv_load_vmstate    = qcow2_load_vmstate,
+diff --git a/qapi-schema.json b/qapi-schema.json
+index 934ac7f..3c00ddd 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -210,6 +210,21 @@
+             'vm-clock-sec': 'int', 'vm-clock-nsec': 'int' } }
+ 
+ ##
++# @ImageInfoSpecificQCow2:
++#
++# @compat: compatibility level
++#
++# @lazy-refcounts: #optional on or off; only valid for compat >= 1.1
++#
++# Since: 1.7
++##
++{ 'type': 'ImageInfoSpecificQCow2',
++  'data': {
++      'compat': 'str',
++      '*lazy-refcounts': 'bool'
++  } }
++
++##
+ # @ImageInfoSpecific:
+ #
+ # A discriminated record of image format specific information structures.
+@@ -219,6 +234,7 @@
+ 
+ { 'union': 'ImageInfoSpecific',
+   'data': {
++      'qcow2': 'ImageInfoSpecificQCow2'
+   } }
+ 
+ ##
+-- 
+1.7.1
+

@@ -1,0 +1,111 @@
+From 582eb6c9eef89809283e8d79b3f39e1ae9eeb64a Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Tue, 17 Jan 2017 19:51:30 +0100
+Subject: [PATCH 1/3] gluster: correctly propagate errors
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <9299039bbb1797e4e61cdc8b4be062efeb152abb.1484682588.git.jcody@redhat.com>
+Patchwork-id: 73254
+O-Subject: [RHEL-7.4 qemu-kvm 1/3] gluster: correctly propagate errors
+Bugzilla: 1151859
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit a7451cb850d115f257080aff3fbc54f255ebf8f7)
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/gluster.c | 29 +++++++++++++++--------------
+ 1 file changed, 15 insertions(+), 14 deletions(-)
+
+diff --git a/block/gluster.c b/block/gluster.c
+index 1793386..248a031 100644
+--- a/block/gluster.c
++++ b/block/gluster.c
+@@ -182,7 +182,8 @@ out:
+     return ret;
+ }
+ 
+-static struct glfs *qemu_gluster_init(GlusterConf *gconf, const char *filename)
++static struct glfs *qemu_gluster_init(GlusterConf *gconf, const char *filename,
++                                      Error **errp)
+ {
+     struct glfs *glfs = NULL;
+     int ret;
+@@ -190,8 +191,8 @@ static struct glfs *qemu_gluster_init(GlusterConf *gconf, const char *filename)
+ 
+     ret = qemu_gluster_parseuri(gconf, filename);
+     if (ret < 0) {
+-        error_report("Usage: file=gluster[+transport]://[server[:port]]/"
+-            "volname/image[?socket=...]");
++        error_setg(errp, "Usage: file=gluster[+transport]://[server[:port]]/"
++                   "volname/image[?socket=...]");
+         errno = -ret;
+         goto out;
+     }
+@@ -218,9 +219,11 @@ static struct glfs *qemu_gluster_init(GlusterConf *gconf, const char *filename)
+ 
+     ret = glfs_init(glfs);
+     if (ret) {
+-        error_report("Gluster connection failed for server=%s port=%d "
+-             "volume=%s image=%s transport=%s", gconf->server, gconf->port,
+-             gconf->volname, gconf->image, gconf->transport);
++        error_setg_errno(errp, errno,
++                         "Gluster connection failed for server=%s port=%d "
++                         "volume=%s image=%s transport=%s", gconf->server,
++                         gconf->port, gconf->volname, gconf->image,
++                         gconf->transport);
+         goto out;
+     }
+     return glfs;
+@@ -328,17 +331,15 @@ static int qemu_gluster_open(BlockDriverState *bs,  QDict *options,
+ 
+     opts = qemu_opts_create_nofail(&runtime_opts);
+     qemu_opts_absorb_qdict(opts, options, &local_err);
+-    if (error_is_set(&local_err)) {
+-        qerror_report_err(local_err);
+-        error_free(local_err);
++    if (local_err) {
++        error_propagate(errp, local_err);
+         ret = -EINVAL;
+         goto out;
+     }
+ 
+     filename = qemu_opt_get(opts, "filename");
+ 
+-
+-    s->glfs = qemu_gluster_init(gconf, filename);
++    s->glfs = qemu_gluster_init(gconf, filename, errp);
+     if (!s->glfs) {
+         ret = -errno;
+         goto out;
+@@ -406,7 +407,7 @@ static int qemu_gluster_reopen_prepare(BDRVReopenState *state,
+ 
+     gconf = g_malloc0(sizeof(GlusterConf));
+ 
+-    reop_s->glfs = qemu_gluster_init(gconf, state->bs->filename);
++    reop_s->glfs = qemu_gluster_init(gconf, state->bs->filename, errp);
+     if (reop_s->glfs == NULL) {
+         ret = -errno;
+         goto exit;
+@@ -481,9 +482,9 @@ static int qemu_gluster_create(const char *filename,
+     int64_t total_size = 0;
+     GlusterConf *gconf = g_malloc0(sizeof(GlusterConf));
+ 
+-    glfs = qemu_gluster_init(gconf, filename);
++    glfs = qemu_gluster_init(gconf, filename, errp);
+     if (!glfs) {
+-        ret = -errno;
++        ret = -EINVAL;
+         goto out;
+     }
+ 
+-- 
+1.8.3.1
+

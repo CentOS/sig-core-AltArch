@@ -1,0 +1,218 @@
+From 8adbd2914ccd44e0b1766690b514bda213b88740 Mon Sep 17 00:00:00 2001
+From: John Snow <jsnow@redhat.com>
+Date: Mon, 23 Nov 2015 17:38:39 +0100
+Subject: [PATCH 20/27] qemu-io: Correct error messages
+
+RH-Author: John Snow <jsnow@redhat.com>
+Message-id: <1448300320-7772-21-git-send-email-jsnow@redhat.com>
+Patchwork-id: 68446
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 20/21] qemu-io: Correct error messages
+Bugzilla: 1272523
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+Reported-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: John Snow <jsnow@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit a9ecfa004f2dd83df612daac4a87dfc3a0feba28)
+Signed-off-by: John Snow <jsnow@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+  qemu-io-cmds.c:
+    - Fixes to sigraise are not backported.
+
+Signed-off-by: John Snow <jsnow@redhat.com>
+---
+ qemu-io-cmds.c | 51 +++++++++++++++++++++++++++++++++------------------
+ 1 file changed, 33 insertions(+), 18 deletions(-)
+
+diff --git a/qemu-io-cmds.c b/qemu-io-cmds.c
+index 6ea027d..b41d6ee 100644
+--- a/qemu-io-cmds.c
++++ b/qemu-io-cmds.c
+@@ -134,6 +134,21 @@ static int64_t cvtnum(const char *s)
+     return ret;
+ }
+ 
++static void print_cvtnum_err(int64_t rc, const char *arg)
++{
++    switch (rc) {
++    case -EINVAL:
++        printf("Parsing error: non-numeric argument,"
++               " or extraneous/unrecognized suffix -- %s\n", arg);
++        break;
++    case -ERANGE:
++        printf("Parsing error: argument too large -- %s\n", arg);
++        break;
++    default:
++        printf("Parsing error: %s\n", arg);
++    }
++}
++
+ #define EXABYTES(x)     ((long long)(x) << 60)
+ #define PETABYTES(x)    ((long long)(x) << 50)
+ #define TERABYTES(x)    ((long long)(x) << 40)
+@@ -355,13 +370,13 @@ create_iovec(BlockDriverState *bs, QEMUIOVector *qiov, char **argv, int nr_iov,
+ 
+         len = cvtnum(arg);
+         if (len < 0) {
+-            printf("non-numeric length argument -- %s\n", arg);
++            print_cvtnum_err(len, arg);
+             goto fail;
+         }
+ 
+         /* should be SIZE_T_MAX, but that doesn't exist */
+         if (len > INT_MAX) {
+-            printf("too large length argument -- %s\n", arg);
++            printf("Argument '%s' exceeds maximum size %d\n", arg, INT_MAX);
+             goto fail;
+         }
+ 
+@@ -688,7 +703,7 @@ static int read_f(BlockDriverState *bs, int argc, char **argv)
+             lflag = 1;
+             pattern_count = cvtnum(optarg);
+             if (pattern_count < 0) {
+-                printf("non-numeric length argument -- %s\n", optarg);
++                print_cvtnum_err(pattern_count, optarg);
+                 return 0;
+             }
+             break;
+@@ -709,7 +724,7 @@ static int read_f(BlockDriverState *bs, int argc, char **argv)
+             sflag = 1;
+             pattern_offset = cvtnum(optarg);
+             if (pattern_offset < 0) {
+-                printf("non-numeric length argument -- %s\n", optarg);
++                print_cvtnum_err(pattern_offset, optarg);
+                 return 0;
+             }
+             break;
+@@ -732,14 +747,14 @@ static int read_f(BlockDriverState *bs, int argc, char **argv)
+ 
+     offset = cvtnum(argv[optind]);
+     if (offset < 0) {
+-        printf("non-numeric length argument -- %s\n", argv[optind]);
++        print_cvtnum_err(offset, argv[optind]);
+         return 0;
+     }
+ 
+     optind++;
+     count = cvtnum(argv[optind]);
+     if (count < 0) {
+-        printf("non-numeric length argument -- %s\n", argv[optind]);
++        print_cvtnum_err(count, argv[optind]);
+         return 0;
+     } else if (count > SIZE_MAX) {
+         printf("length cannot exceed %" PRIu64 ", given %s\n",
+@@ -894,7 +909,7 @@ static int readv_f(BlockDriverState *bs, int argc, char **argv)
+ 
+     offset = cvtnum(argv[optind]);
+     if (offset < 0) {
+-        printf("non-numeric length argument -- %s\n", argv[optind]);
++        print_cvtnum_err(offset, argv[optind]);
+         return 0;
+     }
+     optind++;
+@@ -1043,14 +1058,14 @@ static int write_f(BlockDriverState *bs, int argc, char **argv)
+ 
+     offset = cvtnum(argv[optind]);
+     if (offset < 0) {
+-        printf("non-numeric length argument -- %s\n", argv[optind]);
++        print_cvtnum_err(offset, argv[optind]);
+         return 0;
+     }
+ 
+     optind++;
+     count = cvtnum(argv[optind]);
+     if (count < 0) {
+-        printf("non-numeric length argument -- %s\n", argv[optind]);
++        print_cvtnum_err(count, argv[optind]);
+         return 0;
+     } else if (count > SIZE_MAX) {
+         printf("length cannot exceed %" PRIu64 ", given %s\n",
+@@ -1179,7 +1194,7 @@ static int writev_f(BlockDriverState *bs, int argc, char **argv)
+ 
+     offset = cvtnum(argv[optind]);
+     if (offset < 0) {
+-        printf("non-numeric length argument -- %s\n", argv[optind]);
++        print_cvtnum_err(offset, argv[optind]);
+         return 0;
+     }
+     optind++;
+@@ -1306,7 +1321,7 @@ static int multiwrite_f(BlockDriverState *bs, int argc, char **argv)
+         /* Read the offset of the request */
+         offset = cvtnum(argv[optind]);
+         if (offset < 0) {
+-            printf("non-numeric offset argument -- %s\n", argv[optind]);
++            print_cvtnum_err(offset, argv[optind]);
+             goto out;
+         }
+         optind++;
+@@ -1526,7 +1541,7 @@ static int aio_read_f(BlockDriverState *bs, int argc, char **argv)
+ 
+     ctx->offset = cvtnum(argv[optind]);
+     if (ctx->offset < 0) {
+-        printf("non-numeric length argument -- %s\n", argv[optind]);
++        print_cvtnum_err(ctx->offset, argv[optind]);
+         g_free(ctx);
+         return 0;
+     }
+@@ -1618,7 +1633,7 @@ static int aio_write_f(BlockDriverState *bs, int argc, char **argv)
+ 
+     ctx->offset = cvtnum(argv[optind]);
+     if (ctx->offset < 0) {
+-        printf("non-numeric length argument -- %s\n", argv[optind]);
++        print_cvtnum_err(ctx->offset, argv[optind]);
+         g_free(ctx);
+         return 0;
+     }
+@@ -1676,7 +1691,7 @@ static int truncate_f(BlockDriverState *bs, int argc, char **argv)
+ 
+     offset = cvtnum(argv[1]);
+     if (offset < 0) {
+-        printf("non-numeric truncate argument -- %s\n", argv[1]);
++        print_cvtnum_err(offset, argv[1]);
+         return 0;
+     }
+ 
+@@ -1822,14 +1837,14 @@ static int discard_f(BlockDriverState *bs, int argc, char **argv)
+ 
+     offset = cvtnum(argv[optind]);
+     if (offset < 0) {
+-        printf("non-numeric length argument -- %s\n", argv[optind]);
++        print_cvtnum_err(offset, argv[optind]);
+         return 0;
+     }
+ 
+     optind++;
+     count = cvtnum(argv[optind]);
+     if (count < 0) {
+-        printf("non-numeric length argument -- %s\n", argv[optind]);
++        print_cvtnum_err(count, argv[optind]);
+         return 0;
+     } else if (count >> BDRV_SECTOR_BITS > INT_MAX) {
+         printf("length cannot exceed %"PRIu64", given %s\n",
+@@ -1867,7 +1882,7 @@ static int alloc_f(BlockDriverState *bs, int argc, char **argv)
+ 
+     offset = cvtnum(argv[1]);
+     if (offset < 0) {
+-        printf("non-numeric offset argument -- %s\n", argv[1]);
++        print_cvtnum_err(offset, argv[1]);
+         return 0;
+     } else if (offset & 0x1ff) {
+         printf("offset %" PRId64 " is not sector aligned\n",
+@@ -1878,7 +1893,7 @@ static int alloc_f(BlockDriverState *bs, int argc, char **argv)
+     if (argc == 3) {
+         nb_sectors = cvtnum(argv[2]);
+         if (nb_sectors < 0) {
+-            printf("non-numeric length argument -- %s\n", argv[2]);
++            print_cvtnum_err(nb_sectors, argv[2]);
+             return 0;
+         } else if (nb_sectors > INT_MAX) {
+             printf("length argument cannot exceed %d, given %s\n",
+-- 
+1.8.3.1
+

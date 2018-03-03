@@ -1,0 +1,90 @@
+From 933ac03653bd2ec6194811b5c73b871854382298 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 4 Nov 2013 22:32:19 +0100
+Subject: [PATCH 26/87] blkverify: Employ error parameter
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-29-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55328
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 28/43] blkverify: Employ error parameter
+Bugzilla: 1026524
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1026524
+
+Make use of the error parameter in blkverify_open.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit ca2884087a36c60d592aa0e8e327bf1579972077)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+
+Conflicts:
+	block/blkverify.c
+
+Conflicts because "Implement reference count for BlockDriverState" has
+not yet been backported.
+---
+ block/blkverify.c | 11 +++++------
+ 1 file changed, 5 insertions(+), 6 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/blkverify.c |   11 +++++------
+ 1 files changed, 5 insertions(+), 6 deletions(-)
+
+diff --git a/block/blkverify.c b/block/blkverify.c
+index cceb88f..92a452d 100644
+--- a/block/blkverify.c
++++ b/block/blkverify.c
+@@ -128,8 +128,7 @@ static int blkverify_open(BlockDriverState *bs, QDict *options, int flags,
+     opts = qemu_opts_create_nofail(&runtime_opts);
+     qemu_opts_absorb_qdict(opts, options, &local_err);
+     if (error_is_set(&local_err)) {
+-        qerror_report_err(local_err);
+-        error_free(local_err);
++        error_propagate(errp, local_err);
+         ret = -EINVAL;
+         goto fail;
+     }
+@@ -137,20 +136,21 @@ static int blkverify_open(BlockDriverState *bs, QDict *options, int flags,
+     /* Parse the raw image filename */
+     raw = qemu_opt_get(opts, "x-raw");
+     if (raw == NULL) {
++        error_setg(errp, "Could not retrieve raw image filename");
+         ret = -EINVAL;
+         goto fail;
+     }
+ 
+     ret = bdrv_file_open(&bs->file, raw, NULL, flags, &local_err);
+     if (ret < 0) {
+-        qerror_report_err(local_err);
+-        error_free(local_err);
++        error_propagate(errp, local_err);
+         goto fail;
+     }
+ 
+     /* Open the test file */
+     filename = qemu_opt_get(opts, "x-image");
+     if (filename == NULL) {
++        error_setg(errp, "Could not retrieve test image filename");
+         ret = -EINVAL;
+         goto fail;
+     }
+@@ -158,8 +158,7 @@ static int blkverify_open(BlockDriverState *bs, QDict *options, int flags,
+     s->test_file = bdrv_new("");
+     ret = bdrv_open(s->test_file, filename, NULL, flags, NULL, &local_err);
+     if (ret < 0) {
+-        qerror_report_err(local_err);
+-        error_free(local_err);
++        error_propagate(errp, local_err);
+         bdrv_delete(s->test_file);
+         s->test_file = NULL;
+         goto fail;
+-- 
+1.7.1
+

@@ -1,0 +1,200 @@
+From a8b59fd3d7aa9f6a16caf4c13534039a81552118 Mon Sep 17 00:00:00 2001
+From: Richard Jones <rjones@redhat.com>
+Date: Thu, 11 Jun 2015 11:40:14 +0200
+Subject: [PATCH 14/30] block/curl: Implement the libcurl timer callback
+ interface
+
+Message-id: <1434022828-13037-8-git-send-email-rjones@redhat.com>
+Patchwork-id: 65842
+O-Subject: [RHEL-7.2 qemu-kvm v3 PATCH 07/21] block/curl: Implement the libcurl timer callback interface
+Bugzilla: 1226684
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Peter Maydell <peter.maydell@linaro.org>
+
+libcurl versions 7.16.0 and later have a timer callback interface which
+must be implemented in order for libcurl to make forward progress (it
+will sometimes rely on being called back on the timeout if there are
+no file descriptors registered). Implement the callback, and use a
+QEMU AIO timer to ensure we prod libcurl again when it asks us to.
+
+Based on Peter's original patch plus my fix to add curl_multi_timeout_do.
+Should compile just fine even on older versions of libcurl.
+
+I also tried copy-on-read and streaming:
+
+    $ ./qemu-img create -f qcow2 -o \
+         backing_file=http://download.fedoraproject.org/pub/fedora/linux/releases/20/Live/x86_64/Fedora-Live-Desktop-x86_64-20-1.iso \
+         foo.qcow2 1G
+    $ x86_64-softmmu/qemu-system-x86_64 \
+         -drive if=none,file=foo.qcow2,copy-on-read=on,id=cd \
+         -device ide-cd,drive=cd --enable-kvm -m 1024
+
+Direct http usage is probably too slow, but with copy-on-read ultimately
+the image does boot!
+
+After some time, streaming gets canceled by an EIO, which needs further
+investigation.
+
+Signed-off-by: Peter Maydell <peter.maydell@linaro.org>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+
+Upstream-status: 031fd1be5618c347f9aeb44ec294f14a541e42b2
+
+This patch is modified from upstream by adapting the patch
+to use the timers API from qemu 1.5.3.  (Thanks: Kevin Wolf)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/curl.c | 81 +++++++++++++++++++++++++++++++++++++++++++++++++++---------
+ 1 file changed, 70 insertions(+), 11 deletions(-)
+
+diff --git a/block/curl.c b/block/curl.c
+index 7569dd5..a6631fe 100644
+--- a/block/curl.c
++++ b/block/curl.c
+@@ -34,6 +34,11 @@
+ #define DPRINTF(fmt, ...) do { } while (0)
+ #endif
+ 
++#if LIBCURL_VERSION_NUM >= 0x071000
++/* The multi interface timer callback was introduced in 7.16.0 */
++#define NEED_CURL_TIMER_CALLBACK
++#endif
++
+ #define PROTOCOLS (CURLPROTO_HTTP | CURLPROTO_HTTPS | \
+                    CURLPROTO_FTP | CURLPROTO_FTPS | \
+                    CURLPROTO_TFTP)
+@@ -77,6 +82,7 @@ typedef struct CURLState
+ 
+ typedef struct BDRVCURLState {
+     CURLM *multi;
++    QEMUTimer *timer;
+     size_t len;
+     CURLState states[CURL_NUM_STATES];
+     char *url;
+@@ -87,6 +93,23 @@ static void curl_clean_state(CURLState *s);
+ static void curl_multi_do(void *arg);
+ static int curl_aio_flush(void *opaque);
+ 
++#ifdef NEED_CURL_TIMER_CALLBACK
++static int curl_timer_cb(CURLM *multi, long timeout_ms, void *opaque)
++{
++    BDRVCURLState *s = opaque;
++
++    DPRINTF("CURL: timer callback timeout_ms %ld\n", timeout_ms);
++    if (timeout_ms == -1) {
++        qemu_del_timer(s->timer);
++    } else {
++        int64_t timeout_ns = (int64_t)timeout_ms * 1000 * 1000;
++        qemu_mod_timer(s->timer,
++                  qemu_get_clock_ns(rt_clock) + timeout_ns);
++    }
++    return 0;
++}
++#endif
++
+ static int curl_sock_cb(CURL *curl, curl_socket_t fd, int action,
+                         void *s, void *sp)
+ {
+@@ -213,20 +236,10 @@ static int curl_find_buf(BDRVCURLState *s, size_t start, size_t len,
+     return FIND_RET_NONE;
+ }
+ 
+-static void curl_multi_do(void *arg)
++static void curl_multi_read(BDRVCURLState *s)
+ {
+-    BDRVCURLState *s = (BDRVCURLState *)arg;
+-    int running;
+-    int r;
+     int msgs_in_queue;
+ 
+-    if (!s->multi)
+-        return;
+-
+-    do {
+-        r = curl_multi_socket_all(s->multi, &running);
+-    } while(r == CURLM_CALL_MULTI_PERFORM);
+-
+     /* Try to find done transfers, so we can free the easy
+      * handle again. */
+     do {
+@@ -271,6 +284,41 @@ static void curl_multi_do(void *arg)
+     } while(msgs_in_queue);
+ }
+ 
++static void curl_multi_do(void *arg)
++{
++    BDRVCURLState *s = (BDRVCURLState *)arg;
++    int running;
++    int r;
++
++    if (!s->multi) {
++        return;
++    }
++
++    do {
++        r = curl_multi_socket_all(s->multi, &running);
++    } while(r == CURLM_CALL_MULTI_PERFORM);
++
++    curl_multi_read(s);
++}
++
++static void curl_multi_timeout_do(void *arg)
++{
++#ifdef NEED_CURL_TIMER_CALLBACK
++    BDRVCURLState *s = (BDRVCURLState *)arg;
++    int running;
++
++    if (!s->multi) {
++        return;
++    }
++
++    curl_multi_socket_action(s->multi, CURL_SOCKET_TIMEOUT, 0, &running);
++
++    curl_multi_read(s);
++#else
++    abort();
++#endif
++}
++
+ static CURLState *curl_init_state(BDRVCURLState *s)
+ {
+     CURLState *state = NULL;
+@@ -462,12 +510,19 @@ static int curl_open(BlockDriverState *bs, QDict *options, int flags,
+     curl_easy_cleanup(state->curl);
+     state->curl = NULL;
+ 
++    s->timer = qemu_new_timer(rt_clock, SCALE_NS,
++                              curl_multi_timeout_do, s);
++
+     // Now we know the file exists and its size, so let's
+     // initialize the multi interface!
+ 
+     s->multi = curl_multi_init();
+     curl_multi_setopt(s->multi, CURLMOPT_SOCKETDATA, s);
+     curl_multi_setopt(s->multi, CURLMOPT_SOCKETFUNCTION, curl_sock_cb);
++#ifdef NEED_CURL_TIMER_CALLBACK
++    curl_multi_setopt(s->multi, CURLMOPT_TIMERDATA, s);
++    curl_multi_setopt(s->multi, CURLMOPT_TIMERFUNCTION, curl_timer_cb);
++#endif
+     curl_multi_do(s);
+ 
+     qemu_opts_del(opts);
+@@ -607,6 +662,10 @@ static void curl_close(BlockDriverState *bs)
+     }
+     if (s->multi)
+         curl_multi_cleanup(s->multi);
++
++    qemu_del_timer(s->timer);
++    qemu_free_timer(s->timer);
++
+     g_free(s->url);
+ }
+ 
+-- 
+1.8.3.1
+

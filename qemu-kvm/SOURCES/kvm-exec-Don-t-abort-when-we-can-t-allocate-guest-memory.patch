@@ -1,0 +1,117 @@
+From 37bd9dc61bdc4d1a295403360cb0dcab7fbb8936 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 18 Sep 2013 09:31:08 +0200
+Subject: [PATCH 24/29] exec: Don't abort when we can't allocate guest memory
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1379496669-22778-8-git-send-email-armbru@redhat.com>
+Patchwork-id: 54425
+O-Subject: [PATCH 7.0 qemu-kvm 7/8] exec: Don't abort when we can't allocate guest memory
+Bugzilla: 1009328
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+We abort() on memory allocation failure.  abort() is appropriate for
+programming errors.  Maybe most memory allocation failures are
+programming errors, maybe not.  But guest memory allocation failure
+isn't, and aborting when the user asks for more memory than we can
+provide is not nice.  exit(1) instead, and do it in just one place, so
+the error message is consistent.
+
+Tested-by: Christian Borntraeger <borntraeger@de.ibm.com>
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Andreas Färber <afaerber@suse.de>
+Acked-by: Laszlo Ersek <lersek@redhat.com>
+Acked-by: Stefano Stabellini <stefano.stabellini@eu.citrix.com>
+Acked-by: Christian Borntraeger <borntraeger@de.ibm.com>
+Message-id: 1375276272-15988-8-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <anthony@codemonkey.ws>
+(cherry picked from commit 39228250ce6cf67eb1c3799791d271f53c5c6347)
+---
+ exec.c             | 5 +++++
+ target-s390x/kvm.c | 6 +-----
+ util/oslib-posix.c | 4 +---
+ util/oslib-win32.c | 5 +----
+ 4 files changed, 8 insertions(+), 12 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ exec.c             |    5 +++++
+ target-s390x/kvm.c |    6 +-----
+ util/oslib-posix.c |    4 +---
+ util/oslib-win32.c |    5 +----
+ 4 files changed, 8 insertions(+), 12 deletions(-)
+
+diff --git a/exec.c b/exec.c
+index a75c200..9117a59 100644
+--- a/exec.c
++++ b/exec.c
+@@ -1097,6 +1097,11 @@ ram_addr_t qemu_ram_alloc_from_ptr(ram_addr_t size, void *host,
+         }
+         if (!new_block->host) {
+             new_block->host = phys_mem_alloc(size);
++            if (!new_block->host) {
++                fprintf(stderr, "Cannot set up guest memory '%s': %s\n",
++                        new_block->mr->name, strerror(errno));
++                exit(1);
++            }
+             memory_try_enable_merging(new_block->host, size);
+         }
+     }
+diff --git a/target-s390x/kvm.c b/target-s390x/kvm.c
+index 0b18db4..a106e62 100644
+--- a/target-s390x/kvm.c
++++ b/target-s390x/kvm.c
+@@ -331,11 +331,7 @@ static void *legacy_s390_alloc(ram_addr_t size)
+     mem = mmap((void *) 0x800000000ULL, size,
+                PROT_EXEC|PROT_READ|PROT_WRITE,
+                MAP_SHARED | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+-    if (mem == MAP_FAILED) {
+-        fprintf(stderr, "Allocating RAM failed\n");
+-        abort();
+-    }
+-    return mem;
++    return mem == MAP_FAILED ? NULL : mem;
+ }
+ 
+ int kvm_arch_insert_sw_breakpoint(CPUState *cs, struct kvm_sw_breakpoint *bp)
+diff --git a/util/oslib-posix.c b/util/oslib-posix.c
+index 3dc8b1b..253bc3d 100644
+--- a/util/oslib-posix.c
++++ b/util/oslib-posix.c
+@@ -112,9 +112,7 @@ void *qemu_anon_ram_alloc(size_t size)
+     size_t offset = QEMU_ALIGN_UP((uintptr_t)ptr, align) - (uintptr_t)ptr;
+ 
+     if (ptr == MAP_FAILED) {
+-        fprintf(stderr, "Failed to allocate %zu B: %s\n",
+-                size, strerror(errno));
+-        abort();
++        return NULL;
+     }
+ 
+     ptr += offset;
+diff --git a/util/oslib-win32.c b/util/oslib-win32.c
+index 961fbf5..983b7a2 100644
+--- a/util/oslib-win32.c
++++ b/util/oslib-win32.c
+@@ -65,10 +65,7 @@ void *qemu_anon_ram_alloc(size_t size)
+     /* FIXME: this is not exactly optimal solution since VirtualAlloc
+        has 64Kb granularity, but at least it guarantees us that the
+        memory is page aligned. */
+-    if (!size) {
+-        abort();
+-    }
+-    ptr = qemu_oom_check(VirtualAlloc(NULL, size, MEM_COMMIT, PAGE_READWRITE));
++    ptr = VirtualAlloc(NULL, size, MEM_COMMIT, PAGE_READWRITE);
+     trace_qemu_anon_ram_alloc(size, ptr);
+     return ptr;
+ }
+-- 
+1.7.1
+

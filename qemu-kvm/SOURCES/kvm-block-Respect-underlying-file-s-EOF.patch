@@ -1,0 +1,65 @@
+From 69fe324e32aad7e1afc6ad14021a6a08ad52646c Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:22:27 +0200
+Subject: [PATCH 33/42] block: Respect underlying file's EOF
+
+Message-id: <1434212556-3927-34-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66052
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 33/42] block: Respect underlying file's EOF
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1129893
+
+When falling through to the underlying file in
+bdrv_co_get_block_status(), if it returns that the query offset is
+beyond the file end (by setting *pnum to 0), return the range to be
+zero and do not let the number of sectors for which information could be
+obtained be overwritten.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 59c9a95fd29cfb3296ee58e8a446df251d14a459)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c | 15 +++++++++++++--
+ 1 file changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/block.c b/block.c
+index 22ab762..fa6e192 100644
+--- a/block.c
++++ b/block.c
+@@ -3797,13 +3797,24 @@ static int64_t coroutine_fn bdrv_co_get_block_status(BlockDriverState *bs,
+     if (bs->file &&
+         (ret & BDRV_BLOCK_DATA) && !(ret & BDRV_BLOCK_ZERO) &&
+         (ret & BDRV_BLOCK_OFFSET_VALID)) {
++        int file_pnum;
++
+         ret2 = bdrv_co_get_block_status(bs->file, ret >> BDRV_SECTOR_BITS,
+-                                        *pnum, pnum);
++                                        *pnum, &file_pnum);
+         if (ret2 >= 0) {
+             /* Ignore errors.  This is just providing extra information, it
+              * is useful but not necessary.
+              */
+-            ret |= (ret2 & BDRV_BLOCK_ZERO);
++            if (!file_pnum) {
++                /* !file_pnum indicates an offset at or beyond the EOF; it is
++                 * perfectly valid for the format block driver to point to such
++                 * offsets, so catch it and mark everything as zero */
++                ret |= BDRV_BLOCK_ZERO;
++            } else {
++                /* Limit request to the range reported by the protocol driver */
++                *pnum = file_pnum;
++                ret |= (ret2 & BDRV_BLOCK_ZERO);
++            }
+         }
+     }
+ 
+-- 
+1.8.3.1
+

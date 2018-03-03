@@ -1,0 +1,61 @@
+From 6a40d58e03beaef265f6c1293301f5f8860ecbea Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 18 May 2017 09:21:22 +0200
+Subject: [PATCH 09/18] qemu-char: ignore flow control if a PTY's slave is not
+ connected
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <20170518092131.16571-10-famz@redhat.com>
+Patchwork-id: 75301
+O-Subject: [RHEL-7.4 qemu-kvm PATCH v3 09/18] qemu-char: ignore flow control if a PTY's slave is not connected
+Bugzilla: 1451470
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+After commit f702e62 (serial: change retry logic to avoid concurrency,
+2014-07-11), guest boot hangs if the backend is an unconnected PTY.
+
+The reason is that PTYs do not support G_IO_HUP, and serial_xmit is
+never called.  To fix this, simply invoke serial_xmit immediately
+(via g_idle_source_new) when this happens.
+
+Tested-by: Pavel Hrdina <phrdina@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 62c339c5272ce8fbe8ca52695cee8ff40da7872e)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qemu-char.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/qemu-char.c b/qemu-char.c
+index 47ac55a..08cb959 100644
+--- a/qemu-char.c
++++ b/qemu-char.c
+@@ -1068,6 +1068,9 @@ static int pty_chr_write(CharDriverState *chr, const uint8_t *buf, int len)
+ static GSource *pty_chr_add_watch(CharDriverState *chr, GIOCondition cond)
+ {
+     PtyCharDriver *s = chr->opaque;
++    if (!s->connected) {
++        return NULL;
++    }
+     return g_io_create_watch(s->fd, cond);
+ }
+ 
+@@ -3381,6 +3384,10 @@ int qemu_chr_fe_add_watch(CharDriverState *s, GIOCondition cond,
+     }
+ 
+     src = s->chr_add_watch(s, cond);
++    if (!src) {
++        return -EINVAL;
++    }
++
+     g_source_set_callback(src, (GSourceFunc)func, user_data, NULL);
+     tag = g_source_attach(src, NULL);
+     g_source_unref(src);
+-- 
+1.8.3.1
+

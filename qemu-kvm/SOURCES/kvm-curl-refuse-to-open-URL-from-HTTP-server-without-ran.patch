@@ -1,0 +1,112 @@
+From cb2dd196bc247db6a40ea2847f86b63e9a923351 Mon Sep 17 00:00:00 2001
+From: Richard Jones <rjones@redhat.com>
+Date: Thu, 11 Jun 2015 11:40:21 +0200
+Subject: [PATCH 21/30] curl: refuse to open URL from HTTP server without range
+ support
+
+Message-id: <1434022828-13037-15-git-send-email-rjones@redhat.com>
+Patchwork-id: 65849
+O-Subject: [RHEL-7.2 qemu-kvm v3 PATCH 14/21] curl: refuse to open URL from HTTP server without range support
+Bugzilla: 1226684
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Fam Zheng <famz@redhat.com>
+
+CURL driver requests partial data from server on guest IO req. For HTTP
+and HTTPS, it uses "Range: ***" in requests, and this will not work if
+server not accepting range. This patch does this check when open.
+
+ * Removed curl_size_cb, which is not used: On one hand it's registered to
+   libcurl as CURLOPT_WRITEFUNCTION, instead of CURLOPT_HEADERFUNCTION,
+   which will get called with *data*, not *header*. On the other hand the
+   s->len is assigned unconditionally later.
+
+   In this gone function, the sscanf for "Content-Length: %zd", on
+   (void *)ptr, which is not guaranteed to be zero-terminated, is
+   potentially a security bug. So this patch fixes it as a side-effect. The
+   bug is reported as: https://bugs.launchpad.net/qemu/+bug/1188943
+   (Note the bug is marked "private" so you might not be able to see it)
+
+ * Introduced curl_header_cb, which is used to parse header and mark the
+   server as accepting range if "Accept-Ranges: bytes" line is seen from
+   response header. If protocol is HTTP or HTTPS, but server response has
+   no not this support, refuse to open this URL.
+
+Note that python builtin module SimpleHTTPServer is an example of not
+supporting range, if you need to test this driver, get a better server
+or use internet URLs.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Upstream-status: 3494d650273e619606c6cb2c38aa9b8b7bed98e2
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/curl.c | 24 ++++++++++++++++++------
+ 1 file changed, 18 insertions(+), 6 deletions(-)
+
+diff --git a/block/curl.c b/block/curl.c
+index 67ea05f..e97682f 100644
+--- a/block/curl.c
++++ b/block/curl.c
+@@ -106,6 +106,7 @@ typedef struct BDRVCURLState {
+     CURLState states[CURL_NUM_STATES];
+     char *url;
+     size_t readahead_size;
++    bool accept_range;
+ } BDRVCURLState;
+ 
+ static void curl_clean_state(CURLState *s);
+@@ -157,14 +158,15 @@ static int curl_sock_cb(CURL *curl, curl_socket_t fd, int action,
+     return 0;
+ }
+ 
+-static size_t curl_size_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
++static size_t curl_header_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
+ {
+-    CURLState *s = ((CURLState*)opaque);
++    BDRVCURLState *s = opaque;
+     size_t realsize = size * nmemb;
+-    size_t fsize;
++    const char *accept_line = "Accept-Ranges: bytes";
+ 
+-    if(sscanf(ptr, "Content-Length: %zd", &fsize) == 1) {
+-        s->s->len = fsize;
++    if (realsize >= strlen(accept_line)
++        && strncmp((char *)ptr, accept_line, strlen(accept_line)) == 0) {
++        s->accept_range = true;
+     }
+ 
+     return realsize;
+@@ -483,8 +485,11 @@ static int curl_open(BlockDriverState *bs, QDict *options, int flags,
+ 
+     // Get file size
+ 
++    s->accept_range = false;
+     curl_easy_setopt(state->curl, CURLOPT_NOBODY, 1);
+-    curl_easy_setopt(state->curl, CURLOPT_WRITEFUNCTION, (void *)curl_size_cb);
++    curl_easy_setopt(state->curl, CURLOPT_HEADERFUNCTION,
++                     curl_header_cb);
++    curl_easy_setopt(state->curl, CURLOPT_HEADERDATA, s);
+     if (curl_easy_perform(state->curl))
+         goto out;
+     curl_easy_getinfo(state->curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD, &d);
+@@ -494,6 +499,13 @@ static int curl_open(BlockDriverState *bs, QDict *options, int flags,
+         s->len = (size_t)d;
+     else if(!s->len)
+         goto out;
++    if ((!strncasecmp(s->url, "http://", strlen("http://"))
++        || !strncasecmp(s->url, "https://", strlen("https://")))
++        && !s->accept_range) {
++        pstrcpy(state->errmsg, CURL_ERROR_SIZE,
++                "Server does not support 'range' (byte ranges).");
++        goto out;
++    }
+     DPRINTF("CURL: Size = %zd\n", s->len);
+ 
+     curl_clean_state(state);
+-- 
+1.8.3.1
+

@@ -1,0 +1,142 @@
+From 4729118339de86313e09cb20414ba699510a80cc Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Wed, 6 Nov 2013 14:41:11 +0100
+Subject: [PATCH 35/81] qdev-monitor: Group "device_add help" and "info qdm" by category
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383748882-22831-7-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55532
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 06/17] qdev-monitor: Group "device_add help" and "info qdm" by category
+Bugzilla: 1001216
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Output is a long, unsorted list.  Not very helpful.  Print one list
+per device category instead, with a header line identifying the
+category, plus a list of uncategorized devices.  Print each list in
+case-insenitive alphabetical order.
+
+Devices with multiple categories are listed multiple times.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Marcel Apfelbaum <marcel.a@redhat.com>
+Message-id: 1381410021-1538-3-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@amazon.com>
+(cherry picked from commit a3400aeede46c6c30b6fefb20fc90a43f1f6e7b2)
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ qdev-monitor.c | 67 ++++++++++++++++++++++++++++++++++++++++++++++------------
+ 1 file changed, 53 insertions(+), 14 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qdev-monitor.c |   67 ++++++++++++++++++++++++++++++++++++++++++++-----------
+ 1 files changed, 53 insertions(+), 14 deletions(-)
+
+diff --git a/qdev-monitor.c b/qdev-monitor.c
+index e54dbc2..aa6a261 100644
+--- a/qdev-monitor.c
++++ b/qdev-monitor.c
+@@ -75,18 +75,9 @@ static bool qdev_class_has_alias(DeviceClass *dc)
+     return (qdev_class_get_alias(dc) != NULL);
+ }
+ 
+-static void qdev_print_devinfo(ObjectClass *klass, void *opaque)
++static void qdev_print_devinfo(DeviceClass *dc)
+ {
+-    DeviceClass *dc;
+-    bool *show_no_user = opaque;
+-
+-    dc = (DeviceClass *)object_class_dynamic_cast(klass, TYPE_DEVICE);
+-
+-    if (!dc || (show_no_user && !*show_no_user && dc->no_user)) {
+-        return;
+-    }
+-
+-    error_printf("name \"%s\"", object_class_get_name(klass));
++    error_printf("name \"%s\"", object_class_get_name(OBJECT_CLASS(dc)));
+     if (dc->bus_type) {
+         error_printf(", bus %s", dc->bus_type);
+     }
+@@ -102,6 +93,55 @@ static void qdev_print_devinfo(ObjectClass *klass, void *opaque)
+     error_printf("\n");
+ }
+ 
++static gint devinfo_cmp(gconstpointer a, gconstpointer b)
++{
++    return strcasecmp(object_class_get_name((ObjectClass *)a),
++                      object_class_get_name((ObjectClass *)b));
++}
++
++static void qdev_print_devinfos(bool show_no_user)
++{
++    static const char *cat_name[DEVICE_CATEGORY_MAX + 1] = {
++        [DEVICE_CATEGORY_BRIDGE]  = "Controller/Bridge/Hub",
++        [DEVICE_CATEGORY_USB]     = "USB",
++        [DEVICE_CATEGORY_STORAGE] = "Storage",
++        [DEVICE_CATEGORY_NETWORK] = "Network",
++        [DEVICE_CATEGORY_INPUT]   = "Input",
++        [DEVICE_CATEGORY_DISPLAY] = "Display",
++        [DEVICE_CATEGORY_SOUND]   = "Sound",
++        [DEVICE_CATEGORY_MISC]    = "Misc",
++        [DEVICE_CATEGORY_MAX]     = "Uncategorized",
++    };
++    GSList *list, *elt;
++    int i;
++    bool cat_printed;
++
++    list = g_slist_sort(object_class_get_list(TYPE_DEVICE, false),
++                        devinfo_cmp);
++
++    for (i = 0; i <= DEVICE_CATEGORY_MAX; i++) {
++        cat_printed = false;
++        for (elt = list; elt; elt = elt->next) {
++            DeviceClass *dc = OBJECT_CLASS_CHECK(DeviceClass, elt->data,
++                                                 TYPE_DEVICE);
++            if ((i < DEVICE_CATEGORY_MAX
++                 ? !test_bit(i, dc->categories)
++                 : !bitmap_empty(dc->categories, DEVICE_CATEGORY_MAX))
++                || (!show_no_user && dc->no_user)) {
++                continue;
++            }
++            if (!cat_printed) {
++                error_printf("%s%s devices:\n", i ? "\n" : "",
++                             cat_name[i]);
++                cat_printed = true;
++            }
++            qdev_print_devinfo(dc);
++        }
++    }
++
++    g_slist_free(list);
++}
++
+ static int set_property(const char *name, const char *value, void *opaque)
+ {
+     DeviceState *dev = opaque;
+@@ -147,8 +187,7 @@ int qdev_device_help(QemuOpts *opts)
+ 
+     driver = qemu_opt_get(opts, "driver");
+     if (driver && is_help_option(driver)) {
+-        bool show_no_user = false;
+-        object_class_foreach(qdev_print_devinfo, TYPE_DEVICE, false, &show_no_user);
++        qdev_print_devinfos(false);
+         return 1;
+     }
+ 
+@@ -587,7 +626,7 @@ void do_info_qtree(Monitor *mon, const QDict *qdict)
+ 
+ void do_info_qdm(Monitor *mon, const QDict *qdict)
+ {
+-    object_class_foreach(qdev_print_devinfo, TYPE_DEVICE, false, NULL);
++    qdev_print_devinfos(true);
+ }
+ 
+ int do_device_add(Monitor *mon, const QDict *qdict, QObject **ret_data)
+-- 
+1.7.1
+

@@ -1,0 +1,117 @@
+From 19832bf960bb31814a0d950b01fff45e2618be27 Mon Sep 17 00:00:00 2001
+From: Amos Kong <akong@redhat.com>
+Date: Fri, 8 Nov 2013 06:13:57 +0100
+Subject: [PATCH 2/4] qapi: qapi-visit.py, native list support
+
+RH-Author: Amos Kong <akong@redhat.com>
+Message-id: <1383891239-29531-3-git-send-email-akong@redhat.com>
+Patchwork-id: 55609
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 2/4] qapi: qapi-visit.py, native list support
+Bugzilla: 848203
+RH-Acked-by: Vlad Yasevich <vyasevic@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: Michael Roth <mdroth@linux.vnet.ibm.com>
+
+Teach visitor generators about native types so they can generate the
+appropriate visitor routines.
+
+Signed-off-by: Michael Roth <mdroth@linux.vnet.ibm.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Amos Kong <akong@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit 7c946bc418db6b2a11f89b3465424fef48f714eb)
+---
+ scripts/qapi-visit.py |   34 +++++++++++++++++++++++++++++-----
+ 1 files changed, 29 insertions(+), 5 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ scripts/qapi-visit.py |   34 +++++++++++++++++++++++++++++-----
+ 1 files changed, 29 insertions(+), 5 deletions(-)
+
+diff --git a/scripts/qapi-visit.py b/scripts/qapi-visit.py
+index fc2b67a..c39e628 100644
+--- a/scripts/qapi-visit.py
++++ b/scripts/qapi-visit.py
+@@ -337,12 +337,14 @@ void visit_type_%(name)s(Visitor *m, %(name)s ** obj, const char *name, Error **
+ 
+     return ret
+ 
+-def generate_declaration(name, members, genlist=True):
+-    ret = mcgen('''
++def generate_declaration(name, members, genlist=True, builtin_type=False):
++    ret = ""
++    if not builtin_type:
++        ret += mcgen('''
+ 
+ void visit_type_%(name)s(Visitor *m, %(name)s ** obj, const char *name, Error **errp);
+ ''',
+-                name=name)
++                    name=name)
+ 
+     if genlist:
+         ret += mcgen('''
+@@ -370,8 +372,9 @@ void visit_type_%(name)s(Visitor *m, %(name)s * obj, const char *name, Error **e
+                 name=name)
+ 
+ try:
+-    opts, args = getopt.gnu_getopt(sys.argv[1:], "chp:o:",
+-                                   ["source", "header", "prefix=", "output-dir="])
++    opts, args = getopt.gnu_getopt(sys.argv[1:], "chbp:o:",
++                                   ["source", "header", "builtins", "prefix=",
++                                    "output-dir="])
+ except getopt.GetoptError, err:
+     print str(err)
+     sys.exit(1)
+@@ -383,6 +386,7 @@ h_file = 'qapi-visit.h'
+ 
+ do_c = False
+ do_h = False
++do_builtins = False
+ 
+ for o, a in opts:
+     if o in ("-p", "--prefix"):
+@@ -393,6 +397,8 @@ for o, a in opts:
+         do_c = True
+     elif o in ("-h", "--header"):
+         do_h = True
++    elif o in ("-b", "--builtins"):
++        do_builtins = True
+ 
+ if not do_c and not do_h:
+     do_c = True
+@@ -459,11 +465,29 @@ fdecl.write(mcgen('''
+ 
+ #include "qapi/visitor.h"
+ #include "%(prefix)sqapi-types.h"
++
+ ''',
+                   prefix=prefix, guard=guardname(h_file)))
+ 
+ exprs = parse_schema(sys.stdin)
+ 
++# to avoid header dependency hell, we always generate declarations
++# for built-in types in our header files and simply guard them
++fdecl.write(guardstart("QAPI_VISIT_BUILTIN_VISITOR_DECL"))
++for typename in builtin_types:
++    fdecl.write(generate_declaration(typename, None, genlist=True,
++                                     builtin_type=True))
++fdecl.write(guardend("QAPI_VISIT_BUILTIN_VISITOR_DECL"))
++
++# ...this doesn't work for cases where we link in multiple objects that
++# have the functions defined, so we use -b option to provide control
++# over these cases
++if do_builtins:
++    fdef.write(guardstart("QAPI_VISIT_BUILTIN_VISITOR_DEF"))
++    for typename in builtin_types:
++        fdef.write(generate_visit_list(typename, None))
++    fdef.write(guardend("QAPI_VISIT_BUILTIN_VISITOR_DEF"))
++
+ for expr in exprs:
+     if expr.has_key('type'):
+         ret = generate_visit_struct(expr)
+-- 
+1.7.1
+

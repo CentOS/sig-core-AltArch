@@ -1,0 +1,109 @@
+From 1e726d2e4db2132cb5f0ee985745c87174e6f599 Mon Sep 17 00:00:00 2001
+Message-Id: <1e726d2e4db2132cb5f0ee985745c87174e6f599.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:17:05 +0100
+Subject: [PATCH 07/56] pci: add helper to retrieve the 64-bit range
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-8-git-send-email-mst@redhat.com>
+Patchwork-id: 56312
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 07/57] pci: add helper to retrieve the 64-bit range
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 438640695723f33be6d0081ac1e690aa40975c39)
+
+Conflicts:
+	include/hw/pci/pci.h
+---
+ include/hw/pci/pci.h |  1 +
+ hw/pci/pci.c         | 50 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 51 insertions(+)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/pci/pci.c         | 50 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ include/hw/pci/pci.h |  1 +
+ 2 files changed, 51 insertions(+)
+
+diff --git a/hw/pci/pci.c b/hw/pci/pci.c
+index 26995d7..d550851 100644
+--- a/hw/pci/pci.c
++++ b/hw/pci/pci.c
+@@ -2244,6 +2244,56 @@ void pci_setup_iommu(PCIBus *bus, PCIDMAContextFunc fn, void *opaque)
+     bus->dma_context_opaque = opaque;
+ }
+ 
++static void pci_dev_get_w64(PCIBus *b, PCIDevice *dev, void *opaque)
++{
++    Range *range = opaque;
++    PCIDeviceClass *pc = PCI_DEVICE_GET_CLASS(dev);
++    uint16_t cmd = pci_get_word(dev->config + PCI_COMMAND);
++    int r;
++
++    if (!(cmd & PCI_COMMAND_MEMORY)) {
++        return;
++    }
++
++    if (pc->is_bridge) {
++        pcibus_t base = pci_bridge_get_base(dev, PCI_BASE_ADDRESS_MEM_PREFETCH);
++        pcibus_t limit = pci_bridge_get_limit(dev, PCI_BASE_ADDRESS_MEM_PREFETCH);
++
++        base = MAX(base, 0x1ULL << 32);
++
++        if (limit >= base) {
++            Range pref_range;
++            pref_range.begin = base;
++            pref_range.end = limit + 1;
++            range_extend(range, &pref_range);
++        }
++    }
++    for (r = 0; r < PCI_NUM_REGIONS; ++r) {
++        PCIIORegion *region = &dev->io_regions[r];
++        Range region_range;
++
++        if (!region->size ||
++            (region->type & PCI_BASE_ADDRESS_SPACE_IO) ||
++            !(region->type & PCI_BASE_ADDRESS_MEM_TYPE_64)) {
++            continue;
++        }
++        region_range.begin = pci_get_quad(dev->config + pci_bar(dev, r));
++        region_range.end = region_range.begin + region->size;
++
++        region_range.begin = MAX(region_range.begin, 0x1ULL << 32);
++
++        if (region_range.end - 1 >= region_range.begin) {
++            range_extend(range, &region_range);
++        }
++    }
++}
++
++void pci_bus_get_w64_range(PCIBus *bus, Range *range)
++{
++    range->begin = range->end = 0;
++    pci_for_each_device_under_bus(bus, pci_dev_get_w64, range);
++}
++
+ static const TypeInfo pci_device_type_info = {
+     .name = TYPE_PCI_DEVICE,
+     .parent = TYPE_DEVICE,
+diff --git a/include/hw/pci/pci.h b/include/hw/pci/pci.h
+index 8d075ab..e7760dd 100644
+--- a/include/hw/pci/pci.h
++++ b/include/hw/pci/pci.h
+@@ -395,6 +395,7 @@ int pci_find_domain(const PCIBus *bus);
+ PCIDevice *pci_find_device(PCIBus *bus, int bus_num, uint8_t devfn);
+ int pci_qdev_find_device(const char *id, PCIDevice **pdev);
+ PCIBus *pci_get_bus_devfn(int *devfnp, const char *devaddr);
++void pci_bus_get_w64_range(PCIBus *bus, Range *range);
+ 
+ int pci_read_devaddr(Monitor *mon, const char *addr, int *domp, int *busp,
+                      unsigned *slotp);
+-- 
+1.7.11.7
+

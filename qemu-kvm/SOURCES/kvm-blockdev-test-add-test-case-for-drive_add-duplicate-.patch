@@ -1,0 +1,137 @@
+From 470de5e13e415a5e218d80114676a10c7dcb52c1 Mon Sep 17 00:00:00 2001
+Message-Id: <470de5e13e415a5e218d80114676a10c7dcb52c1.1387288155.git.minovotn@redhat.com>
+In-Reply-To: <527da6c2ce2c09d0183aa8595fc95f136f61b6df.1387288155.git.minovotn@redhat.com>
+References: <527da6c2ce2c09d0183aa8595fc95f136f61b6df.1387288155.git.minovotn@redhat.com>
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Thu, 12 Dec 2013 16:21:26 +0100
+Subject: [PATCH 6/8] blockdev-test: add test case for drive_add duplicate IDs
+
+RH-Author: Stefan Hajnoczi <stefanha@redhat.com>
+Message-id: <1386865288-1575-7-git-send-email-stefanha@redhat.com>
+Patchwork-id: 56260
+O-Subject: [RHEL7 qemu-kvm PATCH 6/8] blockdev-test: add test case for drive_add duplicate IDs
+Bugzilla: 1003773
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+The following should work:
+
+  (qemu) drive_add if=none,id=drive0
+  (qemu) drive_del drive0
+  (qemu) drive_add if=none,id=drive0
+
+Previous versions of QEMU produced a duplicate ID error because
+drive_add leaked the options.
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit 7ceeedd016facf8d58e14a0d1417fa7225d71072)
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Conflicts:
+	tests/Makefile
+
+Trivial conflicts because upstream has additional tests that change the
+diff context.
+---
+ tests/Makefile        |  2 ++
+ tests/blockdev-test.c | 59 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 61 insertions(+)
+ create mode 100644 tests/blockdev-test.c
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ tests/Makefile        |  2 ++
+ tests/blockdev-test.c | 59 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 61 insertions(+)
+ create mode 100644 tests/blockdev-test.c
+
+diff --git a/tests/Makefile b/tests/Makefile
+index 394e029..91231e8 100644
+--- a/tests/Makefile
++++ b/tests/Makefile
+@@ -58,6 +58,7 @@ check-qtest-i386-y += tests/boot-order-test$(EXESUF)
+ check-qtest-i386-y += tests/rtc-test$(EXESUF)
+ check-qtest-i386-y += tests/i440fx-test$(EXESUF)
+ check-qtest-i386-y += tests/fw_cfg-test$(EXESUF)
++check-qtest-i386-y += tests/blockdev-test$(EXESUF)
+ check-qtest-x86_64-y = $(check-qtest-i386-y)
+ gcov-files-i386-y += i386-softmmu/hw/mc146818rtc.c
+ gcov-files-x86_64-y = $(subst i386-softmmu/,x86_64-softmmu/,$(gcov-files-i386-y))
+@@ -135,6 +136,7 @@ tests/boot-order-test$(EXESUF): tests/boot-order-test.o
+ tests/tmp105-test$(EXESUF): tests/tmp105-test.o $(libqos-omap-obj-y)
+ tests/i440fx-test$(EXESUF): tests/i440fx-test.o $(libqos-pc-obj-y)
+ tests/fw_cfg-test$(EXESUF): tests/fw_cfg-test.o $(libqos-pc-obj-y)
++tests/blockdev-test$(EXESUF): tests/blockdev-test.o $(libqos-pc-obj-y)
+ 
+ # QTest rules
+ 
+diff --git a/tests/blockdev-test.c b/tests/blockdev-test.c
+new file mode 100644
+index 0000000..c940e00
+--- /dev/null
++++ b/tests/blockdev-test.c
+@@ -0,0 +1,59 @@
++/*
++ * blockdev.c test cases
++ *
++ * Copyright (C) 2013 Red Hat Inc.
++ *
++ * Authors:
++ *  Stefan Hajnoczi <stefanha@redhat.com>
++ *
++ * This work is licensed under the terms of the GNU LGPL, version 2.1 or later.
++ * See the COPYING.LIB file in the top-level directory.
++ */
++
++#include <glib.h>
++#include <string.h>
++#include "libqtest.h"
++
++static void test_drive_add_empty(void)
++{
++    QDict *response;
++    const char *response_return;
++
++    /* Start with an empty drive */
++    qtest_start("-drive if=none,id=drive0");
++
++    /* Delete the drive */
++    response = qmp("{\"execute\": \"human-monitor-command\","
++                   " \"arguments\": {"
++                   "   \"command-line\": \"drive_del drive0\""
++                   "}}");
++    g_assert(response);
++    response_return = qdict_get_try_str(response, "return");
++    g_assert(response_return);
++    g_assert(strcmp(response_return, "") == 0);
++    QDECREF(response);
++
++    /* Ensure re-adding the drive works - there should be no duplicate ID error
++     * because the old drive must be gone.
++     */
++    response = qmp("{\"execute\": \"human-monitor-command\","
++                   " \"arguments\": {"
++                   "   \"command-line\": \"drive_add 0 if=none,id=drive0\""
++                   "}}");
++    g_assert(response);
++    response_return = qdict_get_try_str(response, "return");
++    g_assert(response_return);
++    g_assert(strcmp(response_return, "OK\r\n") == 0);
++    QDECREF(response);
++
++    qtest_end();
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++
++    qtest_add_func("/qmp/drive_add_empty", test_drive_add_empty);
++
++    return g_test_run();
++}
+-- 
+1.7.11.7
+

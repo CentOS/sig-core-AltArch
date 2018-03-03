@@ -1,0 +1,146 @@
+From e25b1bfc8a6b74bf8474fe8d8e927abd1cacaa4f Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Thu, 12 Sep 2013 09:39:30 +0200
+Subject: [PATCH 02/25] xhci: emulate intr endpoint intervals correctly
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1378978772-21612-3-git-send-email-kraxel@redhat.com>
+Patchwork-id: 54337
+O-Subject: [RHEL-7 qemu-kvm PATCH 2/4] xhci: emulate intr endpoint intervals correctly
+Bugzilla: 1001604
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Hans de Goede <hdegoede@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Respect the interval for interrupt endpoints, so we don't finish
+transfers as fast as possible but at the rate configured by the guest.
+
+Fixes guest deadlocks triggered by interrupt storms.
+
+Cc:
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 4d7a81c06f5f17e019a2d3a18300500bd64f6f40)
+---
+ hw/usb/hcd-xhci.c | 44 +++++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 37 insertions(+), 7 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/hcd-xhci.c |   44 +++++++++++++++++++++++++++++++++++++-------
+ 1 files changed, 37 insertions(+), 7 deletions(-)
+
+diff --git a/hw/usb/hcd-xhci.c b/hw/usb/hcd-xhci.c
+index 55bcfc4..ccf7cc5 100644
+--- a/hw/usb/hcd-xhci.c
++++ b/hw/usb/hcd-xhci.c
+@@ -355,6 +355,7 @@ typedef struct XHCITransfer {
+     unsigned int streamid;
+     bool in_xfer;
+     bool iso_xfer;
++    bool timed_xfer;
+ 
+     unsigned int trb_count;
+     unsigned int trb_alloced;
+@@ -1787,6 +1788,7 @@ static int xhci_fire_ctl_transfer(XHCIState *xhci, XHCITransfer *xfer)
+ 
+     xfer->in_xfer = bmRequestType & USB_DIR_IN;
+     xfer->iso_xfer = false;
++    xfer->timed_xfer = false;
+ 
+     if (xhci_setup_packet(xfer) < 0) {
+         return -1;
+@@ -1802,6 +1804,17 @@ static int xhci_fire_ctl_transfer(XHCIState *xhci, XHCITransfer *xfer)
+     return 0;
+ }
+ 
++static void xhci_calc_intr_kick(XHCIState *xhci, XHCITransfer *xfer,
++                                XHCIEPContext *epctx, uint64_t mfindex)
++{
++    uint64_t asap = ((mfindex + epctx->interval - 1) &
++                     ~(epctx->interval-1));
++    uint64_t kick = epctx->mfindex_last + epctx->interval;
++
++    assert(epctx->interval != 0);
++    xfer->mfindex_kick = MAX(asap, kick);
++}
++
+ static void xhci_calc_iso_kick(XHCIState *xhci, XHCITransfer *xfer,
+                                XHCIEPContext *epctx, uint64_t mfindex)
+ {
+@@ -1824,8 +1837,8 @@ static void xhci_calc_iso_kick(XHCIState *xhci, XHCITransfer *xfer,
+     }
+ }
+ 
+-static void xhci_check_iso_kick(XHCIState *xhci, XHCITransfer *xfer,
+-                                XHCIEPContext *epctx, uint64_t mfindex)
++static void xhci_check_intr_iso_kick(XHCIState *xhci, XHCITransfer *xfer,
++                                     XHCIEPContext *epctx, uint64_t mfindex)
+ {
+     if (xfer->mfindex_kick > mfindex) {
+         qemu_mod_timer(epctx->kick_timer, qemu_get_clock_ns(vm_clock) +
+@@ -1850,18 +1863,30 @@ static int xhci_submit(XHCIState *xhci, XHCITransfer *xfer, XHCIEPContext *epctx
+     switch(epctx->type) {
+     case ET_INTR_OUT:
+     case ET_INTR_IN:
++        xfer->pkts = 0;
++        xfer->iso_xfer = false;
++        xfer->timed_xfer = true;
++        mfindex = xhci_mfindex_get(xhci);
++        xhci_calc_intr_kick(xhci, xfer, epctx, mfindex);
++        xhci_check_intr_iso_kick(xhci, xfer, epctx, mfindex);
++        if (xfer->running_retry) {
++            return -1;
++        }
++        break;
+     case ET_BULK_OUT:
+     case ET_BULK_IN:
+         xfer->pkts = 0;
+         xfer->iso_xfer = false;
++        xfer->timed_xfer = false;
+         break;
+     case ET_ISO_OUT:
+     case ET_ISO_IN:
+         xfer->pkts = 1;
+         xfer->iso_xfer = true;
++        xfer->timed_xfer = true;
+         mfindex = xhci_mfindex_get(xhci);
+         xhci_calc_iso_kick(xhci, xfer, epctx, mfindex);
+-        xhci_check_iso_kick(xhci, xfer, epctx, mfindex);
++        xhci_check_intr_iso_kick(xhci, xfer, epctx, mfindex);
+         if (xfer->running_retry) {
+             return -1;
+         }
+@@ -1922,13 +1947,18 @@ static void xhci_kick_ep(XHCIState *xhci, unsigned int slotid,
+ 
+         trace_usb_xhci_xfer_retry(xfer);
+         assert(xfer->running_retry);
+-        if (xfer->iso_xfer) {
+-            /* retry delayed iso transfer */
++        if (xfer->timed_xfer) {
++            /* time to kick the transfer? */
+             mfindex = xhci_mfindex_get(xhci);
+-            xhci_check_iso_kick(xhci, xfer, epctx, mfindex);
++            xhci_check_intr_iso_kick(xhci, xfer, epctx, mfindex);
+             if (xfer->running_retry) {
+                 return;
+             }
++            xfer->timed_xfer = 0;
++            xfer->running_retry = 1;
++        }
++        if (xfer->iso_xfer) {
++            /* retry iso transfer */
+             if (xhci_setup_packet(xfer) < 0) {
+                 return;
+             }
+@@ -2014,7 +2044,7 @@ static void xhci_kick_ep(XHCIState *xhci, unsigned int slotid,
+                 epctx->next_xfer = (epctx->next_xfer + 1) % TD_QUEUE;
+                 ep = xfer->packet.ep;
+             } else {
+-                if (!xfer->iso_xfer) {
++                if (!xfer->timed_xfer) {
+                     fprintf(stderr, "xhci: error firing data transfer\n");
+                 }
+             }
+-- 
+1.7.1
+

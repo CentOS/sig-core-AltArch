@@ -1,0 +1,141 @@
+From faa6207ac40f548cb7f033e07717e98c9bfb1249 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Fri, 7 Nov 2014 17:17:52 +0100
+Subject: [PATCH 05/41] dump: add API to write header of flatten format
+
+Message-id: <1415380693-16593-6-git-send-email-lersek@redhat.com>
+Patchwork-id: 62191
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 05/26] dump: add API to write header of flatten format
+Bugzilla: 1157798
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: dgibson <dgibson@redhat.com>
+
+From: qiaonuohan <qiaonuohan@cn.fujitsu.com>
+
+flatten format will be used when writing kdump-compressed format. The format is
+also used by makedumpfile, you can refer to the following URL to get more
+detailed information about flatten format of kdump-compressed format:
+http://sourceforge.net/projects/makedumpfile/
+
+The two functions here are used to write start flat header and end flat header
+to vmcore, and they will be called later when flatten format is used.
+
+struct MakedumpfileHeader stored at the head of vmcore is used to indicate the
+vmcore is in flatten format.
+
+struct MakedumpfileHeader {
+    char signature[16];     /* = "makedumpfile" */
+    int64_t type;           /* = 1 */
+    int64_t version;        /* = 1 */
+};
+
+And struct MakedumpfileDataHeader, with offset and buf_size set to -1, is used
+to indicate the end of vmcore in flatten format.
+
+struct MakedumpfileDataHeader {
+    int64_t offset;         /* = -1 */
+    int64_t buf_size;       /* = -1 */
+};
+
+Signed-off-by: Qiao Nuohan <qiaonuohan@cn.fujitsu.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit fda053875e69120b2fde5fb34975ef5a49290f12)
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c                | 42 ++++++++++++++++++++++++++++++++++++++++++
+ include/sysemu/dump.h | 17 +++++++++++++++++
+ 2 files changed, 59 insertions(+)
+
+diff --git a/dump.c b/dump.c
+index fed8bd6..6c902e5 100644
+--- a/dump.c
++++ b/dump.c
+@@ -692,6 +692,48 @@ static int create_vmcore(DumpState *s)
+     return 0;
+ }
+ 
++static int write_start_flat_header(int fd)
++{
++    uint8_t *buf;
++    MakedumpfileHeader mh;
++    int ret = 0;
++
++    memset(&mh, 0, sizeof(mh));
++    strncpy(mh.signature, MAKEDUMPFILE_SIGNATURE,
++            strlen(MAKEDUMPFILE_SIGNATURE));
++
++    mh.type = cpu_to_be64(TYPE_FLAT_HEADER);
++    mh.version = cpu_to_be64(VERSION_FLAT_HEADER);
++
++    buf = g_malloc0(MAX_SIZE_MDF_HEADER);
++    memcpy(buf, &mh, sizeof(mh));
++
++    size_t written_size;
++    written_size = qemu_write_full(fd, buf, MAX_SIZE_MDF_HEADER);
++    if (written_size != MAX_SIZE_MDF_HEADER) {
++        ret = -1;
++    }
++
++    g_free(buf);
++    return ret;
++}
++
++static int write_end_flat_header(int fd)
++{
++    MakedumpfileDataHeader mdh;
++
++    mdh.offset = END_FLAG_FLAT_HEADER;
++    mdh.buf_size = END_FLAG_FLAT_HEADER;
++
++    size_t written_size;
++    written_size = qemu_write_full(fd, &mdh, sizeof(mdh));
++    if (written_size != sizeof(mdh)) {
++        return -1;
++    }
++
++    return 0;
++}
++
+ static ram_addr_t get_start_block(DumpState *s)
+ {
+     GuestPhysBlock *block;
+diff --git a/include/sysemu/dump.h b/include/sysemu/dump.h
+index 19fafb2..b32b390 100644
+--- a/include/sysemu/dump.h
++++ b/include/sysemu/dump.h
+@@ -14,12 +14,29 @@
+ #ifndef DUMP_H
+ #define DUMP_H
+ 
++#define MAKEDUMPFILE_SIGNATURE      "makedumpfile"
++#define MAX_SIZE_MDF_HEADER         (4096) /* max size of makedumpfile_header */
++#define TYPE_FLAT_HEADER            (1)    /* type of flattened format */
++#define VERSION_FLAT_HEADER         (1)    /* version of flattened format */
++#define END_FLAG_FLAT_HEADER        (-1)
++
+ typedef struct ArchDumpInfo {
+     int d_machine;  /* Architecture */
+     int d_endian;   /* ELFDATA2LSB or ELFDATA2MSB */
+     int d_class;    /* ELFCLASS32 or ELFCLASS64 */
+ } ArchDumpInfo;
+ 
++typedef struct QEMU_PACKED MakedumpfileHeader {
++    char signature[16];     /* = "makedumpfile" */
++    int64_t type;
++    int64_t version;
++} MakedumpfileHeader;
++
++typedef struct QEMU_PACKED MakedumpfileDataHeader {
++    int64_t offset;
++    int64_t buf_size;
++} MakedumpfileDataHeader;
++
+ struct GuestPhysBlockList; /* memory_mapping.h */
+ int cpu_get_dump_info(ArchDumpInfo *info,
+                       const struct GuestPhysBlockList *guest_phys_blocks);
+-- 
+1.8.3.1
+

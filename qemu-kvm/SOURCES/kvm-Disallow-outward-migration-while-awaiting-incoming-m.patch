@@ -1,0 +1,62 @@
+From 6bdff9954d46304a278bff833ecb15450c19c4f5 Mon Sep 17 00:00:00 2001
+From: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+Date: Thu, 8 May 2014 11:52:12 +0200
+Subject: [PATCH 05/13] Disallow outward migration while awaiting incoming migration
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+Message-id: <1399549932-9977-1-git-send-email-dgilbert@redhat.com>
+Patchwork-id: 58747
+O-Subject: [RHEL7.1 qemu-kvm PATCH 1/1] Disallow outward migration while awaiting incoming migration
+Bugzilla: 1086987
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+
+bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1086987
+brew: https://brewweb.devel.redhat.com/taskinfo?taskID=7432751
+upstream: ca99993adc9205c905dba5dc1bb819959ada7200
+
+QEMU will assert if you attempt to start an outgoing migration on
+a QEMU that's sitting waiting for an incoming migration (started
+with -incoming), so disallow it with a proper error.
+
+(This is a fix for https://bugzilla.redhat.com/show_bug.cgi?id=1086987 )
+
+Signed-off-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Reviewed-by: Andreas Färber <afaerber@suse.de>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit ca99993adc9205c905dba5dc1bb819959ada7200)
+---
+ migration.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ migration.c |    5 +++++
+ 1 files changed, 5 insertions(+), 0 deletions(-)
+
+diff --git a/migration.c b/migration.c
+index 7efbd25..44b993a 100644
+--- a/migration.c
++++ b/migration.c
+@@ -430,6 +430,11 @@ void qmp_migrate(const char *uri, bool has_blk, bool blk,
+         return;
+     }
+ 
++    if (runstate_check(RUN_STATE_INMIGRATE)) {
++        error_setg(errp, "Guest is waiting for an incoming migration");
++        return;
++    }
++
+     if (qemu_savevm_state_blocked(errp)) {
+         return;
+     }
+-- 
+1.7.1
+

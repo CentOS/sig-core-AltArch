@@ -1,0 +1,72 @@
+From 7940a4b551e845a34409ad79a6250c5ea2f97df6 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Fri, 11 Jul 2014 14:21:10 +0200
+Subject: [PATCH 30/43] usb: initialize libusb_device to avoid crash
+
+Message-id: <1405088470-24115-38-git-send-email-kraxel@redhat.com>
+Patchwork-id: 59842
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 37/37] usb: initialize libusb_device to avoid crash
+Bugzilla: 1111450
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Jincheng Miao <jmiao@redhat.com>
+
+If libusb_get_device_list() fails, the uninitialized local variable
+libusb_device would be passed to libusb_free_device_list(), that
+will cause a crash, like:
+(gdb) bt
+ #0  0x00007fbbb4bafc10 in pthread_mutex_lock () from /lib64/libpthread.so.0
+ #1  0x00007fbbb233e653 in libusb_unref_device (dev=0x6275682d627375)
+     at core.c:902
+ #2  0x00007fbbb233e739 in libusb_free_device_list (list=0x7fbbb6e8436e,
+     unref_devices=<optimized out>) at core.c:653
+ #3  0x00007fbbb6cd80a4 in usb_host_auto_check (unused=unused@entry=0x0)
+     at hw/usb/host-libusb.c:1446
+ #4  0x00007fbbb6cd8525 in usb_host_initfn (udev=0x7fbbbd3c5670)
+     at hw/usb/host-libusb.c:912
+ #5  0x00007fbbb6cc123b in usb_device_init (dev=0x7fbbbd3c5670)
+     at hw/usb/bus.c:106
+ ...
+
+So initialize libusb_device at the begin time.
+
+Signed-off-by: Jincheng Miao <jmiao@redhat.com>
+Reviewed-by: Gonglei <arei.gonglei@huawei.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 3ce21445387c64032a21ae73c995195307a28a36)
+---
+ hw/usb/host-libusb.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/host-libusb.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/hw/usb/host-libusb.c b/hw/usb/host-libusb.c
+index 8510902..ef3dd5f 100644
+--- a/hw/usb/host-libusb.c
++++ b/hw/usb/host-libusb.c
+@@ -1384,7 +1384,7 @@ static void usb_host_auto_check(void *unused)
+ {
+     struct USBHostDevice *s;
+     struct USBAutoFilter *f;
+-    libusb_device **devs;
++    libusb_device **devs = NULL;
+     struct libusb_device_descriptor ddesc;
+     int unconnected = 0;
+     int i, n;
+@@ -1485,7 +1485,7 @@ static void usb_host_auto_check(void *unused)
+ 
+ void usb_host_info(Monitor *mon, const QDict *qdict)
+ {
+-    libusb_device **devs;
++    libusb_device **devs = NULL;
+     struct libusb_device_descriptor ddesc;
+     char port[16];
+     int i, n;
+-- 
+1.8.3.1
+

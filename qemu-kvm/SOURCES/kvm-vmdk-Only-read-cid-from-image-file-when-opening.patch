@@ -1,0 +1,84 @@
+From 5bd906f28072f5d071705801cc1dd2e9084057bc Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Wed, 6 Nov 2013 16:53:43 +0100
+Subject: [PATCH 86/87] vmdk: Only read cid from image file when opening
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383756824-6921-21-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55575
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 20/21] vmdk: Only read cid from image file when opening
+Bugzilla: 980771
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+From: Fam Zheng <famz@redhat.com>
+
+BZ: 980771
+
+Previously cid of parent is parsed from image file for every IO request.
+We already have L1/L2 cache and don't have assumption that parent image
+can be updated behind us, so remove this to get more efficiency.
+
+The parent CID is checked only for once after opening.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit c338b6ad609699cf352c8dd6338360b7e3895ad0)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/vmdk.c | 8 +++-----
+ 1 file changed, 3 insertions(+), 5 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vmdk.c |    8 +++-----
+ 1 files changed, 3 insertions(+), 5 deletions(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index ccbb0c9..8bef9f2 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -112,6 +112,7 @@ typedef struct BDRVVmdkState {
+     CoMutex lock;
+     uint64_t desc_offset;
+     bool cid_updated;
++    bool cid_checked;
+     uint32_t parent_cid;
+     int num_extents;
+     /* Extent array with num_extents entries, ascend ordered by address */
+@@ -197,8 +198,6 @@ static int vmdk_probe(const uint8_t *buf, int buf_size, const char *filename)
+     }
+ }
+ 
+-#define CHECK_CID 1
+-
+ #define SECTOR_SIZE 512
+ #define DESC_SIZE (20 * SECTOR_SIZE)    /* 20 sectors of 512 bytes each */
+ #define BUF_SIZE 4096
+@@ -301,19 +300,18 @@ static int vmdk_write_cid(BlockDriverState *bs, uint32_t cid)
+ 
+ static int vmdk_is_cid_valid(BlockDriverState *bs)
+ {
+-#ifdef CHECK_CID
+     BDRVVmdkState *s = bs->opaque;
+     BlockDriverState *p_bs = bs->backing_hd;
+     uint32_t cur_pcid;
+ 
+-    if (p_bs) {
++    if (!s->cid_checked && p_bs) {
+         cur_pcid = vmdk_read_cid(p_bs, 0);
+         if (s->parent_cid != cur_pcid) {
+             /* CID not valid */
+             return 0;
+         }
+     }
+-#endif
++    s->cid_checked = true;
+     /* CID valid */
+     return 1;
+ }
+-- 
+1.7.1
+

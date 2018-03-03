@@ -1,0 +1,110 @@
+From 2dd33300d200746f86301516a7d04800ac96653d Mon Sep 17 00:00:00 2001
+From: Michael S. Tsirkin <mst@redhat.com>
+Date: Mon, 19 May 2014 09:57:37 +0200
+Subject: [PATCH 1/2] kvm: zero-initialize KVM_SET_GSI_ROUTING input
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1400493448-29146-2-git-send-email-mst@redhat.com>
+Patchwork-id: 58948
+O-Subject: [PATCH qemu-kvm RHEL7.1 1/2] kvm: zero-initialize KVM_SET_GSI_ROUTING input
+Bugzilla: 1098976
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+
+kvm_add_routing_entry makes an attempt to
+zero-initialize any new routing entry.
+However, it fails to initialize padding
+within the u field of the structure
+kvm_irq_routing_entry.
+
+Other functions like kvm_irqchip_update_msi_route
+also fail to initialize the padding field in
+kvm_irq_routing_entry.
+
+It's better to just make sure all input is initialized.
+
+Once it is, we can also drop complex field by field assignment and just
+do the simple *a = *b to update a route entry.
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Gleb Natapov <gleb@redhat.com>
+(cherry picked from commit 0fbc20740342713f282b118b4a446c4c43df3f4a)
+---
+ kvm-all.c | 19 +++++++------------
+ 1 file changed, 7 insertions(+), 12 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ kvm-all.c |   19 +++++++------------
+ 1 files changed, 7 insertions(+), 12 deletions(-)
+
+diff --git a/kvm-all.c b/kvm-all.c
+index adc0a8e..592301a 100644
+--- a/kvm-all.c
++++ b/kvm-all.c
+@@ -988,11 +988,8 @@ static void kvm_add_routing_entry(KVMState *s,
+     }
+     n = s->irq_routes->nr++;
+     new = &s->irq_routes->entries[n];
+-    memset(new, 0, sizeof(*new));
+-    new->gsi = entry->gsi;
+-    new->type = entry->type;
+-    new->flags = entry->flags;
+-    new->u = entry->u;
++
++    *new = *entry;
+ 
+     set_gsi(s, entry->gsi);
+ 
+@@ -1011,9 +1008,7 @@ static int kvm_update_routing_entry(KVMState *s,
+             continue;
+         }
+ 
+-        entry->type = new_entry->type;
+-        entry->flags = new_entry->flags;
+-        entry->u = new_entry->u;
++        *entry = *new_entry;
+ 
+         kvm_irqchip_commit_routes(s);
+ 
+@@ -1025,7 +1020,7 @@ static int kvm_update_routing_entry(KVMState *s,
+ 
+ void kvm_irqchip_add_irq_route(KVMState *s, int irq, int irqchip, int pin)
+ {
+-    struct kvm_irq_routing_entry e;
++    struct kvm_irq_routing_entry e = {};
+ 
+     assert(pin < s->gsi_count);
+ 
+@@ -1138,7 +1133,7 @@ int kvm_irqchip_send_msi(KVMState *s, MSIMessage msg)
+             return virq;
+         }
+ 
+-        route = g_malloc(sizeof(KVMMSIRoute));
++        route = g_malloc0(sizeof(KVMMSIRoute));
+         route->kroute.gsi = virq;
+         route->kroute.type = KVM_IRQ_ROUTING_MSI;
+         route->kroute.flags = 0;
+@@ -1159,7 +1154,7 @@ int kvm_irqchip_send_msi(KVMState *s, MSIMessage msg)
+ 
+ int kvm_irqchip_add_msi_route(KVMState *s, MSIMessage msg)
+ {
+-    struct kvm_irq_routing_entry kroute;
++    struct kvm_irq_routing_entry kroute = {};
+     int virq;
+ 
+     if (!kvm_gsi_routing_enabled()) {
+@@ -1185,7 +1180,7 @@ int kvm_irqchip_add_msi_route(KVMState *s, MSIMessage msg)
+ 
+ int kvm_irqchip_update_msi_route(KVMState *s, int virq, MSIMessage msg)
+ {
+-    struct kvm_irq_routing_entry kroute;
++    struct kvm_irq_routing_entry kroute = {};
+ 
+     if (!kvm_irqchip_in_kernel()) {
+         return -ENOSYS;
+-- 
+1.7.1
+

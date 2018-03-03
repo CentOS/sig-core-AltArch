@@ -1,0 +1,179 @@
+From f45283cb91d07fd280fcf503a486effc1a96fa5e Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 9 Sep 2013 14:28:15 +0200
+Subject: [PATCH 24/38] qapi: qapi-types.py, native list support
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1378736903-18489-25-git-send-email-kwolf@redhat.com>
+Patchwork-id: 54211
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 24/32] qapi: qapi-types.py, native list support
+Bugzilla: 1005818
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Michael Roth <mdroth@linux.vnet.ibm.com>
+
+Bugzilla: 1005818
+
+Teach type generators about native types so they can generate the
+appropriate linked list types.
+
+Signed-off-by: Michael Roth <mdroth@linux.vnet.ibm.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Amos Kong <akong@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit c0afa9c5f717d0ebf10c70c305974ebbffe4c71f)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ scripts/qapi-types.py | 45 ++++++++++++++++++++++++++++++++++++++++++---
+ scripts/qapi.py       | 23 +++++++++++++++++++++++
+ 2 files changed, 65 insertions(+), 3 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ scripts/qapi-types.py |   45 ++++++++++++++++++++++++++++++++++++++++++---
+ scripts/qapi.py       |   23 +++++++++++++++++++++++
+ 2 files changed, 65 insertions(+), 3 deletions(-)
+
+diff --git a/scripts/qapi-types.py b/scripts/qapi-types.py
+index f139bfe..3d9af3c 100644
+--- a/scripts/qapi-types.py
++++ b/scripts/qapi-types.py
+@@ -16,8 +16,21 @@ import os
+ import getopt
+ import errno
+ 
+-def generate_fwd_struct(name, members):
++def generate_fwd_struct(name, members, builtin_type=False):
++    if builtin_type:
++        return mcgen('''
++
++typedef struct %(name)sList
++{
++    %(type)s value;
++    struct %(name)sList *next;
++} %(name)sList;
++''',
++                     type=c_type(name),
++                     name=name)
++
+     return mcgen('''
++
+ typedef struct %(name)s %(name)s;
+ 
+ typedef struct %(name)sList
+@@ -183,6 +196,7 @@ void qapi_free_%(type)s(%(c_type)s obj);
+ 
+ def generate_type_cleanup(name):
+     ret = mcgen('''
++
+ void qapi_free_%(type)s(%(c_type)s obj)
+ {
+     QapiDeallocVisitor *md;
+@@ -203,8 +217,9 @@ void qapi_free_%(type)s(%(c_type)s obj)
+ 
+ 
+ try:
+-    opts, args = getopt.gnu_getopt(sys.argv[1:], "chp:o:",
+-                                   ["source", "header", "prefix=", "output-dir="])
++    opts, args = getopt.gnu_getopt(sys.argv[1:], "chbp:o:",
++                                   ["source", "header", "builtins",
++                                    "prefix=", "output-dir="])
+ except getopt.GetoptError, err:
+     print str(err)
+     sys.exit(1)
+@@ -216,6 +231,7 @@ h_file = 'qapi-types.h'
+ 
+ do_c = False
+ do_h = False
++do_builtins = False
+ 
+ for o, a in opts:
+     if o in ("-p", "--prefix"):
+@@ -226,6 +242,8 @@ for o, a in opts:
+         do_c = True
+     elif o in ("-h", "--header"):
+         do_h = True
++    elif o in ("-b", "--builtins"):
++        do_builtins = True
+ 
+ if not do_c and not do_h:
+     do_c = True
+@@ -301,6 +319,11 @@ fdecl.write(mcgen('''
+ exprs = parse_schema(sys.stdin)
+ exprs = filter(lambda expr: not expr.has_key('gen'), exprs)
+ 
++fdecl.write(guardstart("QAPI_TYPES_BUILTIN_STRUCT_DECL"))
++for typename in builtin_types:
++    fdecl.write(generate_fwd_struct(typename, None, builtin_type=True))
++fdecl.write(guardend("QAPI_TYPES_BUILTIN_STRUCT_DECL"))
++
+ for expr in exprs:
+     ret = "\n"
+     if expr.has_key('type'):
+@@ -317,6 +340,22 @@ for expr in exprs:
+         continue
+     fdecl.write(ret)
+ 
++# to avoid header dependency hell, we always generate declarations
++# for built-in types in our header files and simply guard them
++fdecl.write(guardstart("QAPI_TYPES_BUILTIN_CLEANUP_DECL"))
++for typename in builtin_types:
++    fdecl.write(generate_type_cleanup_decl(typename + "List"))
++fdecl.write(guardend("QAPI_TYPES_BUILTIN_CLEANUP_DECL"))
++
++# ...this doesn't work for cases where we link in multiple objects that
++# have the functions defined, so we use -b option to provide control
++# over these cases
++if do_builtins:
++    fdef.write(guardstart("QAPI_TYPES_BUILTIN_CLEANUP_DEF"))
++    for typename in builtin_types:
++        fdef.write(generate_type_cleanup(typename + "List"))
++    fdef.write(guardend("QAPI_TYPES_BUILTIN_CLEANUP_DEF"))
++
+ for expr in exprs:
+     ret = "\n"
+     if expr.has_key('type'):
+diff --git a/scripts/qapi.py b/scripts/qapi.py
+index 03c42a9..3a54c7f 100644
+--- a/scripts/qapi.py
++++ b/scripts/qapi.py
+@@ -11,6 +11,12 @@
+ 
+ from ordereddict import OrderedDict
+ 
++builtin_types = [
++    'str', 'int', 'number', 'bool',
++    'int8', 'int16', 'int32', 'int64',
++    'uint8', 'uint16', 'uint32', 'uint64'
++]
++
+ def tokenize(data):
+     while len(data):
+         ch = data[0]
+@@ -274,3 +280,20 @@ def guardname(filename):
+     for substr in [".", " ", "-"]:
+         guard = guard.replace(substr, "_")
+     return guard.upper() + '_H'
++
++def guardstart(name):
++    return mcgen('''
++
++#ifndef %(name)s
++#define %(name)s
++
++''',
++                 name=guardname(name))
++
++def guardend(name):
++    return mcgen('''
++
++#endif /* %(name)s */
++
++''',
++                 name=guardname(name))
+-- 
+1.7.1
+

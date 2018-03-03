@@ -1,0 +1,143 @@
+From 826ac25b8740b86a5c6081ae35eed45d6cbb5f2b Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Tue, 16 Sep 2014 20:11:52 +0200
+Subject: [PATCH 14/20] block: use the standard 'ret' instead of 'result'
+
+Message-id: <48fc259f545a424dff6e0308e0f7a12ec425d0dc.1410897407.git.jcody@redhat.com>
+Patchwork-id: 61218
+O-Subject: [PATCH qemu-kvm-rhel RHEL7.1 13/15] block: use the standard 'ret' instead of 'result'
+Bugzilla: 1098086
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+Most QEMU code uses 'ret' for function return values. The VDI driver
+uses a mix of 'result' and 'ret'.  This cleans that up, switching over
+to the standard 'ret' usage.
+
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit dddc7750d68c3ea86d88b060a77acb60d2eeb4a7)
+
+RHEL7 Notes: Difference from upstream is due to conflict resolution from
+             previous patch.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vdi.c |   34 +++++++++++++++++-----------------
+ 1 files changed, 17 insertions(+), 17 deletions(-)
+
+diff --git a/block/vdi.c b/block/vdi.c
+index 1f4491f..298ee12 100644
+--- a/block/vdi.c
++++ b/block/vdi.c
+@@ -350,23 +350,23 @@ static int vdi_make_empty(BlockDriverState *bs)
+ static int vdi_probe(const uint8_t *buf, int buf_size, const char *filename)
+ {
+     const VdiHeader *header = (const VdiHeader *)buf;
+-    int result = 0;
++    int ret = 0;
+ 
+     logout("\n");
+ 
+     if (buf_size < sizeof(*header)) {
+         /* Header too small, no VDI. */
+     } else if (le32_to_cpu(header->signature) == VDI_SIGNATURE) {
+-        result = 100;
++        ret = 100;
+     }
+ 
+-    if (result == 0) {
++    if (ret == 0) {
+         logout("no vdi image\n");
+     } else {
+         logout("%s", header->text);
+     }
+ 
+-    return result;
++    return ret;
+ }
+ 
+ static int vdi_open(BlockDriverState *bs, QDict *options, int flags,
+@@ -673,7 +673,7 @@ static int vdi_co_write(BlockDriverState *bs,
+ static int vdi_create(const char *filename, QEMUOptionParameter *options,
+                       Error **errp)
+ {
+-    int result = 0;
++    int ret = 0;
+     uint64_t bytes = 0;
+     uint32_t blocks;
+     size_t block_size = DEFAULT_CLUSTER_SIZE;
+@@ -710,20 +710,20 @@ static int vdi_create(const char *filename, QEMUOptionParameter *options,
+     }
+ 
+     if (bytes > VDI_DISK_SIZE_MAX) {
+-        result = -ENOTSUP;
++        ret = -ENOTSUP;
+         error_setg(errp, "Unsupported VDI image size (size is 0x%" PRIx64
+                          ", max supported is 0x%" PRIx64 ")",
+                           bytes, VDI_DISK_SIZE_MAX);
+         goto exit;
+     }
+ 
+-    result = bdrv_create_file(filename, options, &local_err);
+-    if (result < 0) {
++    ret = bdrv_create_file(filename, options, &local_err);
++    if (ret < 0) {
+         error_propagate(errp, local_err);
+         goto exit;
+     }
+-    result = bdrv_file_open(&bs, filename, NULL, BDRV_O_RDWR, &local_err);
+-    if (result < 0) {
++    ret = bdrv_file_open(&bs, filename, NULL, BDRV_O_RDWR, &local_err);
++    if (ret < 0) {
+         error_propagate(errp, local_err);
+         goto exit;
+     }
+@@ -757,8 +757,8 @@ static int vdi_create(const char *filename, QEMUOptionParameter *options,
+     vdi_header_print(&header);
+ #endif
+     vdi_header_to_le(&header);
+-    result = bdrv_pwrite_sync(bs, offset, &header, sizeof(header));
+-    if (result < 0) {
++    ret = bdrv_pwrite_sync(bs, offset, &header, sizeof(header));
++    if (ret < 0) {
+         error_setg(errp, "Error writing header to %s", filename);
+         goto exit;
+     }
+@@ -773,8 +773,8 @@ static int vdi_create(const char *filename, QEMUOptionParameter *options,
+                 bmap[i] = VDI_UNALLOCATED;
+             }
+         }
+-        result = bdrv_pwrite_sync(bs, offset, bmap, bmap_size);
+-        if (result < 0) {
++        ret = bdrv_pwrite_sync(bs, offset, bmap, bmap_size);
++        if (ret < 0) {
+             error_setg(errp, "Error writing bmap to %s", filename);
+             goto exit;
+         }
+@@ -782,8 +782,8 @@ static int vdi_create(const char *filename, QEMUOptionParameter *options,
+     }
+ 
+     if (image_type == VDI_TYPE_STATIC) {
+-        result = bdrv_truncate(bs, offset + blocks * block_size);
+-        if (result < 0) {
++        ret = bdrv_truncate(bs, offset + blocks * block_size);
++        if (ret < 0) {
+             error_setg(errp, "Failed to statically allocate %s", filename);
+             goto exit;
+         }
+@@ -792,7 +792,7 @@ static int vdi_create(const char *filename, QEMUOptionParameter *options,
+ exit:
+     bdrv_unref(bs);
+     g_free(bmap);
+-    return result;
++    return ret;
+ }
+ 
+ static void vdi_close(BlockDriverState *bs)
+-- 
+1.7.1
+

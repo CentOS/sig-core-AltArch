@@ -1,0 +1,69 @@
+From 56adc601b22b81ae4c681af6b13f38e560f16867 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Wed, 11 Dec 2013 19:50:32 +0100
+Subject: [PATCH 04/37] block: Inherit opt_transfer_length
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Message-id: <1392117622-28812-5-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57169
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 04/37] block: Inherit opt_transfer_length
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+When there is a format driver between the backend, it's not guaranteed
+that exposing the opt_transfer_length for the format driver results in
+the optimal requests (because of fragmentation etc.), but it can't make
+things worse, so let's just do it.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Wenchao Xia <xiawenc@linux.vnet.ibm.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Benoît Canet <benoit@irqsave.net>
+(cherry picked from commit 466ad822deef3a03757d505218a52993c5d56b5d)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c | 20 +++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
+---
+ block.c |   20 +++++++++++++++++++-
+ 1 files changed, 19 insertions(+), 1 deletions(-)
+
+diff --git a/block.c b/block.c
+index 26eebcc..8b36d05 100644
+--- a/block.c
++++ b/block.c
+@@ -452,7 +452,25 @@ static int bdrv_refresh_limits(BlockDriverState *bs)
+ 
+     memset(&bs->bl, 0, sizeof(bs->bl));
+ 
+-    if (drv && drv->bdrv_refresh_limits) {
++    if (!drv) {
++        return 0;
++    }
++
++    /* Take some limits from the children as a default */
++    if (bs->file) {
++        bdrv_refresh_limits(bs->file);
++        bs->bl.opt_transfer_length = bs->file->bl.opt_transfer_length;
++    }
++
++    if (bs->backing_hd) {
++        bdrv_refresh_limits(bs->backing_hd);
++        bs->bl.opt_transfer_length =
++            MAX(bs->bl.opt_transfer_length,
++                bs->backing_hd->bl.opt_transfer_length);
++    }
++
++    /* Then let the driver override it */
++    if (drv->bdrv_refresh_limits) {
+         return drv->bdrv_refresh_limits(bs);
+     }
+ 
+-- 
+1.7.1
+

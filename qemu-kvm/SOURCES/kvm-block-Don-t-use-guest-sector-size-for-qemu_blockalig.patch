@@ -1,0 +1,148 @@
+From 8603c409443521f98a73652ebf30233da879c7de Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Thu, 28 Nov 2013 10:23:32 +0100
+Subject: [PATCH 08/37] block: Don't use guest sector size for qemu_blockalign()
+
+Message-id: <1392117622-28812-9-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57173
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 08/37] block: Don't use guest sector size for qemu_blockalign()
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+bs->buffer_alignment is set by the device emulation and contains the
+logical block size of the guest device. This isn't something that the
+block layer should know, and even less something to use for determining
+the right alignment of buffers to be used for the host.
+
+The new BlockLimits field opt_mem_alignment tells the qemu block layer
+the optimal alignment to be used so that no bounce buffer must be used
+in the driver.
+
+This patch may change the buffer alignment from 4k to 512 for all
+callers that used qemu_blockalign() with the top-level image format
+BlockDriverState. The value was never propagated to other levels in the
+tree, so in particular raw-posix never required anything else than 512.
+
+While on disks with 4k sectors direct I/O requires a 4k alignment,
+memory may still be okay when aligned to 512 byte boundaries. This is
+what must have happened in practice, because otherwise this would
+already have failed earlier. Therefore I don't expect regressions even
+with this intermediate state. Later, raw-posix can implement the hook
+and expose a different memory alignment requirement.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Wenchao Xia <xiawenc@linux.vnet.ibm.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit 339064d5063924e5176842abbf6c8089f3479c5b)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c                   | 23 ++++++++++++++++++++---
+ include/block/block.h     |  3 +++
+ include/block/block_int.h |  3 +++
+ 3 files changed, 26 insertions(+), 3 deletions(-)
+---
+ block.c                   |   23 ++++++++++++++++++++---
+ include/block/block.h     |    3 +++
+ include/block/block_int.h |    3 +++
+ 3 files changed, 26 insertions(+), 3 deletions(-)
+
+diff --git a/block.c b/block.c
+index 6c98ff7..c85f43e 100644
+--- a/block.c
++++ b/block.c
+@@ -185,6 +185,16 @@ static void bdrv_io_limits_intercept(BlockDriverState *bs,
+     qemu_co_queue_next(&bs->throttled_reqs);
+ }
+ 
++size_t bdrv_opt_mem_align(BlockDriverState *bs)
++{
++    if (!bs || !bs->drv) {
++        /* 4k should be on the safe side */
++        return 4096;
++    }
++
++    return bs->bl.opt_mem_alignment;
++}
++
+ /* check if the path starts with "<protocol>:" */
+ static int path_has_protocol(const char *path)
+ {
+@@ -460,6 +470,9 @@ int bdrv_refresh_limits(BlockDriverState *bs)
+     if (bs->file) {
+         bdrv_refresh_limits(bs->file);
+         bs->bl.opt_transfer_length = bs->file->bl.opt_transfer_length;
++        bs->bl.opt_mem_alignment = bs->file->bl.opt_mem_alignment;
++    } else {
++        bs->bl.opt_mem_alignment = 512;
+     }
+ 
+     if (bs->backing_hd) {
+@@ -467,6 +480,9 @@ int bdrv_refresh_limits(BlockDriverState *bs)
+         bs->bl.opt_transfer_length =
+             MAX(bs->bl.opt_transfer_length,
+                 bs->backing_hd->bl.opt_transfer_length);
++        bs->bl.opt_mem_alignment =
++            MAX(bs->bl.opt_mem_alignment,
++                bs->backing_hd->bl.opt_mem_alignment);
+     }
+ 
+     /* Then let the driver override it */
+@@ -4729,7 +4745,7 @@ void bdrv_set_buffer_alignment(BlockDriverState *bs, int align)
+ 
+ void *qemu_blockalign(BlockDriverState *bs, size_t size)
+ {
+-    return qemu_memalign((bs && bs->buffer_alignment) ? bs->buffer_alignment : 512, size);
++    return qemu_memalign(bdrv_opt_mem_align(bs), size);
+ }
+ 
+ /*
+@@ -4738,12 +4754,13 @@ void *qemu_blockalign(BlockDriverState *bs, size_t size)
+ bool bdrv_qiov_is_aligned(BlockDriverState *bs, QEMUIOVector *qiov)
+ {
+     int i;
++    size_t alignment = bdrv_opt_mem_align(bs);
+ 
+     for (i = 0; i < qiov->niov; i++) {
+-        if ((uintptr_t) qiov->iov[i].iov_base % bs->buffer_alignment) {
++        if ((uintptr_t) qiov->iov[i].iov_base % alignment) {
+             return false;
+         }
+-        if (qiov->iov[i].iov_len % bs->buffer_alignment) {
++        if (qiov->iov[i].iov_len % alignment) {
+             return false;
+         }
+     }
+diff --git a/include/block/block.h b/include/block/block.h
+index 3e22fc2..9d1ce59 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -406,6 +406,9 @@ void bdrv_img_create(const char *filename, const char *fmt,
+                      char *options, uint64_t img_size, int flags,
+                      Error **errp, bool quiet);
+ 
++/* Returns the alignment in bytes that is required so that no bounce buffer
++ * is required throughout the stack */
++size_t bdrv_opt_mem_align(BlockDriverState *bs);
+ void bdrv_set_buffer_alignment(BlockDriverState *bs, int align);
+ void *qemu_blockalign(BlockDriverState *bs, size_t size);
+ bool bdrv_qiov_is_aligned(BlockDriverState *bs, QEMUIOVector *qiov);
+diff --git a/include/block/block_int.h b/include/block/block_int.h
+index 13a52e8..ddbd53d 100644
+--- a/include/block/block_int.h
++++ b/include/block/block_int.h
+@@ -239,6 +239,9 @@ typedef struct BlockLimits {
+ 
+     /* optimal transfer length in sectors */
+     int opt_transfer_length;
++
++    /* memory alignment so that no bounce buffer is needed */
++    size_t opt_mem_alignment;
+ } BlockLimits;
+ 
+ /*
+-- 
+1.7.1
+

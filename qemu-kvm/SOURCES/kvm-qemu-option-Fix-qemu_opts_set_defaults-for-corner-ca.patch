@@ -1,0 +1,96 @@
+From c4ffa69bdec932cf674d92355967ce2876296893 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Tue, 6 Aug 2013 13:17:01 +0200
+Subject: [PATCH 08/28] qemu-option: Fix qemu_opts_set_defaults() for corner cases
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1375795025-28674-3-git-send-email-armbru@redhat.com>
+Patchwork-id: 52990
+O-Subject: [PATCH 7.0 qemu-kvm 2/6] qemu-option: Fix qemu_opts_set_defaults() for corner cases
+Bugzilla: 980782
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michal Novotny <minovotn@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+
+Commit 4f6dd9a changed the initialization of opts in opts_parse() to
+this:
+
+    if (defaults) {
+        if (!id && !QTAILQ_EMPTY(&list->head)) {
+            opts = qemu_opts_find(list, NULL);
+        } else {
+            opts = qemu_opts_create(list, id, 0);
+        }
+    } else {
+        opts = qemu_opts_create(list, id, 1);
+    }
+
+Same as before for !defaults.
+
+If defaults is true, and params has no ID, and options exist, we use
+the first assignment.  It sets opts to null if all options have an ID.
+opts_parse() then returns null.  qemu_opts_set_defaults() asserts the
+value is non-null.  It's the only caller that passes true for
+defaults.
+
+To reproduce, try "-M xenpv -machine id=foo" (yes, "id=foo" is silly,
+but it shouldn't crash).
+
+I believe the function attempts to do the following:
+
+    If options don't yet exist, create new options
+    Else, if defaults, modify the existing options
+    Else, if list->merge_lists, modify the existing options
+    Else, fail
+
+A straightforward call of qemu_opts_create() does exactly that.
+
+Cc: Jan Kiszka <jan.kiszka@siemens.com>
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Message-id: 1372943363-24081-3-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit 6d4cd408686f5ae60b2b3b94b79f48ddedc2f39d)
+
+The upstream commit message's claim that a "straightforward call of
+qemu_opts_create() does exactly that" is wrong.  When
+!list->merge_lists, and the option string doesn't contain id=, and
+options without ID exist, then we don't actually modify the existing
+options, we create new ones.
+
+Not reachable, because we never pass lists with !list->merge_lists to
+qemu_opts_set_defaults().
+
+Patch adding a suitable assertion pending upstream.
+---
+ util/qemu-option.c | 10 +---------
+ 1 file changed, 1 insertion(+), 9 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ util/qemu-option.c |   10 +---------
+ 1 files changed, 1 insertions(+), 9 deletions(-)
+
+diff --git a/util/qemu-option.c b/util/qemu-option.c
+index b6d2ac0..bdfbdb4 100644
+--- a/util/qemu-option.c
++++ b/util/qemu-option.c
+@@ -944,15 +944,7 @@ static QemuOpts *opts_parse(QemuOptsList *list, const char *params,
+         get_opt_value(value, sizeof(value), p+4);
+         id = value;
+     }
+-    if (defaults) {
+-        if (!id && !QTAILQ_EMPTY(&list->head)) {
+-            opts = qemu_opts_find(list, NULL);
+-        } else {
+-            opts = qemu_opts_create(list, id, 0, &local_err);
+-        }
+-    } else {
+-        opts = qemu_opts_create(list, id, 1, &local_err);
+-    }
++    opts = qemu_opts_create(list, id, !defaults, &local_err);
+     if (opts == NULL) {
+         if (error_is_set(&local_err)) {
+             qerror_report_err(local_err);
+-- 
+1.7.1
+

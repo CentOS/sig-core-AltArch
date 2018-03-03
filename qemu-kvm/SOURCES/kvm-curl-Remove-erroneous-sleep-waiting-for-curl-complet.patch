@@ -1,0 +1,53 @@
+From 6313c97af86d08de7928433ab29ed4450f49c425 Mon Sep 17 00:00:00 2001
+From: Richard Jones <rjones@redhat.com>
+Date: Thu, 11 Jun 2015 11:40:12 +0200
+Subject: [PATCH 12/30] curl: Remove erroneous sleep waiting for curl
+ completion
+
+Message-id: <1434022828-13037-6-git-send-email-rjones@redhat.com>
+Patchwork-id: 65841
+O-Subject: [RHEL-7.2 qemu-kvm v3 PATCH 05/21] curl: Remove erroneous sleep waiting for curl completion
+Bugzilla: 1226684
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Matthew Booth <mbooth@redhat.com>
+
+The driver will not start more than a fixed number of curl sessions.
+If it needs more, it must wait for the completion of an existing one.
+The driver was sleeping, which will prevent the main loop from
+running, and therefore the event it's waiting on. It was also directly
+calling its internal handler rather than waiting on existing
+registered handlers to be called from the main loop.
+
+This change causes it simply to wait for a period of time whilst
+allowing the main loop to execute.
+
+Signed-off-by: Matthew Booth <mbooth@redhat.com>
+Tested-by: Richard W.M. Jones <rjones@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+
+Upstream-status: e466183718bfaaf347a3c02499473068a0072114
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/curl.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/block/curl.c b/block/curl.c
+index 8c707e1..e06c222 100644
+--- a/block/curl.c
++++ b/block/curl.c
+@@ -289,8 +289,7 @@ static CURLState *curl_init_state(BDRVCURLState *s)
+             break;
+         }
+         if (!state) {
+-            g_usleep(100);
+-            curl_multi_do(s);
++            qemu_aio_wait();
+         }
+     } while(!state);
+ 
+-- 
+1.8.3.1
+

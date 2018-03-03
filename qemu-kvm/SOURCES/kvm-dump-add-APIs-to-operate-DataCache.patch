@@ -1,0 +1,118 @@
+From 33af2fc0d1fd87e26c9ed15a3ce07a61cbbaa490 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Fri, 7 Nov 2014 17:18:00 +0100
+Subject: [PATCH 13/41] dump: add APIs to operate DataCache
+
+Message-id: <1415380693-16593-14-git-send-email-lersek@redhat.com>
+Patchwork-id: 62199
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 13/26] dump: add APIs to operate DataCache
+Bugzilla: 1157798
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: dgibson <dgibson@redhat.com>
+
+From: qiaonuohan <qiaonuohan@cn.fujitsu.com>
+
+DataCache is used to store data temporarily, then the data will be written to
+vmcore. These functions will be called later when writing data of page to
+vmcore.
+
+Signed-off-by: Qiao Nuohan <qiaonuohan@cn.fujitsu.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit 64cfba6a47411092c941c8d17256fb5673cc8cbf)
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c                | 47 +++++++++++++++++++++++++++++++++++++++++++++++
+ include/sysemu/dump.h |  9 +++++++++
+ 2 files changed, 56 insertions(+)
+
+diff --git a/dump.c b/dump.c
+index f416093..926ab84 100644
+--- a/dump.c
++++ b/dump.c
+@@ -1171,6 +1171,53 @@ out:
+     return ret;
+ }
+ 
++static void prepare_data_cache(DataCache *data_cache, DumpState *s,
++                               off_t offset)
++{
++    data_cache->fd = s->fd;
++    data_cache->data_size = 0;
++    data_cache->buf_size = BUFSIZE_DATA_CACHE;
++    data_cache->buf = g_malloc0(BUFSIZE_DATA_CACHE);
++    data_cache->offset = offset;
++}
++
++static int write_cache(DataCache *dc, const void *buf, size_t size,
++                       bool flag_sync)
++{
++    /*
++     * dc->buf_size should not be less than size, otherwise dc will never be
++     * enough
++     */
++    assert(size <= dc->buf_size);
++
++    /*
++     * if flag_sync is set, synchronize data in dc->buf into vmcore.
++     * otherwise check if the space is enough for caching data in buf, if not,
++     * write the data in dc->buf to dc->fd and reset dc->buf
++     */
++    if ((!flag_sync && dc->data_size + size > dc->buf_size) ||
++        (flag_sync && dc->data_size > 0)) {
++        if (write_buffer(dc->fd, dc->offset, dc->buf, dc->data_size) < 0) {
++            return -1;
++        }
++
++        dc->offset += dc->data_size;
++        dc->data_size = 0;
++    }
++
++    if (!flag_sync) {
++        memcpy(dc->buf + dc->data_size, buf, size);
++        dc->data_size += size;
++    }
++
++    return 0;
++}
++
++static void free_data_cache(DataCache *data_cache)
++{
++    g_free(data_cache->buf);
++}
++
+ static ram_addr_t get_start_block(DumpState *s)
+ {
+     GuestPhysBlock *block;
+diff --git a/include/sysemu/dump.h b/include/sysemu/dump.h
+index 6d4d0bc..92a95e4 100644
+--- a/include/sysemu/dump.h
++++ b/include/sysemu/dump.h
+@@ -41,6 +41,7 @@
+ #define DISKDUMP_HEADER_BLOCKS      (1)
+ #define BUFSIZE_BITMAP              (TARGET_PAGE_SIZE)
+ #define PFN_BUFBITMAP               (CHAR_BIT * BUFSIZE_BITMAP)
++#define BUFSIZE_DATA_CACHE          (TARGET_PAGE_SIZE * 4)
+ 
+ typedef struct ArchDumpInfo {
+     int d_machine;  /* Architecture */
+@@ -142,6 +143,14 @@ typedef struct QEMU_PACKED KdumpSubHeader64 {
+     uint64_t max_mapnr_64;          /* header_version 6 and later */
+ } KdumpSubHeader64;
+ 
++typedef struct DataCache {
++    int fd;             /* fd of the file where to write the cached data */
++    uint8_t *buf;       /* buffer for cached data */
++    size_t buf_size;    /* size of the buf */
++    size_t data_size;   /* size of cached data in buf */
++    off_t offset;       /* offset of the file */
++} DataCache;
++
+ struct GuestPhysBlockList; /* memory_mapping.h */
+ int cpu_get_dump_info(ArchDumpInfo *info,
+                       const struct GuestPhysBlockList *guest_phys_blocks);
+-- 
+1.8.3.1
+

@@ -1,0 +1,53 @@
+From e7ec271f6886eb7c37e200309d677a0f4dc32efe Mon Sep 17 00:00:00 2001
+From: Richard Jones <rjones@redhat.com>
+Date: Thu, 11 Jun 2015 11:40:24 +0200
+Subject: [PATCH 24/30] curl: Handle failure for potentially large allocations
+
+Message-id: <1434022828-13037-18-git-send-email-rjones@redhat.com>
+Patchwork-id: 65852
+O-Subject: [RHEL-7.2 qemu-kvm v3 PATCH 17/21] curl: Handle failure for potentially large allocations
+Bugzilla: 1226684
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+Some code in the block layer makes potentially huge allocations. Failure
+is not completely unexpected there, so avoid aborting qemu and handle
+out-of-memory situations gracefully.
+
+This patch addresses the allocations in the curl block driver.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+
+Upstream-status: 8dc7a7725bd6db2aa7e3c09b49bc21a1a25f40cb
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/curl.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/block/curl.c b/block/curl.c
+index d95789a..2486449 100644
+--- a/block/curl.c
++++ b/block/curl.c
+@@ -618,7 +618,13 @@ static void curl_readv_bh_cb(void *p)
+     state->buf_start = start;
+     state->buf_len = acb->end + s->readahead_size;
+     end = MIN(start + state->buf_len, s->len) - 1;
+-    state->orig_buf = g_malloc(state->buf_len);
++    state->orig_buf = g_try_malloc(state->buf_len);
++    if (state->buf_len && state->orig_buf == NULL) {
++        curl_clean_state(state);
++        acb->common.cb(acb->common.opaque, -ENOMEM);
++        qemu_aio_release(acb);
++        return;
++    }
+     state->acb[0] = acb;
+ 
+     snprintf(state->range, 127, "%zd-%zd", start, end);
+-- 
+1.8.3.1
+

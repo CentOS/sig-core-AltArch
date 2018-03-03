@@ -1,0 +1,58 @@
+From f9b42568a13151521cb8edf38f567e8c5cf25396 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 4 Nov 2013 22:32:23 +0100
+Subject: [PATCH 30/87] qcow2: Correct snapshots size for overlap check
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-33-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55332
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 32/43] qcow2: Correct snapshots size for overlap check
+Bugzilla: 1004347
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1004347
+
+Using s->snapshots_size instead of snapshots_size for the metadata
+overlap check in qcow2_write_snapshots leads to the detection of an
+overlap with the main qcow2 image header when deleting the last
+snapshot, since s->snapshots_size has not yet been updated and is
+therefore non-zero. However, the offset returned by qcow2_alloc_clusters
+will be zero since snapshots_size is zero. Therefore, an overlap is
+detected albeit no such will occur.
+
+This patch fixes this by replacing s->snapshots_size by snapshots_size
+when calling qcow2_pre_write_overlap_check.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 0f39ac9a07cc10278e37d87076b143008f28aa3b)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2-snapshot.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-snapshot.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/block/qcow2-snapshot.c b/block/qcow2-snapshot.c
+index e7e6013..450e4f5 100644
+--- a/block/qcow2-snapshot.c
++++ b/block/qcow2-snapshot.c
+@@ -192,7 +192,7 @@ static int qcow2_write_snapshots(BlockDriverState *bs)
+     /* The snapshot list position has not yet been updated, so these clusters
+      * must indeed be completely free */
+     ret = qcow2_pre_write_overlap_check(bs, QCOW2_OL_DEFAULT, offset,
+-                                        s->snapshots_size);
++                                        snapshots_size);
+     if (ret < 0) {
+         return ret;
+     }
+-- 
+1.7.1
+

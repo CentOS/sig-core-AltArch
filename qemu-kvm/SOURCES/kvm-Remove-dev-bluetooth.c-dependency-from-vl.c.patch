@@ -1,0 +1,132 @@
+From d23a5d0e1d9a437515d566e29706e12373de9e25 Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Mon, 16 Sep 2013 14:38:25 +0200
+Subject: [PATCH 17/29] Remove dev-bluetooth.c dependency from vl.c
+
+RH-Author: Miroslav Rezanina <mrezanin@redhat.com>
+Message-id: <1948c111aeb1ae630ad580f4805d57c35eccceef.1379325610.git.mrezanin@redhat.com>
+Patchwork-id: 54395
+O-Subject: [RHEL7 qemu-kvm PATCH 2/2] Remove dev-bluetooth.c dependency from vl.c
+Bugzilla: 1001131
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: Miroslav Rezanina <mrezanin@redhat.com>
+
+Use usb_legacy_register handling to create bt-dongle device and remove code
+dependency from vl.c so CONFIG_USB_BLUETOOTH can be disabled.
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 615fe4de4b3c26619611078960d3103550bde7d0)
+---
+ hw/usb/Makefile.objs   |  3 ---
+ hw/usb/dev-bluetooth.c | 10 +++++++++-
+ include/hw/usb.h       |  3 ---
+ vl.c                   | 13 ++++---------
+ 4 files changed, 13 insertions(+), 16 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/Makefile.objs   |    3 ---
+ hw/usb/dev-bluetooth.c |   10 +++++++++-
+ include/hw/usb.h       |    3 ---
+ vl.c                   |   13 ++++---------
+ 4 files changed, 13 insertions(+), 16 deletions(-)
+
+diff --git a/hw/usb/Makefile.objs b/hw/usb/Makefile.objs
+index f9695e7..a3eac3e 100644
+--- a/hw/usb/Makefile.objs
++++ b/hw/usb/Makefile.objs
+@@ -18,9 +18,6 @@ common-obj-$(CONFIG_USB_STORAGE_UAS)  += dev-uas.o
+ common-obj-$(CONFIG_USB_AUDIO)        += dev-audio.o
+ common-obj-$(CONFIG_USB_SERIAL)       += dev-serial.o
+ common-obj-$(CONFIG_USB_NETWORK)      += dev-network.o
+-
+-# FIXME: make configurable too
+-CONFIG_USB_BLUETOOTH := y
+ common-obj-$(CONFIG_USB_BLUETOOTH)    += dev-bluetooth.o
+ 
+ ifeq ($(CONFIG_USB_SMARTCARD),y)
+diff --git a/hw/usb/dev-bluetooth.c b/hw/usb/dev-bluetooth.c
+index 68cc1d4..786e30e 100644
+--- a/hw/usb/dev-bluetooth.c
++++ b/hw/usb/dev-bluetooth.c
+@@ -511,10 +511,17 @@ static int usb_bt_initfn(USBDevice *dev)
+     return 0;
+ }
+ 
+-USBDevice *usb_bt_init(USBBus *bus, HCIInfo *hci)
++static USBDevice *usb_bt_init(USBBus *bus, const char *cmdline)
+ {
+     USBDevice *dev;
+     struct USBBtState *s;
++    HCIInfo *hci;
++
++    if (*cmdline) {
++        hci = hci_init(cmdline);
++    } else {
++        hci = bt_new_hci(qemu_find_bt_vlan(0));
++    }
+ 
+     if (!hci)
+         return NULL;
+@@ -565,6 +572,7 @@ static const TypeInfo bt_info = {
+ static void usb_bt_register_types(void)
+ {
+     type_register_static(&bt_info);
++    usb_legacy_register("usb-bt-dongle", "bt", usb_bt_init);
+ }
+ 
+ type_init(usb_bt_register_types)
+diff --git a/include/hw/usb.h b/include/hw/usb.h
+index 901b0da..695d853 100644
+--- a/include/hw/usb.h
++++ b/include/hw/usb.h
+@@ -442,9 +442,6 @@ int set_usb_string(uint8_t *buf, const char *str);
+ USBDevice *usb_host_device_open(USBBus *bus, const char *devname);
+ void usb_host_info(Monitor *mon, const QDict *qdict);
+ 
+-/* usb-bt.c */
+-USBDevice *usb_bt_init(USBBus *bus, HCIInfo *hci);
+-
+ /* usb ports of the VM */
+ 
+ #define VM_USB_HUB_SIZE 8
+diff --git a/vl.c b/vl.c
+index d022f50..a40ab13 100644
+--- a/vl.c
++++ b/vl.c
+@@ -1427,8 +1427,10 @@ static void configure_msg(QemuOpts *opts)
+ 
+ static int usb_device_add(const char *devname)
+ {
+-    const char *p;
+     USBDevice *dev = NULL;
++#ifndef CONFIG_LINUX
++    const char *p;
++#endif
+ 
+     if (!usb_enabled(false)) {
+         return -1;
+@@ -1444,15 +1446,8 @@ static int usb_device_add(const char *devname)
+     /* only the linux version is qdev-ified, usb-bsd still needs this */
+     if (strstart(devname, "host:", &p)) {
+         dev = usb_host_device_open(usb_bus_find(-1), p);
+-    } else
+-#endif
+-    if (!strcmp(devname, "bt") || strstart(devname, "bt:", &p)) {
+-        dev = usb_bt_init(usb_bus_find(-1),
+-                          devname[2] ? hci_init(p)
+-                                     : bt_new_hci(qemu_find_bt_vlan(0)));
+-    } else {
+-        return -1;
+     }
++#endif
+     if (!dev)
+         return -1;
+ 
+-- 
+1.7.1
+

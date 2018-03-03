@@ -1,0 +1,60 @@
+From b66f204fcdb797b85050f3f6af6b4967247fd0f5 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 3 Dec 2013 14:30:44 +0100
+Subject: [PATCH 14/37] block: write: Handle COR dependency after I/O throttling
+
+Message-id: <1392117622-28812-15-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57179
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 14/37] block: write: Handle COR dependency after I/O throttling
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+First waiting for all COR requests to complete and calling the
+throttling function afterwards means that the request could be delayed
+and we still need to wait for the COR request even if it was issued only
+after the throttled write request.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+(cherry picked from commit 244eadef5c797c674b0aef96366671be4b33d03a)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+---
+ block.c |    8 ++++----
+ 1 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/block.c b/block.c
+index e6b6ed4..d8168f5 100644
+--- a/block.c
++++ b/block.c
+@@ -2997,6 +2997,10 @@ static int coroutine_fn bdrv_aligned_pwritev(BlockDriverState *bs,
+     assert((offset & (BDRV_SECTOR_SIZE - 1)) == 0);
+     assert((bytes & (BDRV_SECTOR_SIZE - 1)) == 0);
+ 
++    if (bs->copy_on_read_in_flight) {
++        wait_for_overlapping_requests(bs, sector_num, nb_sectors);
++    }
++
+     tracked_request_begin(&req, bs, sector_num, nb_sectors, true);
+ 
+     if (flags & BDRV_REQ_ZERO_WRITE) {
+@@ -3044,10 +3048,6 @@ static int coroutine_fn bdrv_co_do_writev(BlockDriverState *bs,
+         return -EIO;
+     }
+ 
+-    if (bs->copy_on_read_in_flight) {
+-        wait_for_overlapping_requests(bs, sector_num, nb_sectors);
+-    }
+-
+     /* throttling disk I/O */
+     if (bs->io_limits_enabled) {
+         bdrv_io_limits_intercept(bs, true, nb_sectors);
+-- 
+1.7.1
+

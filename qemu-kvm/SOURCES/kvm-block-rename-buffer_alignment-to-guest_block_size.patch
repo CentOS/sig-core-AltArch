@@ -1,0 +1,178 @@
+From 2c5f92a08224373b01d7d46053f46294fa02d00a Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 29 Nov 2011 11:35:47 +0100
+Subject: [PATCH 09/37] block: rename buffer_alignment to guest_block_size
+
+Message-id: <1392117622-28812-10-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57174
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 09/37] block: rename buffer_alignment to guest_block_size
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+The alignment field is now set to the value that is promised to the
+guest, rather than required by the host.  The next patches will make
+QEMU aware of the host-provided values, so make this clear.
+
+The alignment is also not about memory buffers, but about the sectors on
+the disk, change the documentation of the field.
+
+At this point, the field is set by the device emulation, but completely
+ignored by the block layer.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Wenchao Xia <xiawenc@linux.vnet.ibm.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+(cherry picked from commit 1b7fd729559c6d3b273303aa48bc653ceef08747)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c                   | 10 +++++-----
+ hw/block/virtio-blk.c     |  2 +-
+ hw/ide/core.c             |  2 +-
+ hw/scsi/scsi-disk.c       |  2 +-
+ hw/scsi/scsi-generic.c    |  2 +-
+ include/block/block.h     |  2 +-
+ include/block/block_int.h |  4 ++--
+ 7 files changed, 12 insertions(+), 12 deletions(-)
+---
+ block.c                   |   10 +++++-----
+ hw/block/virtio-blk.c     |    2 +-
+ hw/ide/core.c             |    2 +-
+ hw/scsi/scsi-disk.c       |    2 +-
+ hw/scsi/scsi-generic.c    |    2 +-
+ include/block/block.h     |    2 +-
+ include/block/block_int.h |    4 ++--
+ 7 files changed, 12 insertions(+), 12 deletions(-)
+
+diff --git a/block.c b/block.c
+index c85f43e..f2102bc 100644
+--- a/block.c
++++ b/block.c
+@@ -779,7 +779,7 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
+     }
+ 
+     bs->open_flags = flags;
+-    bs->buffer_alignment = 512;
++    bs->guest_block_size = 512;
+     bs->zero_beyond_eof = true;
+     open_flags = bdrv_open_flags(bs, flags);
+     bs->read_only = !(open_flags & BDRV_O_RDWR);
+@@ -1614,7 +1614,7 @@ static void bdrv_move_feature_fields(BlockDriverState *bs_dest,
+     bs_dest->dev_ops            = bs_src->dev_ops;
+     bs_dest->dev_opaque         = bs_src->dev_opaque;
+     bs_dest->dev                = bs_src->dev;
+-    bs_dest->buffer_alignment   = bs_src->buffer_alignment;
++    bs_dest->guest_block_size   = bs_src->guest_block_size;
+     bs_dest->copy_on_read       = bs_src->copy_on_read;
+ 
+     bs_dest->enable_write_cache = bs_src->enable_write_cache;
+@@ -1766,7 +1766,7 @@ void bdrv_detach_dev(BlockDriverState *bs, void *dev)
+     bs->dev = NULL;
+     bs->dev_ops = NULL;
+     bs->dev_opaque = NULL;
+-    bs->buffer_alignment = 512;
++    bs->guest_block_size = 512;
+ }
+ 
+ /* TODO change to return DeviceState * when all users are qdevified */
+@@ -4738,9 +4738,9 @@ BlockDriverAIOCB *bdrv_aio_ioctl(BlockDriverState *bs,
+     return NULL;
+ }
+ 
+-void bdrv_set_buffer_alignment(BlockDriverState *bs, int align)
++void bdrv_set_guest_block_size(BlockDriverState *bs, int align)
+ {
+-    bs->buffer_alignment = align;
++    bs->guest_block_size = align;
+ }
+ 
+ void *qemu_blockalign(BlockDriverState *bs, size_t size)
+diff --git a/hw/block/virtio-blk.c b/hw/block/virtio-blk.c
+index aa37cc9..a96207d 100644
+--- a/hw/block/virtio-blk.c
++++ b/hw/block/virtio-blk.c
+@@ -721,7 +721,7 @@ static int virtio_blk_device_init(VirtIODevice *vdev)
+     register_savevm(qdev, "virtio-blk", virtio_blk_id++, 2,
+                     virtio_blk_save, virtio_blk_load, s);
+     bdrv_set_dev_ops(s->bs, &virtio_block_ops, s);
+-    bdrv_set_buffer_alignment(s->bs, s->conf->logical_block_size);
++    bdrv_set_guest_block_size(s->bs, s->conf->logical_block_size);
+ 
+     bdrv_iostatus_enable(s->bs);
+ 
+diff --git a/hw/ide/core.c b/hw/ide/core.c
+index 8b3dde6..c172c71 100644
+--- a/hw/ide/core.c
++++ b/hw/ide/core.c
+@@ -2007,7 +2007,7 @@ int ide_init_drive(IDEState *s, BlockDriverState *bs, IDEDriveKind kind,
+     s->smart_selftest_count = 0;
+     if (kind == IDE_CD) {
+         bdrv_set_dev_ops(bs, &ide_cd_block_ops, s);
+-        bdrv_set_buffer_alignment(bs, 2048);
++        bdrv_set_guest_block_size(bs, 2048);
+     } else {
+         if (!bdrv_is_inserted(s->bs)) {
+             error_report("Device needs media, but drive is empty");
+diff --git a/hw/scsi/scsi-disk.c b/hw/scsi/scsi-disk.c
+index bce617c..6491091 100644
+--- a/hw/scsi/scsi-disk.c
++++ b/hw/scsi/scsi-disk.c
+@@ -2254,7 +2254,7 @@ static int scsi_initfn(SCSIDevice *dev)
+     } else {
+         bdrv_set_dev_ops(s->qdev.conf.bs, &scsi_disk_block_ops, s);
+     }
+-    bdrv_set_buffer_alignment(s->qdev.conf.bs, s->qdev.blocksize);
++    bdrv_set_guest_block_size(s->qdev.conf.bs, s->qdev.blocksize);
+ 
+     bdrv_iostatus_enable(s->qdev.conf.bs);
+     add_boot_device_path(s->qdev.conf.bootindex, &dev->qdev, NULL);
+diff --git a/hw/scsi/scsi-generic.c b/hw/scsi/scsi-generic.c
+index 8f195be..f08b64e 100644
+--- a/hw/scsi/scsi-generic.c
++++ b/hw/scsi/scsi-generic.c
+@@ -210,7 +210,7 @@ static void scsi_read_complete(void * opaque, int ret)
+             s->blocksize = ldl_be_p(&r->buf[8]);
+             s->max_lba = ldq_be_p(&r->buf[0]);
+         }
+-        bdrv_set_buffer_alignment(s->conf.bs, s->blocksize);
++        bdrv_set_guest_block_size(s->conf.bs, s->blocksize);
+ 
+         scsi_req_data(&r->req, len);
+         if (!r->req.io_canceled) {
+diff --git a/include/block/block.h b/include/block/block.h
+index 9d1ce59..2a9aa5b 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -409,7 +409,7 @@ void bdrv_img_create(const char *filename, const char *fmt,
+ /* Returns the alignment in bytes that is required so that no bounce buffer
+  * is required throughout the stack */
+ size_t bdrv_opt_mem_align(BlockDriverState *bs);
+-void bdrv_set_buffer_alignment(BlockDriverState *bs, int align);
++void bdrv_set_guest_block_size(BlockDriverState *bs, int align);
+ void *qemu_blockalign(BlockDriverState *bs, size_t size);
+ bool bdrv_qiov_is_aligned(BlockDriverState *bs, QEMUIOVector *qiov);
+ 
+diff --git a/include/block/block_int.h b/include/block/block_int.h
+index ddbd53d..0445e6b 100644
+--- a/include/block/block_int.h
++++ b/include/block/block_int.h
+@@ -307,8 +307,8 @@ struct BlockDriverState {
+     /* Whether produces zeros when read beyond eof */
+     bool zero_beyond_eof;
+ 
+-    /* the memory alignment required for the buffers handled by this driver */
+-    int buffer_alignment;
++    /* the block size for which the guest device expects atomicity */
++    int guest_block_size;
+ 
+     /* do we need to tell the quest if we have a volatile write cache? */
+     int enable_write_cache;
+-- 
+1.7.1
+

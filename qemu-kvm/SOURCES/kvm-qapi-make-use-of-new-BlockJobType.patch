@@ -1,0 +1,122 @@
+From ce9a0218020c6f9c97eb787eb3381344759becc9 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Fri, 17 Jan 2014 03:07:56 +0100
+Subject: [PATCH 13/34] qapi: make use of new BlockJobType
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1389928083-8921-12-git-send-email-famz@redhat.com>
+Patchwork-id: 56773
+O-Subject: [RHEL-7 qemu-kvm PATCH 11/18] qapi: make use of new BlockJobType
+Bugzilla: 1041301
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Switch the string to enum type BlockJobType in BlockJobDriver.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 79e14bf7782d861d3d773a67680de07a8f354f4e)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+
+Conflicts:
+	block/backup.c
+
+Not present downstream.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ block/commit.c           | 2 +-
+ block/mirror.c           | 2 +-
+ block/stream.c           | 2 +-
+ blockjob.c               | 4 ++--
+ include/block/blockjob.h | 2 +-
+ 5 files changed, 6 insertions(+), 6 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/commit.c           |    2 +-
+ block/mirror.c           |    2 +-
+ block/stream.c           |    2 +-
+ blockjob.c               |    4 ++--
+ include/block/blockjob.h |    2 +-
+ 5 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/block/commit.c b/block/commit.c
+index 28f45e4..d237729 100644
+--- a/block/commit.c
++++ b/block/commit.c
+@@ -175,7 +175,7 @@ static void commit_set_speed(BlockJob *job, int64_t speed, Error **errp)
+ 
+ static const BlockJobDriver commit_job_driver = {
+     .instance_size = sizeof(CommitBlockJob),
+-    .job_type      = "commit",
++    .job_type      = BLOCK_JOB_TYPE_COMMIT,
+     .set_speed     = commit_set_speed,
+ };
+ 
+diff --git a/block/mirror.c b/block/mirror.c
+index 139be06..8837186 100644
+--- a/block/mirror.c
++++ b/block/mirror.c
+@@ -527,7 +527,7 @@ static void mirror_complete(BlockJob *job, Error **errp)
+ 
+ static const BlockJobDriver mirror_job_driver = {
+     .instance_size = sizeof(MirrorBlockJob),
+-    .job_type      = "mirror",
++    .job_type      = BLOCK_JOB_TYPE_MIRROR,
+     .set_speed     = mirror_set_speed,
+     .iostatus_reset= mirror_iostatus_reset,
+     .complete      = mirror_complete,
+diff --git a/block/stream.c b/block/stream.c
+index ffa4e9a..1420d09 100644
+--- a/block/stream.c
++++ b/block/stream.c
+@@ -206,7 +206,7 @@ static void stream_set_speed(BlockJob *job, int64_t speed, Error **errp)
+ 
+ static const BlockJobDriver stream_job_driver = {
+     .instance_size = sizeof(StreamBlockJob),
+-    .job_type      = "stream",
++    .job_type      = BLOCK_JOB_TYPE_STREAM,
+     .set_speed     = stream_set_speed,
+ };
+ 
+diff --git a/blockjob.c b/blockjob.c
+index dc0fa6d..a4430a0 100644
+--- a/blockjob.c
++++ b/blockjob.c
+@@ -209,7 +209,7 @@ void block_job_sleep_ns(BlockJob *job, QEMUClock *clock, int64_t ns)
+ BlockJobInfo *block_job_query(BlockJob *job)
+ {
+     BlockJobInfo *info = g_new0(BlockJobInfo, 1);
+-    info->type      = g_strdup(job->driver->job_type);
++    info->type      = g_strdup(BlockJobType_lookup[job->driver->job_type]);
+     info->device    = g_strdup(bdrv_get_device_name(job->bs));
+     info->len       = job->len;
+     info->busy      = job->busy;
+@@ -236,7 +236,7 @@ QObject *qobject_from_block_job(BlockJob *job)
+                               "'len': %" PRId64 ","
+                               "'offset': %" PRId64 ","
+                               "'speed': %" PRId64 " }",
+-                              job->driver->job_type,
++                              BlockJobType_lookup[job->driver->job_type],
+                               bdrv_get_device_name(job->bs),
+                               job->len,
+                               job->offset,
+diff --git a/include/block/blockjob.h b/include/block/blockjob.h
+index dadcd48..5a7d859 100644
+--- a/include/block/blockjob.h
++++ b/include/block/blockjob.h
+@@ -37,7 +37,7 @@ typedef struct BlockJobDriver {
+     size_t instance_size;
+ 
+     /** String describing the operation, part of query-block-jobs QMP API */
+-    const char *job_type;
++    BlockJobType job_type;
+ 
+     /** Optional callback for job types that support setting a speed limit */
+     void (*set_speed)(BlockJob *job, int64_t speed, Error **errp);
+-- 
+1.7.1
+

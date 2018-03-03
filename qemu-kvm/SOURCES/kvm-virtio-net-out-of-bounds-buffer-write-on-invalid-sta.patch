@@ -1,0 +1,76 @@
+From 953a3b8344e504a7333ba9bb6df840d6d94ff872 Mon Sep 17 00:00:00 2001
+From: Michael S. Tsirkin <mst@redhat.com>
+Date: Wed, 14 May 2014 08:31:47 +0200
+Subject: [PATCH 10/31] virtio-net: out-of-bounds buffer write on invalid state load
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1400056285-6688-3-git-send-email-mst@redhat.com>
+Patchwork-id: 58857
+O-Subject: [PATCH qemu-kvm RHEL7.1] virtio-net: out-of-bounds buffer write on invalid state load
+Bugzilla: 1095690
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Xiao Wang <jasowang@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+
+CVE-2013-4150 QEMU 1.5.0 out-of-bounds buffer write in
+virtio_net_load()@hw/net/virtio-net.c
+
+This code is in hw/net/virtio-net.c:
+
+    if (n->max_queues > 1) {
+        if (n->max_queues != qemu_get_be16(f)) {
+            error_report("virtio-net: different max_queues ");
+            return -1;
+        }
+
+        n->curr_queues = qemu_get_be16(f);
+        for (i = 1; i < n->curr_queues; i++) {
+            n->vqs[i].tx_waiting = qemu_get_be32(f);
+        }
+    }
+
+Number of vqs is max_queues, so if we get invalid input here,
+for example if max_queues = 2, curr_queues = 3, we get
+write beyond end of the buffer, with data that comes from
+wire.
+
+This might be used to corrupt qemu memory in hard to predict ways.
+Since we have lots of function pointers around, RCE might be possible.
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Acked-by: Jason Wang <jasowang@redhat.com>
+Reviewed-by: Michael Roth <mdroth@linux.vnet.ibm.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit eea750a5623ddac7a61982eec8f1c93481857578)
+
+Tested: lightly on developer's box
+Brew build: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7452039
+Bugzilla: 1095690
+---
+ hw/net/virtio-net.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/net/virtio-net.c |    5 +++++
+ 1 files changed, 5 insertions(+), 0 deletions(-)
+
+diff --git a/hw/net/virtio-net.c b/hw/net/virtio-net.c
+index 2d559e0..007cc2a 100644
+--- a/hw/net/virtio-net.c
++++ b/hw/net/virtio-net.c
+@@ -1327,6 +1327,11 @@ static int virtio_net_load(QEMUFile *f, void *opaque, int version_id)
+         }
+ 
+         n->curr_queues = qemu_get_be16(f);
++        if (n->curr_queues > n->max_queues) {
++            error_report("virtio-net: curr_queues %x > max_queues %x",
++                         n->curr_queues, n->max_queues);
++            return -1;
++        }
+         for (i = 1; i < n->curr_queues; i++) {
+             n->vqs[i].tx_waiting = qemu_get_be32(f);
+         }
+-- 
+1.7.1
+

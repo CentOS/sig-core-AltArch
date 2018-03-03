@@ -1,0 +1,220 @@
+From b0ac5450a5fcb7e0c9cd5baf511283af375cc18f Mon Sep 17 00:00:00 2001
+From: Vadim Rozenfeld <vrozenfe@redhat.com>
+Date: Mon, 3 Mar 2014 12:09:24 +0100
+Subject: [PATCH 12/12] kvm: add support for hyper-v timers
+
+RH-Author: Vadim Rozenfeld <vrozenfe@redhat.com>
+Message-id: <1393848564-10511-13-git-send-email-vrozenfe@redhat.com>
+Patchwork-id: 57968
+O-Subject: [RHEL-7.0 qemu-kvm v4 PATCH 12/12] kvm: add support for hyper-v timers
+Bugzilla: 1057173
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+
+http://msdn.microsoft.com/en-us/library/windows/hardware/ff541625%28v=vs.85%29.aspx
+
+This code is generic for activating reference time counter or virtual reference time stamp counter
+
+Signed-off-by: Vadim Rozenfeld <vrozenfe@redhat.com>
+Reviewed-by: Marcelo Tosatti <mtosatti@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 48a5f3bcbbbe59a3120a39106bfda59fd1933fbc)
+
+Conflicts:
+	linux-headers/asm-x86/hyperv.h
+	linux-headers/linux/kvm.h
+	target-i386/kvm.c
+---
+ linux-headers/asm-x86/hyperv.h |  3 +++
+ linux-headers/linux/kvm.h      |  1 +
+ target-i386/cpu-qom.h          |  1 +
+ target-i386/cpu.c              |  1 +
+ target-i386/cpu.h              |  1 +
+ target-i386/kvm.c              | 20 +++++++++++++++++++-
+ target-i386/machine.c          | 22 ++++++++++++++++++++++
+ 7 files changed, 48 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ linux-headers/asm-x86/hyperv.h |    3 +++
+ linux-headers/linux/kvm.h      |    1 +
+ target-i386/cpu-qom.h          |    1 +
+ target-i386/cpu.c              |    1 +
+ target-i386/cpu.h              |    1 +
+ target-i386/kvm.c              |   20 +++++++++++++++++++-
+ target-i386/machine.c          |   22 ++++++++++++++++++++++
+ 7 files changed, 48 insertions(+), 1 deletions(-)
+
+diff --git a/linux-headers/asm-x86/hyperv.h b/linux-headers/asm-x86/hyperv.h
+index b80420b..9711819 100644
+--- a/linux-headers/asm-x86/hyperv.h
++++ b/linux-headers/asm-x86/hyperv.h
+@@ -136,6 +136,9 @@
+ /* MSR used to read the per-partition time reference counter */
+ #define HV_X64_MSR_TIME_REF_COUNT		0x40000020
+ 
++/* A partition's reference time stamp counter (TSC) page */
++#define HV_X64_MSR_REFERENCE_TSC		0x40000021
++
+ /* Define the virtual APIC registers */
+ #define HV_X64_MSR_EOI				0x40000070
+ #define HV_X64_MSR_ICR				0x40000071
+diff --git a/linux-headers/linux/kvm.h b/linux-headers/linux/kvm.h
+index e32ef4a..4b93099 100644
+--- a/linux-headers/linux/kvm.h
++++ b/linux-headers/linux/kvm.h
+@@ -666,6 +666,7 @@ struct kvm_ppc_smmu_info {
+ #define KVM_CAP_IRQ_MPIC 90
+ #define KVM_CAP_PPC_RTAS 91
+ #define KVM_CAP_IRQ_XICS 92
++#define KVM_CAP_HYPERV_TIME 96
+ 
+ #ifdef KVM_CAP_IRQ_ROUTING
+ 
+diff --git a/target-i386/cpu-qom.h b/target-i386/cpu-qom.h
+index 99ba65f..0b01e8f 100644
+--- a/target-i386/cpu-qom.h
++++ b/target-i386/cpu-qom.h
+@@ -69,6 +69,7 @@ typedef struct X86CPU {
+     bool hyperv_vapic;
+     bool hyperv_relaxed_timing;
+     int hyperv_spinlock_attempts;
++    bool hyperv_time;
+     bool check_cpuid;
+     bool enforce_cpuid;
+ 
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index 8421dfc..005e190 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -2621,6 +2621,7 @@ static Property x86_cpu_properties[] = {
+     { .name  = "hv-spinlocks", .info  = &qdev_prop_spinlocks },
+     DEFINE_PROP_BOOL("hv-relaxed", X86CPU, hyperv_relaxed_timing, false),
+     DEFINE_PROP_BOOL("hv-vapic", X86CPU, hyperv_vapic, false),
++    DEFINE_PROP_BOOL("hv-time", X86CPU, hyperv_time, false),
+     DEFINE_PROP_BOOL("check", X86CPU, check_cpuid, false),
+     DEFINE_PROP_BOOL("enforce", X86CPU, enforce_cpuid, false),
+     DEFINE_PROP_END_OF_LIST()
+diff --git a/target-i386/cpu.h b/target-i386/cpu.h
+index 0773499..ad40aab 100644
+--- a/target-i386/cpu.h
++++ b/target-i386/cpu.h
+@@ -847,6 +847,7 @@ typedef struct CPUX86State {
+     uint64_t msr_hv_hypercall;
+     uint64_t msr_hv_guest_os_id;
+     uint64_t msr_hv_vapic;
++    uint64_t msr_hv_tsc;
+ 
+     /* exception/interrupt handling */
+     int error_code;
+diff --git a/target-i386/kvm.c b/target-i386/kvm.c
+index a2946c4..ba2cd7f 100644
+--- a/target-i386/kvm.c
++++ b/target-i386/kvm.c
+@@ -72,6 +72,7 @@ static bool has_msr_kvm_steal_time;
+ static int lm_capable_kernel;
+ static bool has_msr_hv_hypercall;
+ static bool has_msr_hv_vapic;
++static bool has_msr_hv_tsc;
+ 
+ static bool has_msr_architectural_pmu;
+ static uint32_t num_architectural_pmu_counters;
+@@ -438,6 +439,7 @@ static bool hyperv_enabled(X86CPU *cpu)
+     CPUState *cs = CPU(cpu);
+     return kvm_check_extension(cs->kvm_state, KVM_CAP_HYPERV) > 0 &&
+            (hyperv_hypercall_available(cpu) ||
++            cpu->hyperv_time  ||
+             cpu->hyperv_relaxed_timing);
+ }
+ 
+@@ -495,7 +497,13 @@ int kvm_arch_init_vcpu(CPUState *cs)
+             c->eax |= HV_X64_MSR_APIC_ACCESS_AVAILABLE;
+             has_msr_hv_vapic = true;
+         }
+-
++        if (cpu->hyperv_time &&
++            kvm_check_extension(cs->kvm_state, KVM_CAP_HYPERV_TIME) > 0) {
++            c->eax |= HV_X64_MSR_HYPERCALL_AVAILABLE;
++            c->eax |= HV_X64_MSR_TIME_REF_COUNT_AVAILABLE;
++            c->eax |= 0x200;
++            has_msr_hv_tsc = true;
++        }
+         c = &cpuid_data.entries[cpuid_i++];
+         c->function = HYPERV_CPUID_ENLIGHTMENT_INFO;
+         if (cpu->hyperv_relaxed_timing) {
+@@ -1207,6 +1215,10 @@ static int kvm_put_msrs(X86CPU *cpu, int level)
+             kvm_msr_entry_set(&msrs[n++], HV_X64_MSR_APIC_ASSIST_PAGE,
+                               env->msr_hv_vapic);
+         }
++        if (has_msr_hv_tsc) {
++            kvm_msr_entry_set(&msrs[n++], HV_X64_MSR_REFERENCE_TSC,
++                              env->msr_hv_tsc);
++        }
+     }
+     if (env->mcg_cap) {
+         int i;
+@@ -1485,6 +1497,9 @@ static int kvm_get_msrs(X86CPU *cpu)
+     if (has_msr_hv_vapic) {
+         msrs[n++].index = HV_X64_MSR_APIC_ASSIST_PAGE;
+     }
++    if (has_msr_hv_tsc) {
++        msrs[n++].index = HV_X64_MSR_REFERENCE_TSC;
++    }
+ 
+     msr_data.info.nmsrs = n;
+     ret = kvm_vcpu_ioctl(CPU(cpu), KVM_GET_MSRS, &msr_data);
+@@ -1596,6 +1611,9 @@ static int kvm_get_msrs(X86CPU *cpu)
+         case HV_X64_MSR_APIC_ASSIST_PAGE:
+             env->msr_hv_vapic = msrs[i].data;
+             break;
++        case HV_X64_MSR_REFERENCE_TSC:
++            env->msr_hv_tsc = msrs[i].data;
++            break;
+         }
+     }
+ 
+diff --git a/target-i386/machine.c b/target-i386/machine.c
+index 021390b..42b049b 100644
+--- a/target-i386/machine.c
++++ b/target-i386/machine.c
+@@ -545,6 +545,25 @@ static const VMStateDescription vmstate_msr_hyperv_vapic = {
+     }
+ };
+ 
++static bool hyperv_time_enable_needed(void *opaque)
++{
++    X86CPU *cpu = opaque;
++    CPUX86State *env = &cpu->env;
++
++    return env->msr_hv_tsc != 0;
++}
++
++static const VMStateDescription vmstate_msr_hyperv_time = {
++    .name = "cpu/msr_hyperv_time",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .minimum_version_id_old = 1,
++    .fields      = (VMStateField []) {
++        VMSTATE_UINT64(env.msr_hv_tsc, X86CPU),
++        VMSTATE_END_OF_LIST()
++    }
++};
++
+ const VMStateDescription vmstate_x86_cpu = {
+     .name = "cpu",
+     .version_id = 12,
+@@ -682,6 +701,9 @@ const VMStateDescription vmstate_x86_cpu = {
+         }, {
+             .vmsd = &vmstate_msr_hyperv_vapic,
+             .needed = hyperv_vapic_enable_needed,
++        }, {
++            .vmsd = &vmstate_msr_hyperv_time,
++            .needed = hyperv_time_enable_needed,
+         } , {
+             /* empty */
+         }
+-- 
+1.7.1
+

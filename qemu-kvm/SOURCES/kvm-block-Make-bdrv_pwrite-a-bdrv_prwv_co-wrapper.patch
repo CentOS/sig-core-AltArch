@@ -1,0 +1,141 @@
+From 571796285399dce82633b305dd9e03bcb8ac5634 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Thu, 5 Dec 2013 12:34:02 +0100
+Subject: [PATCH 29/37] block: Make bdrv_pwrite() a bdrv_prwv_co() wrapper
+
+Message-id: <1392117622-28812-30-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57194
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 29/37] block: Make bdrv_pwrite() a bdrv_prwv_co() wrapper
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+Instead of implementing the alignment adjustment here, use the now
+existing functionality of bdrv_co_do_pwritev().
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit 8407d5d7e265911b05949ee2ffd9e45c97bf0505)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c               | 64 ++++++++-------------------------------------------
+ include/block/block.h |  1 -
+ 2 files changed, 9 insertions(+), 56 deletions(-)
+---
+ block.c               |   64 +++++++------------------------------------------
+ include/block/block.h |    1 -
+ 2 files changed, 9 insertions(+), 56 deletions(-)
+
+diff --git a/block.c b/block.c
+index e76dec6..d18c2df 100644
+--- a/block.c
++++ b/block.c
+@@ -2517,11 +2517,6 @@ int bdrv_write(BlockDriverState *bs, int64_t sector_num,
+     return bdrv_rw_co(bs, sector_num, (uint8_t *)buf, nb_sectors, true, 0);
+ }
+ 
+-int bdrv_writev(BlockDriverState *bs, int64_t sector_num, QEMUIOVector *qiov)
+-{
+-    return bdrv_prwv_co(bs, sector_num << BDRV_SECTOR_BITS, qiov, true, 0);
+-}
+-
+ int bdrv_write_zeroes(BlockDriverState *bs, int64_t sector_num,
+                       int nb_sectors, BdrvRequestFlags flags)
+ {
+@@ -2590,70 +2585,29 @@ int bdrv_pread(BlockDriverState *bs, int64_t offset, void *buf, int bytes)
+ 
+ int bdrv_pwritev(BlockDriverState *bs, int64_t offset, QEMUIOVector *qiov)
+ {
+-    uint8_t tmp_buf[BDRV_SECTOR_SIZE];
+-    int len, nb_sectors, count;
+-    int64_t sector_num;
+     int ret;
+ 
+-    count = qiov->size;
+-
+-    /* first write to align to sector start */
+-    len = (BDRV_SECTOR_SIZE - offset) & (BDRV_SECTOR_SIZE - 1);
+-    if (len > count)
+-        len = count;
+-    sector_num = offset >> BDRV_SECTOR_BITS;
+-    if (len > 0) {
+-        if ((ret = bdrv_read(bs, sector_num, tmp_buf, 1)) < 0)
+-            return ret;
+-        qemu_iovec_to_buf(qiov, 0, tmp_buf + (offset & (BDRV_SECTOR_SIZE - 1)),
+-                          len);
+-        if ((ret = bdrv_write(bs, sector_num, tmp_buf, 1)) < 0)
+-            return ret;
+-        count -= len;
+-        if (count == 0)
+-            return qiov->size;
+-        sector_num++;
+-    }
+-
+-    /* write the sectors "in place" */
+-    nb_sectors = count >> BDRV_SECTOR_BITS;
+-    if (nb_sectors > 0) {
+-        QEMUIOVector qiov_inplace;
+-
+-        qemu_iovec_init(&qiov_inplace, qiov->niov);
+-        qemu_iovec_concat(&qiov_inplace, qiov, len,
+-                          nb_sectors << BDRV_SECTOR_BITS);
+-        ret = bdrv_writev(bs, sector_num, &qiov_inplace);
+-        qemu_iovec_destroy(&qiov_inplace);
+-        if (ret < 0) {
+-            return ret;
+-        }
+-
+-        sector_num += nb_sectors;
+-        len = nb_sectors << BDRV_SECTOR_BITS;
+-        count -= len;
++    ret = bdrv_prwv_co(bs, offset, qiov, true, 0);
++    if (ret < 0) {
++        return ret;
+     }
+ 
+-    /* add data from the last sector */
+-    if (count > 0) {
+-        if ((ret = bdrv_read(bs, sector_num, tmp_buf, 1)) < 0)
+-            return ret;
+-        qemu_iovec_to_buf(qiov, qiov->size - count, tmp_buf, count);
+-        if ((ret = bdrv_write(bs, sector_num, tmp_buf, 1)) < 0)
+-            return ret;
+-    }
+     return qiov->size;
+ }
+ 
+ int bdrv_pwrite(BlockDriverState *bs, int64_t offset,
+-                const void *buf, int count1)
++                const void *buf, int bytes)
+ {
+     QEMUIOVector qiov;
+     struct iovec iov = {
+         .iov_base   = (void *) buf,
+-        .iov_len    = count1,
++        .iov_len    = bytes,
+     };
+ 
++    if (bytes < 0) {
++        return -EINVAL;
++    }
++
+     qemu_iovec_init_external(&qiov, &iov, 1);
+     return bdrv_pwritev(bs, offset, &qiov);
+ }
+diff --git a/include/block/block.h b/include/block/block.h
+index 2a9aa5b..feb1926 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -221,7 +221,6 @@ BlockDriverAIOCB *bdrv_aio_write_zeroes(BlockDriverState *bs, int64_t sector_num
+                                         int nb_sectors, BdrvRequestFlags flags,
+                                         BlockDriverCompletionFunc *cb, void *opaque);
+ int bdrv_make_zero(BlockDriverState *bs, BdrvRequestFlags flags);
+-int bdrv_writev(BlockDriverState *bs, int64_t sector_num, QEMUIOVector *qiov);
+ int bdrv_pread(BlockDriverState *bs, int64_t offset,
+                void *buf, int count);
+ int bdrv_pwrite(BlockDriverState *bs, int64_t offset,
+-- 
+1.7.1
+

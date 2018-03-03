@@ -1,0 +1,73 @@
+From 4b41911968cb53458b86b027f0d028e38618df46 Mon Sep 17 00:00:00 2001
+From: Michael S. Tsirkin <mst@redhat.com>
+Date: Wed, 14 May 2014 08:52:54 +0200
+Subject: [PATCH 23/31] hpet: fix buffer overrun on invalid state load
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1400057538-6975-5-git-send-email-mst@redhat.com>
+Patchwork-id: 58871
+O-Subject: [PATCH qemu-kvm RHEL7.1 4/5] hpet: fix buffer overrun on invalid state load
+Bugzilla: 1095707
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+
+CVE-2013-4527 hw/timer/hpet.c buffer overrun
+
+hpet is a VARRAY with a uint8 size but static array of 32
+
+To fix, make sure num_timers is valid using VMSTATE_VALID hook.
+
+Reported-by: Anthony Liguori <anthony@codemonkey.ws>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Reviewed-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit 3f1c49e2136fa08ab1ef3183fd55def308829584)
+
+Tested: lightly on developer's box
+Brew build: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7452039
+Bugzilla:1095707
+---
+ hw/timer/hpet.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/timer/hpet.c |   13 +++++++++++++
+ 1 files changed, 13 insertions(+), 0 deletions(-)
+
+diff --git a/hw/timer/hpet.c b/hw/timer/hpet.c
+index dd486a1..54ffa49 100644
+--- a/hw/timer/hpet.c
++++ b/hw/timer/hpet.c
+@@ -222,6 +222,18 @@ static int hpet_pre_load(void *opaque)
+     return 0;
+ }
+ 
++static bool hpet_validate_num_timers(void *opaque, int version_id)
++{
++    HPETState *s = opaque;
++
++    if (s->num_timers < HPET_MIN_TIMERS) {
++        return false;
++    } else if (s->num_timers > HPET_MAX_TIMERS) {
++        return false;
++    }
++    return true;
++}
++
+ static int hpet_post_load(void *opaque, int version_id)
+ {
+     HPETState *s = opaque;
+@@ -290,6 +302,7 @@ static const VMStateDescription vmstate_hpet = {
+         VMSTATE_UINT64(isr, HPETState),
+         VMSTATE_UINT64(hpet_counter, HPETState),
+         VMSTATE_UINT8_V(num_timers, HPETState, 2),
++        VMSTATE_VALIDATE("num_timers in range", hpet_validate_num_timers),
+         VMSTATE_STRUCT_VARRAY_UINT8(timer, HPETState, num_timers, 0,
+                                     vmstate_hpet_timer, HPETTimer),
+         VMSTATE_END_OF_LIST()
+-- 
+1.7.1
+

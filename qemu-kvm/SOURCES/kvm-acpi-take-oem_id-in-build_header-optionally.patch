@@ -1,0 +1,157 @@
+From 0decede8a51451da8f5913b0ad13c8e3bdcef582 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Wed, 11 May 2016 12:33:45 +0200
+Subject: [PATCH 06/10] acpi: take oem_id in build_header(), optionally
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1462970028-10959-5-git-send-email-lersek@redhat.com>
+Patchwork-id: 70381
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 4/7] acpi: take oem_id in build_header(), optionally
+Bugzilla: 1330969
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+
+This patch is the continuation of commit 8870ca0e94f2 ("acpi: support
+specified oem table id for build_header"). It will allow us to control the
+OEM ID field too in the SDT header.
+
+Cc: "Michael S. Tsirkin" <mst@redhat.com> (supporter:ACPI/SMBIOS)
+Cc: Igor Mammedov <imammedo@redhat.com> (supporter:ACPI/SMBIOS)
+Cc: Xiao Guangrong <guangrong.xiao@linux.intel.com> (maintainer:NVDIMM)
+Cc: Shannon Zhao <zhaoshenglong@huawei.com> (maintainer:ARM ACPI Subsystem)
+Cc: Paolo Bonzini <pbonzini@redhat.com> (maintainer:X86)
+Cc: Richard W.M. Jones <rjones@redhat.com>
+Cc: Aleksei Kovura <alex3kov@zoho.com>
+Cc: Michael Tokarev <mjt@tls.msk.ru>
+Cc: Steven Newbury <steve@snewbury.org.uk>
+RHBZ: https://bugzilla.redhat.com/show_bug.cgi?id=1248758
+LP: https://bugs.launchpad.net/qemu/+bug/1533848
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Reviewed-by: Shannon Zhao <shannon.zhao@linaro.org>
+(cherry picked from commit 37ad223c515da2fe9f1c679768cb5ccaa42e57e1)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	hw/acpi/aml-build.c
+	hw/acpi/nvdimm.c
+	hw/arm/virt-acpi-build.c
+	hw/i386/acpi-build.c
+	include/hw/acpi/aml-build.h
+
+RHEL-7 backport note: this is actually a manual reimplementation of the
+upstream patch, which is mostly mechanic. A clean cherry-pick would depend
+on a lot of reorganizatorial upstream patches (e.g., 658c27181bf3
+("hw/i386/acpi-build: move generic acpi building helpers into dedictated
+file")), and many new features that overlap with ACPI generation (e.g.,
+the "virt" machtype of the arm/aarch64 targets).
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+---
+ hw/i386/acpi-build.c | 25 +++++++++++++++----------
+ 1 file changed, 15 insertions(+), 10 deletions(-)
+---
+ hw/i386/acpi-build.c | 25 +++++++++++++++----------
+ 1 file changed, 15 insertions(+), 10 deletions(-)
+
+diff --git a/hw/i386/acpi-build.c b/hw/i386/acpi-build.c
+index a9d9f97..4839b0e 100644
+--- a/hw/i386/acpi-build.c
++++ b/hw/i386/acpi-build.c
+@@ -244,12 +244,17 @@ static void acpi_get_pci_info(PcPciInfo *info)
+ static void
+ build_header(GArray *linker, GArray *table_data,
+              AcpiTableHeader *h, const char *sig, int len, uint8_t rev,
+-             const char *oem_table_id)
++             const char *oem_id, const char *oem_table_id)
+ {
+     memcpy(&h->signature, sig, 4);
+     h->length = cpu_to_le32(len);
+     h->revision = rev;
+-    memcpy(h->oem_id, ACPI_BUILD_APPNAME6, 6);
++
++    if (oem_id) {
++        strncpy((char *)h->oem_id, oem_id, sizeof h->oem_id);
++    } else {
++        memcpy(h->oem_id, ACPI_BUILD_APPNAME6, 6);
++    }
+ 
+     if (oem_table_id) {
+         strncpy((char *)h->oem_table_id, oem_table_id, sizeof(h->oem_table_id));
+@@ -527,7 +532,7 @@ build_fadt(GArray *table_data, GArray *linker, AcpiPmInfo *pm,
+     fadt_setup(fadt, pm);
+ 
+     build_header(linker, table_data,
+-                 (void *)fadt, "FACP", sizeof(*fadt), 1, NULL);
++                 (void *)fadt, "FACP", sizeof(*fadt), 1, NULL, NULL);
+ }
+ 
+ static void
+@@ -597,7 +602,7 @@ build_madt(GArray *table_data, GArray *linker, AcpiCpuInfo *cpu,
+ 
+     build_header(linker, table_data,
+                  (void *)(table_data->data + madt_start), "APIC",
+-                 table_data->len - madt_start, 1, NULL);
++                 table_data->len - madt_start, 1, NULL, NULL);
+ }
+ 
+ /* Encode a hex value */
+@@ -789,7 +794,7 @@ build_ssdt(GArray *table_data, GArray *linker,
+ 
+     build_header(linker, table_data,
+                  (void *)(table_data->data + ssdt_start),
+-                 "SSDT", table_data->len - ssdt_start, 1, NULL);
++                 "SSDT", table_data->len - ssdt_start, 1, NULL, NULL);
+ }
+ 
+ static void
+@@ -804,7 +809,7 @@ build_hpet(GArray *table_data, GArray *linker)
+     hpet->timer_block_id = cpu_to_le32(0x8086a201);
+     hpet->addr.address = cpu_to_le64(HPET_BASE);
+     build_header(linker, table_data,
+-                 (void *)hpet, "HPET", sizeof(*hpet), 1, NULL);
++                 (void *)hpet, "HPET", sizeof(*hpet), 1, NULL, NULL);
+ }
+ 
+ static void
+@@ -897,7 +902,7 @@ build_srat(GArray *table_data, GArray *linker,
+     build_header(linker, table_data,
+                  (void *)(table_data->data + srat_start),
+                  "SRAT",
+-                 table_data->len - srat_start, 1, NULL);
++                 table_data->len - srat_start, 1, NULL, NULL);
+ }
+ 
+ static void
+@@ -926,7 +931,7 @@ build_mcfg_q35(GArray *table_data, GArray *linker, AcpiMcfgInfo *info)
+     } else {
+         sig = "MCFG";
+     }
+-    build_header(linker, table_data, (void *)mcfg, sig, len, 1, NULL);
++    build_header(linker, table_data, (void *)mcfg, sig, len, 1, NULL, NULL);
+ }
+ 
+ static void
+@@ -941,7 +946,7 @@ build_dsdt(GArray *table_data, GArray *linker, AcpiMiscInfo *misc)
+ 
+     memset(dsdt, 0, sizeof *dsdt);
+     build_header(linker, table_data, dsdt, "DSDT",
+-                 misc->dsdt_size, 1, NULL);
++                 misc->dsdt_size, 1, NULL, NULL);
+ }
+ 
+ /* Build final rsdt table */
+@@ -965,7 +970,7 @@ build_rsdt(GArray *table_data, GArray *linker, GArray *table_offsets)
+                                        sizeof(uint32_t));
+     }
+     build_header(linker, table_data,
+-                 (void *)rsdt, "RSDT", rsdt_len, 1, NULL);
++                 (void *)rsdt, "RSDT", rsdt_len, 1, NULL, NULL);
+ }
+ 
+ static GArray *
+-- 
+1.8.3.1
+

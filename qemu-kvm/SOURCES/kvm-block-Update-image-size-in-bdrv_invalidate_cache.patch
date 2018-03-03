@@ -1,0 +1,98 @@
+From ceea60585e2975d7860725bb8c6c860b791a4b72 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 17 Mar 2014 13:29:26 +0100
+Subject: [PATCH 2/6] block: Update image size in bdrv_invalidate_cache()
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1395062967-16867-2-git-send-email-kwolf@redhat.com>
+Patchwork-id: 58111
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 1/2] block: Update image size in bdrv_invalidate_cache()
+Bugzilla: 1048575
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+After migration has completed, we call bdrv_invalidate_cache() so that
+drivers which cache some data drop their stale copy of the data and
+reread it from the image file to get a new version of data that the
+source modified while the migration was running.
+
+Reloading metadata from the image file is useless, though, if the size
+of the image file stays stale (this is a value that is cached for all
+image formats in block.c). Reads from (meta)data after the old EOF
+return only zeroes, causing image corruption.
+
+We need to update bs->total_sectors in all layers that could potentially
+have changed their size (i.e. backing files are not a concern - if they
+are changed, we're in bigger trouble)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 3456a8d1852e970688b73d03fdc44dde851759e1)
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c       | 10 +++++++++-
+ block/qcow2.c |  2 ++
+ block/qed.c   |  3 +++
+ 3 files changed, 14 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c       |   10 +++++++++-
+ block/qcow2.c |    2 ++
+ block/qed.c   |    3 +++
+ 3 files changed, 14 insertions(+), 1 deletions(-)
+
+diff --git a/block.c b/block.c
+index ec8dc90..ae55535 100644
+--- a/block.c
++++ b/block.c
+@@ -4713,9 +4713,17 @@ flush_parent:
+ 
+ void bdrv_invalidate_cache(BlockDriverState *bs)
+ {
+-    if (bs->drv && bs->drv->bdrv_invalidate_cache) {
++    if (!bs->drv)  {
++        return;
++    }
++
++    if (bs->drv->bdrv_invalidate_cache) {
+         bs->drv->bdrv_invalidate_cache(bs);
++    } else if (bs->file) {
++        bdrv_invalidate_cache(bs->file);
+     }
++
++    refresh_total_sectors(bs, bs->total_sectors);
+ }
+ 
+ void bdrv_invalidate_cache_all(void)
+diff --git a/block/qcow2.c b/block/qcow2.c
+index daad932..e9bd9c9 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -1176,6 +1176,8 @@ static void qcow2_invalidate_cache(BlockDriverState *bs)
+ 
+     qcow2_close(bs);
+ 
++    bdrv_invalidate_cache(bs->file);
++
+     options = qdict_new();
+     qdict_put(options, QCOW2_OPT_LAZY_REFCOUNTS,
+               qbool_from_int(s->use_lazy_refcounts));
+diff --git a/block/qed.c b/block/qed.c
+index be5945b..619f2d0 100644
+--- a/block/qed.c
++++ b/block/qed.c
+@@ -1561,6 +1561,9 @@ static void bdrv_qed_invalidate_cache(BlockDriverState *bs)
+     BDRVQEDState *s = bs->opaque;
+ 
+     bdrv_qed_close(bs);
++
++    bdrv_invalidate_cache(bs->file);
++
+     memset(s, 0, sizeof(BDRVQEDState));
+     bdrv_qed_open(bs, NULL, bs->open_flags, NULL);
+ }
+-- 
+1.7.1
+

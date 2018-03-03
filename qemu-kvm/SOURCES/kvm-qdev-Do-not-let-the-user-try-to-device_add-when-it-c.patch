@@ -1,0 +1,65 @@
+From de651299014ae67b110a2abbff4a9e544b215b2b Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Wed, 6 Nov 2013 14:41:21 +0100
+Subject: [PATCH 45/81] qdev: Do not let the user try to device_add when it cannot work
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383748882-22831-17-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55542
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 16/17] qdev: Do not let the user try to device_add when it cannot work
+Bugzilla: 1001216
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Such devices have always been unavailable and omitted from the list of
+available devices shown by device_add help.  Until commit 18b6dad
+silently broke the former, setting up nasty traps for unwary users,
+like this one:
+
+    $ qemu-system-x86_64 -nodefaults -monitor stdio -display none
+    QEMU 1.6.50 monitor - type 'help' for more information
+    (qemu) device_add apic
+    Segmentation fault (core dumped)
+
+I call that a regression.  Fix it.
+(cherry picked from pending upstream submission)
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ qdev-monitor.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qdev-monitor.c |    6 +++---
+ 1 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/qdev-monitor.c b/qdev-monitor.c
+index f54cb21..39d030b 100644
+--- a/qdev-monitor.c
++++ b/qdev-monitor.c
+@@ -477,13 +477,13 @@ DeviceState *qdev_device_add(QemuOpts *opts)
+         }
+     }
+ 
+-    if (!obj) {
++    k = DEVICE_CLASS(obj);
++
++    if (!k || k->cannot_instantiate_with_device_add_yet) {
+         qerror_report(QERR_INVALID_PARAMETER_VALUE, "driver", "device type");
+         return NULL;
+     }
+ 
+-    k = DEVICE_CLASS(obj);
+-
+     /* find bus */
+     path = qemu_opt_get(opts, "bus");
+     if (path != NULL) {
+-- 
+1.7.1
+

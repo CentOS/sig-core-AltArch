@@ -1,0 +1,91 @@
+From eccc9faa264d2228126d4fccc5a603b70b02cc9c Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Fri, 11 Jul 2014 14:20:54 +0200
+Subject: [PATCH 20/43] usb: Add usb_device_alloc/free_streams
+
+Message-id: <1405088470-24115-22-git-send-email-kraxel@redhat.com>
+Patchwork-id: 59833
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 21/37] usb: Add usb_device_alloc/free_streams
+Bugzilla: 1111450
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Hans de Goede <hdegoede@redhat.com>
+
+Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 3b444eadf7726d976be4ac89e8e742cb7eb7a5ee)
+---
+ hw/usb/bus.c     | 18 ++++++++++++++++++
+ include/hw/usb.h | 12 ++++++++++++
+ 2 files changed, 30 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/bus.c     | 18 ++++++++++++++++++
+ include/hw/usb.h | 12 ++++++++++++
+ 2 files changed, 30 insertions(+)
+
+diff --git a/hw/usb/bus.c b/hw/usb/bus.c
+index f4eeb5e..12641fe 100644
+--- a/hw/usb/bus.c
++++ b/hw/usb/bus.c
+@@ -206,6 +206,24 @@ void usb_device_ep_stopped(USBDevice *dev, USBEndpoint *ep)
+     }
+ }
+ 
++int usb_device_alloc_streams(USBDevice *dev, USBEndpoint **eps, int nr_eps,
++                             int streams)
++{
++    USBDeviceClass *klass = USB_DEVICE_GET_CLASS(dev);
++    if (klass->alloc_streams) {
++        return klass->alloc_streams(dev, eps, nr_eps, streams);
++    }
++    return 0;
++}
++
++void usb_device_free_streams(USBDevice *dev, USBEndpoint **eps, int nr_eps)
++{
++    USBDeviceClass *klass = USB_DEVICE_GET_CLASS(dev);
++    if (klass->free_streams) {
++        klass->free_streams(dev, eps, nr_eps);
++    }
++}
++
+ static int usb_qdev_init(DeviceState *qdev)
+ {
+     USBDevice *dev = USB_DEVICE(qdev);
+diff --git a/include/hw/usb.h b/include/hw/usb.h
+index 116293e..000001b 100644
+--- a/include/hw/usb.h
++++ b/include/hw/usb.h
+@@ -327,6 +327,14 @@ typedef struct USBDeviceClass {
+      */
+     void (*ep_stopped)(USBDevice *dev, USBEndpoint *ep);
+ 
++    /*
++     * Called by the hcd to alloc / free streams on a bulk endpoint.
++     * Optional may be NULL.
++     */
++    int (*alloc_streams)(USBDevice *dev, USBEndpoint **eps, int nr_eps,
++                         int streams);
++    void (*free_streams)(USBDevice *dev, USBEndpoint **eps, int nr_eps);
++
+     const char *product_desc;
+     const USBDesc *usb_desc;
+ } USBDeviceClass;
+@@ -564,6 +572,10 @@ void usb_device_flush_ep_queue(USBDevice *dev, USBEndpoint *ep);
+ 
+ void usb_device_ep_stopped(USBDevice *dev, USBEndpoint *ep);
+ 
++int usb_device_alloc_streams(USBDevice *dev, USBEndpoint **eps, int nr_eps,
++                             int streams);
++void usb_device_free_streams(USBDevice *dev, USBEndpoint **eps, int nr_eps);
++
+ const char *usb_device_get_product_desc(USBDevice *dev);
+ 
+ const USBDesc *usb_device_get_usb_desc(USBDevice *dev);
+-- 
+1.8.3.1
+

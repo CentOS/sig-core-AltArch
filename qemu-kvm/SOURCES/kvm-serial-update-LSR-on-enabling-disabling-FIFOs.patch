@@ -1,0 +1,63 @@
+From d6acc0368578932ee6a2949054a6f640a5b6fa09 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 18 May 2017 09:21:26 +0200
+Subject: [PATCH 13/18] serial: update LSR on enabling/disabling FIFOs
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <20170518092131.16571-14-famz@redhat.com>
+Patchwork-id: 75306
+O-Subject: [RHEL-7.4 qemu-kvm PATCH v3 13/18] serial: update LSR on enabling/disabling FIFOs
+Bugzilla: 1451470
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+When the transmit FIFO is emptied or enabled, the transmitter
+hold register is empty.  When it is disabled, it is also emptied and
+in addition the previous contents of the transmitter hold register
+are discarded.  In either case, the THRE bit in LSR must be set and
+THRI raised.
+
+When the receive FIFO is emptied or enabled, the data ready and break
+bits must be cleared in LSR.  Likewise when the receive FIFO is disabled.
+
+Reviewed-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 023c3a9707d0d9259a1e858cdf7804dd10973fca)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	hw/char/serial.c
+
+Contextual conflict because upstream uses new timer API timer_del while
+downstream still uses qemu_del_timer.
+---
+ hw/char/serial.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/hw/char/serial.c b/hw/char/serial.c
+index c2be4bd..e0d29a8 100644
+--- a/hw/char/serial.c
++++ b/hw/char/serial.c
+@@ -351,12 +351,15 @@ static void serial_ioport_write(void *opaque, hwaddr addr, uint64_t val,
+         /* FIFO clear */
+ 
+         if (val & UART_FCR_RFR) {
++            s->lsr &= ~(UART_LSR_DR | UART_LSR_BI);
+             qemu_del_timer(s->fifo_timeout_timer);
+             s->timeout_ipending=0;
+             fifo8_reset(&s->recv_fifo);
+         }
+ 
+         if (val & UART_FCR_XFR) {
++            s->lsr |= UART_LSR_THRE;
++            s->thr_ipending = 1;
+             fifo8_reset(&s->xmit_fifo);
+         }
+ 
+-- 
+1.8.3.1
+

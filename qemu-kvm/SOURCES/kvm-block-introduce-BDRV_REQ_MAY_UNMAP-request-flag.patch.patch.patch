@@ -1,0 +1,89 @@
+From c8f8c2859899c631415825beee9cb6369e302f43 Mon Sep 17 00:00:00 2001
+Message-Id: <c8f8c2859899c631415825beee9cb6369e302f43.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:08:56 +0100
+Subject: [PATCH 08/50] block: introduce BDRV_REQ_MAY_UNMAP request flag
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-11-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56047
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 10/52] block: introduce BDRV_REQ_MAY_UNMAP request flag
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Peter Lieven <pl@kamp.de>
+
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit d32f35cbc5a87af5e1100dd55074a79fc2cb5307)
+
+Conflicts:
+	block/backup.c [missing]
+---
+ block-migration.c     | 3 ++-
+ block.c               | 4 ++++
+ include/block/block.h | 7 +++++++
+ 3 files changed, 13 insertions(+), 1 deletion(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ block-migration.c     | 3 ++-
+ block.c               | 4 ++++
+ include/block/block.h | 7 +++++++
+ 3 files changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/block-migration.c b/block-migration.c
+index 3b22db6..1844066 100644
+--- a/block-migration.c
++++ b/block-migration.c
+@@ -780,7 +780,8 @@ static int block_load(QEMUFile *f, void *opaque, int version_id)
+             }
+ 
+             if (flags & BLK_MIG_FLAG_ZERO_BLOCK) {
+-                ret = bdrv_write_zeroes(bs, addr, nr_sectors, 0);
++                ret = bdrv_write_zeroes(bs, addr, nr_sectors,
++                                        BDRV_REQ_MAY_UNMAP);
+             } else {
+                 buf = g_malloc(BLOCK_SIZE);
+                 qemu_get_buffer(f, buf, BLOCK_SIZE);
+diff --git a/block.c b/block.c
+index 698334a..77167f0 100644
+--- a/block.c
++++ b/block.c
+@@ -2827,6 +2827,10 @@ int coroutine_fn bdrv_co_write_zeroes(BlockDriverState *bs,
+ {
+     trace_bdrv_co_write_zeroes(bs, sector_num, nb_sectors);
+ 
++    if (!(bs->open_flags & BDRV_O_UNMAP)) {
++        flags &= ~BDRV_REQ_MAY_UNMAP;
++    }
++
+     return bdrv_co_do_writev(bs, sector_num, nb_sectors, NULL,
+                              BDRV_REQ_ZERO_WRITE | flags);
+ }
+diff --git a/include/block/block.h b/include/block/block.h
+index 2d78a84..10abc00 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -65,6 +65,13 @@ typedef struct BlockDevOps {
+ typedef enum {
+     BDRV_REQ_COPY_ON_READ = 0x1,
+     BDRV_REQ_ZERO_WRITE   = 0x2,
++    /* The BDRV_REQ_MAY_UNMAP flag is used to indicate that the block driver
++     * is allowed to optimize a write zeroes request by unmapping (discarding)
++     * blocks if it is guaranteed that the result will read back as
++     * zeroes. The flag is only passed to the driver if the block device is
++     * opened with BDRV_O_UNMAP.
++     */
++    BDRV_REQ_MAY_UNMAP    = 0x4,
+ } BdrvRequestFlags;
+ 
+ #define BDRV_O_RDWR        0x0002
+-- 
+1.7.11.7
+

@@ -1,0 +1,195 @@
+From b24bec7c4477946f17bf4628608b60d4960b4247 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Thu, 6 Mar 2014 21:13:15 +0100
+Subject: [PATCH 05/16] block: gluster - add reopen support.
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <2f1e357ca27ef45d16e62fbe44b0ce9cef2602fe.1394129674.git.jcody@redhat.com>
+Patchwork-id: 58041
+O-Subject: [RHEL7 qemu-kvm PATCH 2/2] block: gluster - add reopen support.
+Bugzilla: 1031526
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+Gluster does parse open flags in its .bdrv_open() implementation,
+and the .bdrv_reopen_* implementations need to do the same.
+
+A new gluster connection to the image file to be created is established
+in the .bdrv_reopen_prepare(), and the image file opened with the new
+flags.
+
+If this is successful, then the old image file is closed, and the
+old connection torn down. The relevant structure pointers in the gluster
+state structure are updated to the new connection.
+
+If it is not successful, then the new file handle and connection is
+abandoned (if it exists), while the old connection is not modified at
+all.
+
+With reopen supported, block-commit (and offline commit) is now also
+supported for image files whose base image uses the native gluster
+protocol driver.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit adccfbcd6020e928db93b2b4faf0dbd05ffbe016)
+
+Conflicts:
+	block/gluster.c
+
+RHEL7 Note:  Conflict was in contextual information, as RHEL7 does not
+             have gluster zerofill support.
+---
+ block/gluster.c | 102 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 102 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/gluster.c |  102 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 files changed, 102 insertions(+), 0 deletions(-)
+
+diff --git a/block/gluster.c b/block/gluster.c
+index 95cb05a..f43d3a6 100644
+--- a/block/gluster.c
++++ b/block/gluster.c
+@@ -376,6 +376,96 @@ out:
+     return ret;
+ }
+ 
++typedef struct BDRVGlusterReopenState {
++    struct glfs *glfs;
++    struct glfs_fd *fd;
++} BDRVGlusterReopenState;
++
++
++static int qemu_gluster_reopen_prepare(BDRVReopenState *state,
++                                       BlockReopenQueue *queue, Error **errp)
++{
++    int ret = 0;
++    BDRVGlusterReopenState *reop_s;
++    GlusterConf *gconf = NULL;
++    int open_flags = 0;
++
++    assert(state != NULL);
++    assert(state->bs != NULL);
++
++    state->opaque = g_malloc0(sizeof(BDRVGlusterReopenState));
++    reop_s = state->opaque;
++
++    qemu_gluster_parse_flags(state->flags, &open_flags);
++
++    gconf = g_malloc0(sizeof(GlusterConf));
++
++    reop_s->glfs = qemu_gluster_init(gconf, state->bs->filename);
++    if (reop_s->glfs == NULL) {
++        ret = -errno;
++        goto exit;
++    }
++
++    reop_s->fd = glfs_open(reop_s->glfs, gconf->image, open_flags);
++    if (reop_s->fd == NULL) {
++        /* reops->glfs will be cleaned up in _abort */
++        ret = -errno;
++        goto exit;
++    }
++
++exit:
++    /* state->opaque will be freed in either the _abort or _commit */
++    qemu_gluster_gconf_free(gconf);
++    return ret;
++}
++
++static void qemu_gluster_reopen_commit(BDRVReopenState *state)
++{
++    BDRVGlusterReopenState *reop_s = state->opaque;
++    BDRVGlusterState *s = state->bs->opaque;
++
++
++    /* close the old */
++    if (s->fd) {
++        glfs_close(s->fd);
++    }
++    if (s->glfs) {
++        glfs_fini(s->glfs);
++    }
++
++    /* use the newly opened image / connection */
++    s->fd         = reop_s->fd;
++    s->glfs       = reop_s->glfs;
++
++    g_free(state->opaque);
++    state->opaque = NULL;
++
++    return;
++}
++
++
++static void qemu_gluster_reopen_abort(BDRVReopenState *state)
++{
++    BDRVGlusterReopenState *reop_s = state->opaque;
++
++    if (reop_s == NULL) {
++        return;
++    }
++
++    if (reop_s->fd) {
++        glfs_close(reop_s->fd);
++    }
++
++    if (reop_s->glfs) {
++        glfs_fini(reop_s->glfs);
++    }
++
++    g_free(state->opaque);
++    state->opaque = NULL;
++
++    return;
++}
++
+ static int qemu_gluster_create(const char *filename,
+         QEMUOptionParameter *options, Error **errp)
+ {
+@@ -605,6 +695,9 @@ static BlockDriver bdrv_gluster = {
+     .protocol_name                = "gluster",
+     .instance_size                = sizeof(BDRVGlusterState),
+     .bdrv_file_open               = qemu_gluster_open,
++    .bdrv_reopen_prepare          = qemu_gluster_reopen_prepare,
++    .bdrv_reopen_commit           = qemu_gluster_reopen_commit,
++    .bdrv_reopen_abort            = qemu_gluster_reopen_abort,
+     .bdrv_close                   = qemu_gluster_close,
+     .bdrv_create                  = qemu_gluster_create,
+     .bdrv_getlength               = qemu_gluster_getlength,
+@@ -622,6 +715,9 @@ static BlockDriver bdrv_gluster_tcp = {
+     .protocol_name                = "gluster+tcp",
+     .instance_size                = sizeof(BDRVGlusterState),
+     .bdrv_file_open               = qemu_gluster_open,
++    .bdrv_reopen_prepare          = qemu_gluster_reopen_prepare,
++    .bdrv_reopen_commit           = qemu_gluster_reopen_commit,
++    .bdrv_reopen_abort            = qemu_gluster_reopen_abort,
+     .bdrv_close                   = qemu_gluster_close,
+     .bdrv_create                  = qemu_gluster_create,
+     .bdrv_getlength               = qemu_gluster_getlength,
+@@ -639,6 +735,9 @@ static BlockDriver bdrv_gluster_unix = {
+     .protocol_name                = "gluster+unix",
+     .instance_size                = sizeof(BDRVGlusterState),
+     .bdrv_file_open               = qemu_gluster_open,
++    .bdrv_reopen_prepare          = qemu_gluster_reopen_prepare,
++    .bdrv_reopen_commit           = qemu_gluster_reopen_commit,
++    .bdrv_reopen_abort            = qemu_gluster_reopen_abort,
+     .bdrv_close                   = qemu_gluster_close,
+     .bdrv_create                  = qemu_gluster_create,
+     .bdrv_getlength               = qemu_gluster_getlength,
+@@ -656,6 +755,9 @@ static BlockDriver bdrv_gluster_rdma = {
+     .protocol_name                = "gluster+rdma",
+     .instance_size                = sizeof(BDRVGlusterState),
+     .bdrv_file_open               = qemu_gluster_open,
++    .bdrv_reopen_prepare          = qemu_gluster_reopen_prepare,
++    .bdrv_reopen_commit           = qemu_gluster_reopen_commit,
++    .bdrv_reopen_abort            = qemu_gluster_reopen_abort,
+     .bdrv_close                   = qemu_gluster_close,
+     .bdrv_create                  = qemu_gluster_create,
+     .bdrv_getlength               = qemu_gluster_getlength,
+-- 
+1.7.1
+

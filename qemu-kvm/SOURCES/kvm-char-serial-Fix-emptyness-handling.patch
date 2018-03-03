@@ -1,0 +1,54 @@
+From 63857964e14bbf4bcb91eaa56ca46a30d14934ed Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 18 May 2017 09:21:19 +0200
+Subject: [PATCH 06/18] char/serial: Fix emptyness handling
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <20170518092131.16571-7-famz@redhat.com>
+Patchwork-id: 75298
+O-Subject: [RHEL-7.4 qemu-kvm PATCH v3 06/18] char/serial: Fix emptyness handling
+Bugzilla: 1451470
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+From: Don Slutz <dslutz@verizon.com>
+
+The commit 88c1ee73d3231c74ff90bcfc084a7589670ec244
+char/serial: Fix emptyness check
+
+Still causes extra NULL byte(s) to be sent.
+
+So if the fifo is empty, do not send an extra NULL byte.
+
+Reviewed-by: Peter Crosthwaite <peter.crosthwaite@xilinx.com>
+Signed-off-by: Don Slutz <dslutz@verizon.com>
+Message-id: 1395160174-16006-1-git-send-email-dslutz@verizon.com
+Signed-off-by: Peter Maydell <peter.maydell@linaro.org>
+(cherry picked from commit dffacd4654ec8bf2898aed230852154c6ed755ed)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/char/serial.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/hw/char/serial.c b/hw/char/serial.c
+index 489a885..e020b0e 100644
+--- a/hw/char/serial.c
++++ b/hw/char/serial.c
+@@ -225,8 +225,10 @@ static gboolean serial_xmit(GIOChannel *chan, GIOCondition cond, void *opaque)
+ 
+     if (s->tsr_retry <= 0) {
+         if (s->fcr & UART_FCR_FE) {
+-            s->tsr = fifo8_is_empty(&s->xmit_fifo) ?
+-                        0 : fifo8_pop(&s->xmit_fifo);
++            if (fifo8_is_empty(&s->xmit_fifo)) {
++                return FALSE;
++            }
++            s->tsr = fifo8_pop(&s->xmit_fifo);
+             if (!s->xmit_fifo.num) {
+                 s->lsr |= UART_LSR_THRE;
+             }
+-- 
+1.8.3.1
+

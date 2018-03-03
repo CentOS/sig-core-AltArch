@@ -1,0 +1,63 @@
+From f5f0d9ed92f4ba1ea746529ccc945cf60d4973c8 Mon Sep 17 00:00:00 2001
+From: Ladi Prosek <lprosek@redhat.com>
+Date: Wed, 5 Oct 2016 17:22:28 +0200
+Subject: [PATCH 6/8] virtio: zero vq->inuse in virtio_reset()
+
+RH-Author: Ladi Prosek <lprosek@redhat.com>
+Message-id: <1475666548-9186-7-git-send-email-lprosek@redhat.com>
+Patchwork-id: 72485
+O-Subject: [RHEL-7.4 qemu-kvm v2 PATCH 6/6] virtio: zero vq->inuse in virtio_reset()
+Bugzilla: 1377968
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Stefan Hajnoczi <stefanha@redhat.com>
+
+vq->inuse must be zeroed upon device reset like most other virtqueue
+fields.
+
+In theory, virtio_reset() just needs assert(vq->inuse == 0) since
+devices must clean up in-flight requests during reset (requests cannot
+not be leaked!).
+
+In practice, it is difficult to achieve vq->inuse == 0 across reset
+because balloon, blk, 9p, etc implement various different strategies for
+cleaning up requests.  Most devices call g_free(elem) directly without
+telling virtio.c that the VirtQueueElement is cleaned up.  Therefore
+vq->inuse is not decremented during reset.
+
+This patch zeroes vq->inuse and trusts that devices are not leaking
+VirtQueueElements across reset.
+
+I will send a follow-up series that refactors request life-cycle across
+all devices and converts vq->inuse = 0 into assert(vq->inuse == 0) but
+this more invasive approach is not appropriate for stable trees.
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Cc: qemu-stable <qemu-stable@nongnu.org>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Reviewed-by: Ladi Prosek <lprosek@redhat.com>
+(cherry picked from commit 4b7f91ed0270a371e1933efa21ba600b6da23ab9)
+Signed-off-by: Ladi Prosek <lprosek@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/virtio/virtio.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/hw/virtio/virtio.c b/hw/virtio/virtio.c
+index 87a7639..cdb21b1 100644
+--- a/hw/virtio/virtio.c
++++ b/hw/virtio/virtio.c
+@@ -585,6 +585,7 @@ void virtio_reset(void *opaque)
+         vdev->vq[i].signalled_used = 0;
+         vdev->vq[i].signalled_used_valid = false;
+         vdev->vq[i].notification = true;
++        vdev->vq[i].inuse = 0;
+     }
+ }
+ 
+-- 
+1.8.3.1
+

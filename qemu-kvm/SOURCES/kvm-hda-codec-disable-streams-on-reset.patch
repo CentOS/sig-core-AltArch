@@ -1,0 +1,77 @@
+From 22f1816abcb97b9df9f0c7b896202a4c3c5d89ec Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Mon, 3 Feb 2014 14:18:24 -0500
+Subject: [PATCH 4/6] hda-codec: disable streams on reset
+
+Message-id: <1391437104-22283-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 57073
+O-Subject: [RHEL-7 qemu-kvm PATCH 1/1] hda-codec: disable streams on reset
+Bugzilla: 947812
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 39e6a38cdd4b235b2918b4977f31fde2c0da3bc4)
+---
+ hw/audio/hda-codec.c | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/audio/hda-codec.c | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/hw/audio/hda-codec.c b/hw/audio/hda-codec.c
+index 07a43bf..986f2a9 100644
+--- a/hw/audio/hda-codec.c
++++ b/hw/audio/hda-codec.c
+@@ -559,6 +559,21 @@ static int hda_audio_post_load(void *opaque, int version)
+     return 0;
+ }
+ 
++static void hda_audio_reset(DeviceState *dev)
++{
++    HDAAudioState *a = DO_UPCAST(HDAAudioState, hda.qdev, dev);
++    HDAAudioStream *st;
++    int i;
++
++    dprint(a, 1, "%s\n", __func__);
++    for (i = 0; i < ARRAY_SIZE(a->st); i++) {
++        st = a->st + i;
++        if (st->node != NULL) {
++            hda_audio_set_running(st, false);
++        }
++    }
++}
++
+ static const VMStateDescription vmstate_hda_audio_stream = {
+     .name = "hda-audio-stream",
+     .version_id = 1,
+@@ -640,6 +655,7 @@ static void hda_audio_output_class_init(ObjectClass *klass, void *data)
+     k->stream = hda_audio_stream;
+     set_bit(DEVICE_CATEGORY_SOUND, dc->categories);
+     dc->desc = "HDA Audio Codec, output-only (line-out)";
++    dc->reset = hda_audio_reset;
+     dc->vmsd = &vmstate_hda_audio;
+     dc->props = hda_audio_properties;
+ }
+@@ -662,6 +678,7 @@ static void hda_audio_duplex_class_init(ObjectClass *klass, void *data)
+     k->stream = hda_audio_stream;
+     set_bit(DEVICE_CATEGORY_SOUND, dc->categories);
+     dc->desc = "HDA Audio Codec, duplex (line-out, line-in)";
++    dc->reset = hda_audio_reset;
+     dc->vmsd = &vmstate_hda_audio;
+     dc->props = hda_audio_properties;
+ }
+@@ -684,6 +701,7 @@ static void hda_audio_micro_class_init(ObjectClass *klass, void *data)
+     k->stream = hda_audio_stream;
+     set_bit(DEVICE_CATEGORY_SOUND, dc->categories);
+     dc->desc = "HDA Audio Codec, duplex (speaker, microphone)";
++    dc->reset = hda_audio_reset;
+     dc->vmsd = &vmstate_hda_audio;
+     dc->props = hda_audio_properties;
+ }
+-- 
+1.8.3.1
+

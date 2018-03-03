@@ -1,0 +1,105 @@
+From 4d2bc4b2e4d04efa0fd2f3cd10f6bc22b9c0af9f Mon Sep 17 00:00:00 2001
+Message-Id: <4d2bc4b2e4d04efa0fd2f3cd10f6bc22b9c0af9f.1387382496.git.minovotn@redhat.com>
+In-Reply-To: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+References: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+From: Nigel Croxon <ncroxon@redhat.com>
+Date: Thu, 14 Nov 2013 22:53:00 +0100
+Subject: [PATCH 24/46] rdma: qemu_rdma_post_send_control uses wrongly
+ RDMA_WRID_MAX
+
+RH-Author: Nigel Croxon <ncroxon@redhat.com>
+Message-id: <1384469598-13137-25-git-send-email-ncroxon@redhat.com>
+Patchwork-id: 55708
+O-Subject: [RHEL7.0 PATCH 24/42] rdma: qemu_rdma_post_send_control uses wrongly RDMA_WRID_MAX
+Bugzilla: 1011720
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: 1011720
+https://bugzilla.redhat.com/show_bug.cgi?id=1011720
+
+>From commit ID:
+commit 1f22364bb5a756dfcbd15c2ae2bac18bbcef6190
+Author: Isaku Yamahata <yamahata@private.email.ne.jp>
+Date:   Sat Aug 3 22:54:52 2013 -0400
+
+    rdma: qemu_rdma_post_send_control uses wrongly RDMA_WRID_MAX
+
+    RDMA_WRID_CONTROL should be used. And remove related work around.
+
+    Reviewed-by: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Isaku Yamahata <yamahata@private.email.ne.jp>
+    Signed-off-by: Michael R. Hines <mrhines@us.ibm.com>
+    Message-id: 1375584894-9917-6-git-send-email-mrhines@linux.vnet.ibm.com
+    Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+---
+ migration-rdma.c |   12 ++++++------
+ 1 files changed, 6 insertions(+), 6 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ migration-rdma.c | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/migration-rdma.c b/migration-rdma.c
+index 7266803..ea16f0e 100644
+--- a/migration-rdma.c
++++ b/migration-rdma.c
+@@ -322,7 +322,7 @@ typedef struct RDMAContext {
+     char *host;
+     int port;
+ 
+-    RDMAWorkRequestData wr_data[RDMA_WRID_MAX + 1];
++    RDMAWorkRequestData wr_data[RDMA_WRID_MAX];
+ 
+     /*
+      * This is used by *_exchange_send() to figure out whether or not
+@@ -1399,7 +1399,7 @@ static int qemu_rdma_post_send_control(RDMAContext *rdma, uint8_t *buf,
+                                        RDMAControlHeader *head)
+ {
+     int ret = 0;
+-    RDMAWorkRequestData *wr = &rdma->wr_data[RDMA_WRID_MAX];
++    RDMAWorkRequestData *wr = &rdma->wr_data[RDMA_WRID_CONTROL];
+     struct ibv_send_wr *bad_wr;
+     struct ibv_sge sge = {
+                            .addr = (uint64_t)(wr->control),
+@@ -2054,7 +2054,7 @@ static void qemu_rdma_cleanup(RDMAContext *rdma)
+     g_free(rdma->block);
+     rdma->block = NULL;
+ 
+-    for (idx = 0; idx <= RDMA_WRID_MAX; idx++) {
++    for (idx = 0; idx < RDMA_WRID_MAX; idx++) {
+         if (rdma->wr_data[idx].control_mr) {
+             rdma->total_registrations--;
+             ibv_dereg_mr(rdma->wr_data[idx].control_mr);
+@@ -2136,7 +2136,7 @@ static int qemu_rdma_source_init(RDMAContext *rdma, Error **errp, bool pin_all)
+         goto err_rdma_source_init;
+     }
+ 
+-    for (idx = 0; idx <= RDMA_WRID_MAX; idx++) {
++    for (idx = 0; idx < RDMA_WRID_MAX; idx++) {
+         ret = qemu_rdma_reg_control(rdma, idx);
+         if (ret) {
+             ERROR(temp, "rdma migration: error registering %d control!",
+@@ -2248,7 +2248,7 @@ static int qemu_rdma_dest_init(RDMAContext *rdma, Error **errp)
+     struct addrinfo *res;
+     char port_str[16];
+ 
+-    for (idx = 0; idx <= RDMA_WRID_MAX; idx++) {
++    for (idx = 0; idx < RDMA_WRID_MAX; idx++) {
+         rdma->wr_data[idx].control_len = 0;
+         rdma->wr_data[idx].control_curr = NULL;
+     }
+@@ -2705,7 +2705,7 @@ static int qemu_rdma_accept(RDMAContext *rdma)
+         goto err_rdma_dest_wait;
+     }
+ 
+-    for (idx = 0; idx <= RDMA_WRID_MAX; idx++) {
++    for (idx = 0; idx < RDMA_WRID_MAX; idx++) {
+         ret = qemu_rdma_reg_control(rdma, idx);
+         if (ret) {
+             fprintf(stderr, "rdma: error registering %d control!\n", idx);
+-- 
+1.7.11.7
+

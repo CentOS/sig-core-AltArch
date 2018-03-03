@@ -1,0 +1,85 @@
+From 23ae0a2bec72997626c3ba834f036b9a3626eedc Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Tue, 7 Feb 2017 10:07:48 +0100
+Subject: [PATCH 05/11] display: cirrus: ignore source pitch value as needed in
+ blit_is_unsafe
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1486462072-32174-4-git-send-email-kraxel@redhat.com>
+Patchwork-id: 73563
+O-Subject: [RHEL-7.4 qemu-kvm PATCH 3/7] display: cirrus: ignore source pitch value as needed in blit_is_unsafe
+Bugzilla: 1418233
+RH-Acked-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Bruce Rogers <brogers@suse.com>
+
+Commit 4299b90 added a check which is too broad, given that the source
+pitch value is not required to be initialized for solid fill operations.
+This patch refines the blit_is_unsafe() check to ignore source pitch in
+that case. After applying the above commit as a security patch, we
+noticed the SLES 11 SP4 guest gui failed to initialize properly.
+
+Signed-off-by: Bruce Rogers <brogers@suse.com>
+Message-id: 20170109203520.5619-1-brogers@suse.com
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 913a87885f589d263e682c2eb6637c6e14538061)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/display/cirrus_vga.c | 11 +++++++----
+ 1 file changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/hw/display/cirrus_vga.c b/hw/display/cirrus_vga.c
+index dacfac6..c8f2f26 100644
+--- a/hw/display/cirrus_vga.c
++++ b/hw/display/cirrus_vga.c
+@@ -289,7 +289,7 @@ static bool blit_region_is_unsafe(struct CirrusVGAState *s,
+     return false;
+ }
+ 
+-static bool blit_is_unsafe(struct CirrusVGAState *s)
++static bool blit_is_unsafe(struct CirrusVGAState *s, bool dst_only)
+ {
+     /* should be the case, see cirrus_bitblt_start */
+     assert(s->cirrus_blt_width > 0);
+@@ -303,6 +303,9 @@ static bool blit_is_unsafe(struct CirrusVGAState *s)
+                               s->cirrus_blt_dstaddr & s->cirrus_addr_mask)) {
+         return true;
+     }
++    if (dst_only) {
++        return false;
++    }
+     if (blit_region_is_unsafe(s, s->cirrus_blt_srcpitch,
+                               s->cirrus_blt_srcaddr & s->cirrus_addr_mask)) {
+         return true;
+@@ -668,7 +671,7 @@ static int cirrus_bitblt_common_patterncopy(CirrusVGAState * s,
+ 
+     dst = s->vga.vram_ptr + (s->cirrus_blt_dstaddr & s->cirrus_addr_mask);
+ 
+-    if (blit_is_unsafe(s))
++    if (blit_is_unsafe(s, false))
+         return 0;
+ 
+     (*s->cirrus_rop) (s, dst, src,
+@@ -686,7 +689,7 @@ static int cirrus_bitblt_solidfill(CirrusVGAState *s, int blt_rop)
+ {
+     cirrus_fill_t rop_func;
+ 
+-    if (blit_is_unsafe(s)) {
++    if (blit_is_unsafe(s, true)) {
+         return 0;
+     }
+     rop_func = cirrus_fill[rop_to_index[blt_rop]][s->cirrus_blt_pixelwidth - 1];
+@@ -790,7 +793,7 @@ static int cirrus_do_copy(CirrusVGAState *s, int dst, int src, int w, int h)
+ 
+ static int cirrus_bitblt_videotovideo_copy(CirrusVGAState * s)
+ {
+-    if (blit_is_unsafe(s))
++    if (blit_is_unsafe(s, false))
+         return 0;
+ 
+     return cirrus_do_copy(s, s->cirrus_blt_dstaddr - s->vga.start_addr,
+-- 
+1.8.3.1
+

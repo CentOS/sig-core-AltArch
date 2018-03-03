@@ -1,0 +1,67 @@
+From cd10207e755b1b0470503c72c78a8d927f87a37a Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:21:58 +0200
+Subject: [PATCH 04/42] qcow2: Catch !*host_offset for data allocation
+
+Message-id: <1434212556-3927-5-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66023
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 04/42] qcow2: Catch !*host_offset for data allocation
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1129893
+
+qcow2_alloc_cluster_offset() uses host_offset == 0 as "no preferred
+offset" for the (data) cluster range to be allocated. However, this
+offset is actually valid and may be allocated on images with a corrupted
+refcount table or first refcount block.
+
+In this case, the corruption prevention should normally catch that
+write anyway (because it would overwrite the image header). But since 0
+is a special value here, the function assumes that nothing has been
+allocated at all which it asserts against.
+
+Because this condition is not qemu's fault but rather that of a broken
+image, it shouldn't throw an assertion but rather mark the image corrupt
+and show an appropriate message, which this patch does by calling the
+corruption check earlier than it would be called normally (before the
+assertion).
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit ff52aab2df5c5e10f231481961b88d25a3021724)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-cluster.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/block/qcow2-cluster.c b/block/qcow2-cluster.c
+index 1b9609f..f2f1170 100644
+--- a/block/qcow2-cluster.c
++++ b/block/qcow2-cluster.c
+@@ -1089,6 +1089,17 @@ static int handle_alloc(BlockDriverState *bs, uint64_t guest_offset,
+         return 0;
+     }
+ 
++    /* !*host_offset would overwrite the image header and is reserved for "no
++     * host offset preferred". If 0 was a valid host offset, it'd trigger the
++     * following overlap check; do that now to avoid having an invalid value in
++     * *host_offset. */
++    if (!alloc_cluster_offset) {
++        ret = qcow2_pre_write_overlap_check(bs, 0, alloc_cluster_offset,
++                                            nb_clusters * s->cluster_size);
++        assert(ret < 0);
++        goto fail;
++    }
++
+     /*
+      * Save info needed for meta data update.
+      *
+-- 
+1.8.3.1
+

@@ -1,0 +1,189 @@
+From 31d1d075a4cb1526d4c0ba43a8a6d581cedf0292 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Fri, 7 Nov 2014 10:09:29 +0100
+Subject: [PATCH 8/9] Revert "linux-aio: use event notifiers"
+
+Message-id: <1415354969-14209-1-git-send-email-famz@redhat.com>
+Patchwork-id: 62180
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v3] Revert "linux-aio: use event notifiers"
+Bugzilla: 1104748
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+This reverts commit c90caf25e2b6945ae13560476a5ecd7992e9f945:
+
+    linux-aio: use event notifiers
+
+    Since linux-aio already uses an eventfd, converting it to use the
+    EventNotifier-based API simplifies the code even though it is not
+    meant to be portable.
+
+    Reviewed-by: Anthony Liguori <anthony@codemonkey.ws>
+    Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+
+Justification:
+
+    There is a performance regression compared to RHEL 6 since we picked
+    this patch during RHEL 7 rebase. The bugzilla has more data but as a
+    quick overview we can see the difference is significant:
+
+    Configuration   rw         bs         iodepth    bw         iops
+    ------------------------------------------------------------------
+    Before revert   randwrite  4k         32         579        148464
+    After revert    randwrite  4k         32         877        224752
+
+    The reason is that before revert, we pass min_nr=MAX_EVENTS to
+    io_getevents, which is much slower (50000+ ns compared to a few
+    hundreds) than when min_nr is val, the number of events, after
+    revert.
+
+    The decisive difference is that MAX_EVENTS is usually strictly
+    greater than the number of pending events, hence the kernel code
+    takes a different path into the hrtimer, despite timeout=0.
+
+    In other words, the root cause is in kernel. A fix is posted to
+    upstream. But let's have this workaround in qemu-kvm anyway.
+
+Upstream:
+
+    The issue is silently compensated since cd758dd0aca (aio / timers:
+    Add prctl(PR_SET_TIMERSLACK, 1, ...) to reduce timer slack), and the
+    io_getevents call is moved to a BH, so changing min_nr back to 1 in
+    upstream is not demanding. As the ultimate fix in kernel is on its
+    way, reverting is a reasonable move for RHEL.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	block/linux-aio.c
+Trivial context conflict in #include section.
+---
+ block/linux-aio.c | 49 ++++++++++++++++++++++++++++++-------------------
+ 1 file changed, 30 insertions(+), 19 deletions(-)
+
+diff --git a/block/linux-aio.c b/block/linux-aio.c
+index ee0f8d1..40041d1 100644
+--- a/block/linux-aio.c
++++ b/block/linux-aio.c
+@@ -11,8 +11,8 @@
+ #include "block/aio.h"
+ #include "qemu/queue.h"
+ #include "block/raw-aio.h"
+-#include "qemu/event_notifier.h"
+ 
++#include <sys/eventfd.h>
+ #include <libaio.h>
+ 
+ /*
+@@ -38,7 +38,7 @@ struct qemu_laiocb {
+ 
+ struct qemu_laio_state {
+     io_context_t ctx;
+-    EventNotifier e;
++    int efd;
+     int count;
+ };
+ 
+@@ -77,17 +77,29 @@ static void qemu_laio_process_completion(struct qemu_laio_state *s,
+     qemu_aio_release(laiocb);
+ }
+ 
+-static void qemu_laio_completion_cb(EventNotifier *e)
++static void qemu_laio_completion_cb(void *opaque)
+ {
+-    struct qemu_laio_state *s = container_of(e, struct qemu_laio_state, e);
++    struct qemu_laio_state *s = opaque;
+ 
+-    while (event_notifier_test_and_clear(&s->e)) {
++    while (1) {
+         struct io_event events[MAX_EVENTS];
++        uint64_t val;
++        ssize_t ret;
+         struct timespec ts = { 0 };
+         int nevents, i;
+ 
+         do {
+-            nevents = io_getevents(s->ctx, MAX_EVENTS, MAX_EVENTS, events, &ts);
++            ret = read(s->efd, &val, sizeof(val));
++        } while (ret == -1 && errno == EINTR);
++
++        if (ret == -1 && errno == EAGAIN)
++            break;
++
++        if (ret != 8)
++            break;
++
++        do {
++            nevents = io_getevents(s->ctx, val, MAX_EVENTS, events, &ts);
+         } while (nevents == -EINTR);
+ 
+         for (i = 0; i < nevents; i++) {
+@@ -101,9 +113,9 @@ static void qemu_laio_completion_cb(EventNotifier *e)
+     }
+ }
+ 
+-static int qemu_laio_flush_cb(EventNotifier *e)
++static int qemu_laio_flush_cb(void *opaque)
+ {
+-    struct qemu_laio_state *s = container_of(e, struct qemu_laio_state, e);
++    struct qemu_laio_state *s = opaque;
+ 
+     return (s->count > 0) ? 1 : 0;
+ }
+@@ -135,9 +147,8 @@ static void laio_cancel(BlockDriverAIOCB *blockacb)
+      * We might be able to do this slightly more optimal by removing the
+      * O_NONBLOCK flag.
+      */
+-    while (laiocb->ret == -EINPROGRESS) {
+-        qemu_laio_completion_cb(&laiocb->ctx->e);
+-    }
++    while (laiocb->ret == -EINPROGRESS)
++        qemu_laio_completion_cb(laiocb->ctx);
+ }
+ 
+ static const AIOCBInfo laio_aiocb_info = {
+@@ -176,7 +187,7 @@ BlockDriverAIOCB *laio_submit(BlockDriverState *bs, void *aio_ctx, int fd,
+                         __func__, type);
+         goto out_free_aiocb;
+     }
+-    io_set_eventfd(&laiocb->iocb, event_notifier_get_fd(&s->e));
++    io_set_eventfd(&laiocb->iocb, s->efd);
+     s->count++;
+ 
+     if (io_submit(s->ctx, 1, &iocbs) < 0)
+@@ -195,21 +206,21 @@ void *laio_init(void)
+     struct qemu_laio_state *s;
+ 
+     s = g_malloc0(sizeof(*s));
+-    if (event_notifier_init(&s->e, false) < 0) {
++    s->efd = eventfd(0, 0);
++    if (s->efd == -1)
+         goto out_free_state;
+-    }
++    fcntl(s->efd, F_SETFL, O_NONBLOCK);
+ 
+-    if (io_setup(MAX_EVENTS, &s->ctx) != 0) {
++    if (io_setup(MAX_EVENTS, &s->ctx) != 0)
+         goto out_close_efd;
+-    }
+ 
+-    qemu_aio_set_event_notifier(&s->e, qemu_laio_completion_cb,
+-                                qemu_laio_flush_cb);
++    qemu_aio_set_fd_handler(s->efd, qemu_laio_completion_cb, NULL,
++        qemu_laio_flush_cb, s);
+ 
+     return s;
+ 
+ out_close_efd:
+-    event_notifier_cleanup(&s->e);
++    close(s->efd);
+ out_free_state:
+     g_free(s);
+     return NULL;
+-- 
+1.8.3.1
+

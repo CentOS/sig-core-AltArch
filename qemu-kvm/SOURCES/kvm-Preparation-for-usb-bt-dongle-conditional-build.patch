@@ -1,0 +1,245 @@
+From bc5c67b27d0c1d8ec6c4d09352f0de6b6cbddad0 Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Mon, 16 Sep 2013 14:38:24 +0200
+Subject: [PATCH 16/29] Preparation for usb-bt-dongle conditional build
+
+RH-Author: Miroslav Rezanina <mrezanin@redhat.com>
+Message-id: <0b3a39c76eac58a1b2f9f6c84016f234de0940c0.1379325610.git.mrezanin@redhat.com>
+Patchwork-id: 54394
+O-Subject: [RHEL7 qemu-kvm PATCH 1/2] Preparation for usb-bt-dongle conditional build
+Bugzilla: 1001131
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: Miroslav Rezanina <mrezanin@redhat.com>
+
+To allow disable usb-bt-dongle device using CONFIG_BLUETOOTH option, some of
+functions in vl.c file has to be made accessible in dev-bluetooth.c. This is
+pure code moving.
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 644e1a8a34d2f799bfeefae94b71593a2aa662ae)
+---
+ hw/bt/core.c    | 23 +++++++++++++++++++
+ hw/bt/hci.c     | 48 +++++++++++++++++++++++++++++++++++++++
+ include/hw/bt.h |  3 +++
+ vl.c            | 69 ---------------------------------------------------------
+ 4 files changed, 74 insertions(+), 69 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/bt/core.c    |   23 ++++++++++++++++++
+ hw/bt/hci.c     |   48 ++++++++++++++++++++++++++++++++++++++
+ include/hw/bt.h |    3 ++
+ vl.c            |   69 -------------------------------------------------------
+ 4 files changed, 74 insertions(+), 69 deletions(-)
+
+diff --git a/hw/bt/core.c b/hw/bt/core.c
+index 49012e0..0ffc948 100644
+--- a/hw/bt/core.c
++++ b/hw/bt/core.c
+@@ -119,3 +119,26 @@ void bt_device_done(struct bt_device_s *dev)
+ 
+     *p = dev->next;
+ }
++
++static struct bt_vlan_s {
++    struct bt_scatternet_s net;
++    int id;
++    struct bt_vlan_s *next;
++} *first_bt_vlan;
++
++/* find or alloc a new bluetooth "VLAN" */
++struct bt_scatternet_s *qemu_find_bt_vlan(int id)
++{
++    struct bt_vlan_s **pvlan, *vlan;
++    for (vlan = first_bt_vlan; vlan != NULL; vlan = vlan->next) {
++        if (vlan->id == id)
++            return &vlan->net;
++    }
++    vlan = g_malloc0(sizeof(struct bt_vlan_s));
++    vlan->id = id;
++    pvlan = &first_bt_vlan;
++    while (*pvlan != NULL)
++        pvlan = &(*pvlan)->next;
++    *pvlan = vlan;
++    return &vlan->net;
++}
+diff --git a/hw/bt/hci.c b/hw/bt/hci.c
+index b53cd5d..64e1745 100644
+--- a/hw/bt/hci.c
++++ b/hw/bt/hci.c
+@@ -429,6 +429,24 @@ static const uint8_t bt_event_reserved_mask[8] = {
+     0xff, 0x9f, 0xfb, 0xff, 0x07, 0x18, 0x00, 0x00,
+ };
+ 
++
++static void null_hci_send(struct HCIInfo *hci, const uint8_t *data, int len)
++{
++}
++
++static int null_hci_addr_set(struct HCIInfo *hci, const uint8_t *bd_addr)
++{
++    return -ENOTSUP;
++}
++
++struct HCIInfo null_hci = {
++    .cmd_send = null_hci_send,
++    .sco_send = null_hci_send,
++    .acl_send = null_hci_send,
++    .bdaddr_set = null_hci_addr_set,
++};
++
++
+ static inline uint8_t *bt_hci_event_start(struct bt_hci_s *hci,
+                 int evt, int len)
+ {
+@@ -2176,6 +2194,36 @@ struct HCIInfo *bt_new_hci(struct bt_scatternet_s *net)
+     return &s->info;
+ }
+ 
++struct HCIInfo *hci_init(const char *str)
++{
++    char *endp;
++    struct bt_scatternet_s *vlan = 0;
++
++    if (!strcmp(str, "null"))
++        /* null */
++        return &null_hci;
++    else if (!strncmp(str, "host", 4) && (str[4] == '\0' || str[4] == ':'))
++        /* host[:hciN] */
++        return bt_host_hci(str[4] ? str + 5 : "hci0");
++    else if (!strncmp(str, "hci", 3)) {
++        /* hci[,vlan=n] */
++        if (str[3]) {
++            if (!strncmp(str + 3, ",vlan=", 6)) {
++                vlan = qemu_find_bt_vlan(strtol(str + 9, &endp, 0));
++                if (*endp)
++                    vlan = 0;
++            }
++        } else
++            vlan = qemu_find_bt_vlan(0);
++        if (vlan)
++           return bt_new_hci(vlan);
++    }
++
++    fprintf(stderr, "qemu: Unknown bluetooth HCI `%s'.\n", str);
++
++    return 0;
++}
++
+ static void bt_hci_done(struct HCIInfo *info)
+ {
+     struct bt_hci_s *hci = hci_from_info(info);
+diff --git a/include/hw/bt.h b/include/hw/bt.h
+index 830af94..49a9d03 100644
+--- a/include/hw/bt.h
++++ b/include/hw/bt.h
+@@ -108,12 +108,15 @@ struct bt_device_s {
+     uint16_t clkoff;	/* Note: Always little-endian */
+ };
+ 
++extern struct HCIInfo null_hci;
+ /* bt.c */
+ void bt_device_init(struct bt_device_s *dev, struct bt_scatternet_s *net);
+ void bt_device_done(struct bt_device_s *dev);
++struct bt_scatternet_s *qemu_find_bt_vlan(int id);
+ 
+ /* bt-hci.c */
+ struct HCIInfo *bt_new_hci(struct bt_scatternet_s *net);
++struct HCIInfo *hci_init(const char *str);
+ 
+ /* bt-vhci.c */
+ void bt_vhci_init(struct HCIInfo *info);
+diff --git a/vl.c b/vl.c
+index 24536b5..d022f50 100644
+--- a/vl.c
++++ b/vl.c
+@@ -844,45 +844,6 @@ static int nb_hcis;
+ static int cur_hci;
+ static struct HCIInfo *hci_table[MAX_NICS];
+ 
+-static struct bt_vlan_s {
+-    struct bt_scatternet_s net;
+-    int id;
+-    struct bt_vlan_s *next;
+-} *first_bt_vlan;
+-
+-/* find or alloc a new bluetooth "VLAN" */
+-static struct bt_scatternet_s *qemu_find_bt_vlan(int id)
+-{
+-    struct bt_vlan_s **pvlan, *vlan;
+-    for (vlan = first_bt_vlan; vlan != NULL; vlan = vlan->next) {
+-        if (vlan->id == id)
+-            return &vlan->net;
+-    }
+-    vlan = g_malloc0(sizeof(struct bt_vlan_s));
+-    vlan->id = id;
+-    pvlan = &first_bt_vlan;
+-    while (*pvlan != NULL)
+-        pvlan = &(*pvlan)->next;
+-    *pvlan = vlan;
+-    return &vlan->net;
+-}
+-
+-static void null_hci_send(struct HCIInfo *hci, const uint8_t *data, int len)
+-{
+-}
+-
+-static int null_hci_addr_set(struct HCIInfo *hci, const uint8_t *bd_addr)
+-{
+-    return -ENOTSUP;
+-}
+-
+-static struct HCIInfo null_hci = {
+-    .cmd_send = null_hci_send,
+-    .sco_send = null_hci_send,
+-    .acl_send = null_hci_send,
+-    .bdaddr_set = null_hci_addr_set,
+-};
+-
+ struct HCIInfo *qemu_next_hci(void)
+ {
+     if (cur_hci == nb_hcis)
+@@ -891,36 +852,6 @@ struct HCIInfo *qemu_next_hci(void)
+     return hci_table[cur_hci++];
+ }
+ 
+-static struct HCIInfo *hci_init(const char *str)
+-{
+-    char *endp;
+-    struct bt_scatternet_s *vlan = 0;
+-
+-    if (!strcmp(str, "null"))
+-        /* null */
+-        return &null_hci;
+-    else if (!strncmp(str, "host", 4) && (str[4] == '\0' || str[4] == ':'))
+-        /* host[:hciN] */
+-        return bt_host_hci(str[4] ? str + 5 : "hci0");
+-    else if (!strncmp(str, "hci", 3)) {
+-        /* hci[,vlan=n] */
+-        if (str[3]) {
+-            if (!strncmp(str + 3, ",vlan=", 6)) {
+-                vlan = qemu_find_bt_vlan(strtol(str + 9, &endp, 0));
+-                if (*endp)
+-                    vlan = 0;
+-            }
+-        } else
+-            vlan = qemu_find_bt_vlan(0);
+-        if (vlan)
+-           return bt_new_hci(vlan);
+-    }
+-
+-    fprintf(stderr, "qemu: Unknown bluetooth HCI `%s'.\n", str);
+-
+-    return 0;
+-}
+-
+ static int bt_hci_parse(const char *str)
+ {
+     struct HCIInfo *hci;
+-- 
+1.7.1
+

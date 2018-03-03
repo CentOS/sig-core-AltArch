@@ -1,0 +1,169 @@
+From 90c28e632cce2d60c8242f5fb3e93f630e6211bc Mon Sep 17 00:00:00 2001
+Message-Id: <90c28e632cce2d60c8242f5fb3e93f630e6211bc.1387382496.git.minovotn@redhat.com>
+In-Reply-To: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+References: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+From: Nigel Croxon <ncroxon@redhat.com>
+Date: Thu, 14 Nov 2013 22:53:05 +0100
+Subject: [PATCH 29/46] rdma: check if RDMAControlHeader::len match
+ transferred byte
+
+RH-Author: Nigel Croxon <ncroxon@redhat.com>
+Message-id: <1384469598-13137-30-git-send-email-ncroxon@redhat.com>
+Patchwork-id: 55718
+O-Subject: [RHEL7.0 PATCH 29/42] rdma: check if RDMAControlHeader::len match transferred byte
+Bugzilla: 1011720
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: 1011720
+https://bugzilla.redhat.com/show_bug.cgi?id=1011720
+
+>From commit ID:
+commit 88571882516a7cb4291a329c537eb79fd126e1f2
+Author: Isaku Yamahata <yamahata@private.email.ne.jp>
+Date:   Fri Aug 9 16:05:42 2013 -0400
+
+    rdma: check if RDMAControlHeader::len match transferred byte
+
+    RDMAControlHeader::len is provided from remote, so check if the value
+    match the actual transferred byte_len.
+
+    Reviewed-by: Orit Wasserman <owasserm@redhat.com>
+    Reviewed-by: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Isaku Yamahata <yamahata@private.email.ne.jp>
+    Signed-off-by: Michael R. Hines <mrhines@us.ibm.com>
+    Message-id: 1376078746-24948-4-git-send-email-mrhines@linux.vnet.ibm.com
+    Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+---
+ migration-rdma.c |   32 ++++++++++++++++++++++----------
+ 1 files changed, 22 insertions(+), 10 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ migration-rdma.c | 32 ++++++++++++++++++++++----------
+ 1 file changed, 22 insertions(+), 10 deletions(-)
+
+diff --git a/migration-rdma.c b/migration-rdma.c
+index 140d930..9c02ad3 100644
+--- a/migration-rdma.c
++++ b/migration-rdma.c
+@@ -1214,7 +1214,8 @@ static void qemu_rdma_signal_unregister(RDMAContext *rdma, uint64_t index,
+  * (of any kind) has completed.
+  * Return the work request ID that completed.
+  */
+-static uint64_t qemu_rdma_poll(RDMAContext *rdma, uint64_t *wr_id_out)
++static uint64_t qemu_rdma_poll(RDMAContext *rdma, uint64_t *wr_id_out,
++                               uint32_t *byte_len)
+ {
+     int ret;
+     struct ibv_wc wc;
+@@ -1285,6 +1286,9 @@ static uint64_t qemu_rdma_poll(RDMAContext *rdma, uint64_t *wr_id_out)
+     }
+ 
+     *wr_id_out = wc.wr_id;
++    if (byte_len) {
++        *byte_len = wc.byte_len;
++    }
+ 
+     return  0;
+ }
+@@ -1302,7 +1306,8 @@ static uint64_t qemu_rdma_poll(RDMAContext *rdma, uint64_t *wr_id_out)
+  * completions only need to be recorded, but do not actually
+  * need further processing.
+  */
+-static int qemu_rdma_block_for_wrid(RDMAContext *rdma, int wrid_requested)
++static int qemu_rdma_block_for_wrid(RDMAContext *rdma, int wrid_requested,
++                                    uint32_t *byte_len)
+ {
+     int num_cq_events = 0, ret = 0;
+     struct ibv_cq *cq;
+@@ -1314,7 +1319,7 @@ static int qemu_rdma_block_for_wrid(RDMAContext *rdma, int wrid_requested)
+     }
+     /* poll cq first */
+     while (wr_id != wrid_requested) {
+-        ret = qemu_rdma_poll(rdma, &wr_id_in);
++        ret = qemu_rdma_poll(rdma, &wr_id_in, byte_len);
+         if (ret < 0) {
+             return ret;
+         }
+@@ -1356,7 +1361,7 @@ static int qemu_rdma_block_for_wrid(RDMAContext *rdma, int wrid_requested)
+         }
+ 
+         while (wr_id != wrid_requested) {
+-            ret = qemu_rdma_poll(rdma, &wr_id_in);
++            ret = qemu_rdma_poll(rdma, &wr_id_in, byte_len);
+             if (ret < 0) {
+                 goto err_block_for_wrid;
+             }
+@@ -1442,7 +1447,7 @@ static int qemu_rdma_post_send_control(RDMAContext *rdma, uint8_t *buf,
+         return ret;
+     }
+ 
+-    ret = qemu_rdma_block_for_wrid(rdma, RDMA_WRID_SEND_CONTROL);
++    ret = qemu_rdma_block_for_wrid(rdma, RDMA_WRID_SEND_CONTROL, NULL);
+     if (ret < 0) {
+         fprintf(stderr, "rdma migration: send polling control error!\n");
+     }
+@@ -1483,7 +1488,9 @@ static int qemu_rdma_post_recv_control(RDMAContext *rdma, int idx)
+ static int qemu_rdma_exchange_get_response(RDMAContext *rdma,
+                 RDMAControlHeader *head, int expecting, int idx)
+ {
+-    int ret = qemu_rdma_block_for_wrid(rdma, RDMA_WRID_RECV_CONTROL + idx);
++    uint32_t byte_len;
++    int ret = qemu_rdma_block_for_wrid(rdma, RDMA_WRID_RECV_CONTROL + idx,
++                                       &byte_len);
+ 
+     if (ret < 0) {
+         fprintf(stderr, "rdma migration: recv polling control error!\n");
+@@ -1509,6 +1516,11 @@ static int qemu_rdma_exchange_get_response(RDMAContext *rdma,
+         fprintf(stderr, "too long length: %d\n", head->len);
+         return -EINVAL;
+     }
++    if (sizeof(*head) + head->len != byte_len) {
++        fprintf(stderr, "Malformed length: %d byte_len %d\n",
++                head->len, byte_len);
++        return -EINVAL;
++    }
+ 
+     return 0;
+ }
+@@ -1738,7 +1750,7 @@ retry:
+                 count++, current_index, chunk,
+                 sge.addr, length, rdma->nb_sent, block->nb_chunks);
+ 
+-        ret = qemu_rdma_block_for_wrid(rdma, RDMA_WRID_RDMA_WRITE);
++        ret = qemu_rdma_block_for_wrid(rdma, RDMA_WRID_RDMA_WRITE, NULL);
+ 
+         if (ret < 0) {
+             fprintf(stderr, "Failed to Wait for previous write to complete "
+@@ -1882,7 +1894,7 @@ retry:
+ 
+     if (ret == ENOMEM) {
+         DDPRINTF("send queue is full. wait a little....\n");
+-        ret = qemu_rdma_block_for_wrid(rdma, RDMA_WRID_RDMA_WRITE);
++        ret = qemu_rdma_block_for_wrid(rdma, RDMA_WRID_RDMA_WRITE, NULL);
+         if (ret < 0) {
+             fprintf(stderr, "rdma migration: failed to make "
+                             "room in full send queue! %d\n", ret);
+@@ -2471,7 +2483,7 @@ static int qemu_rdma_drain_cq(QEMUFile *f, RDMAContext *rdma)
+     }
+ 
+     while (rdma->nb_sent) {
+-        ret = qemu_rdma_block_for_wrid(rdma, RDMA_WRID_RDMA_WRITE);
++        ret = qemu_rdma_block_for_wrid(rdma, RDMA_WRID_RDMA_WRITE, NULL);
+         if (ret < 0) {
+             fprintf(stderr, "rdma migration: complete polling error!\n");
+             return -EIO;
+@@ -2607,7 +2619,7 @@ static size_t qemu_rdma_save_page(QEMUFile *f, void *opaque,
+      */
+     while (1) {
+         uint64_t wr_id, wr_id_in;
+-        int ret = qemu_rdma_poll(rdma, &wr_id_in);
++        int ret = qemu_rdma_poll(rdma, &wr_id_in, NULL);
+         if (ret < 0) {
+             fprintf(stderr, "rdma migration: polling error! %d\n", ret);
+             goto err;
+-- 
+1.7.11.7
+

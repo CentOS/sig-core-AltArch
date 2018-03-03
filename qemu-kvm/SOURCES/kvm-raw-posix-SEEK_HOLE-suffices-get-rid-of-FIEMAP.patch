@@ -1,0 +1,177 @@
+From 726f113a3fbea10e910a2962fa25b6274314380c Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Tue, 18 Nov 2014 15:30:19 +0100
+Subject: [PATCH 40/41] raw-posix: SEEK_HOLE suffices, get rid of FIEMAP
+
+Message-id: <1416324620-16229-7-git-send-email-mreitz@redhat.com>
+Patchwork-id: 62441
+O-Subject: [RHEL-7.1/7.0.z qemu-kvm PATCH v3 6/7] raw-posix: SEEK_HOLE suffices, get rid of FIEMAP
+Bugzilla: 1160237
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Commit 5500316 (May 2012) implemented raw_co_is_allocated() as
+follows:
+
+1. If defined(CONFIG_FIEMAP), use the FS_IOC_FIEMAP ioctl
+
+2. Else if defined(SEEK_HOLE) && defined(SEEK_DATA), use lseek()
+
+3. Else pretend there are no holes
+
+Later on, raw_co_is_allocated() was generalized to
+raw_co_get_block_status().
+
+Commit 4f11aa8 (May 2014) changed it to try the three methods in order
+until success, because "there may be implementations which support
+[SEEK_HOLE/SEEK_DATA] but not [FIEMAP] (e.g., NFSv4.2) as well as vice
+versa."
+
+Unfortunately, we used FIEMAP incorrectly: we lacked FIEMAP_FLAG_SYNC.
+Commit 38c4d0a (Sep 2014) added it.  Because that's a significant
+speed hit, the next commit 7c159037 put SEEK_HOLE/SEEK_DATA first.
+
+As you see, the obvious use of FIEMAP is wrong, and the correct use is
+slow.  I guess this puts it somewhere between -7 "The obvious use is
+wrong" and -10 "It's impossible to get right" on Rusty Russel's Hard
+to Misuse scale[*].
+
+"Fortunately", the FIEMAP code is used only when
+
+* SEEK_HOLE/SEEK_DATA aren't defined, but CONFIG_FIEMAP is
+
+  Uncommon.  SEEK_HOLE had no XFS implementation between 2011 (when it
+  was introduced for ext4 and btrfs) and 2012.
+
+* SEEK_HOLE/SEEK_DATA and CONFIG_FIEMAP are defined, but lseek() fails
+
+  Unlikely.
+
+Thus, the FIEMAP code executes rarely.  Makes it a nice hidey-hole for
+bugs.  Worse, bugs hiding there can theoretically bite even on a host
+that has SEEK_HOLE/SEEK_DATA.
+
+I don't want to worry about this crap, not even theoretically.  Get
+rid of it.
+
+[*] http://ozlabs.org/~rusty/index.cgi/tech/2008-04-01.html
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit c4875e5b2216cf5427459e619b10f75083565792)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	block/raw-posix.c
+
+Upstream has a "needs_alignment" field in BDRVRawState, downstream does
+not.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/raw-posix.c | 63 ++++---------------------------------------------------
+ 1 file changed, 4 insertions(+), 59 deletions(-)
+
+diff --git a/block/raw-posix.c b/block/raw-posix.c
+index a46e50b..aeb8a97 100644
+--- a/block/raw-posix.c
++++ b/block/raw-posix.c
+@@ -57,9 +57,6 @@
+ #include <linux/fd.h>
+ #include <linux/fs.h>
+ #endif
+-#ifdef CONFIG_FIEMAP
+-#include <linux/fiemap.h>
+-#endif
+ #ifdef CONFIG_FALLOCATE_PUNCH_HOLE
+ #include <linux/falloc.h>
+ #endif
+@@ -147,9 +144,6 @@ typedef struct BDRVRawState {
+     bool has_discard:1;
+     bool has_write_zeroes:1;
+     bool discard_zeroes:1;
+-#ifdef CONFIG_FIEMAP
+-    bool skip_fiemap;
+-#endif
+ } BDRVRawState;
+ 
+ typedef struct BDRVRawReopenState {
+@@ -1308,52 +1302,6 @@ out:
+     return result;
+ }
+ 
+-static int try_fiemap(BlockDriverState *bs, off_t start, off_t *data,
+-                      off_t *hole, int nb_sectors)
+-{
+-#ifdef CONFIG_FIEMAP
+-    BDRVRawState *s = bs->opaque;
+-    int ret = 0;
+-    struct {
+-        struct fiemap fm;
+-        struct fiemap_extent fe;
+-    } f;
+-
+-    if (s->skip_fiemap) {
+-        return -ENOTSUP;
+-    }
+-
+-    f.fm.fm_start = start;
+-    f.fm.fm_length = (int64_t)nb_sectors * BDRV_SECTOR_SIZE;
+-    f.fm.fm_flags = FIEMAP_FLAG_SYNC;
+-    f.fm.fm_extent_count = 1;
+-    f.fm.fm_reserved = 0;
+-    if (ioctl(s->fd, FS_IOC_FIEMAP, &f) == -1) {
+-        s->skip_fiemap = true;
+-        return -errno;
+-    }
+-
+-    if (f.fm.fm_mapped_extents == 0) {
+-        /* No extents found, data is beyond f.fm.fm_start + f.fm.fm_length.
+-         * f.fm.fm_start + f.fm.fm_length must be clamped to the file size!
+-         */
+-        off_t length = lseek(s->fd, 0, SEEK_END);
+-        *hole = f.fm.fm_start;
+-        *data = MIN(f.fm.fm_start + f.fm.fm_length, length);
+-    } else {
+-        *data = f.fe.fe_logical;
+-        *hole = f.fe.fe_logical + f.fe.fe_length;
+-        if (f.fe.fe_flags & FIEMAP_EXTENT_UNWRITTEN) {
+-            ret |= BDRV_BLOCK_ZERO;
+-        }
+-    }
+-
+-    return ret;
+-#else
+-    return -ENOTSUP;
+-#endif
+-}
+-
+ static int try_seek_hole(BlockDriverState *bs, off_t start, off_t *data,
+                          off_t *hole)
+ {
+@@ -1422,13 +1370,10 @@ static int64_t coroutine_fn raw_co_get_block_status(BlockDriverState *bs,
+ 
+     ret = try_seek_hole(bs, start, &data, &hole);
+     if (ret < 0) {
+-        ret = try_fiemap(bs, start, &data, &hole, nb_sectors);
+-        if (ret < 0) {
+-            /* Assume everything is allocated. */
+-            data = 0;
+-            hole = start + nb_sectors * BDRV_SECTOR_SIZE;
+-            ret = 0;
+-        }
++        /* Assume everything is allocated. */
++        data = 0;
++        hole = start + nb_sectors * BDRV_SECTOR_SIZE;
++        ret = 0;
+     }
+ 
+     assert(ret >= 0);
+-- 
+1.8.3.1
+

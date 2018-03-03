@@ -1,0 +1,272 @@
+From 766239ec3a7be7b8bf250a677e478773ac1b96dd Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 9 Sep 2013 14:28:02 +0200
+Subject: [PATCH 11/38] qcow2: Batch discards
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1378736903-18489-12-git-send-email-kwolf@redhat.com>
+Patchwork-id: 54199
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 11/32] qcow2: Batch discards
+Bugzilla: 1005818
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Bugzilla: 1005818
+
+This optimises the discard operation for freed clusters by batching
+discard requests (both snapshot deletion and bdrv_discard end up
+updating the refcounts cluster by cluster).
+
+Note that we don't discard asynchronously, but keep s->lock held. This
+is to avoid that a freed cluster is reallocated and written to while the
+discard is still in flight.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 0b919fae31f4f80f78ebeab8388dc3a03cc5e4ed)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block/qcow2-cluster.c  | 22 +++++++++++---
+ block/qcow2-refcount.c | 82 ++++++++++++++++++++++++++++++++++++++++++++++++--
+ block/qcow2.c          |  1 +
+ block/qcow2.h          | 11 +++++++
+ 4 files changed, 109 insertions(+), 7 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-cluster.c  |   22 ++++++++++--
+ block/qcow2-refcount.c |   82 ++++++++++++++++++++++++++++++++++++++++++++++--
+ block/qcow2.c          |    1 +
+ block/qcow2.h          |   11 ++++++
+ 4 files changed, 109 insertions(+), 7 deletions(-)
+
+diff --git a/block/qcow2-cluster.c b/block/qcow2-cluster.c
+index 3191d6b..cca76d4 100644
+--- a/block/qcow2-cluster.c
++++ b/block/qcow2-cluster.c
+@@ -1377,18 +1377,25 @@ int qcow2_discard_clusters(BlockDriverState *bs, uint64_t offset,
+ 
+     nb_clusters = size_to_clusters(s, end_offset - offset);
+ 
++    s->cache_discards = true;
++
+     /* Each L2 table is handled by its own loop iteration */
+     while (nb_clusters > 0) {
+         ret = discard_single_l2(bs, offset, nb_clusters);
+         if (ret < 0) {
+-            return ret;
++            goto fail;
+         }
+ 
+         nb_clusters -= ret;
+         offset += (ret * s->cluster_size);
+     }
+ 
+-    return 0;
++    ret = 0;
++fail:
++    s->cache_discards = false;
++    qcow2_process_discards(bs, ret);
++
++    return ret;
+ }
+ 
+ /*
+@@ -1450,15 +1457,22 @@ int qcow2_zero_clusters(BlockDriverState *bs, uint64_t offset, int nb_sectors)
+     /* Each L2 table is handled by its own loop iteration */
+     nb_clusters = size_to_clusters(s, nb_sectors << BDRV_SECTOR_BITS);
+ 
++    s->cache_discards = true;
++
+     while (nb_clusters > 0) {
+         ret = zero_single_l2(bs, offset, nb_clusters);
+         if (ret < 0) {
+-            return ret;
++            goto fail;
+         }
+ 
+         nb_clusters -= ret;
+         offset += (ret * s->cluster_size);
+     }
+ 
+-    return 0;
++    ret = 0;
++fail:
++    s->cache_discards = false;
++    qcow2_process_discards(bs, ret);
++
++    return ret;
+ }
+diff --git a/block/qcow2-refcount.c b/block/qcow2-refcount.c
+index 7488988..1244693 100644
+--- a/block/qcow2-refcount.c
++++ b/block/qcow2-refcount.c
+@@ -420,6 +420,74 @@ fail_block:
+     return ret;
+ }
+ 
++void qcow2_process_discards(BlockDriverState *bs, int ret)
++{
++    BDRVQcowState *s = bs->opaque;
++    Qcow2DiscardRegion *d, *next;
++
++    QTAILQ_FOREACH_SAFE(d, &s->discards, next, next) {
++        QTAILQ_REMOVE(&s->discards, d, next);
++
++        /* Discard is optional, ignore the return value */
++        if (ret >= 0) {
++            bdrv_discard(bs->file,
++                         d->offset >> BDRV_SECTOR_BITS,
++                         d->bytes >> BDRV_SECTOR_BITS);
++        }
++
++        g_free(d);
++    }
++}
++
++static void update_refcount_discard(BlockDriverState *bs,
++                                    uint64_t offset, uint64_t length)
++{
++    BDRVQcowState *s = bs->opaque;
++    Qcow2DiscardRegion *d, *p, *next;
++
++    QTAILQ_FOREACH(d, &s->discards, next) {
++        uint64_t new_start = MIN(offset, d->offset);
++        uint64_t new_end = MAX(offset + length, d->offset + d->bytes);
++
++        if (new_end - new_start <= length + d->bytes) {
++            /* There can't be any overlap, areas ending up here have no
++             * references any more and therefore shouldn't get freed another
++             * time. */
++            assert(d->bytes + length == new_end - new_start);
++            d->offset = new_start;
++            d->bytes = new_end - new_start;
++            goto found;
++        }
++    }
++
++    d = g_malloc(sizeof(*d));
++    *d = (Qcow2DiscardRegion) {
++        .bs     = bs,
++        .offset = offset,
++        .bytes  = length,
++    };
++    QTAILQ_INSERT_TAIL(&s->discards, d, next);
++
++found:
++    /* Merge discard requests if they are adjacent now */
++    QTAILQ_FOREACH_SAFE(p, &s->discards, next, next) {
++        if (p == d
++            || p->offset > d->offset + d->bytes
++            || d->offset > p->offset + p->bytes)
++        {
++            continue;
++        }
++
++        /* Still no overlap possible */
++        assert(p->offset == d->offset + d->bytes
++            || d->offset == p->offset + p->bytes);
++
++        QTAILQ_REMOVE(&s->discards, p, next);
++        d->offset = MIN(d->offset, p->offset);
++        d->bytes += p->bytes;
++    }
++}
++
+ /* XXX: cache several refcount block clusters ? */
+ static int QEMU_WARN_UNUSED_RESULT update_refcount(BlockDriverState *bs,
+     int64_t offset, int64_t length, int addend, enum qcow2_discard_type type)
+@@ -488,15 +556,18 @@ static int QEMU_WARN_UNUSED_RESULT update_refcount(BlockDriverState *bs,
+             s->free_cluster_index = cluster_index;
+         }
+         refcount_block[block_index] = cpu_to_be16(refcount);
++
+         if (refcount == 0 && s->discard_passthrough[type]) {
+-            /* Try discarding, ignore errors */
+-            /* FIXME Doing this cluster by cluster will be painfully slow */
+-            bdrv_discard(bs->file, cluster_offset, 1);
++            update_refcount_discard(bs, cluster_offset, s->cluster_size);
+         }
+     }
+ 
+     ret = 0;
+ fail:
++    if (!s->cache_discards) {
++        qcow2_process_discards(bs, ret);
++    }
++
+     /* Write last changed block to disk */
+     if (refcount_block) {
+         int wret;
+@@ -755,6 +826,8 @@ int qcow2_update_snapshot_refcount(BlockDriverState *bs,
+     l1_table = NULL;
+     l1_size2 = l1_size * sizeof(uint64_t);
+ 
++    s->cache_discards = true;
++
+     /* WARNING: qcow2_snapshot_goto relies on this function not using the
+      * l1_table_offset when it is the current s->l1_table_offset! Be careful
+      * when changing this! */
+@@ -867,6 +940,9 @@ fail:
+         qcow2_cache_put(bs, s->l2_table_cache, (void**) &l2_table);
+     }
+ 
++    s->cache_discards = false;
++    qcow2_process_discards(bs, ret);
++
+     /* Update L1 only if it isn't deleted anyway (addend = -1) */
+     if (ret == 0 && addend >= 0 && l1_modified) {
+         for (i = 0; i < l1_size; i++) {
+diff --git a/block/qcow2.c b/block/qcow2.c
+index ef8a2ca..9383990 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -486,6 +486,7 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags)
+     }
+ 
+     QLIST_INIT(&s->cluster_allocs);
++    QTAILQ_INIT(&s->discards);
+ 
+     /* read qcow2 extensions */
+     if (qcow2_read_extensions(bs, header.header_length, ext_end, NULL)) {
+diff --git a/block/qcow2.h b/block/qcow2.h
+index 6f91b9a..3b2d5cd 100644
+--- a/block/qcow2.h
++++ b/block/qcow2.h
+@@ -147,6 +147,13 @@ typedef struct Qcow2Feature {
+     char    name[46];
+ } QEMU_PACKED Qcow2Feature;
+ 
++typedef struct Qcow2DiscardRegion {
++    BlockDriverState *bs;
++    uint64_t offset;
++    uint64_t bytes;
++    QTAILQ_ENTRY(Qcow2DiscardRegion) next;
++} Qcow2DiscardRegion;
++
+ typedef struct BDRVQcowState {
+     int cluster_bits;
+     int cluster_size;
+@@ -199,6 +206,8 @@ typedef struct BDRVQcowState {
+     size_t unknown_header_fields_size;
+     void* unknown_header_fields;
+     QLIST_HEAD(, Qcow2UnknownHeaderExtension) unknown_header_ext;
++    QTAILQ_HEAD (, Qcow2DiscardRegion) discards;
++    bool cache_discards;
+ } BDRVQcowState;
+ 
+ /* XXX: use std qcow open function ? */
+@@ -374,6 +383,8 @@ int qcow2_update_snapshot_refcount(BlockDriverState *bs,
+ int qcow2_check_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
+                           BdrvCheckMode fix);
+ 
++void qcow2_process_discards(BlockDriverState *bs, int ret);
++
+ /* qcow2-cluster.c functions */
+ int qcow2_grow_l1_table(BlockDriverState *bs, uint64_t min_size,
+                         bool exact_size);
+-- 
+1.7.1
+

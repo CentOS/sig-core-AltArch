@@ -1,0 +1,62 @@
+From 005308f5b469f749980310be141315e8bd46556f Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 15 Feb 2016 09:28:20 +0100
+Subject: [PATCH 07/18] vmdk: Set errp on failures in vmdk_open_vmdk4
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1455528511-9357-8-git-send-email-famz@redhat.com>
+Patchwork-id: 69173
+O-Subject: [RHEL-7.3 qemu-kvm PATCH 07/18] vmdk: Set errp on failures in vmdk_open_vmdk4
+Bugzilla: 1299250
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+BZ: https://bugzilla.redhat.com/show_bug.cgi?id=1299250
+
+Reported-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Don Koch <dkoch@verizon.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Message-id: 1417649314-13704-7-git-send-email-famz@redhat.com
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit d899d2e248b900c53dd9081bde9f110e05747433)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vmdk.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 69d8a6e..1247ea4 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -647,6 +647,7 @@ static int vmdk_open_vmdk4(BlockDriverState *bs,
+             bs->file->total_sectors * 512 - 1536,
+             &footer, sizeof(footer));
+         if (ret < 0) {
++            error_setg_errno(errp, -ret, "Failed to read footer");
+             return ret;
+         }
+ 
+@@ -658,6 +659,7 @@ static int vmdk_open_vmdk4(BlockDriverState *bs,
+             le32_to_cpu(footer.eos_marker.size) != 0  ||
+             le32_to_cpu(footer.eos_marker.type) != MARKER_END_OF_STREAM)
+         {
++            error_setg(errp, "Invalid footer");
+             return -EINVAL;
+         }
+ 
+@@ -688,6 +690,7 @@ static int vmdk_open_vmdk4(BlockDriverState *bs,
+     l1_entry_sectors = le32_to_cpu(header.num_gtes_per_gt)
+                         * le64_to_cpu(header.granularity);
+     if (l1_entry_sectors == 0) {
++        error_setg(errp, "L1 entry size is invalid");
+         return -EINVAL;
+     }
+     l1_size = (le64_to_cpu(header.capacity) + l1_entry_sectors - 1)
+-- 
+1.8.3.1
+

@@ -1,0 +1,101 @@
+From 4e424b837ade87f4d44cbd51e8994e4ac8f36515 Mon Sep 17 00:00:00 2001
+From: Vadim Rozenfeld <vrozenfe@redhat.com>
+Date: Mon, 3 Mar 2014 12:09:16 +0100
+Subject: [PATCH 04/12] kvm: make availability of Hyper-V enlightenments dependent on KVM_CAP_HYPERV
+
+RH-Author: Vadim Rozenfeld <vrozenfe@redhat.com>
+Message-id: <1393848564-10511-5-git-send-email-vrozenfe@redhat.com>
+Patchwork-id: 57960
+O-Subject: [RHEL-7.0 qemu-kvm v4 PATCH 04/12] kvm: make availability of Hyper-V enlightenments dependent on KVM_CAP_HYPERV
+Bugzilla: 1004773
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+The MS docs specify HV_X64_MSR_HYPERCALL as a mandatory interface,
+thus we must provide the MSRs even if the user only specified
+features that, like relaxed timing, in principle don't require them.
+And the MSRs are only there if the hypervisor has KVM_CAP_HYPERV.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 7bc3d711b45d6feacab96eda410c5655f4ddafcf)
+---
+ target-i386/kvm.c | 16 +++++++++++-----
+ 1 file changed, 11 insertions(+), 5 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/kvm.c |   16 +++++++++++-----
+ 1 files changed, 11 insertions(+), 5 deletions(-)
+
+diff --git a/target-i386/kvm.c b/target-i386/kvm.c
+index 3688371..495021b 100644
+--- a/target-i386/kvm.c
++++ b/target-i386/kvm.c
+@@ -70,6 +70,8 @@ static bool has_msr_pv_eoi_en;
+ static bool has_msr_misc_enable;
+ static bool has_msr_kvm_steal_time;
+ static int lm_capable_kernel;
++static bool has_msr_hv_hypercall;
++static bool has_msr_hv_vapic;
+ 
+ static bool has_msr_architectural_pmu;
+ static uint32_t num_architectural_pmu_counters;
+@@ -433,8 +435,10 @@ static bool hyperv_hypercall_available(X86CPU *cpu)
+ 
+ static bool hyperv_enabled(X86CPU *cpu)
+ {
+-    return hyperv_hypercall_available(cpu) ||
+-           cpu->hyperv_relaxed_timing;
++    CPUState *cs = CPU(cpu);
++    return kvm_check_extension(cs->kvm_state, KVM_CAP_HYPERV) > 0 &&
++           (hyperv_hypercall_available(cpu) ||
++            cpu->hyperv_relaxed_timing);
+ }
+ 
+ #define KVM_MAX_CPUID_ENTRIES  100
+@@ -489,6 +493,7 @@ int kvm_arch_init_vcpu(CPUState *cs)
+         if (cpu->hyperv_vapic) {
+             c->eax |= HV_X64_MSR_HYPERCALL_AVAILABLE;
+             c->eax |= HV_X64_MSR_APIC_ACCESS_AVAILABLE;
++            has_msr_hv_vapic = true;
+         }
+ 
+         c = &cpuid_data.entries[cpuid_i++];
+@@ -496,7 +501,7 @@ int kvm_arch_init_vcpu(CPUState *cs)
+         if (cpu->hyperv_relaxed_timing) {
+             c->eax |= HV_X64_RELAXED_TIMING_RECOMMENDED;
+         }
+-        if (cpu->hyperv_vapic) {
++        if (has_msr_hv_vapic) {
+             c->eax |= HV_X64_APIC_ACCESS_RECOMMENDED;
+         }
+         c->ebx = cpu->hyperv_spinlock_attempts;
+@@ -507,6 +512,7 @@ int kvm_arch_init_vcpu(CPUState *cs)
+         c->ebx = 0x40;
+ 
+         kvm_base = KVM_CPUID_SIGNATURE_NEXT;
++        has_msr_hv_hypercall = true;
+     }
+ 
+     memcpy(signature, "KVMKVMKVM\0\0\0", 12);
+@@ -1191,11 +1197,11 @@ static int kvm_put_msrs(X86CPU *cpu, int level)
+             kvm_msr_entry_set(&msrs[n++], MSR_CORE_PERF_GLOBAL_CTRL,
+                               env->msr_global_ctrl);
+         }
+-        if (hyperv_hypercall_available(cpu)) {
++        if (has_msr_hv_hypercall) {
+             kvm_msr_entry_set(&msrs[n++], HV_X64_MSR_GUEST_OS_ID, 0);
+             kvm_msr_entry_set(&msrs[n++], HV_X64_MSR_HYPERCALL, 0);
+         }
+-        if (cpu->hyperv_vapic) {
++        if (has_msr_hv_vapic) {
+             kvm_msr_entry_set(&msrs[n++], HV_X64_MSR_APIC_ASSIST_PAGE, 0);
+         }
+     }
+-- 
+1.7.1
+

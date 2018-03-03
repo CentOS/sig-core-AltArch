@@ -1,0 +1,215 @@
+From 771a3a333eb0c9299a69a78ddb9c4181850b827d Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Thu, 21 Nov 2013 16:27:18 +0100
+Subject: [PATCH 08/14] error reason in BLOCK_IO_ERROR / BLOCK_JOB_ERROR events (RHEL 6->7 fwd)
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1385051239-3677-3-git-send-email-lersek@redhat.com>
+Patchwork-id: 55835
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 2/3] error reason in BLOCK_IO_ERROR / BLOCK_JOB_ERROR events (RHEL 6->7 fwd)
+Bugzilla: 971938
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Jiri Denemark <jdenemar@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=971938
+
+This is the RHEL-7 forward port of the RHEL-6 only commit
+
+  commit a635efd74e0968dd4402ba87679af3015930a8cb
+  Author: Luiz Capitulino <lcapitulino@redhat.com>
+  Date:   Fri May 14 22:49:20 2010 -0300
+
+      QMP: Add error reason to BLOCK_IO_ERROR event
+
+The RHEL-6 patch had to be updated due to the following three upstream
+commits that we have in RHEL-7 by virtue of forking:
+
+  [v1.1.0]
+  commit 329c0a48a92664eb48b70993c0f2473b37aa7429
+  Author: Luiz Capitulino <lcapitulino@redhat.com>
+  Date:   Wed Jan 25 16:59:43 2012 -0200
+
+      block: Rename bdrv_mon_event() & BlockMonEventAction
+
+  [v1.3.0]
+  commit 3e1caa5f76a9104a0d574b0f28b3dafe986a8408
+  Author: Paolo Bonzini <pbonzini@redhat.com>
+  Date:   Fri Sep 28 17:22:57 2012 +0200
+
+      iostatus: reorganize io error code
+
+  [v1.3.0]
+  commit 32c81a4a6ecc3f50efc9c270a269e4d3d8a9fbd5
+  Author: Paolo Bonzini <pbonzini@redhat.com>
+  Date:   Fri Sep 28 17:22:58 2012 +0200
+
+      block: introduce block job error
+
+The 2nd and 3rd of these actually simplified the RHEL-6 to RHEL-7
+forward-port because it had concentrated all calls to
+bdrv_emit_qmp_error_event() to two locations, taking the error code as an
+input parameter. The forward-ported patch can simply forward the error
+code now.
+
+RHEL-6 doesn't have BLOCK_JOB_ERROR at all. This forward-port extends the
+RH-specific error reason reporting to BLOCK_JOB_ERROR automatically.
+(Except for "QMP/qmp-events.txt", where BLOCK_JOB_ERROR's documentation
+needed manual patching.)
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+---
+ include/block/block_int.h |  4 +++-
+ block.c                   | 33 +++++++++++++++++++++++++++++++--
+ blockjob.c                |  3 ++-
+ QMP/qmp-events.txt        | 18 ++++++++++++++++--
+ 4 files changed, 52 insertions(+), 6 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ QMP/qmp-events.txt        |   18 ++++++++++++++++--
+ block.c                   |   33 +++++++++++++++++++++++++++++++--
+ blockjob.c                |    3 ++-
+ include/block/block_int.h |    4 +++-
+ 4 files changed, 52 insertions(+), 6 deletions(-)
+
+diff --git a/QMP/qmp-events.txt b/QMP/qmp-events.txt
+index 79fb1c9..c8c6d75 100644
+--- a/QMP/qmp-events.txt
++++ b/QMP/qmp-events.txt
+@@ -53,13 +53,20 @@ Data:
+     "ignore": error has been ignored
+     "report": error has been reported to the device
+     "stop": error caused VM to be stopped
++- "__com.redhat_reason": error reason, this is a RHEL7 extension, it's one of
++  the following (json-string):
++    "eio": errno EIO
++    "eperm": errno EPERM
++    "enospc": errno ENOSPC
++    "eother": any other errno (other than EIO, EPERM, ENOSPC)
+ 
+ Example:
+ 
+ { "event": "BLOCK_IO_ERROR",
+     "data": { "device": "ide0-hd1",
+               "operation": "write",
+-              "action": "stop" },
++              "action": "stop",
++              "__com.redhat_reason": "enospc" },
+     "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
+ 
+ Note: If action is "stop", a STOP event will eventually follow the
+@@ -131,13 +138,20 @@ Data:
+     "ignore": error has been ignored, the job may fail later
+     "report": error will be reported and the job canceled
+     "stop": error caused job to be paused
++- "__com.redhat_reason": error reason, this is a RHEL7 extension, it's one of
++  the following (json-string):
++    "eio": errno EIO
++    "eperm": errno EPERM
++    "enospc": errno ENOSPC
++    "eother": any other errno (other than EIO, EPERM, ENOSPC)
+ 
+ Example:
+ 
+ { "event": "BLOCK_JOB_ERROR",
+     "data": { "device": "ide0-hd1",
+               "operation": "write",
+-              "action": "stop" },
++              "action": "stop",
++              "__com.redhat_reason": "enospc" },
+     "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
+ 
+ BLOCK_JOB_READY
+diff --git a/block.c b/block.c
+index 72ab36c..68755bf 100644
+--- a/block.c
++++ b/block.c
+@@ -1723,9 +1723,36 @@ void bdrv_set_dev_ops(BlockDriverState *bs, const BlockDevOps *ops,
+     bs->dev_opaque = opaque;
+ }
+ 
++#define BDRV_REASON_KEY RFQDN_REDHAT "reason"
++
++/* RHEL7 vendor extension */
++static void bdrv_put_rhel7_reason(QDict *event, int error)
++{
++    const char *reason;
++
++    switch (error) {
++    case ENOSPC:
++        reason = "enospc";
++        break;
++    case EPERM:
++        reason = "eperm";
++        break;
++    case EIO:
++        reason = "eio";
++        break;
++    default:
++        reason = "eother";
++        break;
++    }
++
++    qdict_put(event, BDRV_REASON_KEY, qstring_from_str(reason));
++}
++
+ void bdrv_emit_qmp_error_event(const BlockDriverState *bdrv,
+                                enum MonitorEvent ev,
+-                               BlockErrorAction action, bool is_read)
++                               BlockErrorAction action,
++                               int error,
++                               bool is_read)
+ {
+     QObject *data;
+     const char *action_str;
+@@ -1748,6 +1775,7 @@ void bdrv_emit_qmp_error_event(const BlockDriverState *bdrv,
+                               bdrv->device_name,
+                               action_str,
+                               is_read ? "read" : "write");
++    bdrv_put_rhel7_reason(qobject_to_qdict(data), error);
+     monitor_protocol_event(ev, data);
+ 
+     qobject_decref(data);
+@@ -2905,7 +2933,8 @@ void bdrv_error_action(BlockDriverState *bs, BlockErrorAction action,
+                        bool is_read, int error)
+ {
+     assert(error >= 0);
+-    bdrv_emit_qmp_error_event(bs, QEVENT_BLOCK_IO_ERROR, action, is_read);
++    bdrv_emit_qmp_error_event(bs, QEVENT_BLOCK_IO_ERROR, action, error,
++                              is_read);
+     if (action == BDRV_ACTION_STOP) {
+         vm_stop(RUN_STATE_IO_ERROR);
+         bdrv_iostatus_set_err(bs, error);
+diff --git a/blockjob.c b/blockjob.c
+index ca80df1..c0a22d9 100644
+--- a/blockjob.c
++++ b/blockjob.c
+@@ -271,7 +271,8 @@ BlockErrorAction block_job_error_action(BlockJob *job, BlockDriverState *bs,
+     default:
+         abort();
+     }
+-    bdrv_emit_qmp_error_event(job->bs, QEVENT_BLOCK_JOB_ERROR, action, is_read);
++    bdrv_emit_qmp_error_event(job->bs, QEVENT_BLOCK_JOB_ERROR, action, error,
++                              is_read);
+     if (action == BDRV_ACTION_STOP) {
+         block_job_pause(job);
+         block_job_iostatus_set_err(job, error);
+diff --git a/include/block/block_int.h b/include/block/block_int.h
+index 54708c6..8223f5b 100644
+--- a/include/block/block_int.h
++++ b/include/block/block_int.h
+@@ -320,7 +320,9 @@ int is_windows_drive(const char *filename);
+ #endif
+ void bdrv_emit_qmp_error_event(const BlockDriverState *bdrv,
+                                enum MonitorEvent ev,
+-                               BlockErrorAction action, bool is_read);
++                               BlockErrorAction action,
++                               int error,
++                               bool is_read);
+ 
+ /**
+  * stream_start:
+-- 
+1.7.1
+

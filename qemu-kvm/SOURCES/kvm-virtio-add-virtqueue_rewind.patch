@@ -1,0 +1,86 @@
+From 6b2d5dafa9847ce29e5cddeb369b35db5ce076b1 Mon Sep 17 00:00:00 2001
+From: Ladi Prosek <lprosek@redhat.com>
+Date: Thu, 10 Nov 2016 23:00:50 +0100
+Subject: [PATCH 7/8] virtio: add virtqueue_rewind()
+
+RH-Author: Ladi Prosek <lprosek@redhat.com>
+Message-id: <1478797251-10302-1-git-send-email-lprosek@redhat.com>
+Patchwork-id: 72818
+O-Subject: [PATCH v2 7/6] virtio: add virtqueue_rewind()
+Bugzilla: 1377968
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Stefan Hajnoczi <stefanha@redhat.com>
+
+virtqueue_discard() requires a VirtQueueElement but virtio-balloon does
+not migrate its in-use element.  Introduce a new function that is
+similar to virtqueue_discard() but doesn't require a VirtQueueElement.
+
+This will allow virtio-balloon to access element again after migration
+with the usual proviso that the guest may have modified the vring since
+last time.
+
+Cc: Michael S. Tsirkin <mst@redhat.com>
+Cc: Roman Kagan <rkagan@virtuozzo.com>
+Cc: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Ladi Prosek <lprosek@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 297a75e6c55d91db2704a3d6e4029d99c7df51fd)
+Signed-off-by: Ladi Prosek <lprosek@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/virtio/virtio.c         | 22 ++++++++++++++++++++++
+ include/hw/virtio/virtio.h |  1 +
+ 2 files changed, 23 insertions(+)
+
+diff --git a/hw/virtio/virtio.c b/hw/virtio/virtio.c
+index cdb21b1..fe6b032 100644
+--- a/hw/virtio/virtio.c
++++ b/hw/virtio/virtio.c
+@@ -259,6 +259,28 @@ void virtqueue_discard(VirtQueue *vq, const VirtQueueElement *elem,
+     virtqueue_unmap_sg(vq, elem, len);
+ }
+ 
++/* virtqueue_rewind:
++ * @vq: The #VirtQueue
++ * @num: Number of elements to push back
++ *
++ * Pretend that elements weren't popped from the virtqueue.  The next
++ * virtqueue_pop() will refetch the oldest element.
++ *
++ * Use virtqueue_discard() instead if you have a VirtQueueElement.
++ *
++ * Returns: true on success, false if @num is greater than the number of in use
++ * elements.
++ */
++bool virtqueue_rewind(VirtQueue *vq, unsigned int num)
++{
++    if (num > vq->inuse) {
++        return false;
++    }
++    vq->last_avail_idx -= num;
++    vq->inuse -= num;
++    return true;
++}
++
+ void virtqueue_fill(VirtQueue *vq, const VirtQueueElement *elem,
+                     unsigned int len, unsigned int idx)
+ {
+diff --git a/include/hw/virtio/virtio.h b/include/hw/virtio/virtio.h
+index de32425..d9bfe4c 100644
+--- a/include/hw/virtio/virtio.h
++++ b/include/hw/virtio/virtio.h
+@@ -167,6 +167,7 @@ void virtqueue_push(VirtQueue *vq, const VirtQueueElement *elem,
+ void virtqueue_flush(VirtQueue *vq, unsigned int count);
+ void virtqueue_discard(VirtQueue *vq, const VirtQueueElement *elem,
+                        unsigned int len);
++bool virtqueue_rewind(VirtQueue *vq, unsigned int num);
+ void virtqueue_fill(VirtQueue *vq, const VirtQueueElement *elem,
+                     unsigned int len, unsigned int idx);
+ 
+-- 
+1.8.3.1
+

@@ -1,0 +1,64 @@
+From 8f6bbf90e819d271a62f2b59732d188b51a96128 Mon Sep 17 00:00:00 2001
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+Date: Fri, 16 Jan 2015 17:35:37 +0100
+Subject: [PATCH 05/16] migration_cancel: shutdown migration socket
+
+Message-id: <1421429737-23581-4-git-send-email-dgilbert@redhat.com>
+Patchwork-id: 63334
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 3/3] migration_cancel: shutdown migration socket
+Bugzilla: 1086168
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+
+Force shutdown on migration socket on cancel to cause the cancel
+to complete even if the socket is blocked on a dead network.
+
+Signed-off-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Amit Shah <amit.shah@redhat.com>
+Signed-off-by: Amit Shah <amit.shah@redhat.com>
+(cherry picked from commit a26ba26e214911dc879a23e797d2c269cdb38577)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	migration.c
+---
+ migration.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/migration.c b/migration.c
+index 44b993a..e8c5939 100644
+--- a/migration.c
++++ b/migration.c
+@@ -331,6 +331,7 @@ void migrate_fd_error(MigrationState *s)
+ static void migrate_fd_cancel(MigrationState *s)
+ {
+     int old_state ;
++    QEMUFile *f = migrate_get_current()->file;
+     DPRINTF("cancelling migration\n");
+ 
+     do {
+@@ -340,6 +341,17 @@ static void migrate_fd_cancel(MigrationState *s)
+         }
+         migrate_set_state(s, old_state, MIG_STATE_CANCELLING);
+     } while (s->state != MIG_STATE_CANCELLING);
++
++    /*
++     * If we're unlucky the migration code might be stuck somewhere in a
++     * send/write while the network has failed and is waiting to timeout;
++     * if we've got shutdown(2) available then we can force it to quit.
++     * The outgoing qemu file gets closed in migrate_fd_cleanup that is
++     * called in a bh, so there is no race against this cancel.
++     */
++    if (s->state == MIG_STATE_CANCELLING && f) {
++        qemu_file_shutdown(f);
++    }
+ }
+ 
+ void add_migration_state_change_notifier(Notifier *notify)
+-- 
+1.8.3.1
+

@@ -1,0 +1,67 @@
+From 66543c63c5be389816ab45cdc6eed93094345281 Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Wed, 31 Jul 2013 08:07:32 +0200
+Subject: pc: rhel6-compat: enable S3, S4 for 6.1 and lower machine types
+
+Message-id: <1374235471-27096-3-git-send-email-armbru@redhat.com>
+Patchwork-id: 52605
+O-Subject: [RHEL-7 PATCH qemu-kvm 2/2] pc: rhel6-compat: enable S3, S4 for 6.1 and lower machine types
+Bugzilla: 980840
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Gleb Natapov <gleb@redhat.com>
+
+From: Amit Shah <amit.shah@redhat.com>
+
+We don't advertise S3/S4 support by default since RHEL6.2:
+
+RHEL6.4 has S3/S4 advertisement disabled by default (can be overriden by
+    the disable_s3 and disable_s4 properties of the PIIX4).
+RHEL6.3 and 6.2 had S3/S4 advertisement disabled by default (can be
+    overriden by using the alternative bios-pm.bin SeaBIOS image).
+RHEL6.1 and 6.0 had S3/S4 advertisement enabled by default.
+
+We need to ensure we keep that behaviour, so adjust the 6.1 and 6.0
+machine types to allow S3/S4.
+
+As a side note, migrating a RHEL6.0 or RHEL6.1 VM to a RHEL6.2 or 6.3
+host would have caused a guest-visible change, but we can do better
+starting with 6.4, so let's do the right thing now.  This, however, has
+the potential to cause two guest-visible changes if a VM is migrated
+like this:
+
+RHEL6.1 host --1--> RHEL6.3 host --2--> RHEL6.4 host
+
+After (1) above, guest will stop seeing S3/S4 advertised.  After (2),
+S3/S4 will be advertised again.
+
+Signed-off-by: Amit Shah <amit.shah@redhat.com>
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+(cherry picked from commit ffc7768db990f0587b84e08e06095ed26f095fde)
+
+Picked from qemu-kvm-rhel6.
+
+Conflicts:
+        hw/pc.c
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index 5ca2cc3..23002ce 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -998,6 +998,14 @@ static QEMUMachine pc_machine_rhel620 = {
+ #define PC_RHEL6_1_COMPAT \
+     PC_RHEL6_2_COMPAT,\
+     {\
++        .driver   = "PIIX4_PM",\
++        .property = "disable_s3",\
++        .value    = "0",\
++    },{\
++        .driver   = "PIIX4_PM",\
++        .property = "disable_s4",\
++        .value    = "0",\
++    },{\
+         .driver   = "qxl",\
+         .property = "revision",\
+         .value    = stringify(2),\

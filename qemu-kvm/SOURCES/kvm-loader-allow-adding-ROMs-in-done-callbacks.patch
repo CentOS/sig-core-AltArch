@@ -1,0 +1,87 @@
+From 26aeacdc397f54120d52ae10b543bb4050b940c7 Mon Sep 17 00:00:00 2001
+Message-Id: <26aeacdc397f54120d52ae10b543bb4050b940c7.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:18:39 +0100
+Subject: [PATCH 38/56] loader: allow adding ROMs in done callbacks
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-39-git-send-email-mst@redhat.com>
+Patchwork-id: 56344
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 38/57] loader: allow adding ROMs in done callbacks
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Don't abort if machine done callbacks add ROMs.
+
+Reviewed-by: Gerd Hoffmann <kraxel@redhat.com>
+Tested-by: Gerd Hoffmann <kraxel@redhat.com>
+Reviewed-by: Igor Mammedov <imammedo@redhat.com>
+Tested-by: Igor Mammedov <imammedo@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit d916b46494a2a477636a59900ab1609de192f47a)
+---
+ include/hw/loader.h | 1 +
+ hw/core/loader.c    | 6 +++++-
+ vl.c                | 3 +++
+ 3 files changed, 9 insertions(+), 1 deletion(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/core/loader.c    | 6 +++++-
+ include/hw/loader.h | 1 +
+ vl.c                | 3 +++
+ 3 files changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/hw/core/loader.c b/hw/core/loader.c
+index ab4c7bd..4e72e01 100644
+--- a/hw/core/loader.c
++++ b/hw/core/loader.c
+@@ -777,10 +777,14 @@ int rom_load_all(void)
+         rom->isrom = section.size && memory_region_is_rom(section.mr);
+     }
+     qemu_register_reset(rom_reset, NULL);
+-    roms_loaded = 1;
+     return 0;
+ }
+ 
++void rom_load_done(void)
++{
++    roms_loaded = 1;
++}
++
+ void rom_set_fw(FWCfgState *f)
+ {
+     fw_cfg = f;
+diff --git a/include/hw/loader.h b/include/hw/loader.h
+index 1381a1d..50a017b 100644
+--- a/include/hw/loader.h
++++ b/include/hw/loader.h
+@@ -33,6 +33,7 @@ void *rom_add_blob(const char *name, const void *blob, size_t len,
+ int rom_add_elf_program(const char *name, void *data, size_t datasize,
+                         size_t romsize, hwaddr addr);
+ int rom_load_all(void);
++void rom_load_done(void);
+ void rom_set_fw(FWCfgState *f);
+ int rom_copy(uint8_t *dest, hwaddr addr, size_t size);
+ void *rom_ptr(hwaddr addr);
+diff --git a/vl.c b/vl.c
+index 9b1738b..0cbbdf0 100644
+--- a/vl.c
++++ b/vl.c
+@@ -4318,6 +4318,9 @@ int main(int argc, char **argv, char **envp)
+     qemu_register_reset(qbus_reset_all_fn, sysbus_get_default());
+     qemu_run_machine_init_done_notifiers();
+ 
++    /* Done notifiers can load ROMs */
++    rom_load_done();
++
+     qemu_system_reset(VMRESET_SILENT);
+     if (loadvm) {
+         if (load_vmstate(loadvm) < 0) {
+-- 
+1.7.11.7
+

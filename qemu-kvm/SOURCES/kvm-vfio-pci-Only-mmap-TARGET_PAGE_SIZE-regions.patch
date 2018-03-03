@@ -1,0 +1,61 @@
+From daa0c48addc50413b79612d9e7251a9cbf35af48 Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Mon, 20 Nov 2017 16:21:44 +0100
+Subject: [PATCH] vfio/pci: Only mmap >= TARGET_PAGE_SIZE regions
+
+RH-Author: Alex Williamson <alex.williamson@redhat.com>
+Message-id: <20171120162044.30263.60064.stgit@gimli.home>
+Patchwork-id: 77755
+O-Subject: [RHEL-7.4.z qemu-kvm PATCH] vfio/pci: Only mmap >= TARGET_PAGE_SIZE regions
+Bugzilla: 1515110
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Auger Eric <eric.auger@redhat.com>
+
+Upstream Status: RHEL-only (very small subset of db0da029a185)
+Tested: Teradici USB assignment
+
+Upstream kernel commit 05f0c03fbac1 ('vfio-pci: Allow to mmap sub-page
+MMIO BARs if the mmio page is exclusive') [RHEL-7.4 390f15a45024] allows
+vfio-pci to expose the VFIO_REGION_INFO_FLAG_MMAP flag, indicating the
+region can be mmap'd, for sub-page PCI BARs iff the BAR is page aligned
+and the remainder of the page can be reserved to ensure that it's not
+used for other purposes.  Unfortunately QEMU versions prior to v2.6.0
+blindly accept the MMAP flag with no special handling of these sub-page
+mmaps.  This went unnoticed upstream, but was inadvertently fixed by
+commit db0da029a185 ('vfio: Generalize region support') which ensures
+that the region size is a multiple of page size.  This returns us to
+the previous behavior where sub-page regions are not mmap'd, even though
+the kernel now allows it.  This QEMU commit has since been picked up in
+qemu-kvm with the backport of the above as a33e922436f7.  qemu-kvm-rhev
+has had this support since RHEL-7.3.  Furthermore, upstream commit
+95251725e335 ('vfio: Add support for mmapping sub-page MMIO BARs')
+allows QEMU to fully make use of these sub-page mmaps.  qemu-kvm-rhev
+acquired this capability in the RHEL-7.4 rebase.
+
+Here we extract only the portion of db0da029a185 which excludes sub-page
+regions from being mmap'd.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index 4fdc09a..adfefec 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -2576,7 +2576,8 @@ static int vfio_mmap_bar(VFIOBAR *bar, MemoryRegion *mem, MemoryRegion *submem,
+ {
+     int ret = 0;
+ 
+-    if (VFIO_ALLOW_MMAP && size && bar->flags & VFIO_REGION_INFO_FLAG_MMAP) {
++    if (VFIO_ALLOW_MMAP && size && bar->flags & VFIO_REGION_INFO_FLAG_MMAP &&
++        !(size & ~TARGET_PAGE_MASK)) {
+         int prot = 0;
+ 
+         if (bar->flags & VFIO_REGION_INFO_FLAG_READ) {
+-- 
+1.8.3.1
+

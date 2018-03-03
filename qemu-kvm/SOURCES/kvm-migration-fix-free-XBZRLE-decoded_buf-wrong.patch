@@ -1,0 +1,140 @@
+From 0726ca63bf611741889fb77f68afd9e7e18d4e47 Mon Sep 17 00:00:00 2001
+From: Orit Wasserman <owasserm@redhat.com>
+Date: Tue, 11 Feb 2014 14:56:37 +0100
+Subject: [PATCH 18/28] migration:fix free XBZRLE decoded_buf wrong
+
+RH-Author: Orit Wasserman <owasserm@redhat.com>
+Message-id: <1392130597-23600-3-git-send-email-owasserm@redhat.com>
+Patchwork-id: 57213
+O-Subject: [RHEL7 qemu-kvm PATCH 2/2] migration:fix free XBZRLE decoded_buf wrong
+Bugzilla: 1038540
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+
+From: "Gonglei (Arei)" <arei.gonglei@huawei.com>
+
+When qemu do live migration with xbzrle, qemu malloc decoded_buf
+at destination end but free it at source end. It will crash qemu
+by double free error in some scenarios. Splitting the XBZRLE structure
+for clear logic distinguishing src/dst side.
+
+Signed-off-by: ChenLiang <chenliang88@huawei.com>
+Reviewed-by: Peter Maydell <peter.maydell@linaro.org>
+Reviewed-by: Orit Wasserman <owasserm@redhat.com>
+Signed-off-by: GongLei <arei.gonglei@huawei.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit 905f26f2221e139ac0e7317ddac158c50f5cf876)
+---
+ arch_init.c                   | 22 ++++++++++++----------
+ include/migration/migration.h |  1 +
+ migration.c                   |  1 +
+ 3 files changed, 14 insertions(+), 10 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ arch_init.c                   |   22 ++++++++++++----------
+ include/migration/migration.h |    1 +
+ migration.c                   |    1 +
+ 3 files changed, 14 insertions(+), 10 deletions(-)
+
+diff --git a/arch_init.c b/arch_init.c
+index 65148d6..31bf690 100644
+--- a/arch_init.c
++++ b/arch_init.c
+@@ -164,17 +164,15 @@ static struct {
+     uint8_t *encoded_buf;
+     /* buffer for storing page content */
+     uint8_t *current_buf;
+-    /* buffer used for XBZRLE decoding */
+-    uint8_t *decoded_buf;
+     /* Cache for XBZRLE */
+     PageCache *cache;
+ } XBZRLE = {
+     .encoded_buf = NULL,
+     .current_buf = NULL,
+-    .decoded_buf = NULL,
+     .cache = NULL,
+ };
+-
++/* buffer used for XBZRLE decoding */
++static uint8_t *xbzrle_decoded_buf;
+ 
+ int64_t xbzrle_cache_resize(int64_t new_size)
+ {
+@@ -608,6 +606,12 @@ uint64_t ram_bytes_total(void)
+     return total;
+ }
+ 
++void free_xbzrle_decoded_buf(void)
++{
++    g_free(xbzrle_decoded_buf);
++    xbzrle_decoded_buf = NULL;
++}
++
+ static void migration_end(void)
+ {
+     if (migration_bitmap) {
+@@ -621,11 +625,9 @@ static void migration_end(void)
+         g_free(XBZRLE.cache);
+         g_free(XBZRLE.encoded_buf);
+         g_free(XBZRLE.current_buf);
+-        g_free(XBZRLE.decoded_buf);
+         XBZRLE.cache = NULL;
+         XBZRLE.encoded_buf = NULL;
+         XBZRLE.current_buf = NULL;
+-        XBZRLE.decoded_buf = NULL;
+     }
+ }
+ 
+@@ -830,8 +832,8 @@ static int load_xbzrle(QEMUFile *f, ram_addr_t addr, void *host)
+     unsigned int xh_len;
+     int xh_flags;
+ 
+-    if (!XBZRLE.decoded_buf) {
+-        XBZRLE.decoded_buf = g_malloc(TARGET_PAGE_SIZE);
++    if (!xbzrle_decoded_buf) {
++        xbzrle_decoded_buf = g_malloc(TARGET_PAGE_SIZE);
+     }
+ 
+     /* extract RLE header */
+@@ -848,10 +850,10 @@ static int load_xbzrle(QEMUFile *f, ram_addr_t addr, void *host)
+         return -1;
+     }
+     /* load data and decode */
+-    qemu_get_buffer(f, XBZRLE.decoded_buf, xh_len);
++    qemu_get_buffer(f, xbzrle_decoded_buf, xh_len);
+ 
+     /* decode RLE */
+-    ret = xbzrle_decode_buffer(XBZRLE.decoded_buf, xh_len, host,
++    ret = xbzrle_decode_buffer(xbzrle_decoded_buf, xh_len, host,
+                                TARGET_PAGE_SIZE);
+     if (ret == -1) {
+         fprintf(stderr, "Failed to load XBZRLE page - decode error!\n");
+diff --git a/include/migration/migration.h b/include/migration/migration.h
+index 140e6b4..9314511 100644
+--- a/include/migration/migration.h
++++ b/include/migration/migration.h
+@@ -98,6 +98,7 @@ MigrationState *migrate_get_current(void);
+ uint64_t ram_bytes_remaining(void);
+ uint64_t ram_bytes_transferred(void);
+ uint64_t ram_bytes_total(void);
++void free_xbzrle_decoded_buf(void);
+ 
+ void acct_update_position(QEMUFile *f, size_t size, bool zero);
+ 
+diff --git a/migration.c b/migration.c
+index b6de990..93de654 100644
+--- a/migration.c
++++ b/migration.c
+@@ -104,6 +104,7 @@ static void process_incoming_migration_co(void *opaque)
+ 
+     ret = qemu_loadvm_state(f);
+     qemu_fclose(f);
++    free_xbzrle_decoded_buf();
+     if (ret < 0) {
+         fprintf(stderr, "load of migration failed\n");
+         exit(EXIT_FAILURE);
+-- 
+1.7.1
+

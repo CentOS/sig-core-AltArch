@@ -1,0 +1,240 @@
+From 0dfb1b6f831f5b2a1fdf5e77330db3c95db2e464 Mon Sep 17 00:00:00 2001
+From: John Snow <jsnow@redhat.com>
+Date: Mon, 23 Nov 2015 17:38:33 +0100
+Subject: [PATCH 14/27] qemu-io: Interface cleanup
+
+RH-Author: John Snow <jsnow@redhat.com>
+Message-id: <1448300320-7772-15-git-send-email-jsnow@redhat.com>
+Patchwork-id: 68444
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 14/21] qemu-io: Interface cleanup
+Bugzilla: 1272523
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 3d21994f9c511cb63220fef5abea164b83fbb997)
+Signed-off-by: John Snow <jsnow@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+  qemu-io-cmds.c: include block/qapi.h context
+  qemu-io.c       include block/qapi.h context
+
+Signed-off-by: John Snow <jsnow@redhat.com>
+---
+ cmd.h             | 48 ------------------------------------------------
+ include/qemu-io.h | 46 ++++++++++++++++++++++++++++++++++++++++++++++
+ qemu-io-cmds.c    | 14 +++++++-------
+ qemu-io.c         |  7 +++----
+ 4 files changed, 56 insertions(+), 59 deletions(-)
+ delete mode 100644 cmd.h
+ create mode 100644 include/qemu-io.h
+
+diff --git a/cmd.h b/cmd.h
+deleted file mode 100644
+index 9907795..0000000
+--- a/cmd.h
++++ /dev/null
+@@ -1,48 +0,0 @@
+-/*
+- * Copyright (c) 2000-2005 Silicon Graphics, Inc.
+- * All Rights Reserved.
+- *
+- * This program is free software; you can redistribute it and/or
+- * modify it under the terms of the GNU General Public License as
+- * published by the Free Software Foundation.
+- *
+- * This program is distributed in the hope that it would be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program; if not, see <http://www.gnu.org/licenses/>.
+- */
+-#ifndef __COMMAND_H__
+-#define __COMMAND_H__
+-
+-#include "qemu-common.h"
+-
+-#define CMD_FLAG_GLOBAL	((int)0x80000000)	/* don't iterate "args" */
+-
+-extern BlockDriverState *qemuio_bs;
+-
+-typedef int (*cfunc_t)(BlockDriverState *bs, int argc, char **argv);
+-typedef void (*helpfunc_t)(void);
+-
+-typedef struct cmdinfo {
+-	const char	*name;
+-	const char	*altname;
+-	cfunc_t		cfunc;
+-	int		argmin;
+-	int		argmax;
+-	int		canpush;
+-	int		flags;
+-	const char	*args;
+-	const char	*oneline;
+-	helpfunc_t      help;
+-} cmdinfo_t;
+-
+-void qemuio_add_command(const cmdinfo_t *ci);
+-
+-int qemuio_command_usage(const cmdinfo_t *ci);
+-
+-bool qemuio_command(const char *cmd);
+-
+-#endif	/* __COMMAND_H__ */
+diff --git a/include/qemu-io.h b/include/qemu-io.h
+new file mode 100644
+index 0000000..a418b46
+--- /dev/null
++++ b/include/qemu-io.h
+@@ -0,0 +1,46 @@
++/*
++ * Copyright (c) 2000-2005 Silicon Graphics, Inc.
++ * All Rights Reserved.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it would be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++#ifndef QEMU_IO_H
++#define QEMU_IO_H
++
++#include "qemu-common.h"
++
++#define CMD_FLAG_GLOBAL ((int)0x80000000) /* don't iterate "args" */
++
++typedef int (*cfunc_t)(BlockDriverState *bs, int argc, char **argv);
++typedef void (*helpfunc_t)(void);
++
++typedef struct cmdinfo {
++    const char* name;
++    const char* altname;
++    cfunc_t     cfunc;
++    int         argmin;
++    int         argmax;
++    int         canpush;
++    int         flags;
++    const char  *args;
++    const char  *oneline;
++    helpfunc_t  help;
++} cmdinfo_t;
++
++bool qemuio_command(BlockDriverState *bs, const char *cmd);
++
++void qemuio_add_command(const cmdinfo_t *ci);
++int qemuio_command_usage(const cmdinfo_t *ci);
++
++#endif /* QEMU_IO_H */
+diff --git a/qemu-io-cmds.c b/qemu-io-cmds.c
+index 1db7fb9..1f21ce9 100644
+--- a/qemu-io-cmds.c
++++ b/qemu-io-cmds.c
+@@ -8,10 +8,9 @@
+  * See the COPYING file in the top-level directory.
+  */
+ 
+-#include "qemu-common.h"
++#include "qemu-io.h"
+ #include "block/block_int.h"
+ #include "block/qapi.h"
+-#include "cmd.h"
+ 
+ #define CMD_NOFILE_OK   0x01
+ 
+@@ -51,11 +50,12 @@ static int init_check_command(BlockDriverState *bs, const cmdinfo_t *ct)
+     return 1;
+ }
+ 
+-static int command(const cmdinfo_t *ct, int argc, char **argv)
++static int command(BlockDriverState *bs, const cmdinfo_t *ct, int argc,
++                   char **argv)
+ {
+     char *cmd = argv[0];
+ 
+-    if (!init_check_command(qemuio_bs, ct)) {
++    if (!init_check_command(bs, ct)) {
+         return 0;
+     }
+ 
+@@ -76,7 +76,7 @@ static int command(const cmdinfo_t *ct, int argc, char **argv)
+         return 0;
+     }
+     optind = 0;
+-    return ct->cfunc(qemuio_bs, argc, argv);
++    return ct->cfunc(bs, argc, argv);
+ }
+ 
+ static const cmdinfo_t *find_command(const char *cmd)
+@@ -2084,7 +2084,7 @@ static const cmdinfo_t help_cmd = {
+     .oneline    = "help for one or all commands",
+ };
+ 
+-bool qemuio_command(const char *cmd)
++bool qemuio_command(BlockDriverState *bs, const char *cmd)
+ {
+     char *input;
+     const cmdinfo_t *ct;
+@@ -2097,7 +2097,7 @@ bool qemuio_command(const char *cmd)
+     if (c) {
+         ct = find_command(v[0]);
+         if (ct) {
+-            done = command(ct, c, v);
++            done = command(bs, ct, c, v);
+         } else {
+             fprintf(stderr, "command \"%s\" not found\n", v[0]);
+         }
+diff --git a/qemu-io.c b/qemu-io.c
+index da9944e..e685808 100644
+--- a/qemu-io.c
++++ b/qemu-io.c
+@@ -14,13 +14,12 @@
+ #include <getopt.h>
+ #include <libgen.h>
+ 
+-#include "qemu-common.h"
++#include "qemu-io.h"
+ #include "qemu/main-loop.h"
+ #include "qemu/option.h"
+ #include "qemu/config-file.h"
+ #include "block/block_int.h"
+ #include "block/qapi.h"
+-#include "cmd.h"
+ #include "trace/control.h"
+ #include "qemu/timer.h"
+ 
+@@ -306,7 +305,7 @@ static void command_loop(void)
+     char *input;
+ 
+     for (i = 0; !done && i < ncmdline; i++) {
+-        done = qemuio_command(cmdline[i]);
++        done = qemuio_command(qemuio_bs, cmdline[i]);
+     }
+     if (cmdline) {
+         g_free(cmdline);
+@@ -331,7 +330,7 @@ static void command_loop(void)
+         if (input == NULL) {
+             break;
+         }
+-        done = qemuio_command(input);
++        done = qemuio_command(qemuio_bs, input);
+         g_free(input);
+ 
+         prompted = 0;
+-- 
+1.8.3.1
+

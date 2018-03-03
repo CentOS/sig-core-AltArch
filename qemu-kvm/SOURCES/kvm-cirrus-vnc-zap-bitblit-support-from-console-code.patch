@@ -1,0 +1,300 @@
+From 9bd81fb917c9ac22055e0dc7b3a89a22d5cfbfc1 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Mon, 27 Mar 2017 10:01:17 +0200
+Subject: [PATCH 2/7] cirrus/vnc: zap bitblit support from console code.
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1490608882-10242-3-git-send-email-kraxel@redhat.com>
+Patchwork-id: 74554
+O-Subject: [RHEL-7.4 qemu-kvm PATCH v2 2/7] cirrus/vnc: zap bitblit support from console code.
+Bugzilla: 1430060
+RH-Acked-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+There is a special code path (dpy_gfx_copy) to allow graphic emulation
+notify user interface code about bitblit operations carryed out by
+guests.  It is supported by cirrus and vnc server.  The intended purpose
+is to optimize display scrolls and just send over the scroll op instead
+of a full display update.
+
+This is rarely used these days though because modern guests simply don't
+use the cirrus blitter any more.  Any linux guest using the cirrus drm
+driver doesn't.  Any windows guest newer than winxp doesn't ship with a
+cirrus driver any more and thus uses the cirrus as simple framebuffer.
+
+So this code tends to bitrot and bugs can go unnoticed for a long time.
+See for example commit "3e10c3e vnc: fix qemu crash because of SIGSEGV"
+which fixes a bug lingering in the code for almost a year, added by
+commit "c7628bf vnc: only alloc server surface with clients connected".
+
+Also the vnc server will throttle the frame rate in case it figures the
+network can't keep up (send buffers are full).  This doesn't work with
+dpy_gfx_copy, for any copy operation sent to the vnc client we have to
+send all outstanding updates beforehand, otherwise the vnc client might
+run the client side blit on outdated data and thereby corrupt the
+display.  So this dpy_gfx_copy "optimization" might even make things
+worse on slow network links.
+
+Lets kill it once for all.
+
+Oh, and one more reason: Turns out (after writing the patch) we have a
+security bug in that code path ...
+
+Fixes: CVE-2016-9603
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: 1489494419-14340-1-git-send-email-kraxel@redhat.com
+(cherry picked from commit 50628d3479e4f9aa97e323506856e394fe7ad7a6)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	include/ui/console.h
+	ui/vnc.c
+---
+ hw/display/cirrus_vga.c | 12 ++----
+ include/ui/console.h    |  7 ----
+ ui/console.c            | 28 --------------
+ ui/vnc.c                | 99 -------------------------------------------------
+ 4 files changed, 3 insertions(+), 143 deletions(-)
+
+diff --git a/hw/display/cirrus_vga.c b/hw/display/cirrus_vga.c
+index 1b972db..83cef70 100644
+--- a/hw/display/cirrus_vga.c
++++ b/hw/display/cirrus_vga.c
+@@ -790,21 +790,15 @@ static int cirrus_do_copy(CirrusVGAState *s, int dst, int src, int w, int h)
+         }
+     }
+ 
+-    /* we have to flush all pending changes so that the copy
+-       is generated at the appropriate moment in time */
+-    if (notify)
+-        graphic_hw_update(s->vga.con);
+-
+     (*s->cirrus_rop) (s, s->vga.vram_ptr + s->cirrus_blt_dstaddr,
+                       s->vga.vram_ptr + s->cirrus_blt_srcaddr,
+ 		      s->cirrus_blt_dstpitch, s->cirrus_blt_srcpitch,
+ 		      s->cirrus_blt_width, s->cirrus_blt_height);
+ 
+     if (notify) {
+-        qemu_console_copy(s->vga.con,
+-			  sx, sy, dx, dy,
+-			  s->cirrus_blt_width / depth,
+-			  s->cirrus_blt_height);
++        dpy_gfx_update(s->vga.con, dx, dy,
++                       s->cirrus_blt_width / depth,
++                       s->cirrus_blt_height);
+     }
+ 
+     /* we don't have to notify the display that this portion has
+diff --git a/include/ui/console.h b/include/ui/console.h
+index 4307b5f..7f5fa66 100644
+--- a/include/ui/console.h
++++ b/include/ui/console.h
+@@ -159,9 +159,6 @@ typedef struct DisplayChangeListenerOps {
+                            int x, int y, int w, int h);
+     void (*dpy_gfx_switch)(DisplayChangeListener *dcl,
+                            struct DisplaySurface *new_surface);
+-    void (*dpy_gfx_copy)(DisplayChangeListener *dcl,
+-                         int src_x, int src_y,
+-                         int dst_x, int dst_y, int w, int h);
+ 
+     void (*dpy_text_cursor)(DisplayChangeListener *dcl,
+                             int x, int y);
+@@ -216,8 +213,6 @@ void unregister_displaychangelistener(DisplayChangeListener *dcl);
+ void dpy_gfx_update(QemuConsole *con, int x, int y, int w, int h);
+ void dpy_gfx_replace_surface(QemuConsole *con,
+                              DisplaySurface *surface);
+-void dpy_gfx_copy(QemuConsole *con, int src_x, int src_y,
+-                  int dst_x, int dst_y, int w, int h);
+ void dpy_text_cursor(QemuConsole *con, int x, int y);
+ void dpy_text_update(QemuConsole *con, int x, int y, int w, int h);
+ void dpy_text_resize(QemuConsole *con, int w, int h);
+@@ -295,8 +290,6 @@ void text_consoles_set_display(DisplayState *ds);
+ void console_select(unsigned int index);
+ void console_color_init(DisplayState *ds);
+ void qemu_console_resize(QemuConsole *con, int width, int height);
+-void qemu_console_copy(QemuConsole *con, int src_x, int src_y,
+-                       int dst_x, int dst_y, int w, int h);
+ DisplaySurface *qemu_console_surface(QemuConsole *con);
+ DisplayState *qemu_console_displaystate(QemuConsole *console);
+ 
+diff --git a/ui/console.c b/ui/console.c
+index d422083..fb08ec0 100644
+--- a/ui/console.c
++++ b/ui/console.c
+@@ -1461,27 +1461,6 @@ void dpy_refresh(DisplayState *s)
+     }
+ }
+ 
+-void dpy_gfx_copy(QemuConsole *con, int src_x, int src_y,
+-                  int dst_x, int dst_y, int w, int h)
+-{
+-    DisplayState *s = con->ds;
+-    DisplayChangeListener *dcl;
+-
+-    if (!qemu_console_is_visible(con)) {
+-        return;
+-    }
+-    QLIST_FOREACH(dcl, &s->listeners, next) {
+-        if (con != (dcl->con ? dcl->con : active_console)) {
+-            continue;
+-        }
+-        if (dcl->ops->dpy_gfx_copy) {
+-            dcl->ops->dpy_gfx_copy(dcl, src_x, src_y, dst_x, dst_y, w, h);
+-        } else { /* TODO */
+-            dcl->ops->dpy_gfx_update(dcl, dst_x, dst_y, w, h);
+-        }
+-    }
+-}
+-
+ void dpy_text_cursor(QemuConsole *con, int x, int y)
+ {
+     DisplayState *s = con->ds;
+@@ -1843,13 +1822,6 @@ void qemu_console_resize(QemuConsole *s, int width, int height)
+     dpy_gfx_replace_surface(s, surface);
+ }
+ 
+-void qemu_console_copy(QemuConsole *con, int src_x, int src_y,
+-                       int dst_x, int dst_y, int w, int h)
+-{
+-    assert(con->console_type == GRAPHIC_CONSOLE);
+-    dpy_gfx_copy(con, src_x, src_y, dst_x, dst_y, w, h);
+-}
+-
+ DisplaySurface *qemu_console_surface(QemuConsole *console)
+ {
+     return console->surface;
+diff --git a/ui/vnc.c b/ui/vnc.c
+index b68918e..1834db0 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -417,7 +417,6 @@ out_error:
+ */
+ 
+ static int vnc_update_client(VncState *vs, int has_dirty);
+-static int vnc_update_client_sync(VncState *vs, int has_dirty);
+ static void vnc_disconnect_start(VncState *vs);
+ 
+ static void vnc_colordepth(VncState *vs);
+@@ -728,96 +727,6 @@ int vnc_send_framebuffer_update(VncState *vs, int x, int y, int w, int h)
+     return n;
+ }
+ 
+-static void vnc_copy(VncState *vs, int src_x, int src_y, int dst_x, int dst_y, int w, int h)
+-{
+-    /* send bitblit op to the vnc client */
+-    vnc_lock_output(vs);
+-    vnc_write_u8(vs, VNC_MSG_SERVER_FRAMEBUFFER_UPDATE);
+-    vnc_write_u8(vs, 0);
+-    vnc_write_u16(vs, 1); /* number of rects */
+-    vnc_framebuffer_update(vs, dst_x, dst_y, w, h, VNC_ENCODING_COPYRECT);
+-    vnc_write_u16(vs, src_x);
+-    vnc_write_u16(vs, src_y);
+-    vnc_unlock_output(vs);
+-    vnc_flush(vs);
+-}
+-
+-static void vnc_dpy_copy(DisplayChangeListener *dcl,
+-                         int src_x, int src_y,
+-                         int dst_x, int dst_y, int w, int h)
+-{
+-    VncDisplay *vd = container_of(dcl, VncDisplay, dcl);
+-    VncState *vs, *vn;
+-    uint8_t *src_row;
+-    uint8_t *dst_row;
+-    int i, x, y, pitch, inc, w_lim, s;
+-    int cmp_bytes;
+-
+-    vnc_refresh_server_surface(vd);
+-    QTAILQ_FOREACH_SAFE(vs, &vd->clients, next, vn) {
+-        if (vnc_has_feature(vs, VNC_FEATURE_COPYRECT)) {
+-            vs->force_update = 1;
+-            vnc_update_client_sync(vs, 1);
+-            /* vs might be free()ed here */
+-        }
+-    }
+-
+-    /* do bitblit op on the local surface too */
+-    pitch = vnc_server_fb_stride(vd);
+-    src_row = vnc_server_fb_ptr(vd, src_x, src_y);
+-    dst_row = vnc_server_fb_ptr(vd, dst_x, dst_y);
+-    y = dst_y;
+-    inc = 1;
+-    if (dst_y > src_y) {
+-        /* copy backwards */
+-        src_row += pitch * (h-1);
+-        dst_row += pitch * (h-1);
+-        pitch = -pitch;
+-        y = dst_y + h - 1;
+-        inc = -1;
+-    }
+-    w_lim = w - (VNC_DIRTY_PIXELS_PER_BIT - (dst_x % VNC_DIRTY_PIXELS_PER_BIT));
+-    if (w_lim < 0) {
+-        w_lim = w;
+-    } else {
+-        w_lim = w - (w_lim % VNC_DIRTY_PIXELS_PER_BIT);
+-    }
+-    for (i = 0; i < h; i++) {
+-        for (x = 0; x <= w_lim;
+-                x += s, src_row += cmp_bytes, dst_row += cmp_bytes) {
+-            if (x == w_lim) {
+-                if ((s = w - w_lim) == 0)
+-                    break;
+-            } else if (!x) {
+-                s = (VNC_DIRTY_PIXELS_PER_BIT -
+-                    (dst_x % VNC_DIRTY_PIXELS_PER_BIT));
+-                s = MIN(s, w_lim);
+-            } else {
+-                s = VNC_DIRTY_PIXELS_PER_BIT;
+-            }
+-            cmp_bytes = s * VNC_SERVER_FB_BYTES;
+-            if (memcmp(src_row, dst_row, cmp_bytes) == 0)
+-                continue;
+-            memmove(dst_row, src_row, cmp_bytes);
+-            QTAILQ_FOREACH(vs, &vd->clients, next) {
+-                if (!vnc_has_feature(vs, VNC_FEATURE_COPYRECT)) {
+-                    set_bit(((x + dst_x) / VNC_DIRTY_PIXELS_PER_BIT),
+-                            vs->dirty[y]);
+-                }
+-            }
+-        }
+-        src_row += pitch - w * VNC_SERVER_FB_BYTES;
+-        dst_row += pitch - w * VNC_SERVER_FB_BYTES;
+-        y += inc;
+-    }
+-
+-    QTAILQ_FOREACH(vs, &vd->clients, next) {
+-        if (vnc_has_feature(vs, VNC_FEATURE_COPYRECT)) {
+-            vnc_copy(vs, src_x, src_y, dst_x, dst_y, w, h);
+-        }
+-    }
+-}
+-
+ static void vnc_mouse_set(DisplayChangeListener *dcl,
+                           int x, int y, int visible)
+ {
+@@ -883,13 +792,6 @@ static int find_and_clear_dirty_height(struct VncState *vs,
+     return h;
+ }
+ 
+-static int vnc_update_client_sync(VncState *vs, int has_dirty)
+-{
+-    int ret = vnc_update_client(vs, has_dirty);
+-    vnc_jobs_join(vs);
+-    return ret;
+-}
+-
+ static int vnc_update_client(VncState *vs, int has_dirty)
+ {
+     if (vs->need_update && vs->csock != -1) {
+@@ -2936,7 +2838,6 @@ static void vnc_listen_websocket_read(void *opaque)
+ static const DisplayChangeListenerOps dcl_ops = {
+     .dpy_name          = "vnc",
+     .dpy_refresh       = vnc_refresh,
+-    .dpy_gfx_copy      = vnc_dpy_copy,
+     .dpy_gfx_update    = vnc_dpy_update,
+     .dpy_gfx_switch    = vnc_dpy_switch,
+     .dpy_mouse_set     = vnc_mouse_set,
+-- 
+1.8.3.1
+

@@ -1,0 +1,132 @@
+From 5f8e45393355671d8793e4bb37c07c95c609fdcd Mon Sep 17 00:00:00 2001
+From: Michael S. Tsirkin <mst@redhat.com>
+Date: Sun, 9 Mar 2014 18:48:58 +0100
+Subject: [PATCH 10/16] pc: avoid duplicate names for ROM MRs
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1394390868-24135-2-git-send-email-mst@redhat.com>
+Patchwork-id: 58054
+O-Subject: [PATCH qemu-kvm RHEL7.0 v3 2/2] pc: avoid duplicate names for ROM MRs
+Bugzilla: 1064018
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+
+Since
+commit 04920fc0faa4760f9c4fc0e73b992b768099be70
+    loader: store FW CFG ROM files in RAM
+RAM MRs including ROM files in FW CFGs are created
+and named using the file basename.
+
+This becomes problematic if these names are
+supplied by user, since the basename might not
+be unique.
+
+There are two cases we care about:
+- option-rom flag.
+- option ROM for devices. This triggers e.g. when
+  using rombar=0.
+
+At the moment we get an assert. E.g
+qemu -option-rom /usr/share/ipxe/8086100e.rom -option-rom
+/usr/share/ipxe.efi/8086100e.rom
+RAMBlock "/rom@genroms/8086100e.rom" already registered, abort!
+
+This is a regression from 1.7.
+
+For now let's keep it simple and just avoid creating the
+MRs in case of option ROMs.
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+
+Upstream: posted
+Brew build: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7173355
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1064018#c6
+Tested: by developer
+---
+ include/hw/loader.h |  6 ++++--
+ hw/core/loader.c    | 10 ++++++----
+ 2 files changed, 10 insertions(+), 6 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/core/loader.c    |   10 ++++++----
+ include/hw/loader.h |    6 ++++--
+ 2 files changed, 10 insertions(+), 6 deletions(-)
+
+diff --git a/hw/core/loader.c b/hw/core/loader.c
+index c363aef..9309b8c 100644
+--- a/hw/core/loader.c
++++ b/hw/core/loader.c
+@@ -54,6 +54,7 @@
+ 
+ #include <zlib.h>
+ 
++bool option_rom_has_mr = false;
+ bool rom_file_has_mr = true;
+ 
+ static int roms_loaded;
+@@ -590,7 +591,8 @@ static void *rom_set_mr(Rom *rom, const char *name)
+ }
+ 
+ int rom_add_file(const char *file, const char *fw_dir,
+-                 hwaddr addr, int32_t bootindex)
++                 hwaddr addr, int32_t bootindex,
++                 bool option_rom)
+ {
+     Rom *rom;
+     int rc, fd = -1;
+@@ -642,7 +644,7 @@ int rom_add_file(const char *file, const char *fw_dir,
+                  basename);
+         snprintf(devpath, sizeof(devpath), "/rom@%s", fw_file_name);
+ 
+-        if (rom_file_has_mr) {
++        if ((!option_rom || option_rom_has_mr) && rom_file_has_mr) {
+             data = rom_set_mr(rom, devpath);
+         } else {
+             data = rom->data;
+@@ -721,12 +723,12 @@ int rom_add_elf_program(const char *name, void *data, size_t datasize,
+ 
+ int rom_add_vga(const char *file)
+ {
+-    return rom_add_file(file, "vgaroms", 0, -1);
++    return rom_add_file(file, "vgaroms", 0, -1, true);
+ }
+ 
+ int rom_add_option(const char *file, int32_t bootindex)
+ {
+-    return rom_add_file(file, "genroms", 0, bootindex);
++    return rom_add_file(file, "genroms", 0, bootindex, true);
+ }
+ 
+ static void rom_reset(void *unused)
+diff --git a/include/hw/loader.h b/include/hw/loader.h
+index 7ceccce..a5e02ce 100644
+--- a/include/hw/loader.h
++++ b/include/hw/loader.h
+@@ -23,10 +23,12 @@ void pstrcpy_targphys(const char *name,
+                       hwaddr dest, int buf_size,
+                       const char *source);
+ 
++extern bool option_rom_has_mr;
+ extern bool rom_file_has_mr;
+ 
+ int rom_add_file(const char *file, const char *fw_dir,
+-                 hwaddr addr, int32_t bootindex);
++                 hwaddr addr, int32_t bootindex,
++                 bool option_rom);
+ void *rom_add_blob(const char *name, const void *blob, size_t len,
+                    hwaddr addr, const char *fw_file_name,
+                    FWCfgReadCallback fw_callback, void *callback_opaque);
+@@ -40,7 +42,7 @@ void *rom_ptr(hwaddr addr);
+ void do_info_roms(Monitor *mon, const QDict *qdict);
+ 
+ #define rom_add_file_fixed(_f, _a, _i)          \
+-    rom_add_file(_f, NULL, _a, _i)
++    rom_add_file(_f, NULL, _a, _i, false)
+ #define rom_add_blob_fixed(_f, _b, _l, _a)      \
+     (rom_add_blob(_f, _b, _l, _a, NULL, NULL, NULL) ? 0 : -1)
+ 
+-- 
+1.7.1
+

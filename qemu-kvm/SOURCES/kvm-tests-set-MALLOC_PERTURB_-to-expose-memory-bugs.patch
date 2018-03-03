@@ -1,0 +1,79 @@
+From 5178597af3139c1ce9ac95971729468eda5625d7 Mon Sep 17 00:00:00 2001
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Mon, 27 May 2013 15:28:51 +0200
+Subject: [PATCH 34/38] tests: set MALLOC_PERTURB_ to expose memory bugs
+
+Message-id: <1379499002-5231-3-git-send-email-mreitz@redhat.com>
+Patchwork-id: 54433
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 2/6] tests: set MALLOC_PERTURB_ to expose memory bugs
+Bugzilla: 1006959
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+BZ: 1006959
+
+glibc wipes malloc(3) memory when the MALLOC_PERTURB_ environment
+variable is set.  The value of the environment variable determines the
+bit pattern used to wipe memory.  For more information, see
+http://udrepper.livejournal.com/11429.html.
+
+Set MALLOC_PERTURB_ for gtester and qemu-iotests.  Note we pick a random
+value from 1 to 255 to expose more bugs.  If you need to reproduce a
+crash use 'show environment' in gdb to extract the MALLOC_PERTURB_
+value from a core dump.
+
+Both make check and qemu-iotests pass with MALLOC_PERTURB_ enabled.
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Message-id: 1369661331-28041-1-git-send-email-stefanha@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit 04129606170ec9011d4952b4f22c368679bedbf9)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ tests/Makefile           |    5 ++++-
+ tests/qemu-iotests/check |    3 ++-
+ 2 files changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/tests/Makefile b/tests/Makefile
+index a307d5a..c107489 100644
+--- a/tests/Makefile
++++ b/tests/Makefile
+@@ -171,6 +171,7 @@ GCOV_OPTIONS = -n $(if $(V),-f,)
+ $(patsubst %, check-qtest-%, $(QTEST_TARGETS)): check-qtest-%: $(check-qtest-y)
+ 	$(if $(CONFIG_GCOV),@rm -f *.gcda */*.gcda */*/*.gcda */*/*/*.gcda,)
+ 	$(call quiet-command,QTEST_QEMU_BINARY=$*-softmmu/qemu-system-$* \
++		MALLOC_PERTURB_=$${MALLOC_PERTURB_:-$$((RANDOM % 255 + 1))} \
+ 		gtester $(GTESTER_OPTIONS) -m=$(SPEED) $(check-qtest-$*-y),"GTESTER $@")
+ 	$(if $(CONFIG_GCOV),@for f in $(gcov-files-$*-y); do \
+ 	  echo Gcov report for $$f:;\
+@@ -180,7 +181,9 @@ $(patsubst %, check-qtest-%, $(QTEST_TARGETS)): check-qtest-%: $(check-qtest-y)
+ .PHONY: $(patsubst %, check-%, $(check-unit-y))
+ $(patsubst %, check-%, $(check-unit-y)): check-%: %
+ 	$(if $(CONFIG_GCOV),@rm -f *.gcda */*.gcda */*/*.gcda */*/*/*.gcda,)
+-	$(call quiet-command,gtester $(GTESTER_OPTIONS) -m=$(SPEED) $*,"GTESTER $*")
++	$(call quiet-command, \
++		MALLOC_PERTURB_=$${MALLOC_PERTURB_:-$$((RANDOM % 255 + 1))} \
++		gtester $(GTESTER_OPTIONS) -m=$(SPEED) $*,"GTESTER $*")
+ 	$(if $(CONFIG_GCOV),@for f in $(gcov-files-$(subst tests/,,$*)-y); do \
+ 	  echo Gcov report for $$f:;\
+ 	  $(GCOV) $(GCOV_OPTIONS) $$f -o `dirname $$f`; \
+diff --git a/tests/qemu-iotests/check b/tests/qemu-iotests/check
+index 432732c..74628ae 100755
+--- a/tests/qemu-iotests/check
++++ b/tests/qemu-iotests/check
+@@ -214,7 +214,8 @@ do
+ 	start=`_wallclock`
+ 	$timestamp && echo -n "	["`date "+%T"`"]"
+ 	[ ! -x $seq ] && chmod u+x $seq # ensure we can run it
+-	./$seq >$tmp.out 2>&1
++	MALLOC_PERTURB_=${MALLOC_PERTURB_:-$(($RANDOM % 255 + 1))} \
++		./$seq >$tmp.out 2>&1
+ 	sts=$?
+ 	$timestamp && _timestamp
+ 	stop=`_wallclock`
+-- 
+1.7.1
+

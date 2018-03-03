@@ -1,0 +1,46 @@
+From 1f08301adf98c235ccc4e978f809c3f60833452c Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 27 Jul 2016 07:35:00 +0200
+Subject: [PATCH 02/16] qjson: Apply nesting limit more sanely
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1469604913-12442-4-git-send-email-armbru@redhat.com>
+Patchwork-id: 71468
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 02/15] qjson: Apply nesting limit more sanely
+Bugzilla: 1276036
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+The nesting limit from commit 29c75dd "json-streamer: limit the
+maximum recursion depth and maximum token count" applies separately to
+braces and brackets.  This makes no sense.  Apply it to their sum,
+because that's actually a measure of recursion depth.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Message-Id: <1448486613-17634-2-git-send-email-armbru@redhat.com>
+(cherry picked from commit 4f2d31fbc0bfdf41feea7d1be49f4f7ffa005534)
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qobject/json-streamer.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/qobject/json-streamer.c b/qobject/json-streamer.c
+index 1b2f9b1..dced2c7 100644
+--- a/qobject/json-streamer.c
++++ b/qobject/json-streamer.c
+@@ -64,8 +64,7 @@ static void json_message_process_token(JSONLexer *lexer, QString *token, JSONTok
+          parser->bracket_count == 0)) {
+         goto out_emit;
+     } else if (parser->token_size > MAX_TOKEN_SIZE ||
+-               parser->bracket_count > MAX_NESTING ||
+-               parser->brace_count > MAX_NESTING) {
++               parser->bracket_count + parser->brace_count > MAX_NESTING) {
+         /* Security consideration, we limit total memory allocated per object
+          * and the maximum recursion depth that a message can force.
+          */
+-- 
+1.8.3.1
+

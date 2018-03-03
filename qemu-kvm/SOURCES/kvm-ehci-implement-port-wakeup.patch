@@ -1,0 +1,103 @@
+From e29585889b3c33b370bf09c58cb4a0f4b3fae482 Mon Sep 17 00:00:00 2001
+From: Marcel Apfelbaum <marcel.a@redhat.com>
+Date: Wed, 18 Dec 2013 20:05:26 +0100
+Subject: [PATCH 10/16] ehci: implement port wakeup
+
+RH-Author: Marcel Apfelbaum <marcel.a@redhat.com>
+Message-id: <1387397126-27754-1-git-send-email-marcel.a@redhat.com>
+Patchwork-id: 56377
+O-Subject: [RHEL-7 qemu-kvm PATCH v2] ehci: implement port wakeup
+Bugzilla: 1039513
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: Gerd Hoffmann <kraxel@redhat.com>
+
+Update portsc register and raise irq in case a suspended
+port is woken up, so remote wakeup works on our ehci ports.
+
+bugzilla: #1039513 ASSIGNED   - Gerd Hoffmann - backport remote wakeup for ehci
+brew: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=6755209
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+Signed-off-by: Marcel Apfelbaum <marcel.a@redhat.com>
+(cherry picked from commit e489df40caa96d895d9672d77f536f23c9e42f94)
+
+Conflicts:
+	trace-events
+---
+ v1->v2:
+ Rebased the patch. Minor conflicts.
+
+ hw/usb/hcd-ehci.c | 18 ++++++++++++++++--
+ trace-events      |  3 +++
+ 2 files changed, 19 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/hcd-ehci.c |   18 ++++++++++++++++--
+ trace-events      |    3 +++
+ 2 files changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/hw/usb/hcd-ehci.c b/hw/usb/hcd-ehci.c
+index 0d3799d..02d2ab7 100644
+--- a/hw/usb/hcd-ehci.c
++++ b/hw/usb/hcd-ehci.c
+@@ -826,9 +826,9 @@ static void ehci_child_detach(USBPort *port, USBDevice *child)
+ static void ehci_wakeup(USBPort *port)
+ {
+     EHCIState *s = port->opaque;
+-    uint32_t portsc = s->portsc[port->index];
++    uint32_t *portsc = &s->portsc[port->index];
+ 
+-    if (portsc & PORTSC_POWNER) {
++    if (*portsc & PORTSC_POWNER) {
+         USBPort *companion = s->companion_ports[port->index];
+         if (companion->ops->wakeup) {
+             companion->ops->wakeup(companion);
+@@ -836,6 +836,12 @@ static void ehci_wakeup(USBPort *port)
+         return;
+     }
+ 
++    if (*portsc & PORTSC_SUSPEND) {
++        trace_usb_ehci_port_wakeup(port->index);
++        *portsc |= PORTSC_FPRES;
++        ehci_raise_irq(s, USBSTS_PCD);
++    }
++
+     qemu_bh_schedule(s->async_bh);
+ }
+ 
+@@ -1067,6 +1073,14 @@ static void ehci_port_write(void *ptr, hwaddr addr,
+         }
+     }
+ 
++    if ((val & PORTSC_SUSPEND) && !(*portsc & PORTSC_SUSPEND)) {
++        trace_usb_ehci_port_suspend(port);
++    }
++    if (!(val & PORTSC_FPRES) && (*portsc & PORTSC_FPRES)) {
++        trace_usb_ehci_port_resume(port);
++        val &= ~PORTSC_SUSPEND;
++    }
++
+     *portsc &= ~PORTSC_RO_MASK;
+     *portsc |= val;
+     trace_usb_ehci_portsc_change(addr + PORTSC_BEGIN, addr >> 2, *portsc, old);
+diff --git a/trace-events b/trace-events
+index e9ee94f..dbbd25d 100644
+--- a/trace-events
++++ b/trace-events
+@@ -303,6 +303,9 @@ usb_ehci_sitd(uint32_t addr, uint32_t nxt, uint32_t active) "ITD @ %08x: next %0
+ usb_ehci_port_attach(uint32_t port, const char *owner, const char *device) "attach port #%d, owner %s, device %s"
+ usb_ehci_port_detach(uint32_t port, const char *owner) "detach port #%d, owner %s"
+ usb_ehci_port_reset(uint32_t port, int enable) "reset port #%d - %d"
++usb_ehci_port_suspend(uint32_t port) "port #%d"
++usb_ehci_port_wakeup(uint32_t port) "port #%d"
++usb_ehci_port_resume(uint32_t port) "port #%d"
+ usb_ehci_queue_action(void *q, const char *action) "q %p: %s"
+ usb_ehci_packet_action(void *q, void *p, const char *action) "q %p p %p: %s"
+ usb_ehci_irq(uint32_t level, uint32_t frindex, uint32_t sts, uint32_t mask) "level %d, frindex 0x%04x, sts 0x%x, mask 0x%x"
+-- 
+1.7.1
+

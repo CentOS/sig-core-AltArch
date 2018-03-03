@@ -1,0 +1,117 @@
+From db50fd1dfca6131e29def9ed3cfd120b30894356 Mon Sep 17 00:00:00 2001
+From: "Dr. David Alan Gilbert (git)" <dgilbert@redhat.com>
+Date: Wed, 22 Oct 2014 09:46:37 +0200
+Subject: [PATCH 6/6] kvmclock: Ensure time in migration never goes backward
+
+Message-id: <1413971197-4624-6-git-send-email-dgilbert@redhat.com>
+Patchwork-id: 61792
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 5/5] kvmclock: Ensure time in migration never goes backward
+Bugzilla: 1098602 1130428
+RH-Acked-by: Marcelo Tosatti <mtosatti@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: Alexander Graf <agraf@suse.de>
+
+When we migrate we ask the kernel about its current belief on what the guest
+time would be. However, I've seen cases where the kvmclock guest structure
+indicates a time more recent than the kvm returned time.
+
+To make sure we never go backwards, calculate what the guest would have seen as time at the point of migration and use that value instead of the kernel returned one when it's more recent.
+This bases the view of the kvmclock after migration on the
+same foundation in host as well as guest.
+
+Signed-off-by: Alexander Graf <agraf@suse.de>
+Cc: qemu-stable@nongnu.org
+Reviewed-by: Marcelo Tosatti <mtosatti@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 9a48bcd1b82494671c111109b0eefdb882581499)
+
+dgilbert: Rework kvmclock_current_nsec code to get 'env' since the types
+      have changed
+
+Signed-off-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/kvm/clock.c | 48 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 48 insertions(+)
+
+diff --git a/hw/i386/kvm/clock.c b/hw/i386/kvm/clock.c
+index 53056d4..4bac13e 100644
+--- a/hw/i386/kvm/clock.c
++++ b/hw/i386/kvm/clock.c
+@@ -14,6 +14,7 @@
+  */
+ 
+ #include "qemu-common.h"
++#include "qemu/host-utils.h"
+ #include "sysemu/sysemu.h"
+ #include "sysemu/kvm.h"
+ #include "sysemu/cpus.h"
+@@ -29,6 +30,47 @@ typedef struct KVMClockState {
+     bool clock_valid;
+ } KVMClockState;
+ 
++struct pvclock_vcpu_time_info {
++    uint32_t   version;
++    uint32_t   pad0;
++    uint64_t   tsc_timestamp;
++    uint64_t   system_time;
++    uint32_t   tsc_to_system_mul;
++    int8_t     tsc_shift;
++    uint8_t    flags;
++    uint8_t    pad[2];
++} __attribute__((__packed__)); /* 32 bytes */
++
++static uint64_t kvmclock_current_nsec(KVMClockState *s)
++{
++    CPUX86State *env = first_cpu;
++    hwaddr kvmclock_struct_pa = env->system_time_msr & ~1ULL;
++    uint64_t migration_tsc = env->tsc;
++    struct pvclock_vcpu_time_info time;
++    uint64_t delta;
++    uint64_t nsec_lo;
++    uint64_t nsec_hi;
++    uint64_t nsec;
++
++    if (!(env->system_time_msr & 1ULL)) {
++        /* KVM clock not active */
++        return 0;
++    }
++
++    cpu_physical_memory_read(kvmclock_struct_pa, &time, sizeof(time));
++
++    assert(time.tsc_timestamp <= migration_tsc);
++    delta = migration_tsc - time.tsc_timestamp;
++    if (time.tsc_shift < 0) {
++        delta >>= -time.tsc_shift;
++    } else {
++        delta <<= time.tsc_shift;
++    }
++
++    mulu64(&nsec_lo, &nsec_hi, delta, time.tsc_to_system_mul);
++    nsec = (nsec_lo >> 32) | (nsec_hi << 32);
++    return nsec + time.system_time;
++}
+ 
+ static void kvmclock_vm_state_change(void *opaque, int running,
+                                      RunState state)
+@@ -40,9 +82,15 @@ static void kvmclock_vm_state_change(void *opaque, int running,
+ 
+     if (running) {
+         struct kvm_clock_data data;
++        uint64_t time_at_migration = kvmclock_current_nsec(s);
+ 
+         s->clock_valid = false;
+ 
++        /* We can't rely on the migrated clock value, just discard it */
++        if (time_at_migration) {
++            s->clock = time_at_migration;
++        }
++
+         data.clock = s->clock;
+         data.flags = 0;
+         ret = kvm_vm_ioctl(kvm_state, KVM_SET_CLOCK, &data);
+-- 
+1.8.3.1
+

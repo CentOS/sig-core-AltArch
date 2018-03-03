@@ -1,0 +1,70 @@
+From dba21483b097900b47ba5e1e597ba4a4150b1aa1 Mon Sep 17 00:00:00 2001
+Message-Id: <dba21483b097900b47ba5e1e597ba4a4150b1aa1.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:08:50 +0100
+Subject: [PATCH 02/50] iscsi: factor out sector conversions
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-5-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56041
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 04/52] iscsi: factor out sector conversions
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Peter Lieven <pl@kamp.de>
+
+Reviewed-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 0777b5dde42f4f453abc8bb2c4e145fb8749415d)
+---
+ block/iscsi.c | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ block/iscsi.c | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/block/iscsi.c b/block/iscsi.c
+index ac35caa..8086957 100644
+--- a/block/iscsi.c
++++ b/block/iscsi.c
+@@ -234,6 +234,11 @@ iscsi_aio_write16_cb(struct iscsi_context *iscsi, int status,
+     iscsi_schedule_bh(acb);
+ }
+ 
++static int64_t sector_lun2qemu(int64_t sector, IscsiLun *iscsilun)
++{
++    return sector * iscsilun->block_size / BDRV_SECTOR_SIZE;
++}
++
+ static int64_t sector_qemu2lun(int64_t sector, IscsiLun *iscsilun)
+ {
+     return sector * BDRV_SECTOR_SIZE / iscsilun->block_size;
+@@ -298,7 +303,7 @@ iscsi_aio_writev_acb(IscsiAIOCB *acb)
+     lba = sector_qemu2lun(acb->sector_num, acb->iscsilun);
+     *(uint32_t *)&acb->task->cdb[2]  = htonl(lba >> 32);
+     *(uint32_t *)&acb->task->cdb[6]  = htonl(lba & 0xffffffff);
+-    num_sectors = size / acb->iscsilun->block_size;
++    num_sectors = sector_qemu2lun(acb->nb_sectors, acb->iscsilun);
+     *(uint32_t *)&acb->task->cdb[10] = htonl(num_sectors);
+     acb->task->expxferlen = size;
+ 
+@@ -1171,8 +1176,7 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
+     if ((ret = iscsi_readcapacity_sync(iscsilun)) != 0) {
+         goto out;
+     }
+-    bs->total_sectors    = iscsilun->num_blocks *
+-                           iscsilun->block_size / BDRV_SECTOR_SIZE ;
++    bs->total_sectors = sector_lun2qemu(iscsilun->num_blocks, iscsilun);
+ 
+     /* Medium changer or tape. We dont have any emulation for this so this must
+      * be sg ioctl compatible. We force it to be sg, otherwise qemu will try
+-- 
+1.7.11.7
+

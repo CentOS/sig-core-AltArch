@@ -1,0 +1,256 @@
+From 9164d579671d6147799c92ee35b9efc1760155cb Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Thu, 23 Jan 2014 14:03:31 +0100
+Subject: [PATCH 04/14] virtio-bus: remove vdev field
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1390485820-7585-2-git-send-email-armbru@redhat.com>
+Patchwork-id: 56927
+O-Subject: [PATCH 7.0 qemu-kvm 01/10] virtio-bus: remove vdev field
+Bugzilla: 983344
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+The vdev field is complicated to synchronize.  Just access the
+BusState's list of children.
+
+Cc: qemu-stable@nongnu.org
+Acked-by: Andreas Faerber <afaerber@suse.de>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 06d3dff0723c712a4b109ced4243edf49ef850af)
+
+Conflicts:
+	hw/virtio/virtio-mmio.c
+
+We don't have hw/virtio/virtio-mmio.c.
+
+Semantic conflict in hw/pci/pci-hotplug, because we got commit 1e3043a
+via upstream 1.5.3, but upstream master has not.
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+---
+ hw/pci/pci-hotplug.c           |  2 +-
+ hw/virtio/virtio-bus.c         | 65 +++++++++++++++++++++++++-----------------
+ hw/virtio/virtio-pci.c         |  2 +-
+ include/hw/virtio/virtio-bus.h | 16 ++++++++---
+ 4 files changed, 53 insertions(+), 32 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/pci/pci-hotplug.c           |    2 +-
+ hw/virtio/virtio-bus.c         |   65 ++++++++++++++++++++++++----------------
+ hw/virtio/virtio-pci.c         |    2 +-
+ include/hw/virtio/virtio-bus.h |   16 +++++++--
+ 4 files changed, 53 insertions(+), 32 deletions(-)
+
+diff --git a/hw/pci/pci-hotplug.c b/hw/pci/pci-hotplug.c
+index 667e40c..eae28d4 100644
+--- a/hw/pci/pci-hotplug.c
++++ b/hw/pci/pci-hotplug.c
+@@ -96,7 +96,7 @@ static int scsi_hot_add(Monitor *mon, DeviceState *adapter,
+             return -1;
+         }
+         virtio_proxy = VIRTIO_PCI(adapter);
+-        adapter = DEVICE(virtio_proxy->bus.vdev);
++        adapter = DEVICE(virtio_bus_get_device(&virtio_proxy->bus));
+         scsibus = (SCSIBus *)
+                   object_dynamic_cast(OBJECT(QLIST_FIRST(&adapter->child_bus)),
+                             TYPE_SCSI_BUS);
+diff --git a/hw/virtio/virtio-bus.c b/hw/virtio/virtio-bus.c
+index e6b103c..17dd06e 100644
+--- a/hw/virtio/virtio-bus.c
++++ b/hw/virtio/virtio-bus.c
+@@ -46,8 +46,6 @@ int virtio_bus_plug_device(VirtIODevice *vdev)
+     VirtioBusClass *klass = VIRTIO_BUS_GET_CLASS(bus);
+     DPRINTF("%s: plug device.\n", qbus->name);
+ 
+-    bus->vdev = vdev;
+-
+     if (klass->device_plugged != NULL) {
+         klass->device_plugged(qbus->parent);
+     }
+@@ -58,9 +56,11 @@ int virtio_bus_plug_device(VirtIODevice *vdev)
+ /* Reset the virtio_bus */
+ void virtio_bus_reset(VirtioBusState *bus)
+ {
++    VirtIODevice *vdev = virtio_bus_get_device(bus);
++
+     DPRINTF("%s: reset device.\n", qbus->name);
+-    if (bus->vdev != NULL) {
+-        virtio_reset(bus->vdev);
++    if (vdev != NULL) {
++        virtio_reset(vdev);
+     }
+ }
+ 
+@@ -69,62 +69,71 @@ void virtio_bus_destroy_device(VirtioBusState *bus)
+ {
+     BusState *qbus = BUS(bus);
+     VirtioBusClass *klass = VIRTIO_BUS_GET_CLASS(bus);
++    VirtIODevice *vdev = virtio_bus_get_device(bus);
++
+     DPRINTF("%s: remove device.\n", qbus->name);
+ 
+-    if (bus->vdev != NULL) {
++    if (vdev != NULL) {
+         if (klass->device_unplug != NULL) {
+             klass->device_unplug(qbus->parent);
+         }
+-        object_unparent(OBJECT(bus->vdev));
+-        bus->vdev = NULL;
++        object_unparent(OBJECT(vdev));
+     }
+ }
+ 
+ /* Get the device id of the plugged device. */
+ uint16_t virtio_bus_get_vdev_id(VirtioBusState *bus)
+ {
+-    assert(bus->vdev != NULL);
+-    return bus->vdev->device_id;
++    VirtIODevice *vdev = virtio_bus_get_device(bus);
++    assert(vdev != NULL);
++    return vdev->device_id;
+ }
+ 
+ /* Get the config_len field of the plugged device. */
+ size_t virtio_bus_get_vdev_config_len(VirtioBusState *bus)
+ {
+-    assert(bus->vdev != NULL);
+-    return bus->vdev->config_len;
++    VirtIODevice *vdev = virtio_bus_get_device(bus);
++    assert(vdev != NULL);
++    return vdev->config_len;
+ }
+ 
+ /* Get the features of the plugged device. */
+ uint32_t virtio_bus_get_vdev_features(VirtioBusState *bus,
+                                     uint32_t requested_features)
+ {
++    VirtIODevice *vdev = virtio_bus_get_device(bus);
+     VirtioDeviceClass *k;
+-    assert(bus->vdev != NULL);
+-    k = VIRTIO_DEVICE_GET_CLASS(bus->vdev);
++
++    assert(vdev != NULL);
++    k = VIRTIO_DEVICE_GET_CLASS(vdev);
+     assert(k->get_features != NULL);
+-    return k->get_features(bus->vdev, requested_features);
++    return k->get_features(vdev, requested_features);
+ }
+ 
+ /* Set the features of the plugged device. */
+ void virtio_bus_set_vdev_features(VirtioBusState *bus,
+                                       uint32_t requested_features)
+ {
++    VirtIODevice *vdev = virtio_bus_get_device(bus);
+     VirtioDeviceClass *k;
+-    assert(bus->vdev != NULL);
+-    k = VIRTIO_DEVICE_GET_CLASS(bus->vdev);
++
++    assert(vdev != NULL);
++    k = VIRTIO_DEVICE_GET_CLASS(vdev);
+     if (k->set_features != NULL) {
+-        k->set_features(bus->vdev, requested_features);
++        k->set_features(vdev, requested_features);
+     }
+ }
+ 
+ /* Get bad features of the plugged device. */
+ uint32_t virtio_bus_get_vdev_bad_features(VirtioBusState *bus)
+ {
++    VirtIODevice *vdev = virtio_bus_get_device(bus);
+     VirtioDeviceClass *k;
+-    assert(bus->vdev != NULL);
+-    k = VIRTIO_DEVICE_GET_CLASS(bus->vdev);
++
++    assert(vdev != NULL);
++    k = VIRTIO_DEVICE_GET_CLASS(vdev);
+     if (k->bad_features != NULL) {
+-        return k->bad_features(bus->vdev);
++        return k->bad_features(vdev);
+     } else {
+         return 0;
+     }
+@@ -133,22 +142,26 @@ uint32_t virtio_bus_get_vdev_bad_features(VirtioBusState *bus)
+ /* Get config of the plugged device. */
+ void virtio_bus_get_vdev_config(VirtioBusState *bus, uint8_t *config)
+ {
++    VirtIODevice *vdev = virtio_bus_get_device(bus);
+     VirtioDeviceClass *k;
+-    assert(bus->vdev != NULL);
+-    k = VIRTIO_DEVICE_GET_CLASS(bus->vdev);
++
++    assert(vdev != NULL);
++    k = VIRTIO_DEVICE_GET_CLASS(vdev);
+     if (k->get_config != NULL) {
+-        k->get_config(bus->vdev, config);
++        k->get_config(vdev, config);
+     }
+ }
+ 
+ /* Set config of the plugged device. */
+ void virtio_bus_set_vdev_config(VirtioBusState *bus, uint8_t *config)
+ {
++    VirtIODevice *vdev = virtio_bus_get_device(bus);
+     VirtioDeviceClass *k;
+-    assert(bus->vdev != NULL);
+-    k = VIRTIO_DEVICE_GET_CLASS(bus->vdev);
++
++    assert(vdev != NULL);
++    k = VIRTIO_DEVICE_GET_CLASS(vdev);
+     if (k->set_config != NULL) {
+-        k->set_config(bus->vdev, config);
++        k->set_config(vdev, config);
+     }
+ }
+ 
+diff --git a/hw/virtio/virtio-pci.c b/hw/virtio/virtio-pci.c
+index 6f5c434..1287e59 100644
+--- a/hw/virtio/virtio-pci.c
++++ b/hw/virtio/virtio-pci.c
+@@ -948,7 +948,7 @@ static void virtio_pci_device_plugged(DeviceState *d)
+     uint8_t *config;
+     uint32_t size;
+ 
+-    proxy->vdev = bus->vdev;
++    proxy->vdev = virtio_bus_get_device(bus);
+ 
+     config = proxy->pci_dev.config;
+     if (proxy->class_code) {
+diff --git a/include/hw/virtio/virtio-bus.h b/include/hw/virtio/virtio-bus.h
+index 9ed60f9..105ca6d 100644
+--- a/include/hw/virtio/virtio-bus.h
++++ b/include/hw/virtio/virtio-bus.h
+@@ -66,10 +66,6 @@ typedef struct VirtioBusClass {
+ 
+ struct VirtioBusState {
+     BusState parent_obj;
+-    /*
+-     * Only one VirtIODevice can be plugged on the bus.
+-     */
+-    VirtIODevice *vdev;
+ };
+ 
+ int virtio_bus_plug_device(VirtIODevice *vdev);
+@@ -92,4 +88,16 @@ void virtio_bus_get_vdev_config(VirtioBusState *bus, uint8_t *config);
+ /* Set config of the plugged device. */
+ void virtio_bus_set_vdev_config(VirtioBusState *bus, uint8_t *config);
+ 
++static inline VirtIODevice *virtio_bus_get_device(VirtioBusState *bus)
++{
++    BusState *qbus = &bus->parent_obj;
++    BusChild *kid = QTAILQ_FIRST(&qbus->children);
++    DeviceState *qdev = kid ? kid->child : NULL;
++
++    /* This is used on the data path, the cast is guaranteed
++     * to succeed by the qdev machinery.
++     */
++    return (VirtIODevice *)qdev;
++}
++
+ #endif /* VIRTIO_BUS_H */
+-- 
+1.7.1
+

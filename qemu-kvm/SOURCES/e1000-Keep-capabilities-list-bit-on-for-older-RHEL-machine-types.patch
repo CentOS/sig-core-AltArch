@@ -1,0 +1,49 @@
+From 5278c98d70ef98926e47b226cf5e40decc7ac7ca Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Wed, 31 Jul 2013 08:06:40 +0200
+Subject: e1000: Keep capabilities list bit on for older RHEL machine types
+
+Message-id: <1375201922-6794-16-git-send-email-armbru@redhat.com>
+Patchwork-id: 52825
+O-Subject: [RHEL-7 PATCH v3 15/15] e1000: Keep capabilities list bit on for older RHEL machine types
+Bugzilla: 983991
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Upstream commit dd8e937 "e1000: Don't set the Capabilities List bit"
+switched it off.  The necessary compat_props to keep it on for old
+machine types were forgotten.
+
+The RHEL-6 backport commit 2d76e3e added property
+e1000.x-__com_redhat_rhel630_compat, set it for 6.3 and older via
+compat_props, and made setting the capabilities list bit depend on it
+being set.
+
+Instead of porting the RHEL-only property forward to RHEL-7, use
+upstream's e1000.autonegotiation, which is on for 6.4 and newer, else
+off.  This is admittedly a hack.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+
+diff --git a/hw/net/e1000.c b/hw/net/e1000.c
+index e6f46f0..661b461 100644
+--- a/hw/net/e1000.c
++++ b/hw/net/e1000.c
+@@ -1324,6 +1324,16 @@ static int pci_e1000_init(PCIDevice *pci_dev)
+ 
+     pci_conf = d->dev.config;
+ 
++    if (!(d->compat_flags & E1000_FLAG_AUTONEG)) {
++        /*
++         * We have no capabilities, so capability list bit should normally be 0.
++         * Keep it on for compat machine types to avoid breaking migration.
++         * HACK: abuse E1000_FLAG_AUTONEG, which is off exactly for
++         * the machine types that need this.
++         */
++        pci_set_word(pci_conf + PCI_STATUS, PCI_STATUS_CAP_LIST);
++    }
++
+     /* TODO: RST# value should be 0, PCI spec 6.2.4 */
+     pci_conf[PCI_CACHE_LINE_SIZE] = 0x10;
+ 

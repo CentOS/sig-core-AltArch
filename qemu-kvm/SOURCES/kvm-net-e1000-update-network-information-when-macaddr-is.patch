@@ -1,0 +1,59 @@
+From 7825ef61b703c017c2b4ae56007046f0acd3fee6 Mon Sep 17 00:00:00 2001
+From: Amos Kong <akong@redhat.com>
+Date: Tue, 5 Nov 2013 09:17:40 +0100
+Subject: [PATCH 08/25] net/e1000: update network information when macaddr is changed in guest
+
+RH-Author: Amos Kong <akong@redhat.com>
+Message-id: <1383643062-1844-3-git-send-email-akong@redhat.com>
+Patchwork-id: 55369
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 2/4] net/e1000: update network information when macaddr is changed in guest
+Bugzilla: 922589
+RH-Acked-by: Vlad Yasevich <vyasevic@redhat.com>
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+RH-Acked-by: Xiao Wang <jasowang@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+
+Bugzilla: 922589
+
+If we change macaddr in guest by 'ifconfig eth0 hw ether 12:12:12:34:35:36',
+the mac register of e1000 is already updated, but we don't update
+network information in qemu. Therefor, the information in monitor
+is wrong.
+
+This patch updates nic info when the second part of macaddr is written.
+
+Signed-off-by: Amos Kong <akong@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 7c36507c2b8776266f50c5e2739bd18279953b93)
+---
+ hw/net/e1000.c |    8 ++++++++
+ 1 files changed, 8 insertions(+), 0 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/net/e1000.c |    8 ++++++++
+ 1 files changed, 8 insertions(+), 0 deletions(-)
+
+diff --git a/hw/net/e1000.c b/hw/net/e1000.c
+index d273ef2..87a84a7 100644
+--- a/hw/net/e1000.c
++++ b/hw/net/e1000.c
+@@ -971,7 +971,15 @@ mac_read_clr8(E1000State *s, int index)
+ static void
+ mac_writereg(E1000State *s, int index, uint32_t val)
+ {
++    uint32_t macaddr[2];
++
+     s->mac_reg[index] = val;
++
++    if (index == RA + 1) {
++        macaddr[0] = cpu_to_le32(s->mac_reg[RA]);
++        macaddr[1] = cpu_to_le32(s->mac_reg[RA + 1]);
++        qemu_format_nic_info_str(qemu_get_queue(s->nic), (uint8_t *)macaddr);
++    }
+ }
+ 
+ static void
+-- 
+1.7.1
+

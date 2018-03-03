@@ -1,0 +1,146 @@
+From 30e78b5a6fc16e3669f83b27e02c8eb53e646b48 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 25 Mar 2014 14:23:17 +0100
+Subject: [PATCH 10/49] bochs: Unify header structs and make them QEMU_PACKED
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1395753835-7591-11-git-send-email-kwolf@redhat.com>
+Patchwork-id: n/a
+O-Subject: [virt-devel] [EMBARGOED RHEL-7.0 qemu-kvm PATCH 10/48] bochs: Unify header structs and make them QEMU_PACKED
+Bugzilla: 1066691
+RH-Acked-by: Jeff Cody <jcody@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1066691
+Upstream status: Series embargoed
+
+This is an on-disk structure, so offsets must be accurate.
+
+Before this patch, sizeof(bochs) != sizeof(header_v1), which makes the
+memcpy() between both invalid. We're lucky enough that the destination
+buffer happened to be the larger one, and the memcpy size to be taken
+from the smaller one, so we didn't get a buffer overflow in practice.
+
+This patch unifies the both structures, eliminating the need to do a
+memcpy in the first place. The common fields are extracted to the top
+level of the struct and the actually differing part gets a union of the
+two versions.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+---
+ block/bochs.c |   67 +++++++++++++++++++++-----------------------------------
+ 1 files changed, 25 insertions(+), 42 deletions(-)
+
+diff --git a/block/bochs.c b/block/bochs.c
+index 51d9a90..708780d 100644
+--- a/block/bochs.c
++++ b/block/bochs.c
+@@ -39,45 +39,30 @@
+ // not allocated: 0xffffffff
+ 
+ // always little-endian
+-struct bochs_header_v1 {
+-    char magic[32]; // "Bochs Virtual HD Image"
+-    char type[16]; // "Redolog"
+-    char subtype[16]; // "Undoable" / "Volatile" / "Growing"
+-    uint32_t version;
+-    uint32_t header; // size of header
+-
+-    union {
+-	struct {
+-	    uint32_t catalog; // num of entries
+-	    uint32_t bitmap; // bitmap size
+-	    uint32_t extent; // extent size
+-	    uint64_t disk; // disk size
+-	    char padding[HEADER_SIZE - 64 - 8 - 20];
+-	} redolog;
+-	char padding[HEADER_SIZE - 64 - 8];
+-    } extra;
+-};
+-
+-// always little-endian
+ struct bochs_header {
+-    char magic[32]; // "Bochs Virtual HD Image"
+-    char type[16]; // "Redolog"
+-    char subtype[16]; // "Undoable" / "Volatile" / "Growing"
++    char magic[32];     /* "Bochs Virtual HD Image" */
++    char type[16];      /* "Redolog" */
++    char subtype[16];   /* "Undoable" / "Volatile" / "Growing" */
+     uint32_t version;
+-    uint32_t header; // size of header
++    uint32_t header;    /* size of header */
++
++    uint32_t catalog;   /* num of entries */
++    uint32_t bitmap;    /* bitmap size */
++    uint32_t extent;    /* extent size */
+ 
+     union {
+-	struct {
+-	    uint32_t catalog; // num of entries
+-	    uint32_t bitmap; // bitmap size
+-	    uint32_t extent; // extent size
+-	    uint32_t reserved; // for ???
+-	    uint64_t disk; // disk size
+-	    char padding[HEADER_SIZE - 64 - 8 - 24];
+-	} redolog;
+-	char padding[HEADER_SIZE - 64 - 8];
++        struct {
++            uint32_t reserved;  /* for ??? */
++            uint64_t disk;      /* disk size */
++            char padding[HEADER_SIZE - 64 - 20 - 12];
++        } QEMU_PACKED redolog;
++        struct {
++            uint64_t disk;      /* disk size */
++            char padding[HEADER_SIZE - 64 - 20 - 8];
++        } QEMU_PACKED redolog_v1;
++        char padding[HEADER_SIZE - 64 - 20];
+     } extra;
+-};
++} QEMU_PACKED;
+ 
+ typedef struct BDRVBochsState {
+     CoMutex lock;
+@@ -114,7 +99,6 @@ static int bochs_open(BlockDriverState *bs, QDict *options, int flags,
+     BDRVBochsState *s = bs->opaque;
+     int i;
+     struct bochs_header bochs;
+-    struct bochs_header_v1 header_v1;
+     int ret;
+ 
+     bs->read_only = 1; // no write support yet
+@@ -133,13 +117,12 @@ static int bochs_open(BlockDriverState *bs, QDict *options, int flags,
+     }
+ 
+     if (le32_to_cpu(bochs.version) == HEADER_V1) {
+-      memcpy(&header_v1, &bochs, sizeof(bochs));
+-      bs->total_sectors = le64_to_cpu(header_v1.extra.redolog.disk) / 512;
++        bs->total_sectors = le64_to_cpu(bochs.extra.redolog_v1.disk) / 512;
+     } else {
+-      bs->total_sectors = le64_to_cpu(bochs.extra.redolog.disk) / 512;
++        bs->total_sectors = le64_to_cpu(bochs.extra.redolog.disk) / 512;
+     }
+ 
+-    s->catalog_size = le32_to_cpu(bochs.extra.redolog.catalog);
++    s->catalog_size = le32_to_cpu(bochs.catalog);
+     s->catalog_bitmap = g_malloc(s->catalog_size * 4);
+ 
+     ret = bdrv_pread(bs->file, le32_to_cpu(bochs.header), s->catalog_bitmap,
+@@ -153,10 +136,10 @@ static int bochs_open(BlockDriverState *bs, QDict *options, int flags,
+ 
+     s->data_offset = le32_to_cpu(bochs.header) + (s->catalog_size * 4);
+ 
+-    s->bitmap_blocks = 1 + (le32_to_cpu(bochs.extra.redolog.bitmap) - 1) / 512;
+-    s->extent_blocks = 1 + (le32_to_cpu(bochs.extra.redolog.extent) - 1) / 512;
++    s->bitmap_blocks = 1 + (le32_to_cpu(bochs.bitmap) - 1) / 512;
++    s->extent_blocks = 1 + (le32_to_cpu(bochs.extent) - 1) / 512;
+ 
+-    s->extent_size = le32_to_cpu(bochs.extra.redolog.extent);
++    s->extent_size = le32_to_cpu(bochs.extent);
+ 
+     qemu_co_mutex_init(&s->lock);
+     return 0;
+-- 
+1.7.1
+

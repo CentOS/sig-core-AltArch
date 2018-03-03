@@ -1,0 +1,58 @@
+From 4e3d25779bb06d9c7a39e9e36b1be8737b459e32 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 4 Nov 2013 22:32:28 +0100
+Subject: [PATCH 35/87] qcow2: Remove wrong metadata overlap check
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-38-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55337
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 37/43] qcow2: Remove wrong metadata overlap check
+Bugzilla: 1004347
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1004347
+
+In qcow2_write_compressed, if the compression fails, a normal cluster is
+written to disk. This is done through bdrv_write on the qcow2 BDS
+itself (using the guest offset), thus it is wrong to do a metadata
+overlap check before.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit f9bff971436b5924ca3c3203c6a3dcd6437bd430)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2.c | 8 --------
+ 1 file changed, 8 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2.c |    8 --------
+ 1 files changed, 0 insertions(+), 8 deletions(-)
+
+diff --git a/block/qcow2.c b/block/qcow2.c
+index 880d2cf..8b73518 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -1735,14 +1735,6 @@ static int qcow2_write_compressed(BlockDriverState *bs, int64_t sector_num,
+ 
+     if (ret != Z_STREAM_END || out_len >= s->cluster_size) {
+         /* could not compress: write normal cluster */
+-
+-        ret = qcow2_pre_write_overlap_check(bs, QCOW2_OL_DEFAULT,
+-                sector_num * BDRV_SECTOR_SIZE,
+-                s->cluster_sectors * BDRV_SECTOR_SIZE);
+-        if (ret < 0) {
+-            goto fail;
+-        }
+-
+         ret = bdrv_write(bs, sector_num, buf, s->cluster_sectors);
+         if (ret < 0) {
+             goto fail;
+-- 
+1.7.1
+

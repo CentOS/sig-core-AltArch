@@ -1,0 +1,82 @@
+From 216010b25271a2814abef68971d672632ddbd122 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Tue, 6 Aug 2013 13:17:04 +0200
+Subject: [PATCH 11/28] microblaze: Fix latent bug with default DTB lookup
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1375795025-28674-6-git-send-email-armbru@redhat.com>
+Patchwork-id: 52994
+O-Subject: [PATCH 7.0 qemu-kvm 5/6] microblaze: Fix latent bug with default DTB lookup
+Bugzilla: 980782
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michal Novotny <minovotn@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+
+microblaze_load_kernel() fails to call
+qemu_find_file(QEMU_FILE_TYPE_BIOS, dtb_filename) when no -machine
+options are given.  This can't normally happen, because -machine
+option kernel is mandatory for this target.  Fix it anyway, by using
+qemu_get_machine_opts().
+
+Cc: Peter Crosthwaite <peter.crosthwaite@petalogix.com>
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Message-id: 1372943363-24081-6-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit 7bccd9402691e712305bc3b5cc6cf2fa1cc27631)
+---
+ hw/microblaze/boot.c | 27 +++++++++++++--------------
+ 1 file changed, 13 insertions(+), 14 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/microblaze/boot.c |   27 +++++++++++++--------------
+ 1 files changed, 13 insertions(+), 14 deletions(-)
+
+diff --git a/hw/microblaze/boot.c b/hw/microblaze/boot.c
+index e543d88..f03934b 100644
+--- a/hw/microblaze/boot.c
++++ b/hw/microblaze/boot.c
+@@ -28,6 +28,7 @@
+ #include "qemu/config-file.h"
+ #include "qemu-common.h"
+ #include "sysemu/device_tree.h"
++#include "sysemu/sysemu.h"
+ #include "hw/loader.h"
+ #include "elf.h"
+ 
+@@ -105,20 +106,18 @@ void microblaze_load_kernel(MicroBlazeCPU *cpu, hwaddr ddr_base,
+                             void (*machine_cpu_reset)(MicroBlazeCPU *))
+ {
+     QemuOpts *machine_opts;
+-    const char *kernel_filename = NULL;
+-    const char *kernel_cmdline = NULL;
+-
+-    machine_opts = qemu_opts_find(qemu_find_opts("machine"), 0);
+-    if (machine_opts) {
+-        const char *dtb_arg;
+-        kernel_filename = qemu_opt_get(machine_opts, "kernel");
+-        kernel_cmdline = qemu_opt_get(machine_opts, "append");
+-        dtb_arg = qemu_opt_get(machine_opts, "dtb");
+-        if (dtb_arg) { /* Preference a -dtb argument */
+-            dtb_filename = dtb_arg;
+-        } else { /* default to pcbios dtb as passed by machine_init */
+-            dtb_filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, dtb_filename);
+-        }
++    const char *kernel_filename;
++    const char *kernel_cmdline;
++    const char *dtb_arg;
++
++    machine_opts = qemu_get_machine_opts();
++    kernel_filename = qemu_opt_get(machine_opts, "kernel");
++    kernel_cmdline = qemu_opt_get(machine_opts, "append");
++    dtb_arg = qemu_opt_get(machine_opts, "dtb");
++    if (dtb_arg) { /* Preference a -dtb argument */
++        dtb_filename = dtb_arg;
++    } else { /* default to pcbios dtb as passed by machine_init */
++        dtb_filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, dtb_filename);
+     }
+ 
+     boot_info.machine_cpu_reset = machine_cpu_reset;
+-- 
+1.7.1
+

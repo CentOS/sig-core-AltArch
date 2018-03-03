@@ -1,0 +1,103 @@
+From 2f7835f6ef83931dff5fb37729fd42cd7b431b17 Mon Sep 17 00:00:00 2001
+Message-Id: <2f7835f6ef83931dff5fb37729fd42cd7b431b17.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:09:07 +0100
+Subject: [PATCH 19/50] block: introduce bdrv_make_zero
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-22-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56058
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 21/52] block: introduce bdrv_make_zero
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Peter Lieven <pl@kamp.de>
+
+this patch adds a call to completely zero out a block device.
+the operation is sped up by checking the block status and
+only writing zeroes to the device if they currently do not
+return zeroes. optionally the zero writing can be sped up
+by setting the flag BDRV_REQ_MAY_UNMAP to emulate the zero
+write by unmapping if the driver supports it.
+
+Signed-off-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit d75cbb5e68f5a7d64248ba89399a7f2073231de5)
+---
+ block.c               | 37 +++++++++++++++++++++++++++++++++++++
+ include/block/block.h |  1 +
+ 2 files changed, 38 insertions(+)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ block.c               | 37 +++++++++++++++++++++++++++++++++++++
+ include/block/block.h |  1 +
+ 2 files changed, 38 insertions(+)
+
+diff --git a/block.c b/block.c
+index 23dbafd..2e77763 100644
+--- a/block.c
++++ b/block.c
+@@ -2412,6 +2412,43 @@ int bdrv_write_zeroes(BlockDriverState *bs, int64_t sector_num,
+                       BDRV_REQ_ZERO_WRITE | flags);
+ }
+ 
++/*
++ * Completely zero out a block device with the help of bdrv_write_zeroes.
++ * The operation is sped up by checking the block status and only writing
++ * zeroes to the device if they currently do not return zeroes. Optional
++ * flags are passed through to bdrv_write_zeroes (e.g. BDRV_REQ_MAY_UNMAP).
++ *
++ * Returns < 0 on error, 0 on success. For error codes see bdrv_write().
++ */
++int bdrv_make_zero(BlockDriverState *bs, BdrvRequestFlags flags)
++{
++    int64_t target_size = bdrv_getlength(bs) / BDRV_SECTOR_SIZE;
++    int64_t ret, nb_sectors, sector_num = 0;
++    int n;
++
++    for (;;) {
++        nb_sectors = target_size - sector_num;
++        if (nb_sectors <= 0) {
++            return 0;
++        }
++        if (nb_sectors > INT_MAX) {
++            nb_sectors = INT_MAX;
++        }
++        ret = bdrv_get_block_status(bs, sector_num, nb_sectors, &n);
++        if (ret & BDRV_BLOCK_ZERO) {
++            sector_num += n;
++            continue;
++        }
++        ret = bdrv_write_zeroes(bs, sector_num, n, flags);
++        if (ret < 0) {
++            error_report("error writing zeroes at sector %" PRId64 ": %s",
++                         sector_num, strerror(-ret));
++            return ret;
++        }
++        sector_num += n;
++    }
++}
++
+ int bdrv_pread(BlockDriverState *bs, int64_t offset,
+                void *buf, int count1)
+ {
+diff --git a/include/block/block.h b/include/block/block.h
+index 1958d98..b87ed3a 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -218,6 +218,7 @@ int bdrv_write(BlockDriverState *bs, int64_t sector_num,
+                const uint8_t *buf, int nb_sectors);
+ int bdrv_write_zeroes(BlockDriverState *bs, int64_t sector_num,
+                int nb_sectors, BdrvRequestFlags flags);
++int bdrv_make_zero(BlockDriverState *bs, BdrvRequestFlags flags);
+ int bdrv_writev(BlockDriverState *bs, int64_t sector_num, QEMUIOVector *qiov);
+ int bdrv_pread(BlockDriverState *bs, int64_t offset,
+                void *buf, int count);
+-- 
+1.7.11.7
+

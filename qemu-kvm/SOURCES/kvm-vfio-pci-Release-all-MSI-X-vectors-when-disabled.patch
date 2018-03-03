@@ -1,0 +1,67 @@
+From 4e1c9f340ef7820e28c55ad286a631cb9e63967a Mon Sep 17 00:00:00 2001
+Message-Id: <4e1c9f340ef7820e28c55ad286a631cb9e63967a.1387276076.git.minovotn@redhat.com>
+In-Reply-To: <e610718166120379517e80d1a7aa12d60294209b.1387276076.git.minovotn@redhat.com>
+References: <e610718166120379517e80d1a7aa12d60294209b.1387276076.git.minovotn@redhat.com>
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Mon, 9 Dec 2013 17:48:46 +0100
+Subject: [PATCH 06/16] vfio-pci: Release all MSI-X vectors when disabled
+
+RH-Author: Alex Williamson <alex.williamson@redhat.com>
+Message-id: <20131209174830.21963.40720.stgit@bling.home>
+Patchwork-id: 56091
+O-Subject: [RHEL7 qemu-kvm PATCH] vfio-pci: Release all MSI-X vectors when disabled
+Bugzilla: 1029743
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Amos Kong <akong@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1029743
+Brew: https://brewweb.devel.redhat.com/taskinfo?taskID=6696250
+Upstream: 3e40ba0faf0822fa78336fe6cd9d677ea9b14f1b
+
+We were relying on msix_unset_vector_notifiers() to release all the
+vectors when we disable MSI-X, but this only happens when MSI-X is
+still enabled on the device.  Perform further cleanup by releasing
+any remaining vectors listed as in-use after this call.  This caused
+a leak of IRQ routes on hotplug depending on how the guest OS prepared
+the device for removal.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+Cc: qemu-stable@nongnu.org
+---
+ hw/misc/vfio.c |   12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/misc/vfio.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index 5a6925c..250f96f 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -886,8 +886,20 @@ static void vfio_disable_msi_common(VFIODevice *vdev)
+ 
+ static void vfio_disable_msix(VFIODevice *vdev)
+ {
++    int i;
++
+     msix_unset_vector_notifiers(&vdev->pdev);
+ 
++    /*
++     * MSI-X will only release vectors if MSI-X is still enabled on the
++     * device, check through the rest and release it ourselves if necessary.
++     */
++    for (i = 0; i < vdev->nr_vectors; i++) {
++        if (vdev->msi_vectors[i].use) {
++            vfio_msix_vector_release(&vdev->pdev, i);
++        }
++    }
++
+     if (vdev->nr_vectors) {
+         vfio_disable_irqindex(vdev, VFIO_PCI_MSIX_IRQ_INDEX);
+     }
+-- 
+1.7.11.7
+

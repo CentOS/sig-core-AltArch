@@ -1,0 +1,166 @@
+From 68066d2b824a88a45b3263dd1ceb18307c92581f Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 15 Feb 2014 16:03:47 +0100
+Subject: [PATCH 2/5] qcow2: remove n_start and n_end of qcow2_alloc_cluster_offset()
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1392480230-24011-2-git-send-email-mreitz@redhat.com>
+Patchwork-id: 57292
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 1/4] qcow2: remove n_start and n_end of qcow2_alloc_cluster_offset()
+Bugzilla: 1049176
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+From: Hu Tao <hutao@cn.fujitsu.com>
+
+BZ: 1049176
+BZ: 1055848
+
+n_start can be actually calculated from offset. The number of
+sectors to be allocated(n_end - n_start) can be passed in in
+num. By removing n_start and n_end, we can save two parameters.
+
+The side effect is there is a bug in qcow2.c:preallocate() that
+passes incorrect n_start to qcow2_alloc_cluster_offset() is
+fixed. The bug can be triggerred by a larger cluster size than
+the default value(65536), for example:
+
+./qemu-img create -f qcow2 \
+  -o 'cluster_size=131072,preallocation=metadata' file.img 4G
+
+Signed-off-by: Hu Tao <hutao@cn.fujitsu.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 16f0587e0a5da5b1ad76cb7c3739491bc042201c)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2-cluster.c | 14 ++++++--------
+ block/qcow2.c         | 13 +++++++------
+ block/qcow2.h         |  2 +-
+ trace-events          |  2 +-
+ 4 files changed, 15 insertions(+), 16 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-cluster.c |   14 ++++++--------
+ block/qcow2.c         |   13 +++++++------
+ block/qcow2.h         |    2 +-
+ trace-events          |    2 +-
+ 4 files changed, 15 insertions(+), 16 deletions(-)
+
+diff --git a/block/qcow2-cluster.c b/block/qcow2-cluster.c
+index 79c3ae0..862df0f 100644
+--- a/block/qcow2-cluster.c
++++ b/block/qcow2-cluster.c
+@@ -1173,7 +1173,7 @@ fail:
+  * Return 0 on success and -errno in error cases
+  */
+ int qcow2_alloc_cluster_offset(BlockDriverState *bs, uint64_t offset,
+-    int n_start, int n_end, int *num, uint64_t *host_offset, QCowL2Meta **m)
++    int *num, uint64_t *host_offset, QCowL2Meta **m)
+ {
+     BDRVQcowState *s = bs->opaque;
+     uint64_t start, remaining;
+@@ -1181,15 +1181,13 @@ int qcow2_alloc_cluster_offset(BlockDriverState *bs, uint64_t offset,
+     uint64_t cur_bytes;
+     int ret;
+ 
+-    trace_qcow2_alloc_clusters_offset(qemu_coroutine_self(), offset,
+-                                      n_start, n_end);
++    trace_qcow2_alloc_clusters_offset(qemu_coroutine_self(), offset, *num);
+ 
+-    assert(n_start * BDRV_SECTOR_SIZE == offset_into_cluster(s, offset));
+-    offset = start_of_cluster(s, offset);
++    assert((offset & ~BDRV_SECTOR_MASK) == 0);
+ 
+ again:
+-    start = offset + (n_start << BDRV_SECTOR_BITS);
+-    remaining = (n_end - n_start) << BDRV_SECTOR_BITS;
++    start = offset;
++    remaining = *num << BDRV_SECTOR_BITS;
+     cluster_offset = 0;
+     *host_offset = 0;
+     cur_bytes = 0;
+@@ -1275,7 +1273,7 @@ again:
+         }
+     }
+ 
+-    *num = (n_end - n_start) - (remaining >> BDRV_SECTOR_BITS);
++    *num -= remaining >> BDRV_SECTOR_BITS;
+     assert(*num > 0);
+     assert(*host_offset != 0);
+ 
+diff --git a/block/qcow2.c b/block/qcow2.c
+index 25a5b5e..fe950b4 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -1000,7 +1000,6 @@ static coroutine_fn int qcow2_co_writev(BlockDriverState *bs,
+ {
+     BDRVQcowState *s = bs->opaque;
+     int index_in_cluster;
+-    int n_end;
+     int ret;
+     int cur_nr_sectors; /* number of sectors in current iteration */
+     uint64_t cluster_offset;
+@@ -1024,14 +1023,16 @@ static coroutine_fn int qcow2_co_writev(BlockDriverState *bs,
+ 
+         trace_qcow2_writev_start_part(qemu_coroutine_self());
+         index_in_cluster = sector_num & (s->cluster_sectors - 1);
+-        n_end = index_in_cluster + remaining_sectors;
++        cur_nr_sectors = remaining_sectors;
+         if (s->crypt_method &&
+-            n_end > QCOW_MAX_CRYPT_CLUSTERS * s->cluster_sectors) {
+-            n_end = QCOW_MAX_CRYPT_CLUSTERS * s->cluster_sectors;
++            cur_nr_sectors >
++            QCOW_MAX_CRYPT_CLUSTERS * s->cluster_sectors - index_in_cluster) {
++            cur_nr_sectors =
++                QCOW_MAX_CRYPT_CLUSTERS * s->cluster_sectors - index_in_cluster;
+         }
+ 
+         ret = qcow2_alloc_cluster_offset(bs, sector_num << 9,
+-            index_in_cluster, n_end, &cur_nr_sectors, &cluster_offset, &l2meta);
++            &cur_nr_sectors, &cluster_offset, &l2meta);
+         if (ret < 0) {
+             goto fail;
+         }
+@@ -1408,7 +1409,7 @@ static int preallocate(BlockDriverState *bs)
+ 
+     while (nb_sectors) {
+         num = MIN(nb_sectors, INT_MAX >> 9);
+-        ret = qcow2_alloc_cluster_offset(bs, offset, 0, num, &num,
++        ret = qcow2_alloc_cluster_offset(bs, offset, &num,
+                                          &host_offset, &meta);
+         if (ret < 0) {
+             return ret;
+diff --git a/block/qcow2.h b/block/qcow2.h
+index 9749f03..4a653c5 100644
+--- a/block/qcow2.h
++++ b/block/qcow2.h
+@@ -463,7 +463,7 @@ void qcow2_encrypt_sectors(BDRVQcowState *s, int64_t sector_num,
+ int qcow2_get_cluster_offset(BlockDriverState *bs, uint64_t offset,
+     int *num, uint64_t *cluster_offset);
+ int qcow2_alloc_cluster_offset(BlockDriverState *bs, uint64_t offset,
+-    int n_start, int n_end, int *num, uint64_t *host_offset, QCowL2Meta **m);
++    int *num, uint64_t *host_offset, QCowL2Meta **m);
+ uint64_t qcow2_alloc_compressed_cluster_offset(BlockDriverState *bs,
+                                          uint64_t offset,
+                                          int compressed_size);
+diff --git a/trace-events b/trace-events
+index 5d86cf3..b9144b2 100644
+--- a/trace-events
++++ b/trace-events
+@@ -485,7 +485,7 @@ qcow2_writev_done_part(void *co, int cur_nr_sectors) "co %p cur_nr_sectors %d"
+ qcow2_writev_data(void *co, uint64_t offset) "co %p offset %" PRIx64
+ 
+ # block/qcow2-cluster.c
+-qcow2_alloc_clusters_offset(void *co, uint64_t offset, int n_start, int n_end) "co %p offet %" PRIx64 " n_start %d n_end %d"
++qcow2_alloc_clusters_offset(void *co, uint64_t offset, int num) "co %p offet %" PRIx64 " num %d"
+ qcow2_handle_copied(void *co, uint64_t guest_offset, uint64_t host_offset, uint64_t bytes) "co %p guest_offet %" PRIx64 " host_offset %" PRIx64 " bytes %" PRIx64
+ qcow2_handle_alloc(void *co, uint64_t guest_offset, uint64_t host_offset, uint64_t bytes) "co %p guest_offet %" PRIx64 " host_offset %" PRIx64 " bytes %" PRIx64
+ qcow2_do_alloc_clusters_offset(void *co, uint64_t guest_offset, uint64_t host_offset, int nb_clusters) "co %p guest_offet %" PRIx64 " host_offset %" PRIx64 " nb_clusters %d"
+-- 
+1.7.1
+

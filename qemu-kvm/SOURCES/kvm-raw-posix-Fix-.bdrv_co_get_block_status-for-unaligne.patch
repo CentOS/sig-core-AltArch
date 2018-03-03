@@ -1,0 +1,57 @@
+From 4237964a9f433faaf643166a8ce9c070dc4cf165 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Thu, 14 Jan 2016 15:10:31 +0100
+Subject: [PATCH] raw-posix: Fix .bdrv_co_get_block_status() for unaligned
+ image size
+
+Message-id: <1452784231-14211-2-git-send-email-mreitz@redhat.com>
+Patchwork-id: 68756
+O-Subject: [RHEL-7.3 qemu-kvm PATCH 1/1] raw-posix: Fix .bdrv_co_get_block_status() for unaligned image size
+Bugzilla: 1283116
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+Image files with an unaligned image size have a final hole that starts
+at EOF, i.e. in the middle of a sector. Currently, *pnum == 0 is
+returned when checking the status of this sector. In qemu-img, this
+triggers an assertion failure.
+
+In order to fix this, one type for the sector that contains EOF must be
+found. Treating a hole as data is safe, so this patch rounds the
+calculated number of data sectors up, so that a partial sector at EOF is
+treated as a full data sector.
+
+This fixes https://bugzilla.redhat.com/show_bug.cgi?id=1229394
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Tested-by: Cole Robinson <crobinso@redhat.com>
+(cherry picked from commit b8684454e152ca2e100f4b59d80de2be27186206)
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/raw-posix.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/block/raw-posix.c b/block/raw-posix.c
+index 72a9dc0..1f5275f 100644
+--- a/block/raw-posix.c
++++ b/block/raw-posix.c
+@@ -1452,8 +1452,9 @@ static int64_t coroutine_fn raw_co_get_block_status(BlockDriverState *bs,
+         *pnum = nb_sectors;
+         ret = BDRV_BLOCK_DATA;
+     } else if (data == start) {
+-        /* On a data extent, compute sectors to the end of the extent.  */
+-        *pnum = MIN(nb_sectors, (hole - start) / BDRV_SECTOR_SIZE);
++        /* On a data extent, compute sectors to the end of the extent,
++         * possibly including a partial sector at EOF. */
++        *pnum = MIN(nb_sectors, DIV_ROUND_UP(hole - start, BDRV_SECTOR_SIZE));
+         ret = BDRV_BLOCK_DATA;
+     } else {
+         /* On a hole, compute sectors to the beginning of the next extent.  */
+-- 
+1.8.3.1
+

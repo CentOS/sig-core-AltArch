@@ -1,0 +1,90 @@
+From 5ef9ff360b8856803c2d9e865c3c2e83f59b1099 Mon Sep 17 00:00:00 2001
+From: Marcel Apfelbaum <marcel.a@redhat.com>
+Date: Wed, 6 Nov 2013 16:32:36 +0100
+Subject: [PATCH 77/81] vl: allow "cont" from panicked state
+
+RH-Author: Marcel Apfelbaum <marcel.a@redhat.com>
+Message-id: <1383755557-21590-9-git-send-email-marcel.a@redhat.com>
+Patchwork-id: 55553
+O-Subject: [RHEL-7 qemu-kvm PATCH v3 8/9] vl: allow "cont" from panicked state
+Bugzilla: 990601
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+After reporting the GUEST_PANICKED monitor event, QEMU stops the VM.
+The reason for this is that events are edge-triggered, and can be lost if
+management dies at the wrong time.  Stopping a panicked VM lets management
+know of a panic even if it has crashed; management can learn about the
+panic when it restarts and queries running QEMU processes.  The downside
+is of course that the VM will be paused while management is not running,
+but that is acceptable if it only happens with explicit "-device pvpanic".
+
+Upon learning of a panic, management (if configured to do so) can pick a
+variety of behaviors: leave the VM paused, reset it, destroy it.  In
+addition to all of these behaviors, it is possible to dump the VM core
+from the host.
+
+However, right now, the panicked state is irreversible, and can only be
+exited by resetting the machine.  This means that any policy decision
+is entirely in the hands of the host.  In particular there is no way to
+use the "reboot on panic" option together with pvpanic.
+
+This patch makes the panicked state reversible (and removes various
+workarounds that were there because of the state being irreversible).
+With this change, management has a wider set of possible policies: it
+can just log the crash and leave policy to the guest, it can leave the
+VM paused.  In particular, the "log the crash and continue" is implemented
+simply by sending a "cont" as soon as management learns about the panic.
+Management could also implement the "irreversible paused state" itself.
+And again, all such actions can be coupled with dumping the VM core.
+
+Unfortunately we cannot change the behavior of 1.6.0.  Thus, even if
+it uses "-device pvpanic", management should check for "cont" failures.
+If "cont" fails, management can then log that the VM remained paused
+and urge the administrator to update QEMU.
+
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Luiz Capitulino <lcapitulino@redhat.com>
+Acked-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit df39076850958b842ac9e414dc3ab2895f1877bf)
+Signed-off-by: Marcel Apfelbaum <marcel.a@redhat.com>
+---
+ vl.c | 5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ vl.c |    5 ++---
+ 1 files changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/vl.c b/vl.c
+index 7c8ba63..9b1738b 100644
+--- a/vl.c
++++ b/vl.c
+@@ -640,7 +640,7 @@ static const RunStateTransition runstate_transitions_def[] = {
+     { RUN_STATE_WATCHDOG, RUN_STATE_RUNNING },
+     { RUN_STATE_WATCHDOG, RUN_STATE_FINISH_MIGRATE },
+ 
+-    { RUN_STATE_GUEST_PANICKED, RUN_STATE_PAUSED },
++    { RUN_STATE_GUEST_PANICKED, RUN_STATE_RUNNING },
+     { RUN_STATE_GUEST_PANICKED, RUN_STATE_FINISH_MIGRATE },
+ 
+     { RUN_STATE_MAX, RUN_STATE_MAX },
+@@ -687,8 +687,7 @@ int runstate_is_running(void)
+ bool runstate_needs_reset(void)
+ {
+     return runstate_check(RUN_STATE_INTERNAL_ERROR) ||
+-        runstate_check(RUN_STATE_SHUTDOWN) ||
+-        runstate_check(RUN_STATE_GUEST_PANICKED);
++        runstate_check(RUN_STATE_SHUTDOWN);
+ }
+ 
+ StatusInfo *qmp_query_status(Error **errp)
+-- 
+1.7.1
+

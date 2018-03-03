@@ -1,0 +1,54 @@
+From 2c71eba27413f9b34610cee3f6b16b0678f4d102 Mon Sep 17 00:00:00 2001
+From: Ladi Prosek <lprosek@redhat.com>
+Date: Wed, 5 Oct 2016 17:22:27 +0200
+Subject: [PATCH 5/8] virtio-balloon: discard virtqueue element on reset
+
+RH-Author: Ladi Prosek <lprosek@redhat.com>
+Message-id: <1475666548-9186-6-git-send-email-lprosek@redhat.com>
+Patchwork-id: 72484
+O-Subject: [RHEL-7.4 qemu-kvm v2 PATCH 5/6] virtio-balloon: discard virtqueue element on reset
+Bugzilla: 1377968
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+The one pending element is being freed but not discarded on device
+reset, which causes svq->inuse to creep up, eventually hitting the
+"Virtqueue size exceeded" error.
+
+Properly discarding the element on device reset makes sure that its
+buffers are unmapped and the inuse counter stays balanced.
+
+Cc: Michael S. Tsirkin <mst@redhat.com>
+Cc: Roman Kagan <rkagan@virtuozzo.com>
+Cc: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Ladi Prosek <lprosek@redhat.com>
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 104e70cae78bd4afd95d948c6aff188f10508a9c)
+Signed-off-by: Ladi Prosek <lprosek@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+  * s->stats_vq_elem => &s->stats_vq_elem because the field is not
+    s pointer in 1.5.3
+---
+ hw/virtio/virtio-balloon.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/hw/virtio/virtio-balloon.c b/hw/virtio/virtio-balloon.c
+index 17b3029..faf93f7 100644
+--- a/hw/virtio/virtio-balloon.c
++++ b/hw/virtio/virtio-balloon.c
+@@ -398,6 +398,7 @@ static void virtio_balloon_device_reset(VirtIODevice *vdev)
+     VirtIOBalloon *s = VIRTIO_BALLOON(vdev);
+ 
+     if (s->stats_vq_elem_pending) {
++        virtqueue_discard(s->svq, &s->stats_vq_elem, 0);
+         s->stats_vq_elem_pending = false;
+     }
+ }
+-- 
+1.8.3.1
+

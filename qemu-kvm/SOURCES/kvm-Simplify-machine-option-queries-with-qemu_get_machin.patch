@@ -1,0 +1,283 @@
+From cfb7a42b4241cf1a8dea0f33947c66671923f694 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Tue, 6 Aug 2013 13:17:05 +0200
+Subject: [PATCH 12/28] Simplify -machine option queries with qemu_get_machine_opts()
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1375795025-28674-7-git-send-email-armbru@redhat.com>
+Patchwork-id: 52996
+O-Subject: [PATCH 7.0 qemu-kvm 6/6] Simplify -machine option queries with qemu_get_machine_opts()
+Bugzilla: 980782
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michal Novotny <minovotn@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+
+The previous two commits fixed bugs in -machine option queries.  I
+can't find fault with the remaining queries, but let's use
+qemu_get_machine_opts() everywhere, for consistency, simplicity and
+robustness.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Message-id: 1372943363-24081-7-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit 2ff3de685a875ece3ee21256736c0a9dbf39dc4c)
+---
+ device_tree.c  | 28 ++++++++++------------------
+ exec.c         | 12 ++++--------
+ hw/arm/boot.c  |  8 +-------
+ hw/ppc/e500.c  | 12 +++---------
+ hw/ppc/spapr.c | 28 ++++++++++------------------
+ vl.c           | 22 ++++++----------------
+ 6 files changed, 34 insertions(+), 76 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ device_tree.c  |   28 ++++++++++------------------
+ exec.c         |   12 ++++--------
+ hw/arm/boot.c  |    8 +-------
+ hw/ppc/e500.c  |   12 +++---------
+ hw/ppc/spapr.c |   28 ++++++++++------------------
+ vl.c           |   22 ++++++----------------
+ 6 files changed, 34 insertions(+), 76 deletions(-)
+
+diff --git a/device_tree.c b/device_tree.c
+index 56af24b..77cbe04 100644
+--- a/device_tree.c
++++ b/device_tree.c
+@@ -21,6 +21,7 @@
+ #include "config.h"
+ #include "qemu-common.h"
+ #include "sysemu/device_tree.h"
++#include "sysemu/sysemu.h"
+ #include "hw/loader.h"
+ #include "qemu/option.h"
+ #include "qemu/config-file.h"
+@@ -239,14 +240,10 @@ uint32_t qemu_devtree_alloc_phandle(void *fdt)
+      * which phandle id to start allocting phandles.
+      */
+     if (!phandle) {
+-        QemuOpts *machine_opts;
+-        machine_opts = qemu_opts_find(qemu_find_opts("machine"), 0);
+-        if (machine_opts) {
+-            const char *phandle_start;
+-            phandle_start = qemu_opt_get(machine_opts, "phandle_start");
+-            if (phandle_start) {
+-                phandle = strtoul(phandle_start, NULL, 0);
+-            }
++        const char *phandle_start = qemu_opt_get(qemu_get_machine_opts(),
++                                                 "phandle_start");
++        if (phandle_start) {
++            phandle = strtoul(phandle_start, NULL, 0);
+         }
+     }
+ 
+@@ -307,15 +304,10 @@ int qemu_devtree_add_subnode(void *fdt, const char *name)
+ 
+ void qemu_devtree_dumpdtb(void *fdt, int size)
+ {
+-    QemuOpts *machine_opts;
+-
+-    machine_opts = qemu_opts_find(qemu_find_opts("machine"), 0);
+-    if (machine_opts) {
+-        const char *dumpdtb = qemu_opt_get(machine_opts, "dumpdtb");
+-        if (dumpdtb) {
+-            /* Dump the dtb to a file and quit */
+-            exit(g_file_set_contents(dumpdtb, fdt, size, NULL) ? 0 : 1);
+-        }
+-    }
++    const char *dumpdtb = qemu_opt_get(qemu_get_machine_opts(), "dumpdtb");
+ 
++    if (dumpdtb) {
++        /* Dump the dtb to a file and quit */
++        exit(g_file_set_contents(dumpdtb, fdt, size, NULL) ? 0 : 1);
++    }
+ }
+diff --git a/exec.c b/exec.c
+index aec65c5..ee22b9b 100644
+--- a/exec.c
++++ b/exec.c
+@@ -31,6 +31,7 @@
+ #include "hw/qdev.h"
+ #include "qemu/osdep.h"
+ #include "sysemu/kvm.h"
++#include "sysemu/sysemu.h"
+ #include "hw/xen/xen.h"
+ #include "qemu/timer.h"
+ #include "qemu/config-file.h"
+@@ -979,12 +980,10 @@ ram_addr_t last_ram_offset(void)
+ static void qemu_ram_setup_dump(void *addr, ram_addr_t size)
+ {
+     int ret;
+-    QemuOpts *machine_opts;
+ 
+     /* Use MADV_DONTDUMP, if user doesn't want the guest memory in the core */
+-    machine_opts = qemu_opts_find(qemu_find_opts("machine"), 0);
+-    if (machine_opts &&
+-        !qemu_opt_get_bool(machine_opts, "dump-guest-core", true)) {
++    if (!qemu_opt_get_bool(qemu_get_machine_opts(),
++                           "dump-guest-core", true)) {
+         ret = qemu_madvise(addr, size, QEMU_MADV_DONTDUMP);
+         if (ret) {
+             perror("qemu_madvise");
+@@ -1031,10 +1030,7 @@ void qemu_ram_set_idstr(ram_addr_t addr, const char *name, DeviceState *dev)
+ 
+ static int memory_try_enable_merging(void *addr, size_t len)
+ {
+-    QemuOpts *opts;
+-
+-    opts = qemu_opts_find(qemu_find_opts("machine"), 0);
+-    if (opts && !qemu_opt_get_bool(opts, "mem-merge", true)) {
++    if (!qemu_opt_get_bool(qemu_get_machine_opts(), "mem-merge", true)) {
+         /* disabled by the user */
+         return 0;
+     }
+diff --git a/hw/arm/boot.c b/hw/arm/boot.c
+index 6bffc3d..6436109 100644
+--- a/hw/arm/boot.c
++++ b/hw/arm/boot.c
+@@ -365,7 +365,6 @@ void arm_load_kernel(ARMCPU *cpu, struct arm_boot_info *info)
+     uint64_t elf_entry;
+     hwaddr entry;
+     int big_endian;
+-    QemuOpts *machine_opts;
+ 
+     /* Load the kernel.  */
+     if (!info->kernel_filename) {
+@@ -373,12 +372,7 @@ void arm_load_kernel(ARMCPU *cpu, struct arm_boot_info *info)
+         exit(1);
+     }
+ 
+-    machine_opts = qemu_opts_find(qemu_find_opts("machine"), 0);
+-    if (machine_opts) {
+-        info->dtb_filename = qemu_opt_get(machine_opts, "dtb");
+-    } else {
+-        info->dtb_filename = NULL;
+-    }
++    info->dtb_filename = qemu_opt_get(qemu_get_machine_opts(), "dtb");
+ 
+     if (!info->secondary_cpu_reset_hook) {
+         info->secondary_cpu_reset_hook = default_reset_secondary;
+diff --git a/hw/ppc/e500.c b/hw/ppc/e500.c
+index c9ae512..ef3e571 100644
+--- a/hw/ppc/e500.c
++++ b/hw/ppc/e500.c
+@@ -137,7 +137,6 @@ static int ppce500_load_device_tree(CPUPPCState *env,
+     uint32_t clock_freq = 400000000;
+     uint32_t tb_freq = 400000000;
+     int i;
+-    const char *toplevel_compat = NULL; /* user override */
+     char compatible_sb[] = "fsl,mpc8544-immr\0simple-bus";
+     char soc[128];
+     char mpic[128];
+@@ -158,14 +157,9 @@ static int ppce500_load_device_tree(CPUPPCState *env,
+             0x0, 0xe1000000,
+             0x0, 0x10000,
+         };
+-    QemuOpts *machine_opts;
+-    const char *dtb_file = NULL;
+-
+-    machine_opts = qemu_opts_find(qemu_find_opts("machine"), 0);
+-    if (machine_opts) {
+-        dtb_file = qemu_opt_get(machine_opts, "dtb");
+-        toplevel_compat = qemu_opt_get(machine_opts, "dt_compatible");
+-    }
++    QemuOpts *machine_opts = qemu_get_machine_opts();
++    const char *dtb_file = qemu_opt_get(machine_opts, "dtb");
++    const char *toplevel_compat = qemu_opt_get(machine_opts, "dt_compatible");
+ 
+     if (dtb_file) {
+         char *filename;
+diff --git a/hw/ppc/spapr.c b/hw/ppc/spapr.c
+index c96ac81..6a46488 100644
+--- a/hw/ppc/spapr.c
++++ b/hw/ppc/spapr.c
+@@ -678,27 +678,19 @@ static void spapr_cpu_reset(void *opaque)
+ 
+ static void spapr_create_nvram(sPAPREnvironment *spapr)
+ {
+-    QemuOpts *machine_opts;
+-    DeviceState *dev;
++    DeviceState *dev = qdev_create(&spapr->vio_bus->bus, "spapr-nvram");
++    const char *drivename = qemu_opt_get(qemu_get_machine_opts(), "nvram");
+ 
+-    dev = qdev_create(&spapr->vio_bus->bus, "spapr-nvram");
++    if (drivename) {
++        BlockDriverState *bs;
+ 
+-    machine_opts = qemu_opts_find(qemu_find_opts("machine"), 0);
+-    if (machine_opts) {
+-        const char *drivename;
+-
+-        drivename = qemu_opt_get(machine_opts, "nvram");
+-        if (drivename) {
+-            BlockDriverState *bs;
+-
+-            bs = bdrv_find(drivename);
+-            if (!bs) {
+-                fprintf(stderr, "No such block device \"%s\" for nvram\n",
+-                        drivename);
+-                exit(1);
+-            }
+-            qdev_prop_set_drive_nofail(dev, "drive", bs);
++        bs = bdrv_find(drivename);
++        if (!bs) {
++            fprintf(stderr, "No such block device \"%s\" for nvram\n",
++                    drivename);
++            exit(1);
+         }
++        qdev_prop_set_drive_nofail(dev, "drive", bs);
+     }
+ 
+     qdev_init_nofail(dev);
+diff --git a/vl.c b/vl.c
+index 0ed9257..d424af7 100644
+--- a/vl.c
++++ b/vl.c
+@@ -1037,15 +1037,9 @@ static int parse_sandbox(QemuOpts *opts, void *opaque)
+     return 0;
+ }
+ 
+-/*********QEMU USB setting******/
+ bool usb_enabled(bool default_usb)
+ {
+-    QemuOpts *mach_opts;
+-    mach_opts = qemu_opts_find(qemu_find_opts("machine"), 0);
+-    if (mach_opts) {
+-        return qemu_opt_get_bool(mach_opts, "usb", default_usb);
+-    }
+-    return default_usb;
++    return qemu_opt_get_bool(qemu_get_machine_opts(), "usb", default_usb);
+ }
+ 
+ #ifndef _WIN32
+@@ -4136,14 +4130,10 @@ int main(int argc, char **argv, char **envp)
+         qtest_init();
+     }
+ 
+-    machine_opts = qemu_opts_find(qemu_find_opts("machine"), 0);
+-    if (machine_opts) {
+-        kernel_filename = qemu_opt_get(machine_opts, "kernel");
+-        initrd_filename = qemu_opt_get(machine_opts, "initrd");
+-        kernel_cmdline = qemu_opt_get(machine_opts, "append");
+-    } else {
+-        kernel_filename = initrd_filename = kernel_cmdline = NULL;
+-    }
++    machine_opts = qemu_get_machine_opts();
++    kernel_filename = qemu_opt_get(machine_opts, "kernel");
++    initrd_filename = qemu_opt_get(machine_opts, "initrd");
++    kernel_cmdline = qemu_opt_get(machine_opts, "append");
+ 
+     if (!kernel_cmdline) {
+         kernel_cmdline = "";
+@@ -4161,7 +4151,7 @@ int main(int argc, char **argv, char **envp)
+         exit(1);
+     }
+ 
+-    if (!linux_boot && machine_opts && qemu_opt_get(machine_opts, "dtb")) {
++    if (!linux_boot && qemu_opt_get(machine_opts, "dtb")) {
+         fprintf(stderr, "-dtb only allowed with -kernel option\n");
+         exit(1);
+     }
+-- 
+1.7.1
+

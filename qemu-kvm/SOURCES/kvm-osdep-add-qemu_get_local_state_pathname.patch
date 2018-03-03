@@ -1,0 +1,130 @@
+From eb8c85b01be23beabb2b61e8b32a7e20ca0fea17 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Wed, 31 Jul 2013 14:03:22 +0200
+Subject: [PATCH 01/28] osdep: add qemu_get_local_state_pathname()
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1375279407-13573-2-git-send-email-lersek@redhat.com>
+Patchwork-id: 52863
+O-Subject: [RHEL-7 qemu-kvm PATCH 1/6] osdep: add qemu_get_local_state_pathname()
+Bugzilla: 964304
+RH-Acked-by: Michal Novotny <minovotn@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+This function returns ${prefix}/var/RELATIVE_PATHNAME on POSIX-y systems,
+and <CSIDL_COMMON_APPDATA>/RELATIVE_PATHNAME on Win32.
+
+http://msdn.microsoft.com/en-us/library/bb762494.aspx
+
+  [...] This folder is used for application data that is not user
+  specific. For example, an application can store a spell-check
+  dictionary, a database of clip art, or a log file in the
+  CSIDL_COMMON_APPDATA folder. [...]
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Michael Roth <mdroth@linux.vnet.ibm.com>
+(cherry picked from commit e2ea3515a9d2d747f91dadf361afcbeb57a71500)
+---
+ include/qemu/osdep.h |   11 +++++++++++
+ util/oslib-posix.c   |    9 +++++++++
+ util/oslib-win32.c   |   22 ++++++++++++++++++++++
+ 3 files changed, 42 insertions(+), 0 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ include/qemu/osdep.h |   11 +++++++++++
+ util/oslib-posix.c   |    9 +++++++++
+ util/oslib-win32.c   |   22 ++++++++++++++++++++++
+ 3 files changed, 42 insertions(+), 0 deletions(-)
+
+diff --git a/include/qemu/osdep.h b/include/qemu/osdep.h
+index 57d7b1f..26136f1 100644
+--- a/include/qemu/osdep.h
++++ b/include/qemu/osdep.h
+@@ -204,4 +204,15 @@ const char *qemu_get_version(void);
+ void fips_set_state(bool requested);
+ bool fips_get_state(void);
+ 
++/* Return a dynamically allocated pathname denoting a file or directory that is
++ * appropriate for storing local state.
++ *
++ * @relative_pathname need not start with a directory separator; one will be
++ * added automatically.
++ *
++ * The caller is responsible for releasing the value returned with g_free()
++ * after use.
++ */
++char *qemu_get_local_state_pathname(const char *relative_pathname);
++
+ #endif
+diff --git a/util/oslib-posix.c b/util/oslib-posix.c
+index 631a1de..3dc8b1b 100644
+--- a/util/oslib-posix.c
++++ b/util/oslib-posix.c
+@@ -47,6 +47,8 @@ extern int daemon(int, int);
+ #  define QEMU_VMALLOC_ALIGN getpagesize()
+ #endif
+ 
++#include <glib/gprintf.h>
++
+ #include "config-host.h"
+ #include "sysemu/sysemu.h"
+ #include "trace.h"
+@@ -232,3 +234,10 @@ int qemu_utimens(const char *path, const struct timespec *times)
+ 
+     return utimes(path, &tv[0]);
+ }
++
++char *
++qemu_get_local_state_pathname(const char *relative_pathname)
++{
++    return g_strdup_printf("%s/%s", CONFIG_QEMU_LOCALSTATEDIR,
++                           relative_pathname);
++}
+diff --git a/util/oslib-win32.c b/util/oslib-win32.c
+index df2ecbd..961fbf5 100644
+--- a/util/oslib-win32.c
++++ b/util/oslib-win32.c
+@@ -26,12 +26,17 @@
+  * THE SOFTWARE.
+  */
+ #include <windows.h>
++#include <glib.h>
++#include <stdlib.h>
+ #include "config-host.h"
+ #include "sysemu/sysemu.h"
+ #include "qemu/main-loop.h"
+ #include "trace.h"
+ #include "qemu/sockets.h"
+ 
++/* this must come after including "trace.h" */
++#include <shlobj.h>
++
+ void *qemu_oom_check(void *ptr)
+ {
+     if (ptr == NULL) {
+@@ -160,3 +165,20 @@ int qemu_get_thread_id(void)
+ {
+     return GetCurrentThreadId();
+ }
++
++char *
++qemu_get_local_state_pathname(const char *relative_pathname)
++{
++    HRESULT result;
++    char base_path[MAX_PATH+1] = "";
++
++    result = SHGetFolderPath(NULL, CSIDL_COMMON_APPDATA, NULL,
++                             /* SHGFP_TYPE_CURRENT */ 0, base_path);
++    if (result != S_OK) {
++        /* misconfigured environment */
++        g_critical("CSIDL_COMMON_APPDATA unavailable: %ld", (long)result);
++        abort();
++    }
++    return g_strdup_printf("%s" G_DIR_SEPARATOR_S "%s", base_path,
++                           relative_pathname);
++}
+-- 
+1.7.1
+

@@ -1,0 +1,138 @@
+From a181c782ef252d49815ce3628716f91e51c765c2 Mon Sep 17 00:00:00 2001
+Message-Id: <a181c782ef252d49815ce3628716f91e51c765c2.1387382496.git.minovotn@redhat.com>
+In-Reply-To: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+References: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+From: Nigel Croxon <ncroxon@redhat.com>
+Date: Thu, 14 Nov 2013 22:52:43 +0100
+Subject: [PATCH 07/46] rdma: export throughput w/ MigrationStats QMP
+
+RH-Author: Nigel Croxon <ncroxon@redhat.com>
+Message-id: <1384469598-13137-8-git-send-email-ncroxon@redhat.com>
+Patchwork-id: 55698
+O-Subject: [RHEL7.0 PATCH 07/42] rdma: export throughput w/ MigrationStats QMP
+Bugzilla: 1011720
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: 1011720
+https://bugzilla.redhat.com/show_bug.cgi?id=1011720
+
+>From commit ID:
+commit 7e114f8cf24a01893226e3a4d22a288125515cfd
+Author: Michael R. Hines <mrhines@us.ibm.com>
+Date:   Tue Jun 25 21:35:30 2013 -0400
+
+    rdma: export throughput w/ MigrationStats QMP
+
+    This exposes throughput (in megabits/sec) through QMP.
+
+    Reviewed-by: Juan Quintela <quintela@redhat.com>
+    Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+    Reviewed-by: Chegu Vinod <chegu_vinod@hp.com>
+    Tested-by: Chegu Vinod <chegu_vinod@hp.com>
+    Tested-by: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Juan Quintela <quintela@redhat.com>
+---
+ hmp.c                         |    2 ++
+ include/migration/migration.h |    1 +
+ migration.c                   |    6 ++++++
+ qapi-schema.json              |    5 ++++-
+ 4 files changed, 13 insertions(+), 1 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hmp.c                         | 2 ++
+ include/migration/migration.h | 1 +
+ migration.c                   | 6 ++++++
+ qapi-schema.json              | 5 ++++-
+ 4 files changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/hmp.c b/hmp.c
+index 29990d2..316e6a1 100644
+--- a/hmp.c
++++ b/hmp.c
+@@ -167,6 +167,8 @@ void hmp_info_migrate(Monitor *mon, const QDict *qdict)
+     if (info->has_ram) {
+         monitor_printf(mon, "transferred ram: %" PRIu64 " kbytes\n",
+                        info->ram->transferred >> 10);
++        monitor_printf(mon, "throughput: %0.2f mbps\n",
++                       info->ram->mbps);
+         monitor_printf(mon, "remaining ram: %" PRIu64 " kbytes\n",
+                        info->ram->remaining >> 10);
+         monitor_printf(mon, "total ram: %" PRIu64 " kbytes\n",
+diff --git a/include/migration/migration.h b/include/migration/migration.h
+index 2f3a3d9..201be18 100644
+--- a/include/migration/migration.h
++++ b/include/migration/migration.h
+@@ -40,6 +40,7 @@ struct MigrationState
+ 
+     int state;
+     MigrationParams params;
++    double mbps;
+     int64_t total_time;
+     int64_t downtime;
+     int64_t expected_downtime;
+diff --git a/migration.c b/migration.c
+index 3520776..f4d1e34 100644
+--- a/migration.c
++++ b/migration.c
+@@ -66,6 +66,7 @@ MigrationState *migrate_get_current(void)
+         .state = MIG_STATE_SETUP,
+         .bandwidth_limit = MAX_THROTTLE,
+         .xbzrle_cache_size = DEFAULT_MIGRATE_CACHE_SIZE,
++        .mbps = -1,
+     };
+ 
+     return &current_migration;
+@@ -201,6 +202,7 @@ MigrationInfo *qmp_query_migrate(Error **errp)
+         info->ram->normal = norm_mig_pages_transferred();
+         info->ram->normal_bytes = norm_mig_bytes_transferred();
+         info->ram->dirty_pages_rate = s->dirty_pages_rate;
++        info->ram->mbps = s->mbps;
+ 
+         if (blk_mig_active()) {
+             info->has_disk = true;
+@@ -231,6 +233,7 @@ MigrationInfo *qmp_query_migrate(Error **errp)
+         info->ram->skipped = skipped_mig_pages_transferred();
+         info->ram->normal = norm_mig_pages_transferred();
+         info->ram->normal_bytes = norm_mig_bytes_transferred();
++        info->ram->mbps = s->mbps;
+         break;
+     case MIG_STATE_ERROR:
+         info->has_status = true;
+@@ -580,6 +583,9 @@ static void *migration_thread(void *opaque)
+             double bandwidth = transferred_bytes / time_spent;
+             max_size = bandwidth * migrate_max_downtime() / 1000000;
+ 
++            s->mbps = time_spent ? (((double) transferred_bytes * 8.0) /
++                    ((double) time_spent / 1000.0)) / 1000.0 / 1000.0 : -1;
++
+             DPRINTF("transferred %" PRIu64 " time_spent %" PRIu64
+                     " bandwidth %g max_size %" PRId64 "\n",
+                     transferred_bytes, time_spent, bandwidth, max_size);
+diff --git a/qapi-schema.json b/qapi-schema.json
+index 92fcd54..17df327 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -569,12 +569,15 @@
+ # @dirty-pages-rate: number of pages dirtied by second by the
+ #        guest (since 1.3)
+ #
++# @mbps: throughput in megabits/sec. (since 1.6)
++#
+ # Since: 0.14.0
+ ##
+ { 'type': 'MigrationStats',
+   'data': {'transferred': 'int', 'remaining': 'int', 'total': 'int' ,
+            'duplicate': 'int', 'skipped': 'int', 'normal': 'int',
+-           'normal-bytes': 'int', 'dirty-pages-rate' : 'int' } }
++           'normal-bytes': 'int', 'dirty-pages-rate' : 'int',
++           'mbps' : 'number' } }
+ 
+ ##
+ # @XBZRLECacheStats
+-- 
+1.7.11.7
+

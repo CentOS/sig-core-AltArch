@@ -1,0 +1,162 @@
+From 36dbb9edadf3cd22fd6f0da96cf293da35b0234c Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:22:05 +0200
+Subject: [PATCH 11/42] iotests: Add more tests for qcow2 corruption
+
+Message-id: <1434212556-3927-12-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66030
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 11/42] iotests: Add more tests for qcow2 corruption
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1129893
+
+Add tests for unaligned L1/L2/reftable entries and non-fatal corruption
+reports.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Message-id: 1409926039-29044-6-git-send-email-mreitz@redhat.com
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 5b0ed2be883238f52567ba2635ea38f34e8eb90d)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/060     | 56 ++++++++++++++++++++++++++++++++++++++++++++--
+ tests/qemu-iotests/060.out | 51 +++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 105 insertions(+), 2 deletions(-)
+
+diff --git a/tests/qemu-iotests/060 b/tests/qemu-iotests/060
+index 5180e23..e1187a3 100644
+--- a/tests/qemu-iotests/060
++++ b/tests/qemu-iotests/060
+@@ -169,9 +169,61 @@ echo "=== Testing unallocated image header ==="
+ echo
+ _make_test_img 64M
+ # Create L1/L2
+-$QEMU_IO -c "$OPEN_RW" -c "write 0 64k" | _filter_qemu_io
++$QEMU_IO -c "write 0 64k" "$TEST_IMG" | _filter_qemu_io
+ poke_file "$TEST_IMG" "$rb_offset" "\x00\x00"
+-$QEMU_IO -c "$OPEN_RW" -c "write 64k 64k" | _filter_qemu_io
++$QEMU_IO -c "write 64k 64k" "$TEST_IMG" | _filter_qemu_io
++
++echo
++echo "=== Testing unaligned L1 entry ==="
++echo
++_make_test_img 64M
++$QEMU_IO -c "write 0 64k" "$TEST_IMG" | _filter_qemu_io
++# This will be masked with ~(512 - 1) = ~0x1ff, so whether the lower 9 bits are
++# aligned or not does not matter
++poke_file "$TEST_IMG" "$l1_offset" "\x80\x00\x00\x00\x00\x04\x2a\x00"
++$QEMU_IO -c "read 0 64k" "$TEST_IMG" | _filter_qemu_io
++
++echo
++echo "=== Testing unaligned L2 entry ==="
++echo
++_make_test_img 64M
++$QEMU_IO -c "write 0 64k" "$TEST_IMG" | _filter_qemu_io
++poke_file "$TEST_IMG" "$l2_offset" "\x80\x00\x00\x00\x00\x05\x2a\x00"
++$QEMU_IO -c "read 0 64k" "$TEST_IMG" | _filter_qemu_io
++
++echo
++echo "=== Testing unaligned reftable entry ==="
++echo
++_make_test_img 64M
++poke_file "$TEST_IMG" "$rt_offset" "\x00\x00\x00\x00\x00\x02\x2a\x00"
++$QEMU_IO -c "write 0 64k" "$TEST_IMG" | _filter_qemu_io
++
++echo
++echo "=== Testing non-fatal corruption on freeing ==="
++echo
++_make_test_img 64M
++$QEMU_IO -c "write 0 64k" "$TEST_IMG" | _filter_qemu_io
++poke_file "$TEST_IMG" "$l2_offset" "\x80\x00\x00\x00\x00\x05\x2a\x00"
++$QEMU_IO -c "discard 0 64k" "$TEST_IMG" | _filter_qemu_io
++
++echo
++echo "=== Testing read-only corruption report ==="
++echo
++_make_test_img 64M
++$QEMU_IO -c "write 0 64k" "$TEST_IMG" | _filter_qemu_io
++poke_file "$TEST_IMG" "$l2_offset" "\x80\x00\x00\x00\x00\x05\x2a\x00"
++# Should only emit a single error message
++$QEMU_IO -c "$OPEN_RO" -c "read 0 64k" -c "read 0 64k" | _filter_qemu_io
++
++echo
++echo "=== Testing non-fatal and then fatal corruption report ==="
++echo
++_make_test_img 64M
++$QEMU_IO -c "write 0 128k" "$TEST_IMG" | _filter_qemu_io
++poke_file "$TEST_IMG" "$l2_offset"        "\x80\x00\x00\x00\x00\x05\x2a\x00"
++poke_file "$TEST_IMG" "$(($l2_offset+8))" "\x80\x00\x00\x00\x00\x06\x2a\x00"
++# Should emit two error messages
++$QEMU_IO -c "discard 0 64k" -c "read 64k 64k" "$TEST_IMG" | _filter_qemu_io
+ 
+ # success, all done
+ echo "*** done"
+diff --git a/tests/qemu-iotests/060.out b/tests/qemu-iotests/060.out
+index 30806da..4f0c6d0 100644
+--- a/tests/qemu-iotests/060.out
++++ b/tests/qemu-iotests/060.out
+@@ -101,4 +101,55 @@ wrote 65536/65536 bytes at offset 0
+ 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ qcow2: Marking image as corrupt: Preventing invalid write on metadata (overlaps with qcow2_header); further corruption events will be suppressed
+ write failed: Input/output error
++
++=== Testing unaligned L1 entry ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++wrote 65536/65536 bytes at offset 0
++64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++qcow2: Marking image as corrupt: L2 table offset 0x42a00 unaligned (L1 index: 0); further corruption events will be suppressed
++read failed: Input/output error
++
++=== Testing unaligned L2 entry ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++wrote 65536/65536 bytes at offset 0
++64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++qcow2: Marking image as corrupt: Data cluster offset 0x52a00 unaligned (L2 offset: 0x40000, L2 index: 0); further corruption events will be suppressed
++read failed: Input/output error
++
++=== Testing unaligned reftable entry ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++qcow2: Marking image as corrupt: Refblock offset 0x22a00 unaligned (reftable index: 0); further corruption events will be suppressed
++write failed: Input/output error
++
++=== Testing non-fatal corruption on freeing ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++wrote 65536/65536 bytes at offset 0
++64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++qcow2: Image is corrupt: Cannot free unaligned cluster 0x52a00; further non-fatal corruption events will be suppressed
++discard 65536/65536 bytes at offset 0
++64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++=== Testing read-only corruption report ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++wrote 65536/65536 bytes at offset 0
++64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++qcow2: Image is corrupt: Data cluster offset 0x52a00 unaligned (L2 offset: 0x40000, L2 index: 0); further non-fatal corruption events will be suppressed
++read failed: Input/output error
++read failed: Input/output error
++
++=== Testing non-fatal and then fatal corruption report ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++wrote 131072/131072 bytes at offset 0
++128 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++qcow2: Image is corrupt: Cannot free unaligned cluster 0x52a00; further non-fatal corruption events will be suppressed
++qcow2: Marking image as corrupt: Data cluster offset 0x62a00 unaligned (L2 offset: 0x40000, L2 index: 0x1); further corruption events will be suppressed
++discard 65536/65536 bytes at offset 0
++64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read failed: Input/output error
+ *** done
+-- 
+1.8.3.1
+

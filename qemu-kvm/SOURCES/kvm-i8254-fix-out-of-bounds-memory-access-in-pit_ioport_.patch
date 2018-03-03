@@ -1,0 +1,57 @@
+From 5ba6a1889f6da826b7a3b16381977806d8efe553 Mon Sep 17 00:00:00 2001
+From: Petr Matousek <pmatouse@redhat.com>
+Date: Thu, 25 Jun 2015 12:46:37 +0200
+Subject: [PATCH 01/10] i8254: fix out-of-bounds memory access in
+ pit_ioport_read()
+
+Message-id: <20150625124637.GJ18896@dhcp-25-225.brq.redhat.com>
+Patchwork-id: 66478
+O-Subject: [RHEL-7.2 qemu-kvm PATCH] i8254: fix out-of-bounds memory access in pit_ioport_read()
+Bugzilla: 1229646
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+
+Upstream: d4862a87e31a51de9eb260f25c9e99a75efe3235
+
+Due converting PIO to the new memory read/write api we no longer provide
+separate I/O region lenghts for read and write operations. As a result,
+reading from PIT Mode/Command register will end with accessing
+pit->channels with invalid index.
+
+Fix this by ignoring read from the Mode/Command register.
+
+This is CVE-2015-3214.
+
+Reported-by: Matt Tait <matttait@google.com>
+Fixes: 0505bcdec8228d8de39ab1a02644e71999e7c052
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Petr Matousek <pmatouse@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Signed-off-by: Petr Matousek <pmatouse@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/timer/i8254.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/hw/timer/i8254.c b/hw/timer/i8254.c
+index 20c0c36..64c9f58 100644
+--- a/hw/timer/i8254.c
++++ b/hw/timer/i8254.c
+@@ -187,6 +187,12 @@ static uint64_t pit_ioport_read(void *opaque, hwaddr addr,
+     PITChannelState *s;
+ 
+     addr &= 3;
++
++    if (addr == 3) {
++        /* Mode/Command register is write only, read is ignored */
++        return 0;
++    }
++
+     s = &pit->channels[addr];
+     if (s->status_latched) {
+         s->status_latched = 0;
+-- 
+1.8.3.1
+

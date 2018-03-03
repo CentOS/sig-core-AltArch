@@ -1,0 +1,103 @@
+From d78a26ac572e339d115c3485d3a19ead0e9d4dcf Mon Sep 17 00:00:00 2001
+Message-Id: <d78a26ac572e339d115c3485d3a19ead0e9d4dcf.1418766606.git.jen@redhat.com>
+In-Reply-To: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+References: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 4 Dec 2014 00:05:02 -0600
+Subject: [CHANGE 08/31] block/vmdk: add basic .bdrv_check support
+To: rhvirt-patches@redhat.com,
+    jen@redhat.com
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1417651524-18041-9-git-send-email-famz@redhat.com>
+Patchwork-id: 62681
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v5 08/30] block/vmdk: add basic .bdrv_check support
+Bugzilla: 1134251
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Peter Lieven <pl@kamp.de>
+
+this adds a basic vmdk corruption check. it should detect severe
+table corruptions and file truncation.
+
+Signed-off-by: Peter Lieven <pl@kamp.de>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit f43aa8e18ad83508c2786403e7230a584d357c8e)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Jeff E. Nelson <jen@redhat.com>
+---
+ block/vmdk.c | 48 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 48 insertions(+)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 7ea3aef..eda2962 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -1944,6 +1944,53 @@ static ImageInfo *vmdk_get_extent_info(VmdkExtent *extent)
+     return info;
+ }
+ 
++static int vmdk_check(BlockDriverState *bs, BdrvCheckResult *result,
++                      BdrvCheckMode fix)
++{
++    BDRVVmdkState *s = bs->opaque;
++    VmdkExtent *extent = NULL;
++    int64_t sector_num = 0;
++    int64_t total_sectors = bdrv_getlength(bs) / BDRV_SECTOR_SIZE;
++    int ret;
++    uint64_t cluster_offset;
++
++    if (fix) {
++        return -ENOTSUP;
++    }
++
++    for (;;) {
++        if (sector_num >= total_sectors) {
++            return 0;
++        }
++        extent = find_extent(s, sector_num, extent);
++        if (!extent) {
++            fprintf(stderr,
++                    "ERROR: could not find extent for sector %" PRId64 "\n",
++                    sector_num);
++            break;
++        }
++        ret = get_cluster_offset(bs, extent, NULL,
++                                 sector_num << BDRV_SECTOR_BITS,
++                                 0, &cluster_offset);
++        if (ret == VMDK_ERROR) {
++            fprintf(stderr,
++                    "ERROR: could not get cluster_offset for sector %"
++                    PRId64 "\n", sector_num);
++            break;
++        }
++        if (ret == VMDK_OK && cluster_offset >= bdrv_getlength(extent->file)) {
++            fprintf(stderr,
++                    "ERROR: cluster offset for sector %"
++                    PRId64 " points after EOF\n", sector_num);
++            break;
++        }
++        sector_num += extent->cluster_sectors;
++    }
++
++    result->corruptions++;
++    return 0;
++}
++
+ static ImageInfoSpecific *vmdk_get_specific_info(BlockDriverState *bs)
+ {
+     int i;
+@@ -2017,6 +2064,7 @@ static BlockDriver bdrv_vmdk = {
+     .instance_size                = sizeof(BDRVVmdkState),
+     .bdrv_probe                   = vmdk_probe,
+     .bdrv_open                    = vmdk_open,
++    .bdrv_check                   = vmdk_check,
+     .bdrv_reopen_prepare          = vmdk_reopen_prepare,
+     .bdrv_read                    = vmdk_co_read,
+     .bdrv_write                   = vmdk_co_write,
+-- 
+2.1.0
+

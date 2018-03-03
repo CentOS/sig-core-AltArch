@@ -1,0 +1,95 @@
+From 9dbd79c3095d98b66d30893fd1ba8b98366e9d41 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 5 Nov 2013 14:08:57 +0100
+Subject: [PATCH 44/87] qapi-types/visit.py: Pass whole expr dict for structs
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383660558-32096-4-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55382
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 03/24] qapi-types/visit.py: Pass whole expr dict for structs
+Bugzilla: 978402
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit 14d36307ffdf949df9c1dd7f435e138b36f63bb0)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ scripts/qapi-types.py | 11 ++++++++---
+ scripts/qapi-visit.py |  8 ++++++--
+ 2 files changed, 14 insertions(+), 5 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ scripts/qapi-types.py |   11 ++++++++---
+ scripts/qapi-visit.py |    8 ++++++--
+ 2 files changed, 14 insertions(+), 5 deletions(-)
+
+diff --git a/scripts/qapi-types.py b/scripts/qapi-types.py
+index 8680160..ff60dfb 100644
+--- a/scripts/qapi-types.py
++++ b/scripts/qapi-types.py
+@@ -65,7 +65,7 @@ def generate_struct_fields(members):
+                          c_name=c_var(argname))
+         if structured:
+             push_indent()
+-            ret += generate_struct("", argname, argentry)
++            ret += generate_struct({ "field": argname, "data": argentry})
+             pop_indent()
+         else:
+             ret += mcgen('''
+@@ -75,7 +75,12 @@ def generate_struct_fields(members):
+ 
+     return ret
+ 
+-def generate_struct(structname, fieldname, members):
++def generate_struct(expr):
++
++    structname = expr.get('type', "")
++    fieldname = expr.get('field', "")
++    members = expr['data']
++
+     ret = mcgen('''
+ struct %(name)s
+ {
+@@ -411,7 +416,7 @@ if do_builtins:
+ for expr in exprs:
+     ret = "\n"
+     if expr.has_key('type'):
+-        ret += generate_struct(expr['type'], "", expr['data']) + "\n"
++        ret += generate_struct(expr) + "\n"
+         ret += generate_type_cleanup_decl(expr['type'] + "List")
+         fdef.write(generate_type_cleanup(expr['type'] + "List") + "\n")
+         ret += generate_type_cleanup_decl(expr['type'])
+diff --git a/scripts/qapi-visit.py b/scripts/qapi-visit.py
+index 367cf7a..43d902c 100644
+--- a/scripts/qapi-visit.py
++++ b/scripts/qapi-visit.py
+@@ -120,7 +120,11 @@ if (!err) {
+ ''')
+     return ret
+ 
+-def generate_visit_struct(name, members):
++def generate_visit_struct(expr):
++
++    name = expr['type']
++    members = expr['data']
++
+     ret = generate_visit_struct_fields(name, "", "", members)
+ 
+     ret += mcgen('''
+@@ -448,7 +452,7 @@ exprs = parse_schema(sys.stdin)
+ 
+ for expr in exprs:
+     if expr.has_key('type'):
+-        ret = generate_visit_struct(expr['type'], expr['data'])
++        ret = generate_visit_struct(expr)
+         ret += generate_visit_list(expr['type'], expr['data'])
+         fdef.write(ret)
+ 
+-- 
+1.7.1
+

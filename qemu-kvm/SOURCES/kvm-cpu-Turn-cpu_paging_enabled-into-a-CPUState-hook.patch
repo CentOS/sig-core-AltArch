@@ -1,0 +1,195 @@
+From 0fb4264531471230dfe37f1c04d38cd46e38027a Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Mon, 12 Aug 2013 15:59:32 +0200
+Subject: cpu: Turn cpu_paging_enabled() into a CPUState hook
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1376323180-12863-3-git-send-email-lersek@redhat.com>
+Patchwork-id: 53161
+O-Subject: [RHEL-7 qemu-kvm PATCH 02/10] cpu: Turn cpu_paging_enabled() into a CPUState hook
+Bugzilla: 981582
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Radim Krcmar <rkrcmar@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Relocate assignment of x86 get_arch_id to have all hooks in one place.
+
+Reviewed-by: Jens Freimann <jfrei@linux.vnet.ibm.com>
+Reviewed-by: Luiz Capitulino <lcapitulino@redhat.com>
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit 444d55907871f88276a654fc7fdc8c7db95f4b59)
+
+Conflicts (due to RHEL-7 commit c93d9248, "target-i386: Disable PMU CPUID
+leaf by default"):
+
+	target-i386/cpu.c
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+
+diff --git a/include/qom/cpu.h b/include/qom/cpu.h
+index 46465e9..490f5f1 100644
+--- a/include/qom/cpu.h
++++ b/include/qom/cpu.h
+@@ -48,6 +48,7 @@ typedef struct CPUState CPUState;
+  * @reset: Callback to reset the #CPUState to its initial state.
+  * @do_interrupt: Callback for interrupt handling.
+  * @get_arch_id: Callback for getting architecture-dependent CPU ID.
++ * @get_paging_enabled: Callback for inquiring whether paging is enabled.
+  * @vmsd: State description for migration.
+  *
+  * Represents a CPU family or model.
+@@ -62,6 +63,7 @@ typedef struct CPUClass {
+     void (*reset)(CPUState *cpu);
+     void (*do_interrupt)(CPUState *cpu);
+     int64_t (*get_arch_id)(CPUState *cpu);
++    bool (*get_paging_enabled)(const CPUState *cpu);
+ 
+     const struct VMStateDescription *vmsd;
+     int (*write_elf64_note)(WriteCoreDumpFunction f, CPUState *cpu,
+@@ -138,6 +140,14 @@ struct CPUState {
+ };
+ 
+ /**
++ * cpu_paging_enabled:
++ * @cpu: The CPU whose state is to be inspected.
++ *
++ * Returns: %true if paging is enabled, %false otherwise.
++ */
++bool cpu_paging_enabled(const CPUState *cpu);
++
++/**
+  * cpu_write_elf64_note:
+  * @f: pointer to a function that writes memory to a file
+  * @cpu: The CPU whose memory is to be dumped
+diff --git a/include/sysemu/memory_mapping.h b/include/sysemu/memory_mapping.h
+index 1256125..6f01524 100644
+--- a/include/sysemu/memory_mapping.h
++++ b/include/sysemu/memory_mapping.h
+@@ -31,7 +31,6 @@ typedef struct MemoryMappingList {
+ } MemoryMappingList;
+ 
+ int cpu_get_memory_mapping(MemoryMappingList *list, CPUArchState *env);
+-bool cpu_paging_enabled(CPUArchState *env);
+ 
+ /*
+  * add or merge the memory region [phys_addr, phys_addr + length) into the
+diff --git a/memory_mapping-stub.c b/memory_mapping-stub.c
+index 24d5d67..6c0dfeb 100644
+--- a/memory_mapping-stub.c
++++ b/memory_mapping-stub.c
+@@ -25,9 +25,3 @@ int cpu_get_memory_mapping(MemoryMappingList *list,
+ {
+     return -1;
+ }
+-
+-bool cpu_paging_enabled(CPUArchState *env)
+-{
+-    return true;
+-}
+-
+diff --git a/memory_mapping.c b/memory_mapping.c
+index ff45b3a..0790aac 100644
+--- a/memory_mapping.c
++++ b/memory_mapping.c
+@@ -170,7 +170,7 @@ static CPUArchState *find_paging_enabled_cpu(CPUArchState *start_cpu)
+     CPUArchState *env;
+ 
+     for (env = start_cpu; env != NULL; env = env->next_cpu) {
+-        if (cpu_paging_enabled(env)) {
++        if (cpu_paging_enabled(ENV_GET_CPU(env))) {
+             return env;
+         }
+     }
+diff --git a/qom/cpu.c b/qom/cpu.c
+index 04aefbb..9f6da0f 100644
+--- a/qom/cpu.c
++++ b/qom/cpu.c
+@@ -50,6 +50,18 @@ bool cpu_exists(int64_t id)
+     return data.found;
+ }
+ 
++bool cpu_paging_enabled(const CPUState *cpu)
++{
++    CPUClass *cc = CPU_GET_CLASS(cpu);
++
++    return cc->get_paging_enabled(cpu);
++}
++
++static bool cpu_common_get_paging_enabled(const CPUState *cpu)
++{
++    return true;
++}
++
+ /* CPU hot-plug notifiers */
+ static NotifierList cpu_added_notifiers =
+     NOTIFIER_LIST_INITIALIZER(cpu_add_notifiers);
+@@ -176,6 +188,7 @@ static void cpu_class_init(ObjectClass *klass, void *data)
+     k->class_by_name = cpu_common_class_by_name;
+     k->reset = cpu_common_reset;
+     k->get_arch_id = cpu_common_get_arch_id;
++    k->get_paging_enabled = cpu_common_get_paging_enabled;
+     k->write_elf32_qemunote = cpu_common_write_elf32_qemunote;
+     k->write_elf32_note = cpu_common_write_elf32_note;
+     k->write_elf64_qemunote = cpu_common_write_elf64_qemunote;
+diff --git a/target-i386/arch_memory_mapping.c b/target-i386/arch_memory_mapping.c
+index 24884bd..39def3d 100644
+--- a/target-i386/arch_memory_mapping.c
++++ b/target-i386/arch_memory_mapping.c
+@@ -241,7 +241,7 @@ static void walk_pml4e(MemoryMappingList *list,
+ 
+ int cpu_get_memory_mapping(MemoryMappingList *list, CPUArchState *env)
+ {
+-    if (!cpu_paging_enabled(env)) {
++    if (!cpu_paging_enabled(ENV_GET_CPU(env))) {
+         /* paging is disabled */
+         return 0;
+     }
+@@ -273,7 +273,3 @@ int cpu_get_memory_mapping(MemoryMappingList *list, CPUArchState *env)
+     return 0;
+ }
+ 
+-bool cpu_paging_enabled(CPUArchState *env)
+-{
+-    return env->cr[0] & CR0_PG_MASK;
+-}
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index 2bcc21e..dfa2a86 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -2509,11 +2509,19 @@ static int64_t x86_cpu_get_arch_id(CPUState *cs)
+     return env->cpuid_apic_id;
+ }
+ 
++
+ static Property x86_cpu_properties[] = {
+     DEFINE_PROP_BOOL("pmu", X86CPU, enable_pmu, false),
+     DEFINE_PROP_END_OF_LIST()
+ };
+ 
++static bool x86_cpu_get_paging_enabled(const CPUState *cs)
++{
++    X86CPU *cpu = X86_CPU(cs);
++
++    return cpu->env.cr[0] & CR0_PG_MASK;
++}
++
+ static void x86_cpu_common_class_init(ObjectClass *oc, void *data)
+ {
+     X86CPUClass *xcc = X86_CPU_CLASS(oc);
+@@ -2529,6 +2537,8 @@ static void x86_cpu_common_class_init(ObjectClass *oc, void *data)
+     cc->reset = x86_cpu_reset;
+ 
+     cc->do_interrupt = x86_cpu_do_interrupt;
++    cc->get_arch_id = x86_cpu_get_arch_id;
++    cc->get_paging_enabled = x86_cpu_get_paging_enabled;
+ #ifndef CONFIG_USER_ONLY
+     cc->write_elf64_note = x86_cpu_write_elf64_note;
+     cc->write_elf64_qemunote = x86_cpu_write_elf64_qemunote;
+@@ -2536,8 +2546,6 @@ static void x86_cpu_common_class_init(ObjectClass *oc, void *data)
+     cc->write_elf32_qemunote = x86_cpu_write_elf32_qemunote;
+ #endif
+     cpu_class_set_vmsd(cc, &vmstate_x86_cpu);
+-
+-    cc->get_arch_id = x86_cpu_get_arch_id;
+ }
+ 
+ static const TypeInfo x86_cpu_type_info = {

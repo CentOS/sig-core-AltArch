@@ -1,0 +1,46 @@
+From 9c887fdb82a6500aec6897f5c7f48f6bd31a33fc Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:21:55 +0200
+Subject: [PATCH 01/42] qcow2: Put cache reference in error case
+
+Message-id: <1434212556-3927-2-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66020
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 01/42] qcow2: Put cache reference in error case
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+BZ: 1129893
+
+When qcow2_get_cluster_offset() sees a zero cluster in a version 2
+image, it (rightfully) returns an error. But in doing so it shouldn't
+leak an L2 table cache reference.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit 8885eadedd0ea8b57c1baa367ee2c2d616700bd9)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-cluster.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/block/qcow2-cluster.c b/block/qcow2-cluster.c
+index 81d90d9..1b9609f 100644
+--- a/block/qcow2-cluster.c
++++ b/block/qcow2-cluster.c
+@@ -481,6 +481,7 @@ int qcow2_get_cluster_offset(BlockDriverState *bs, uint64_t offset,
+         break;
+     case QCOW2_CLUSTER_ZERO:
+         if (s->qcow_version < 3) {
++            qcow2_cache_put(bs, s->l2_table_cache, (void**) &l2_table);
+             return -EIO;
+         }
+         c = count_contiguous_clusters(nb_clusters, s->cluster_size,
+-- 
+1.8.3.1
+

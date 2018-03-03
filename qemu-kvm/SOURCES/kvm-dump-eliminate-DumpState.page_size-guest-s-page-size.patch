@@ -1,0 +1,265 @@
+From e660f3651e349f658fe393917bab3ef8da44448c Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Fri, 7 Nov 2014 17:18:10 +0100
+Subject: [PATCH 23/41] dump: eliminate DumpState.page_size ("guest's page
+ size")
+
+Message-id: <1415380693-16593-24-git-send-email-lersek@redhat.com>
+Patchwork-id: 62211
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 23/26] dump: eliminate DumpState.page_size ("guest's page size")
+Bugzilla: 1157798
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: dgibson <dgibson@redhat.com>
+
+Use TARGET_PAGE_SIZE and ~TARGET_PAGE_MASK instead.
+
+"DumpState.page_size" has type "size_t", whereas TARGET_PAGE_SIZE has type
+"int". TARGET_PAGE_MASK is of type "int" and has negative value. The patch
+affects the implicit type conversions as follows:
+
+- create_header32() and create_header64(): assigned to "block_size", which
+  has type "uint32_t". No change.
+
+- get_next_page(): "block->target_start", "block->target_end" and "addr"
+  have type "hwaddr" (uint64_t).
+
+  Before the patch,
+  - if "size_t" was "uint64_t", then no additional conversion was done as
+    part of the usual arithmetic conversions,
+  - If "size_t" was "uint32_t", then it was widened to uint64_t as part of
+    the usual arithmetic conversions,
+  for the remainder and addition operators.
+
+  After the patch,
+  - "~TARGET_PAGE_MASK" expands to  ~~((1 << TARGET_PAGE_BITS) - 1). It
+    has type "int" and positive value (only least significant bits set).
+    That's converted (widened) to "uint64_t" for the bit-ands. No visible
+    change.
+  - The same holds for the (addr + TARGET_PAGE_SIZE) addition.
+
+- write_dump_pages():
+  - TARGET_PAGE_SIZE passed as argument to a bunch of functions that all
+    have prototypes. No change.
+
+  - When incrementing "offset_data" (of type "off_t"): given that we never
+    build for ILP32_OFF32 (see "-D_FILE_OFFSET_BITS=64" in configure),
+    "off_t" is always "int64_t", and we only need to consider:
+    - ILP32_OFFBIG: "size_t" is "uint32_t".
+      - before: int64_t += uint32_t. Page size converted to int64_t for
+        the addition.
+      - after:  int64_t += int32_t. No change.
+    - LP64_OFF64: "size_t" is "uint64_t".
+      - before: int64_t += uint64_t. Offset converted to uint64_t for the
+        addition, then the uint64_t result is converted to int64_t for
+        storage.
+      - after:  int64_t += int32_t. Same as the ILP32_OFFBIG/after case.
+        No visible change.
+
+  - (size_out < s->page_size) comparisons, and (size_out = s->page_size)
+    assignment:
+    - before: "size_out" is of type "size_t", no implicit conversion for
+              either operator.
+    - after: TARGET_PAGE_SIZE (of type "int" and positive value) is
+             converted to "size_t" (for the relop because the latter is
+             one of "uint32_t" and "uint64_t"). No visible change.
+
+- dump_init():
+  - DIV_ROUND_UP(DIV_ROUND_UP(s->max_mapnr, CHAR_BIT), s->page_size): The
+    innermost "DumpState.max_mapnr" field has type uint64_t, which
+    propagates through all implicit conversions at hand:
+
+    #define DIV_ROUND_UP(n,d) (((n) + (d) - 1) / (d))
+
+    regardless of the page size macro argument's type. In the outer macro
+    replacement, the page size is converted from uint32_t and int32_t
+    alike to uint64_t.
+
+  - (tmp * s->page_size) multiplication: "tmp" has size "uint64_t"; the
+    RHS is converted to that type from uint32_t and int32_t just the same
+    if it's not uint64_t to begin with.
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit 2f859f80c2077e00237ea1dfae2523ebd8377f5f)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c | 51 +++++++++++++++++++++++++--------------------------
+ 1 file changed, 25 insertions(+), 26 deletions(-)
+
+diff --git a/dump.c b/dump.c
+index bc82b55..f8e0fd7 100644
+--- a/dump.c
++++ b/dump.c
+@@ -90,7 +90,6 @@ typedef struct DumpState {
+     uint8_t *note_buf;          /* buffer for notes */
+     size_t note_buf_offset;     /* the writing place in note_buf */
+     uint32_t nr_cpus;           /* number of guest's cpu */
+-    size_t page_size;           /* guest's page size */
+     uint64_t max_mapnr;         /* the biggest guest's phys-mem's number */
+     size_t len_dump_bitmap;     /* the size of the place used to store
+                                    dump_bitmap in vmcore */
+@@ -811,7 +810,7 @@ static int create_header32(DumpState *s)
+ 
+     strncpy(dh->signature, KDUMP_SIGNATURE, strlen(KDUMP_SIGNATURE));
+     dh->header_version = cpu_convert_to_target32(6, endian);
+-    block_size = s->page_size;
++    block_size = TARGET_PAGE_SIZE;
+     dh->block_size = cpu_convert_to_target32(block_size, endian);
+     sub_hdr_size = sizeof(struct KdumpSubHeader32) + s->note_size;
+     sub_hdr_size = DIV_ROUND_UP(sub_hdr_size, block_size);
+@@ -918,7 +917,7 @@ static int create_header64(DumpState *s)
+ 
+     strncpy(dh->signature, KDUMP_SIGNATURE, strlen(KDUMP_SIGNATURE));
+     dh->header_version = cpu_convert_to_target32(6, endian);
+-    block_size = s->page_size;
++    block_size = TARGET_PAGE_SIZE;
+     dh->block_size = cpu_convert_to_target32(block_size, endian);
+     sub_hdr_size = sizeof(struct KdumpSubHeader64) + s->note_size;
+     sub_hdr_size = DIV_ROUND_UP(sub_hdr_size, block_size);
+@@ -1089,8 +1088,8 @@ static bool get_next_page(GuestPhysBlock **blockptr, uint64_t *pfnptr,
+     if (!block) {
+         block = QTAILQ_FIRST(&s->guest_phys_blocks.head);
+         *blockptr = block;
+-        assert(block->target_start % s->page_size == 0);
+-        assert(block->target_end % s->page_size == 0);
++        assert((block->target_start & ~TARGET_PAGE_MASK) == 0);
++        assert((block->target_end & ~TARGET_PAGE_MASK) == 0);
+         *pfnptr = paddr_to_pfn(block->target_start);
+         if (bufptr) {
+             *bufptr = block->host_addr;
+@@ -1102,7 +1101,7 @@ static bool get_next_page(GuestPhysBlock **blockptr, uint64_t *pfnptr,
+     addr = pfn_to_paddr(*pfnptr);
+ 
+     if ((addr >= block->target_start) &&
+-        (addr + s->page_size <= block->target_end)) {
++        (addr + TARGET_PAGE_SIZE <= block->target_end)) {
+         buf = block->host_addr + (addr - block->target_start);
+     } else {
+         /* the next page is in the next block */
+@@ -1111,8 +1110,8 @@ static bool get_next_page(GuestPhysBlock **blockptr, uint64_t *pfnptr,
+         if (!block) {
+             return false;
+         }
+-        assert(block->target_start % s->page_size == 0);
+-        assert(block->target_end % s->page_size == 0);
++        assert((block->target_start & ~TARGET_PAGE_MASK) == 0);
++        assert((block->target_end & ~TARGET_PAGE_MASK) == 0);
+         *pfnptr = paddr_to_pfn(block->target_start);
+         buf = block->host_addr;
+     }
+@@ -1297,7 +1296,7 @@ static int write_dump_pages(DumpState *s)
+     prepare_data_cache(&page_data, s, offset_data);
+ 
+     /* prepare buffer to store compressed data */
+-    len_buf_out = get_len_buf_out(s->page_size, s->flag_compress);
++    len_buf_out = get_len_buf_out(TARGET_PAGE_SIZE, s->flag_compress);
+     if (len_buf_out == 0) {
+         dump_error(s, "dump: failed to get length of output buffer.\n");
+         goto out;
+@@ -1313,19 +1312,19 @@ static int write_dump_pages(DumpState *s)
+      * init zero page's page_desc and page_data, because every zero page
+      * uses the same page_data
+      */
+-    pd_zero.size = cpu_convert_to_target32(s->page_size, endian);
++    pd_zero.size = cpu_convert_to_target32(TARGET_PAGE_SIZE, endian);
+     pd_zero.flags = cpu_convert_to_target32(0, endian);
+     pd_zero.offset = cpu_convert_to_target64(offset_data, endian);
+     pd_zero.page_flags = cpu_convert_to_target64(0, endian);
+-    buf = g_malloc0(s->page_size);
+-    ret = write_cache(&page_data, buf, s->page_size, false);
++    buf = g_malloc0(TARGET_PAGE_SIZE);
++    ret = write_cache(&page_data, buf, TARGET_PAGE_SIZE, false);
+     g_free(buf);
+     if (ret < 0) {
+         dump_error(s, "dump: failed to write page data(zero page).\n");
+         goto out;
+     }
+ 
+-    offset_data += s->page_size;
++    offset_data += TARGET_PAGE_SIZE;
+ 
+     /*
+      * dump memory to vmcore page by page. zero page will all be resided in the
+@@ -1333,7 +1332,7 @@ static int write_dump_pages(DumpState *s)
+      */
+     while (get_next_page(&block_iter, &pfn_iter, &buf, s)) {
+         /* check zero page */
+-        if (is_zero_page(buf, s->page_size)) {
++        if (is_zero_page(buf, TARGET_PAGE_SIZE)) {
+             ret = write_cache(&page_desc, &pd_zero, sizeof(PageDescriptor),
+                               false);
+             if (ret < 0) {
+@@ -1354,8 +1353,9 @@ static int write_dump_pages(DumpState *s)
+              */
+              size_out = len_buf_out;
+              if ((s->flag_compress & DUMP_DH_COMPRESSED_ZLIB) &&
+-                    (compress2(buf_out, (uLongf *)&size_out, buf, s->page_size,
+-                    Z_BEST_SPEED) == Z_OK) && (size_out < s->page_size)) {
++                 (compress2(buf_out, (uLongf *)&size_out, buf,
++                            TARGET_PAGE_SIZE, Z_BEST_SPEED) == Z_OK) &&
++                 (size_out < TARGET_PAGE_SIZE)) {
+                 pd.flags = cpu_convert_to_target32(DUMP_DH_COMPRESSED_ZLIB,
+                                                    endian);
+                 pd.size  = cpu_convert_to_target32(size_out, endian);
+@@ -1367,9 +1367,9 @@ static int write_dump_pages(DumpState *s)
+                 }
+ #ifdef CONFIG_LZO
+             } else if ((s->flag_compress & DUMP_DH_COMPRESSED_LZO) &&
+-                    (lzo1x_1_compress(buf, s->page_size, buf_out,
++                    (lzo1x_1_compress(buf, TARGET_PAGE_SIZE, buf_out,
+                     (lzo_uint *)&size_out, wrkmem) == LZO_E_OK) &&
+-                    (size_out < s->page_size)) {
++                    (size_out < TARGET_PAGE_SIZE)) {
+                 pd.flags = cpu_convert_to_target32(DUMP_DH_COMPRESSED_LZO,
+                                                    endian);
+                 pd.size  = cpu_convert_to_target32(size_out, endian);
+@@ -1382,9 +1382,9 @@ static int write_dump_pages(DumpState *s)
+ #endif
+ #ifdef CONFIG_SNAPPY
+             } else if ((s->flag_compress & DUMP_DH_COMPRESSED_SNAPPY) &&
+-                    (snappy_compress((char *)buf, s->page_size,
++                    (snappy_compress((char *)buf, TARGET_PAGE_SIZE,
+                     (char *)buf_out, &size_out) == SNAPPY_OK) &&
+-                    (size_out < s->page_size)) {
++                    (size_out < TARGET_PAGE_SIZE)) {
+                 pd.flags = cpu_convert_to_target32(
+                                         DUMP_DH_COMPRESSED_SNAPPY, endian);
+                 pd.size  = cpu_convert_to_target32(size_out, endian);
+@@ -1398,13 +1398,13 @@ static int write_dump_pages(DumpState *s)
+             } else {
+                 /*
+                  * fall back to save in plaintext, size_out should be
+-                 * assigned to s->page_size
++                 * assigned TARGET_PAGE_SIZE
+                  */
+                 pd.flags = cpu_convert_to_target32(0, endian);
+-                size_out = s->page_size;
++                size_out = TARGET_PAGE_SIZE;
+                 pd.size = cpu_convert_to_target32(size_out, endian);
+ 
+-                ret = write_cache(&page_data, buf, s->page_size, false);
++                ret = write_cache(&page_data, buf, TARGET_PAGE_SIZE, false);
+                 if (ret < 0) {
+                     dump_error(s, "dump: failed to write page data.\n");
+                     goto out;
+@@ -1616,13 +1616,12 @@ static int dump_init(DumpState *s, int fd, bool has_format,
+     }
+ 
+     s->nr_cpus = nr_cpus;
+-    s->page_size = TARGET_PAGE_SIZE;
+ 
+     get_max_mapnr(s);
+ 
+     uint64_t tmp;
+-    tmp = DIV_ROUND_UP(DIV_ROUND_UP(s->max_mapnr, CHAR_BIT), s->page_size);
+-    s->len_dump_bitmap = tmp * s->page_size;
++    tmp = DIV_ROUND_UP(DIV_ROUND_UP(s->max_mapnr, CHAR_BIT), TARGET_PAGE_SIZE);
++    s->len_dump_bitmap = tmp * TARGET_PAGE_SIZE;
+ 
+     /* init for kdump-compressed format */
+     if (has_format && format != DUMP_GUEST_MEMORY_FORMAT_ELF) {
+-- 
+1.8.3.1
+

@@ -1,0 +1,59 @@
+From 362faad8e8f4c2c2c875df12f6bbae7964c0146d Mon Sep 17 00:00:00 2001
+From: John Snow <jsnow@redhat.com>
+Date: Mon, 23 Nov 2015 17:38:38 +0100
+Subject: [PATCH 19/27] qemu-io: Check for trailing chars
+
+RH-Author: John Snow <jsnow@redhat.com>
+Message-id: <1448300320-7772-20-git-send-email-jsnow@redhat.com>
+Patchwork-id: 68449
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 19/21] qemu-io: Check for trailing chars
+Bugzilla: 1272523
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+Make sure there's not trailing garbage, e.g.
+"64k-whatever-i-want-here"
+
+Reported-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: John Snow <jsnow@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit ef5a788527b2038d742b057a415ab4d0e735e98f)
+Signed-off-by: John Snow <jsnow@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+  qemu-io-cmds.c:
+    - Downstream still uses strtosz_suffix, not
+      qemu_strtosz_suffix.
+
+Signed-off-by: John Snow <jsnow@redhat.com>
+---
+ qemu-io-cmds.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/qemu-io-cmds.c b/qemu-io-cmds.c
+index 95345fe..6ea027d 100644
+--- a/qemu-io-cmds.c
++++ b/qemu-io-cmds.c
+@@ -124,7 +124,14 @@ static char **breakline(char *input, int *count)
+ static int64_t cvtnum(const char *s)
+ {
+     char *end;
+-    return strtosz_suffix(s, &end, STRTOSZ_DEFSUFFIX_B);
++    int64_t ret;
++
++    ret = strtosz_suffix(s, &end, STRTOSZ_DEFSUFFIX_B);
++    if (*end != '\0') {
++        /* Detritus at the end of the string */
++        return -EINVAL;
++    }
++    return ret;
+ }
+ 
+ #define EXABYTES(x)     ((long long)(x) << 60)
+-- 
+1.8.3.1
+

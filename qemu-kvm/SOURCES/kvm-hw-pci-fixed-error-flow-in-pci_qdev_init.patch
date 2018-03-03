@@ -1,0 +1,48 @@
+From 041c25ce0ca658d4426ec18a116a464e4bac9862 Mon Sep 17 00:00:00 2001
+From: Marcel Apfelbaum <marcel.a@redhat.com>
+Date: Thu, 20 Nov 2014 10:33:13 +0100
+Subject: [PATCH 1/2] hw/pci: fixed error flow in pci_qdev_init
+
+Message-id: <1416479594-22022-2-git-send-email-marcel.a@redhat.com>
+Patchwork-id: 62484
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 1/2] hw/pci: fixed error flow in pci_qdev_init
+Bugzilla: 1046007
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Eric Blake <eblake@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+Verify return code for pci_add_option_rom.
+
+Signed-off-by: Marcel Apfelbaum <marcel.a@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Reviewed-by: Markus Armbruster <armbru@redhat.com>
+(cherry picked from commit 178e785fb4507ec3462dc772bbe08303416ece47)
+Signed-off-by: Marcel Apfelbaum <marcel.a@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/pci/pci.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/hw/pci/pci.c b/hw/pci/pci.c
+index 703b111..0918f4e 100644
+--- a/hw/pci/pci.c
++++ b/hw/pci/pci.c
+@@ -1733,7 +1733,12 @@ static int pci_qdev_init(DeviceState *qdev)
+         pci_dev->romfile = g_strdup(pc->romfile);
+         is_default_rom = true;
+     }
+-    pci_add_option_rom(pci_dev, is_default_rom);
++
++    rc = pci_add_option_rom(pci_dev, is_default_rom);
++    if (rc != 0) {
++        pci_unregister_device(DEVICE(pci_dev));
++        return rc;
++    }
+ 
+     if (bus->hotplug) {
+         /* Let buses differentiate between hotplug and when device is
+-- 
+1.8.3.1
+

@@ -1,0 +1,294 @@
+From 820c45fa40b9763a207e9eeb1268f87c2ac06351 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Fri, 19 Sep 2014 03:18:57 +0200
+Subject: [PATCH 18/20] block: extend block-commit to accept a string for the backing file
+
+Message-id: <d49dacc368c02a3cd3d3d9b1d7ea0dc75cc7884a.1411096194.git.jcody@redhat.com>
+Patchwork-id: 61311
+O-Subject: [PATCH qemu-kvm-rhev RHEL7.0.z 2/4] block: extend block-commit to accept a string for the backing file
+Bugzilla: 1122925
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Eric Blake <eblake@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+On some image chains, QEMU may not always be able to resolve the
+filenames properly, when updating the backing file of an image
+after a block commit.
+
+For instance, certain relative pathnames may fail, or drives may
+have been specified originally by file descriptor (e.g. /dev/fd/???),
+or a relative protocol pathname may have been used.
+
+In these instances, QEMU may lack the information to be able to make
+the correct choice, but the user or management layer most likely does
+have that knowledge.
+
+With this extension to the block-commit api, the user is able to change
+the backing file of the overlay image as part of the block-commit
+operation.
+
+This allows the change to be 'safe', in the sense that if the attempt
+to write the overlay image metadata fails, then the block-commit
+operation returns failure, without disrupting the guest.
+
+If the commit top is the active layer, then specifying the backing
+file string will be treated as an error (there is no overlay image
+to modify in that case).
+
+If a backing file string is not specified in the command, the backing
+file string to use is determined in the same manner as it was
+previously.
+
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Reviewed-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 54e269009099cdc9483be115f1e12d56ad459c5e)
+
+Conflicts:
+	qapi/block-core.json
+
+RHEL7 Notes: Conflict is due to qapi json being divided into separate
+             files upstream; downstream in RHEL7 it is still in a single
+             json file.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c                   |    8 ++++++--
+ block/commit.c            |    9 ++++++---
+ blockdev.c                |    8 +++++++-
+ include/block/block.h     |    3 ++-
+ include/block/block_int.h |    3 ++-
+ qapi-schema.json          |   20 ++++++++++++++++++--
+ qmp-commands.hx           |   19 ++++++++++++++++++-
+ 7 files changed, 59 insertions(+), 11 deletions(-)
+
+diff --git a/block.c b/block.c
+index 7bdbbc6..496eb72 100644
+--- a/block.c
++++ b/block.c
+@@ -2323,12 +2323,15 @@ typedef struct BlkIntermediateStates {
+  *
+  * base <- active
+  *
++ * If backing_file_str is non-NULL, it will be used when modifying top's
++ * overlay image metadata.
++ *
+  * Error conditions:
+  *  if active == top, that is considered an error
+  *
+  */
+ int bdrv_drop_intermediate(BlockDriverState *active, BlockDriverState *top,
+-                           BlockDriverState *base)
++                           BlockDriverState *base, const char *backing_file_str)
+ {
+     BlockDriverState *intermediate;
+     BlockDriverState *base_bs = NULL;
+@@ -2380,7 +2383,8 @@ int bdrv_drop_intermediate(BlockDriverState *active, BlockDriverState *top,
+     }
+ 
+     /* success - we can delete the intermediate states, and link top->base */
+-    ret = bdrv_change_backing_file(new_top_bs, base_bs->filename,
++    backing_file_str = backing_file_str ? backing_file_str : base_bs->filename;
++    ret = bdrv_change_backing_file(new_top_bs, backing_file_str,
+                                    base_bs->drv ? base_bs->drv->format_name : "");
+     if (ret) {
+         goto exit;
+diff --git a/block/commit.c b/block/commit.c
+index e3e395d..b6e1770 100644
+--- a/block/commit.c
++++ b/block/commit.c
+@@ -37,6 +37,7 @@ typedef struct CommitBlockJob {
+     BlockdevOnError on_error;
+     int base_flags;
+     int orig_overlay_flags;
++    char *backing_file_str;
+ } CommitBlockJob;
+ 
+ static int coroutine_fn commit_populate(BlockDriverState *bs,
+@@ -141,7 +142,7 @@ wait:
+ 
+     if (!block_job_is_cancelled(&s->common) && sector_num == end) {
+         /* success */
+-        ret = bdrv_drop_intermediate(active, top, base);
++        ret = bdrv_drop_intermediate(active, top, base, s->backing_file_str);
+     }
+ 
+ exit_free_buf:
+@@ -158,7 +159,7 @@ exit_restore_reopen:
+     if (overlay_bs && s->orig_overlay_flags != bdrv_get_flags(overlay_bs)) {
+         bdrv_reopen(overlay_bs, s->orig_overlay_flags, NULL);
+     }
+-
++    g_free(s->backing_file_str);
+     block_job_completed(&s->common, ret);
+ }
+ 
+@@ -182,7 +183,7 @@ static const BlockJobDriver commit_job_driver = {
+ void commit_start(BlockDriverState *bs, BlockDriverState *base,
+                   BlockDriverState *top, int64_t speed,
+                   BlockdevOnError on_error, BlockDriverCompletionFunc *cb,
+-                  void *opaque, Error **errp)
++                  void *opaque, const char *backing_file_str, Error **errp)
+ {
+     CommitBlockJob *s;
+     BlockReopenQueue *reopen_queue = NULL;
+@@ -244,6 +245,8 @@ void commit_start(BlockDriverState *bs, BlockDriverState *base,
+     s->base_flags          = orig_base_flags;
+     s->orig_overlay_flags  = orig_overlay_flags;
+ 
++    s->backing_file_str = g_strdup(backing_file_str);
++
+     s->on_error = on_error;
+     s->common.co = qemu_coroutine_create(commit_run);
+ 
+diff --git a/blockdev.c b/blockdev.c
+index 107e27e..96dc3df 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -1465,6 +1465,7 @@ void qmp_block_stream(const char *device, bool has_base,
+ void qmp_block_commit(const char *device,
+                       bool has_base, const char *base,
+                       bool has_top, const char *top,
++                      bool has_backing_file, const char *backing_file,
+                       bool has_speed, int64_t speed,
+                       Error **errp)
+ {
+@@ -1522,11 +1523,16 @@ void qmp_block_commit(const char *device,
+     }
+ 
+     if (top_bs == bs) {
++        if (has_backing_file) {
++            error_setg(errp, "'backing-file' specified,"
++                             " but 'top' is the active layer");
++            return;
++        }
+         commit_active_start(bs, base_bs, speed, on_error, block_job_cb,
+                             bs, &local_err);
+     } else {
+         commit_start(bs, base_bs, top_bs, speed, on_error, block_job_cb, bs,
+-                    &local_err);
++                     has_backing_file ? backing_file : NULL, &local_err);
+     }
+     if (local_err != NULL) {
+         error_propagate(errp, local_err);
+diff --git a/include/block/block.h b/include/block/block.h
+index 972c0e7..03b7960 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -256,7 +256,8 @@ int bdrv_change_backing_file(BlockDriverState *bs,
+     const char *backing_file, const char *backing_fmt);
+ void bdrv_register(BlockDriver *bdrv);
+ int bdrv_drop_intermediate(BlockDriverState *active, BlockDriverState *top,
+-                           BlockDriverState *base);
++                           BlockDriverState *base,
++                           const char *backing_file_str);
+ BlockDriverState *bdrv_find_overlay(BlockDriverState *active,
+                                     BlockDriverState *bs);
+ BlockDriverState *bdrv_find_base(BlockDriverState *bs);
+diff --git a/include/block/block_int.h b/include/block/block_int.h
+index 53fc98c..e6874b4 100644
+--- a/include/block/block_int.h
++++ b/include/block/block_int.h
+@@ -389,13 +389,14 @@ void stream_start(BlockDriverState *bs, BlockDriverState *base,
+  * @on_error: The action to take upon error.
+  * @cb: Completion function for the job.
+  * @opaque: Opaque pointer value passed to @cb.
++ * @backing_file_str: String to use as the backing file in @top's overlay
+  * @errp: Error object.
+  *
+  */
+ void commit_start(BlockDriverState *bs, BlockDriverState *base,
+                  BlockDriverState *top, int64_t speed,
+                  BlockdevOnError on_error, BlockDriverCompletionFunc *cb,
+-                 void *opaque, Error **errp);
++                 void *opaque, const char *backing_file_str, Error **errp);
+ /**
+  * commit_active_start:
+  * @bs: Active block device to be committed.
+diff --git a/qapi-schema.json b/qapi-schema.json
+index 18ab949..ed79eb9 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -1848,6 +1848,23 @@
+ #                    which contains the topmost data to be committed down. If
+ #                    not specified, this is the active layer.
+ #
++# @backing-file:  #optional The backing file string to write into the overlay
++#                           image of 'top'.  If 'top' is the active layer,
++#                           specifying a backing file string is an error. This
++#                           filename is not validated.
++#
++#                           If a pathname string is such that it cannot be
++#                           resolved by QEMU, that means that subsequent QMP or
++#                           HMP commands must use node-names for the image in
++#                           question, as filename lookup methods will fail.
++#
++#                           If not specified, QEMU will automatically determine
++#                           the backing file string to use, or error out if
++#                           there is no obvious choice. Care should be taken
++#                           when specifying the string, to specify a valid
++#                           filename or protocol.
++#                           (Since 2.1)
++#
+ #                    If top == base, that is an error.
+ #                    If top == active, the job will not be completed by itself,
+ #                    user needs to complete the job with the block-job-complete
+@@ -1860,7 +1877,6 @@
+ #                    size of the smaller top, you can safely truncate it
+ #                    yourself once the commit operation successfully completes.
+ #
+-#
+ # @speed:  #optional the maximum speed, in bytes per second
+ #
+ # Returns: Nothing on success
+@@ -1875,7 +1891,7 @@
+ ##
+ { 'command': 'block-commit',
+   'data': { 'device': 'str', '*base': 'str', '*top': 'str',
+-            '*speed': 'int' } }
++            '*backing-file': 'str', '*speed': 'int' } }
+ 
+ ##
+ # @drive-mirror
+diff --git a/qmp-commands.hx b/qmp-commands.hx
+index f67121a..5ece4f9 100644
+--- a/qmp-commands.hx
++++ b/qmp-commands.hx
+@@ -1005,7 +1005,7 @@ EQMP
+ 
+     {
+         .name       = "block-commit",
+-        .args_type  = "device:B,base:s?,top:s?,speed:o?",
++        .args_type  = "device:B,base:s?,top:s?,backing-file:s?,speed:o?",
+         .mhandler.cmd_new = qmp_marshal_input_block_commit,
+     },
+ 
+@@ -1026,6 +1026,23 @@ Arguments:
+           which contains the topmost data to be committed down. If
+           not specified, this is the active layer. (json-string, optional)
+ 
++- backing-file:     The backing file string to write into the overlay
++                    image of 'top'.  If 'top' is the active layer,
++                    specifying a backing file string is an error. This
++                    filename is not validated.
++
++                    If a pathname string is such that it cannot be
++                    resolved by QEMU, that means that subsequent QMP or
++                    HMP commands must use node-names for the image in
++                    question, as filename lookup methods will fail.
++
++                    If not specified, QEMU will automatically determine
++                    the backing file string to use, or error out if
++                    there is no obvious choice. Care should be taken
++                    when specifying the string, to specify a valid
++                    filename or protocol.
++                    (json-string, optional) (Since 2.1)
++
+           If top == base, that is an error.
+           If top == active, the job will not be completed by itself,
+           user needs to complete the job with the block-job-complete
+-- 
+1.7.1
+

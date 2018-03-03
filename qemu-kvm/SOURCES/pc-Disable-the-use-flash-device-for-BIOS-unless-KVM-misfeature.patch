@@ -1,0 +1,97 @@
+From 62868855d0fdd34dee119a59c7e56c1706fc27ab Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Wed, 31 Jul 2013 08:00:55 +0200
+Subject: pc: Disable the "use flash device for BIOS unless KVM" misfeature
+
+Message-id: <1373453682-19227-2-git-send-email-armbru@redhat.com>
+Patchwork-id: 52417
+O-Subject: [RHEL-7 PATCH qemu-kvm 1/1] pc: Disable the "use flash device for BIOS unless KVM" misfeature
+Bugzilla: 963280
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Use of a flash memory device for the BIOS was added in series "[PATCH
+v10 0/8] PC system flash support", commit 4732dca..1b89faf, v1.1.
+
+Flash vs. ROM is a guest-visible difference.  Thus, flash use had to
+be suppressed for machine types pc-1.0 and older.  This was
+accomplished by adding a dummy device "pc-sysfw" with property
+"rom_only":
+
+* Non-zero rom_only means "use ROM".  Default for pc-1.0 and older.
+* Zero rom_only means "maybe use flash".  Default for newer machines.
+
+Not only is the dummy device ugly, it was also retroactively added to
+the older machine types!  Fortunately, it's not guest-visible (thus no
+immediate guest ABI breakage), and has no vmstate (thus no immediate
+migration breakage).  Breakage occurs only if the user unwisely
+enables flash by setting rom_only to zero.  Patch review FAIL #1.
+
+Why "maybe use flash"?  Flash didn't work with KVM.  Therefore,
+rom_only=0 really means "use flash, except when KVM is enabled, use
+ROM".  This is a Bad Idea, because it makes enabling/ disabling KVM
+guest-visible.  Patch review FAIL #2.
+
+Aside: it also precludes migrating between KVM on and off, but that's
+not possible for other reasons anyway.
+
+Upstream commit 9953f88 killed the misfeature for new machine types.
+Upstream commit 9e1c2ec reverted the kill, but left a dead variable
+behind.  This is what's in RHEL-7 is before this patch.
+
+KVM has recently been made to support flash (KVM_CAP_READONLY_MEM),
+which permitted upstream QEMU to redo the flash vs. ROM switch
+properly (commit 338ea90..dafb82e).  The required follow-up cleanup
+hasn't been committed, yet: Paolo's [PATCH v2 0/3] Remove legacy sysfw
+code.
+
+Instead of backporting all that, I'm simply ripping out the flash
+feature.  ROM has been working just fine for us, and I don't think we
+should complicate RHEL-7 maintenance and support by having two ways to
+map BIOS, at least not without sufficient business reason.
+
+The result behaves just like upstream with the follow-up cleanup
+applied, except -pflash doesn't affect the BIOS mapping, but remains
+as it always was: it creates an unused drive.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+
+diff --git a/hw/block/pc_sysfw.c b/hw/block/pc_sysfw.c
+index 4f17668..2bbedc9 100644
+--- a/hw/block/pc_sysfw.c
++++ b/hw/block/pc_sysfw.c
+@@ -36,6 +36,7 @@
+ 
+ #define BIOS_FILENAME "bios.bin"
+ 
++#if 0   /* Disabled for Red Hat Enterprise Linux */
+ typedef struct PcSysFwDevice {
+     SysBusDevice busdev;
+     uint8_t rom_only;
+@@ -138,6 +139,7 @@ static void pc_system_flash_init(MemoryRegion *rom_memory,
+ 
+     pc_isa_bios_init(rom_memory, flash_mem, size);
+ }
++#endif  /* Disabled for Red Hat Enterprise Linux */
+ 
+ static void old_pc_system_rom_init(MemoryRegion *rom_memory)
+ {
+@@ -194,6 +196,7 @@ static void old_pc_system_rom_init(MemoryRegion *rom_memory)
+                                 bios);
+ }
+ 
++#if 0   /* Disabled for Red Hat Enterprise Linux */
+ /*
+  * Bug-compatible flash vs. ROM selection enabled?
+  * A few older machines enable this.
+@@ -287,3 +290,9 @@ static void pcsysfw_register (void)
+ 
+ type_init (pcsysfw_register);
+ 
++#else   /* Disabled for Red Hat Enterprise Linux */
++void pc_system_firmware_init(MemoryRegion *rom_memory)
++{
++    old_pc_system_rom_init(rom_memory);
++}
++#endif

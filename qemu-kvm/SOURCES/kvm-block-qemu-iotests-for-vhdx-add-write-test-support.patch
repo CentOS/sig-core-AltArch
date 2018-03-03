@@ -1,0 +1,104 @@
+From 445ea167eadbc4b951b46c8a2ab52cc0ce681aac Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Wed, 20 Nov 2013 19:44:07 +0100
+Subject: [PATCH 24/25] block: qemu-iotests for vhdx, add write test support
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <dfa3072f5edd6daf7e2088b868ababb5ff8afe06.1384975172.git.jcody@redhat.com>
+Patchwork-id: 55817
+O-Subject: [RHEL7 qemu-kvm PATCH 24/26] block: qemu-iotests for vhdx, add write test support
+Bugzilla: 879234
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+This removes the IMGFMT_GENERIC blocker for read-only, so existing
+iotests run read/write tests for vhdx images created by qemu-img (e.g.
+tests 001, 002, 003).
+
+In addition, this updates the sample image test for the Hyper-V
+created image, to verify we can write it as well.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 751aec24cdcd4359b5927df5cebfe6b8d3e74515)
+
+RHEL7 Note:  Difference from upstream - there was a typo in this patch,
+             that used 'MM' instead of 'M' for size passed into qemu-io.
+             Upstream apparently gobbles the extra 'M' without error,
+             but RHEL7 does not.  Fix this so that test 064 passes.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+---
+ tests/qemu-iotests/064     | 11 +++++++++++
+ tests/qemu-iotests/064.out | 14 ++++++++++++++
+ tests/qemu-iotests/common  |  1 -
+ 3 files changed, 25 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/064     |   11 +++++++++++
+ tests/qemu-iotests/064.out |   14 ++++++++++++++
+ tests/qemu-iotests/common  |    1 -
+ 3 files changed, 25 insertions(+), 1 deletions(-)
+
+diff --git a/tests/qemu-iotests/064 b/tests/qemu-iotests/064
+index 6789aa6..906205e 100755
+--- a/tests/qemu-iotests/064
++++ b/tests/qemu-iotests/064
+@@ -56,6 +56,17 @@ echo
+ echo "=== Verify pattern 0x00, 66M - 1024M ==="
+ $QEMU_IO -r -c "read -pP 0x00 66M 958M" "$TEST_IMG" | _filter_qemu_io
+ 
++echo
++echo "=== Verify pattern write, 0xc3 99M-157M ==="
++$QEMU_IO -c "write -pP 0xc3 99M 58M" "$TEST_IMG" | _filter_qemu_io
++# first verify we didn't write where we should not have
++$QEMU_IO -c "read -pP 0xa5 0 33M" "$TEST_IMG" | _filter_qemu_io
++$QEMU_IO -c "read -pP 0x96 33M 33M" "$TEST_IMG" | _filter_qemu_io
++$QEMU_IO -c "read -pP 0x00 66M 33M" "$TEST_IMG" | _filter_qemu_io
++$QEMU_IO -c "read -pP 0x00 157M 867M" "$TEST_IMG" | _filter_qemu_io
++# now verify what we should have actually written
++$QEMU_IO -c "read -pP 0xc3 99M 58M" "$TEST_IMG" | _filter_qemu_io
++
+ # success, all done
+ echo "*** done"
+ rm -f $seq.full
+diff --git a/tests/qemu-iotests/064.out b/tests/qemu-iotests/064.out
+index b9e8e4a..5346a4e 100644
+--- a/tests/qemu-iotests/064.out
++++ b/tests/qemu-iotests/064.out
+@@ -11,4 +11,18 @@ read 34603008/34603008 bytes at offset 34603008
+ === Verify pattern 0x00, 66M - 1024M ===
+ read 1004535808/1004535808 bytes at offset 69206016
+ 958 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++=== Verify pattern write, 0xc3 99M-157M ===
++wrote 60817408/60817408 bytes at offset 103809024
++58 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 34603008/34603008 bytes at offset 0
++33 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 34603008/34603008 bytes at offset 34603008
++33 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 34603008/34603008 bytes at offset 69206016
++33 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 909115392/909115392 bytes at offset 164626432
++867 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 60817408/60817408 bytes at offset 103809024
++58 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ *** done
+diff --git a/tests/qemu-iotests/common b/tests/qemu-iotests/common
+index 2932e14..8cde7f1 100644
+--- a/tests/qemu-iotests/common
++++ b/tests/qemu-iotests/common
+@@ -200,7 +200,6 @@ testlist options
+         -vhdx)
+             IMGFMT=vhdx
+             xpand=false
+-            IMGFMT_GENERIC=false
+             ;;
+ 
+         -rbd)
+-- 
+1.7.1
+

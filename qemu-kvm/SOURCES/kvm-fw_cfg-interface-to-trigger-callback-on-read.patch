@@ -1,0 +1,146 @@
+From 8ef464d9f69895ad603c8104460ec667892be48c Mon Sep 17 00:00:00 2001
+Message-Id: <8ef464d9f69895ad603c8104460ec667892be48c.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:17:56 +0100
+Subject: [PATCH 26/56] fw_cfg: interface to trigger callback on read
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-27-git-send-email-mst@redhat.com>
+Patchwork-id: 56332
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 26/57] fw_cfg: interface to trigger callback on read
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Reviewed-by: Gerd Hoffmann <kraxel@redhat.com>
+Tested-by: Gerd Hoffmann <kraxel@redhat.com>
+Reviewed-by: Igor Mammedov <imammedo@redhat.com>
+Tested-by: Igor Mammedov <imammedo@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit d87072ceeccf4f84a64d4bc59124bcd64286c070)
+---
+ include/hw/nvram/fw_cfg.h |  4 ++++
+ hw/nvram/fw_cfg.c         | 33 ++++++++++++++++++++++++++++-----
+ 2 files changed, 32 insertions(+), 5 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/nvram/fw_cfg.c         | 33 ++++++++++++++++++++++++++++-----
+ include/hw/nvram/fw_cfg.h |  4 ++++
+ 2 files changed, 32 insertions(+), 5 deletions(-)
+
+diff --git a/hw/nvram/fw_cfg.c b/hw/nvram/fw_cfg.c
+index 064344d..b865c09 100644
+--- a/hw/nvram/fw_cfg.c
++++ b/hw/nvram/fw_cfg.c
+@@ -41,6 +41,7 @@ typedef struct FWCfgEntry {
+     uint8_t *data;
+     void *callback_opaque;
+     FWCfgCallback callback;
++    FWCfgReadCallback read_callback;
+ } FWCfgEntry;
+ 
+ struct FWCfgState {
+@@ -245,8 +246,12 @@ static uint8_t fw_cfg_read(FWCfgState *s)
+ 
+     if (s->cur_entry == FW_CFG_INVALID || !e->data || s->cur_offset >= e->len)
+         ret = 0;
+-    else
++    else {
++        if (e->read_callback) {
++            e->read_callback(e->callback_opaque, s->cur_offset);
++        }
+         ret = e->data[s->cur_offset++];
++    }
+ 
+     trace_fw_cfg_read(s, ret);
+     return ret;
+@@ -377,7 +382,10 @@ static const VMStateDescription vmstate_fw_cfg = {
+     }
+ };
+ 
+-void fw_cfg_add_bytes(FWCfgState *s, uint16_t key, void *data, size_t len)
++static void fw_cfg_add_bytes_read_callback(FWCfgState *s, uint16_t key,
++                                           FWCfgReadCallback callback,
++                                           void *callback_opaque,
++                                           void *data, size_t len)
+ {
+     int arch = !!(key & FW_CFG_ARCH_LOCAL);
+ 
+@@ -387,6 +395,13 @@ void fw_cfg_add_bytes(FWCfgState *s, uint16_t key, void *data, size_t len)
+ 
+     s->entries[arch][key].data = data;
+     s->entries[arch][key].len = (uint32_t)len;
++    s->entries[arch][key].read_callback = callback;
++    s->entries[arch][key].callback_opaque = callback_opaque;
++}
++
++void fw_cfg_add_bytes(FWCfgState *s, uint16_t key, void *data, size_t len)
++{
++    fw_cfg_add_bytes_read_callback(s, key, NULL, NULL, data, len);
+ }
+ 
+ void fw_cfg_add_string(FWCfgState *s, uint16_t key, const char *value)
+@@ -440,8 +455,9 @@ void fw_cfg_add_callback(FWCfgState *s, uint16_t key, FWCfgCallback callback,
+     s->entries[arch][key].callback = callback;
+ }
+ 
+-void fw_cfg_add_file(FWCfgState *s,  const char *filename,
+-                     void *data, size_t len)
++void fw_cfg_add_file_callback(FWCfgState *s,  const char *filename,
++                              FWCfgReadCallback callback, void *callback_opaque,
++                              void *data, size_t len)
+ {
+     int i, index;
+     size_t dsize;
+@@ -455,7 +471,8 @@ void fw_cfg_add_file(FWCfgState *s,  const char *filename,
+     index = be32_to_cpu(s->files->count);
+     assert(index < FW_CFG_FILE_SLOTS);
+ 
+-    fw_cfg_add_bytes(s, FW_CFG_FILE_FIRST + index, data, len);
++    fw_cfg_add_bytes_read_callback(s, FW_CFG_FILE_FIRST + index,
++                                   callback, callback_opaque, data, len);
+ 
+     pstrcpy(s->files->f[index].name, sizeof(s->files->f[index].name),
+             filename);
+@@ -473,6 +490,12 @@ void fw_cfg_add_file(FWCfgState *s,  const char *filename,
+     s->files->count = cpu_to_be32(index+1);
+ }
+ 
++void fw_cfg_add_file(FWCfgState *s,  const char *filename,
++                     void *data, size_t len)
++{
++    fw_cfg_add_file_callback(s, filename, NULL, NULL, data, len);
++}
++
+ static void fw_cfg_machine_ready(struct Notifier *n, void *data)
+ {
+     size_t len;
+diff --git a/include/hw/nvram/fw_cfg.h b/include/hw/nvram/fw_cfg.h
+index f60dd67..2ab0fc2 100644
+--- a/include/hw/nvram/fw_cfg.h
++++ b/include/hw/nvram/fw_cfg.h
+@@ -60,6 +60,7 @@ typedef struct FWCfgFiles {
+ } FWCfgFiles;
+ 
+ typedef void (*FWCfgCallback)(void *opaque, uint8_t *data);
++typedef void (*FWCfgReadCallback)(void *opaque, uint32_t offset);
+ 
+ void fw_cfg_add_bytes(FWCfgState *s, uint16_t key, void *data, size_t len);
+ void fw_cfg_add_string(FWCfgState *s, uint16_t key, const char *value);
+@@ -70,6 +71,9 @@ void fw_cfg_add_callback(FWCfgState *s, uint16_t key, FWCfgCallback callback,
+                          void *callback_opaque, void *data, size_t len);
+ void fw_cfg_add_file(FWCfgState *s, const char *filename, void *data,
+                      size_t len);
++void fw_cfg_add_file_callback(FWCfgState *s, const char *filename,
++                              FWCfgReadCallback callback, void *callback_opaque,
++                              void *data, size_t len);
+ FWCfgState *fw_cfg_init(uint32_t ctl_port, uint32_t data_port,
+                         hwaddr crl_addr, hwaddr data_addr);
+ 
+-- 
+1.7.11.7
+

@@ -1,0 +1,70 @@
+From 47886bf3b19f06d0a5255d9656d1c02800baddd0 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 15 Feb 2016 09:28:25 +0100
+Subject: [PATCH 12/18] vmdk: Fix next_cluster_sector for compressed write
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1455528511-9357-13-git-send-email-famz@redhat.com>
+Patchwork-id: 69178
+O-Subject: [RHEL-7.3 qemu-kvm PATCH 12/18] vmdk: Fix next_cluster_sector for compressed write
+Bugzilla: 1299250
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+BZ: https://bugzilla.redhat.com/show_bug.cgi?id=1299250
+
+This fixes the bug introduced by commit c6ac36e (vmdk: Optimize cluster
+allocation).
+
+Sometimes, write_len could be larger than cluster size, because it
+contains both data and marker.  We must advance next_cluster_sector in
+this case, otherwise the image gets corrupted.
+
+Cc: qemu-stable@nongnu.org
+Reported-by: Antoni Villalonga <qemu-list@friki.cat>
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 5e82a31eb967db135fc4e688b134fb0972d62de3)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vmdk.c | 14 ++++++++++----
+ 1 file changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 3810d75..dd8b638 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -1297,6 +1297,8 @@ static int vmdk_write_extent(VmdkExtent *extent, int64_t cluster_offset,
+     uLongf buf_len;
+     const uint8_t *write_buf = buf;
+     int write_len = nb_sectors * 512;
++    int64_t write_offset;
++    int64_t write_end_sector;
+ 
+     if (extent->compressed) {
+         if (!extent->has_marker) {
+@@ -1315,10 +1317,14 @@ static int vmdk_write_extent(VmdkExtent *extent, int64_t cluster_offset,
+         write_buf = (uint8_t *)data;
+         write_len = buf_len + sizeof(VmdkGrainMarker);
+     }
+-    ret = bdrv_pwrite(extent->file,
+-                        cluster_offset + offset_in_cluster,
+-                        write_buf,
+-                        write_len);
++    write_offset = cluster_offset + offset_in_cluster,
++    ret = bdrv_pwrite(extent->file, write_offset, write_buf, write_len);
++
++    write_end_sector = DIV_ROUND_UP(write_offset + write_len, BDRV_SECTOR_SIZE);
++
++    extent->next_cluster_sector = MAX(extent->next_cluster_sector,
++                                      write_end_sector);
++
+     if (ret != write_len) {
+         ret = ret < 0 ? ret : -EIO;
+         goto out;
+-- 
+1.8.3.1
+

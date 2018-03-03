@@ -1,0 +1,64 @@
+From 26c346739c8772521b68e4763321d7bdfc49efd4 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Fri, 17 Jan 2014 17:07:54 +0100
+Subject: [PATCH 04/11] qdev-monitor: Fix crash when device_add is called with abstract driver
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1389978479-30595-5-git-send-email-armbru@redhat.com>
+Patchwork-id: 56787
+O-Subject: [PATCH 7.0 qemu-kvm 4/9] qdev-monitor: Fix crash when device_add is called with abstract driver
+Bugzilla: 669524
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+
+From: Igor Mammedov <imammedo@redhat.com>
+
+User is able to crash running QEMU when following monitor
+command is called:
+
+ device_add intel-hda-generic
+
+Crash is caused by assertion in object_initialize_with_type()
+when type is abstract.
+
+Checking if type is abstract before instance is created in
+qdev_device_add() allows to prevent crash on incorrect user input.
+
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Igor Mammedov <imammedo@redhat.com>
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit 2fa4e56d88aa0039062bbc7f9a88e9f90c77ed94)
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+---
+ qdev-monitor.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qdev-monitor.c |    6 ++++++
+ 1 files changed, 6 insertions(+), 0 deletions(-)
+
+diff --git a/qdev-monitor.c b/qdev-monitor.c
+index 5b45d02..f313a94 100644
+--- a/qdev-monitor.c
++++ b/qdev-monitor.c
+@@ -482,6 +482,12 @@ DeviceState *qdev_device_add(QemuOpts *opts)
+         return NULL;
+     }
+ 
++    if (object_class_is_abstract(oc)) {
++        qerror_report(QERR_INVALID_PARAMETER_VALUE, "driver",
++                      "non-abstract device type");
++        return NULL;
++    }
++
+     dc = DEVICE_CLASS(oc);
+ 
+     /* find bus */
+-- 
+1.7.1
+

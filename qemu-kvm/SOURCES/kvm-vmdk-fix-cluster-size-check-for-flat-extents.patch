@@ -1,0 +1,80 @@
+From cbffbb8195ec5370cbb2baf53148806b5a1c3dc8 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Wed, 9 Oct 2013 09:50:22 +0200
+Subject: [PATCH 10/11] vmdk: fix cluster size check for flat extents
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1381312223-7074-3-git-send-email-famz@redhat.com>
+Patchwork-id: 54794
+O-Subject: [RHEL-7 qemu-kvm PATCH 2/3] vmdk: fix cluster size check for flat extents
+Bugzilla: 1017049
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+We use the extent size as cluster size for flat extents (where no L1/L2
+table is allocated so it's safe) reuse sector calculating code with
+sparse extents.
+
+Don't pass in the cluster size for adding flat extent, just set it to
+sectors later, then the cluster size checking will not fail.
+
+The cluster_sectors is changed to int64_t to allow big flat extent.
+
+Without this, flat extent opening is broken:
+
+    # qemu-img create -f vmdk -o subformat=monolithicFlat /tmp/a.vmdk 100G
+    Formatting '/tmp/a.vmdk', fmt=vmdk size=107374182400 compat6=off subformat='monolithicFlat' zeroed_grain=off
+    # qemu-img info /tmp/a.vmdk
+    image: /tmp/a.vmdk
+    file format: raw
+    virtual size: 0 (0 bytes)
+    disk size: 4.0K
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 301c7d38a0c359b91526391d13617386f3d9bb29)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ block/vmdk.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vmdk.c |    6 +++---
+ 1 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index b0b419b..66735ab 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -105,7 +105,7 @@ typedef struct VmdkExtent {
+     uint32_t l2_cache_offsets[L2_CACHE_SIZE];
+     uint32_t l2_cache_counts[L2_CACHE_SIZE];
+ 
+-    unsigned int cluster_sectors;
++    int64_t cluster_sectors;
+ } VmdkExtent;
+ 
+ typedef struct BDRVVmdkState {
+@@ -424,7 +424,7 @@ static int vmdk_add_extent(BlockDriverState *bs,
+     extent->l1_size = l1_size;
+     extent->l1_entry_sectors = l2_size * cluster_sectors;
+     extent->l2_size = l2_size;
+-    extent->cluster_sectors = cluster_sectors;
++    extent->cluster_sectors = flat ? sectors : cluster_sectors;
+ 
+     if (s->num_extents > 1) {
+         extent->end_sector = (*(extent - 1)).end_sector + extent->sectors;
+@@ -737,7 +737,7 @@ static int vmdk_parse_extents(const char *desc, BlockDriverState *bs,
+             VmdkExtent *extent;
+ 
+             ret = vmdk_add_extent(bs, extent_file, true, sectors,
+-                            0, 0, 0, 0, sectors, &extent);
++                            0, 0, 0, 0, 0, &extent);
+             if (ret < 0) {
+                 return ret;
+             }
+-- 
+1.7.1
+

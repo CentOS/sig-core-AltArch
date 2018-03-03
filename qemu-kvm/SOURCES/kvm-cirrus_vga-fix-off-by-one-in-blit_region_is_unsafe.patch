@@ -1,0 +1,59 @@
+From 8d230a5a57512c84545bd6345775e69b4b3b1983 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Tue, 7 Feb 2017 10:07:46 +0100
+Subject: [PATCH 03/11] cirrus_vga: fix off-by-one in blit_region_is_unsafe
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1486462072-32174-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 73564
+O-Subject: [RHEL-7.4 qemu-kvm PATCH 1/7] cirrus_vga: fix off-by-one in blit_region_is_unsafe
+Bugzilla: 1418233
+RH-Acked-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+The "max" value is being compared with >=, but addr + width points to
+the first byte that will _not_ be copied.  Laszlo suggested using a
+"greater than" comparison, instead of subtracting one like it is
+already done above for the height, so that max remains always positive.
+
+The mistake is "safe"---it will reject some blits, but will never cause
+out-of-bounds writes.
+
+Cc: Gerd Hoffmann <kraxel@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Message-id: 1455121059-18280-1-git-send-email-pbonzini@redhat.com
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit d2ba7ecb348d3b996fcd920cf1ca7b72722c1dfd)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/display/cirrus_vga.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/hw/display/cirrus_vga.c b/hw/display/cirrus_vga.c
+index 717ecdb..c42dfcf 100644
+--- a/hw/display/cirrus_vga.c
++++ b/hw/display/cirrus_vga.c
+@@ -272,14 +272,14 @@ static bool blit_region_is_unsafe(struct CirrusVGAState *s,
+             + ((int64_t)s->cirrus_blt_height-1) * pitch;
+         int32_t max = addr
+             + s->cirrus_blt_width;
+-        if (min < 0 || max >= s->vga.vram_size) {
++        if (min < 0 || max > s->vga.vram_size) {
+             return true;
+         }
+     } else {
+         int64_t max = addr
+             + ((int64_t)s->cirrus_blt_height-1) * pitch
+             + s->cirrus_blt_width;
+-        if (max >= s->vga.vram_size) {
++        if (max > s->vga.vram_size) {
+             return true;
+         }
+     }
+-- 
+1.8.3.1
+

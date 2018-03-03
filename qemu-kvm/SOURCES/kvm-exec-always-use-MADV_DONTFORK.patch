@@ -1,0 +1,58 @@
+From 38dcbd1ff68da81b9172d8036622e41fe591c5c0 Mon Sep 17 00:00:00 2001
+From: Andrea Arcangeli <aarcange@redhat.com>
+Date: Fri, 7 Feb 2014 11:02:33 +0100
+Subject: [PATCH 10/28] exec: always use MADV_DONTFORK
+
+RH-Author: Andrea Arcangeli <aarcange@redhat.com>
+Message-id: <1391770953-20138-2-git-send-email-aarcange@redhat.com>
+Patchwork-id: 57131
+O-Subject: [RHEL-7.0 qemu-kvm PATCH] exec: always use MADV_DONTFORK
+Bugzilla: 1004197
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Andrew Jones <drjones@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+
+MADV_DONTFORK prevents fork to fail with -ENOMEM if the default
+overcommit heuristics decides there's too much anonymous virtual
+memory allocated. If the KVM secondary MMU is synchronized with MMU
+notifiers or not, doesn't make a difference in that regard.
+
+Secondly it's always more efficient to avoid copying the guest
+physical address space in the fork child (so we avoid to mark all the
+guest memory readonly in the parent and so we skip the establishment
+and teardown of lots of pagetables in the child).
+
+In the common case we can ignore the error if MADV_DONTFORK is not
+available. Leave a second invocation that errors out in the KVM path
+if MMU notifiers are missing and KVM is enabled, to abort in such
+case.
+
+Signed-off-by: Andrea Arcangeli <aarcange@redhat.com>
+Tested-By: Benoit Canet <benoit@irqsave.net>
+Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Gleb Natapov <gleb@redhat.com>
+(cherry picked from upstream commit 3e469dbfe413c25d48321c3a19ddfae0727dc6e5)
+---
+ exec.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ exec.c |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+diff --git a/exec.c b/exec.c
+index ce9310c..6fe2fe7 100644
+--- a/exec.c
++++ b/exec.c
+@@ -1194,6 +1194,7 @@ ram_addr_t qemu_ram_alloc_from_ptr(ram_addr_t size, void *host,
+ 
+     qemu_ram_setup_dump(new_block->host, size);
+     qemu_madvise(new_block->host, size, QEMU_MADV_HUGEPAGE);
++    qemu_madvise(new_block->host, size, QEMU_MADV_DONTFORK);
+ 
+     if (kvm_enabled())
+         kvm_setup_guest_memory(new_block->host, size);
+-- 
+1.7.1
+

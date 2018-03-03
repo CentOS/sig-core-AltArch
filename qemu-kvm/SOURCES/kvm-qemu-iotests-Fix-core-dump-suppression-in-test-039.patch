@@ -1,0 +1,141 @@
+From 3d0fa39257aac5ee843c0f3e5e69703e299bb90c Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 13 Mar 2017 17:46:23 +0100
+Subject: [PATCH 12/24] qemu-iotests: Fix core dump suppression in test 039
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <20170313174629.28735-1-mreitz@redhat.com>
+Patchwork-id: 74281
+O-Subject: [RHEL-7.4 qemu-kvm PATCH 3/9] qemu-iotests: Fix core dump suppression in test 039
+Bugzilla: 1427176
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+The shell script attempts to suppress core dumps like this:
+
+    old_ulimit=$(ulimit -c)
+    ulimit -c 0
+    $QEMU_IO arg...
+    ulimit -c "$old_ulimit"
+
+This breaks the test hard unless the limit was zero to begin with!
+ulimit sets both hard and soft limit by default, and (re-)raising the
+hard limit requires privileges.  Broken since it was added in commit
+dc68afe.
+
+Could be fixed by adding -S to set only the soft limit, but I'm not
+sure how portable that is in practice.  Simply do it in a subshell
+instead, like this:
+
+    (ulimit -c 0; exec $QEMU_IO arg...)
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit d530e342320d4db3c9522bfadc60a7bc8142343a)
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/039           | 20 ++++++++------------
+ tests/qemu-iotests/039.out       |  3 +++
+ tests/qemu-iotests/common.filter |  1 +
+ 3 files changed, 12 insertions(+), 12 deletions(-)
+
+diff --git a/tests/qemu-iotests/039 b/tests/qemu-iotests/039
+index 8bade92..1e50651 100755
+--- a/tests/qemu-iotests/039
++++ b/tests/qemu-iotests/039
+@@ -46,6 +46,11 @@ _supported_proto generic
+ _supported_os Linux
+ _unsupported_qemu_io_options --nocache
+ 
++_no_dump_exec()
++{
++    (ulimit -c 0; exec "$@")
++}
++
+ size=128M
+ 
+ echo
+@@ -66,10 +71,7 @@ echo "== Creating a dirty image file =="
+ IMGOPTS="compat=1.1,lazy_refcounts=on"
+ _make_test_img $size
+ 
+-old_ulimit=$(ulimit -c)
+-ulimit -c 0 # do not produce a core dump on abort(3)
+-$QEMU_IO -c "write -P 0x5a 0 512" -c "abort" "$TEST_IMG" | _filter_qemu_io
+-ulimit -c "$old_ulimit"
++_no_dump_exec $QEMU_IO -c "write -P 0x5a 0 512" -c "abort" "$TEST_IMG" 2>&1 | _filter_qemu_io
+ 
+ # The dirty bit must be set
+ ./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
+@@ -102,10 +104,7 @@ echo "== Opening a dirty image read/write should repair it =="
+ IMGOPTS="compat=1.1,lazy_refcounts=on"
+ _make_test_img $size
+ 
+-old_ulimit=$(ulimit -c)
+-ulimit -c 0 # do not produce a core dump on abort(3)
+-$QEMU_IO -c "write -P 0x5a 0 512" -c "abort" "$TEST_IMG" | _filter_qemu_io
+-ulimit -c "$old_ulimit"
++_no_dump_exec $QEMU_IO -c "write -P 0x5a 0 512" -c "abort" "$TEST_IMG" 2>&1 | _filter_qemu_io
+ 
+ # The dirty bit must be set
+ ./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
+@@ -121,10 +120,7 @@ echo "== Creating an image file with lazy_refcounts=off =="
+ IMGOPTS="compat=1.1,lazy_refcounts=off"
+ _make_test_img $size
+ 
+-old_ulimit=$(ulimit -c)
+-ulimit -c 0 # do not produce a core dump on abort(3)
+-$QEMU_IO -c "write -P 0x5a 0 512" -c "abort" "$TEST_IMG" | _filter_qemu_io
+-ulimit -c "$old_ulimit"
++_no_dump_exec $QEMU_IO -c "write -P 0x5a 0 512" -c "abort" "$TEST_IMG" 2>&1 | _filter_qemu_io
+ 
+ # The dirty bit must not be set since lazy_refcounts=off
+ ./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
+diff --git a/tests/qemu-iotests/039.out b/tests/qemu-iotests/039.out
+index d25bf0b..af62da1 100644
+--- a/tests/qemu-iotests/039.out
++++ b/tests/qemu-iotests/039.out
+@@ -11,6 +11,7 @@ No errors were found on the image.
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=134217728 
+ wrote 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++./039: Aborted                 ( ulimit -c 0; exec "$@" )
+ incompatible_features     0x1
+ ERROR cluster 5 refcount=0 reference=1
+ ERROR OFLAG_COPIED data cluster: l2_entry=8000000000050000 refcount=0
+@@ -45,6 +46,7 @@ read 512/512 bytes at offset 0
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=134217728 
+ wrote 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++./039: Aborted                 ( ulimit -c 0; exec "$@" )
+ incompatible_features     0x1
+ ERROR cluster 5 refcount=0 reference=1
+ Rebuilding refcount structure
+@@ -58,6 +60,7 @@ incompatible_features     0x0
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=134217728 
+ wrote 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++./039: Aborted                 ( ulimit -c 0; exec "$@" )
+ incompatible_features     0x0
+ No errors were found on the image.
+ *** done
+diff --git a/tests/qemu-iotests/common.filter b/tests/qemu-iotests/common.filter
+index 9c82c77..dcd246d 100644
+--- a/tests/qemu-iotests/common.filter
++++ b/tests/qemu-iotests/common.filter
+@@ -150,6 +150,7 @@ _filter_win32()
+ _filter_qemu_io()
+ {
+     _filter_win32 | sed -e "s/[0-9]* ops\; [0-9/:. sec]* ([0-9/.inf]* [EPTGMKiBbytes]*\/sec and [0-9/.inf]* ops\/sec)/X ops\; XX:XX:XX.X (XXX YYY\/sec and XXX ops\/sec)/" \
++        -e "s/: line [0-9][0-9]*:  *[0-9][0-9]*\( Aborted\)/:\1/" \
+         -e "s/qemu-io> //g"
+ }
+ 
+-- 
+1.8.3.1
+

@@ -1,0 +1,137 @@
+From b2472117867fc233fcb634b7370051bcb7fc892c Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 25 Mar 2014 14:23:52 +0100
+Subject: [PATCH 45/49] qcow2: Check maximum L1 size in qcow2_snapshot_load_tmp() (CVE-2014-0143)
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1395753835-7591-46-git-send-email-kwolf@redhat.com>
+Patchwork-id: n/a
+O-Subject: [virt-devel] [EMBARGOED RHEL-7.0 qemu-kvm PATCH 45/48] qcow2: Check maximum L1 size in qcow2_snapshot_load_tmp() (CVE-2014-0143)
+Bugzilla: 1079320
+RH-Acked-by: Jeff Cody <jcody@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1079320
+Upstream status: Embargoed
+
+This avoids an unbounded allocation.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+
+RHEL 7.0 doesn't have commit 7b4c4781, so use error_report() instead of
+error_setg().
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block/qcow2-snapshot.c     |    4 ++++
+ block/qcow2.c              |    4 +---
+ block/qcow2.h              |    4 ++++
+ tests/qemu-iotests/080     |   15 ++++++++++++++-
+ tests/qemu-iotests/080.out |    7 +++++++
+ 5 files changed, 30 insertions(+), 4 deletions(-)
+
+diff --git a/block/qcow2-snapshot.c b/block/qcow2-snapshot.c
+index b29f7bd..626a8d4 100644
+--- a/block/qcow2-snapshot.c
++++ b/block/qcow2-snapshot.c
+@@ -635,6 +635,10 @@ int qcow2_snapshot_load_tmp(BlockDriverState *bs, const char *snapshot_name)
+     sn = &s->snapshots[snapshot_index];
+ 
+     /* Allocate and read in the snapshot's L1 table */
++    if (sn->l1_size > QCOW_MAX_L1_SIZE) {
++        error_report("Snapshot L1 table too large");
++        return -EFBIG;
++    }
+     new_l1_bytes = sn->l1_size * sizeof(uint64_t);
+     new_l1_table = g_malloc0(align_offset(new_l1_bytes, 512));
+ 
+diff --git a/block/qcow2.c b/block/qcow2.c
+index 33b46b8..3f8febc 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -637,9 +637,7 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
+     }
+ 
+     /* read the level 1 table */
+-    if (header.l1_size > 0x2000000) {
+-        /* 32 MB L1 table is enough for 2 PB images at 64k cluster size
+-         * (128 GB for 512 byte clusters, 2 EB for 2 MB clusters) */
++    if (header.l1_size > QCOW_MAX_L1_SIZE) {
+         error_setg(errp, "Active L1 table too large");
+         ret = -EFBIG;
+         goto fail;
+diff --git a/block/qcow2.h b/block/qcow2.h
+index 9f9f5ae..87e256a 100644
+--- a/block/qcow2.h
++++ b/block/qcow2.h
+@@ -44,6 +44,10 @@
+  * (128 GB for 512 byte clusters, 2 EB for 2 MB clusters) */
+ #define QCOW_MAX_REFTABLE_SIZE 0x800000
+ 
++/* 32 MB L1 table is enough for 2 PB images at 64k cluster size
++ * (128 GB for 512 byte clusters, 2 EB for 2 MB clusters) */
++#define QCOW_MAX_L1_SIZE 0x2000000
++
+ /* indicate that the refcount of the referenced cluster is exactly one. */
+ #define QCOW_OFLAG_COPIED     (1LL << 63)
+ /* indicate that the cluster is compressed (they never have the copied flag) */
+diff --git a/tests/qemu-iotests/080 b/tests/qemu-iotests/080
+index 59e7a44..6b3a3e7 100755
+--- a/tests/qemu-iotests/080
++++ b/tests/qemu-iotests/080
+@@ -30,7 +30,8 @@ status=1	# failure is the default!
+ 
+ _cleanup()
+ {
+-	_cleanup_test_img
++    rm -f $TEST_IMG.snap
++    _cleanup_test_img
+ }
+ trap "_cleanup; exit \$status" 0 1 2 3 15
+ 
+@@ -58,6 +59,10 @@ offset_ext_size=$((header_size + 4))
+ 
+ offset_l2_table_0=$((0x40000))
+ 
++offset_snap1=$((0x70000))
++offset_snap1_l1_offset=$((offset_snap1 + 0))
++offset_snap1_l1_size=$((offset_snap1 + 8))
++
+ echo
+ echo "== Huge header size =="
+ _make_test_img 64M
+@@ -161,6 +166,14 @@ poke_file "$TEST_IMG" "$offset_l2_table_0" "\xbf\xff\xff\xff\xff\xff\x00\x00"
+ poke_file "$TEST_IMG" "$offset_l2_table_0" "\x80\x00\x00\xff\xff\xff\x00\x00"
+ { $QEMU_IMG snapshot -c test $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
+ 
++echo
++echo "== Invalid snapshot L1 table =="
++_make_test_img 64M
++{ $QEMU_IO -c "write 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
++{ $QEMU_IMG snapshot -c test $TEST_IMG; } 2>&1 | _filter_testdir
++poke_file "$TEST_IMG" "$offset_snap1_l1_size" "\x10\x00\x00\x00"
++{ $QEMU_IMG convert -s test $TEST_IMG $TEST_IMG.snap; } 2>&1 | _filter_testdir
++
+ # success, all done
+ echo "*** done"
+ rm -f $seq.full
+diff --git a/tests/qemu-iotests/080.out b/tests/qemu-iotests/080.out
+index 4d84fbf..1fa0672 100644
+--- a/tests/qemu-iotests/080.out
++++ b/tests/qemu-iotests/080.out
+@@ -74,4 +74,11 @@ wrote 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ qemu-img: Could not create snapshot 'test': -27 (File too large)
+ qemu-img: Could not create snapshot 'test': -11 (Resource temporarily unavailable)
++
++== Invalid snapshot L1 table ==
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++wrote 512/512 bytes at offset 0
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++qemu-img: Snapshot L1 table too large
++qemu-img: Failed to load snapshot
+ *** done
+-- 
+1.7.1
+

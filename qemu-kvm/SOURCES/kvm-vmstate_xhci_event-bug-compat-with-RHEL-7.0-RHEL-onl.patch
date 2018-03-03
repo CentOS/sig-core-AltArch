@@ -1,0 +1,143 @@
+From 713d4d69d84774949c7306289724c2463dbeab1d Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Mon, 1 Sep 2014 13:36:53 +0200
+Subject: [PATCH 06/12] vmstate_xhci_event: bug compat with RHEL-7.0 (RHEL only)
+
+Message-id: <1409578613-11909-3-git-send-email-lersek@redhat.com>
+Patchwork-id: 60782
+O-Subject: [PATCH RHEL-7.0.z/RHEL-7.1.0 qemu-kvm 2/2] vmstate_xhci_event: bug compat with RHEL-7.0 (RHEL only)
+Bugzilla: 1122147
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+The "vmstate_xhci_event.fields" member is a pointer to an array of
+VMStateField elements. The unnamed array (of static storage duration)
+comes from a compound literal. The previous patch fixed the undefined
+behavior by adding a terminator element to this array, but in RHEL-7 we
+also need to look into the practical details of that undefined behavior.
+
+In debug builds (./configure --enable-debug), the compiler places the
+"vmstate_xhci_intr.fields" member's unnamed initializer array right after
+the "vmstate_xhci_event.fields" member's. This leads to infinite recursion
+(see the previous patch for details), but in RHEL-7 we don't ship debug
+builds.
+
+In a normal (optimized, official) build, the layout changes. The
+"vmstate_xhci_event.fields" member's unterminated initializer array is
+followed by the one of the "vmstate_xhci_slot.fields" member:
+
+  (gdb) print (intptr_t)&vmstate_xhci_event.fields[7] - \
+              (intptr_t)&vmstate_xhci_slot.fields[0]
+  $3 = 0
+
+where "vmstate_xhci_slot.fields" is initialized from
+
+    .fields = (VMStateField[]) {
+        VMSTATE_BOOL(enabled,   XHCISlot),
+        VMSTATE_BOOL(addressed, XHCISlot),
+        VMSTATE_END_OF_LIST()
+    }
+
+The elements of this array are (only relevant members quoted):
+
+  (gdb) print vmstate_xhci_slot.fields[0].offset
+  $16 = 0
+  (gdb) print vmstate_xhci_slot.fields[0].size
+  $17 = 1
+  (gdb) print vmstate_xhci_slot.fields[1].offset
+  $18 = 1
+  (gdb) print vmstate_xhci_slot.fields[1].size
+  $19 = 1
+
+This means that the wire format for "vmstate_xhci_event" will include the
+byte at offset 0 and the byte at offset 1 from XHCIEvent, corresponding to
+part of the "XHCIEvent.type" member:
+
+  (gdb) print vmstate_xhci_event.fields[0].name
+  $23 = 0x5555558b12e7 "type"
+  (gdb) print vmstate_xhci_event.fields[0].offset
+  $24 = 0
+  (gdb) print vmstate_xhci_event.fields[0].size
+  $25 = 4
+
+In order to accommodate these bogus bytes, coming from an unpatched source
+side, we introduce two dummy XHCIEvent fields; otherwise the patched
+destination would reject the migration stream.
+
+For the reverse direction, we explicitly set the dummy bytes to the values
+that they used to take in an unpatched source, so that when the unpatched
+destination deserializes them into part of "XHCIEvent.type", said victim
+member still receives a correct value.
+
+The dummy fields have type uint8_t, not bool. The reason is that
+assignment to bool (in xhci_event_pre_save()) would entail conversion to
+bool, hence result in values 0 or 1. (See _Bool conversion rules and
+<stdbool.h>.)
+
+RHEL-only because we control the compiler version and the build flags only
+in RHEL.
+
+This is for CVE-2014-5263.
+
+Suggested-by: Amit Shah <amit.shah@redhat.com>
+Suggested-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Suggested-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/hcd-xhci.c |   27 ++++++++++++++++++++-------
+ 1 files changed, 20 insertions(+), 7 deletions(-)
+
+diff --git a/hw/usb/hcd-xhci.c b/hw/usb/hcd-xhci.c
+index 0ef2bc4..2c9e36a 100644
+--- a/hw/usb/hcd-xhci.c
++++ b/hw/usb/hcd-xhci.c
+@@ -420,6 +420,8 @@ typedef struct XHCIEvent {
+     uint32_t flags;
+     uint8_t slotid;
+     uint8_t epid;
++    uint8_t cve_2014_5263_a;
++    uint8_t cve_2014_5263_b;
+ } XHCIEvent;
+ 
+ typedef struct XHCIInterrupter {
+@@ -3515,17 +3517,28 @@ static const VMStateDescription vmstate_xhci_slot = {
+     }
+ };
+ 
++static void xhci_event_pre_save(void *opaque)
++{
++    XHCIEvent *s = opaque;
++
++    s->cve_2014_5263_a = ((uint8_t *)&s->type)[0];
++    s->cve_2014_5263_b = ((uint8_t *)&s->type)[1];
++}
++
+ static const VMStateDescription vmstate_xhci_event = {
+     .name = "xhci-event",
+     .version_id = 1,
++    .pre_save = xhci_event_pre_save,
+     .fields = (VMStateField[]) {
+-        VMSTATE_UINT32(type,   XHCIEvent),
+-        VMSTATE_UINT32(ccode,  XHCIEvent),
+-        VMSTATE_UINT64(ptr,    XHCIEvent),
+-        VMSTATE_UINT32(length, XHCIEvent),
+-        VMSTATE_UINT32(flags,  XHCIEvent),
+-        VMSTATE_UINT8(slotid,  XHCIEvent),
+-        VMSTATE_UINT8(epid,    XHCIEvent),
++        VMSTATE_UINT32(type,           XHCIEvent),
++        VMSTATE_UINT32(ccode,          XHCIEvent),
++        VMSTATE_UINT64(ptr,            XHCIEvent),
++        VMSTATE_UINT32(length,         XHCIEvent),
++        VMSTATE_UINT32(flags,          XHCIEvent),
++        VMSTATE_UINT8(slotid,          XHCIEvent),
++        VMSTATE_UINT8(epid,            XHCIEvent),
++        VMSTATE_UINT8(cve_2014_5263_a, XHCIEvent),
++        VMSTATE_UINT8(cve_2014_5263_b, XHCIEvent),
+         VMSTATE_END_OF_LIST()
+     }
+ };
+-- 
+1.7.1
+

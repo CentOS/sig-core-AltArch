@@ -1,0 +1,73 @@
+From 370fe54037a8d715db78f35d1853dbecdbcef3a0 Mon Sep 17 00:00:00 2001
+From: Juan Quintela <quintela@redhat.com>
+Date: Tue, 14 Jan 2014 15:07:21 +0100
+Subject: [PATCH 10/40] memory: set single dirty flags when possible
+
+RH-Author: Juan Quintela <quintela@redhat.com>
+Message-id: <1389712071-23303-11-git-send-email-quintela@redhat.com>
+Patchwork-id: 56661
+O-Subject: [RHEL7 qemu-kvm PATCH 10/40] memory: set single dirty flags when possible
+Bugzilla: 997559
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Orit Wasserman <owasserm@redhat.com>
+(cherry picked from commit 63995cebfaa283586682ea6236c9686b2a49ece7)
+Signed-off-by: Juan Quintela <quintela@trasno.org>
+---
+ exec.c                         | 7 ++++---
+ include/exec/memory-internal.h | 4 +++-
+ 2 files changed, 7 insertions(+), 4 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ exec.c                         |    7 ++++---
+ include/exec/memory-internal.h |    4 +++-
+ 2 files changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/exec.c b/exec.c
+index ea81329..178ed4a 100644
+--- a/exec.c
++++ b/exec.c
+@@ -1919,7 +1919,8 @@ static void invalidate_and_set_dirty(hwaddr addr,
+         /* invalidate code */
+         tb_invalidate_phys_page_range(addr, addr + length, 0);
+         /* set dirty bit */
+-        cpu_physical_memory_set_dirty_flags(addr, (0xff & ~CODE_DIRTY_FLAG));
++        cpu_physical_memory_set_dirty_flag(addr, VGA_DIRTY_FLAG);
++        cpu_physical_memory_set_dirty_flag(addr, MIGRATION_DIRTY_FLAG);
+     }
+     xen_modified_memory(addr, length);
+ }
+@@ -2434,8 +2435,8 @@ void stl_phys_notdirty(hwaddr addr, uint32_t val)
+                 /* invalidate code */
+                 tb_invalidate_phys_page_range(addr1, addr1 + 4, 0);
+                 /* set dirty bit */
+-                cpu_physical_memory_set_dirty_flags(
+-                    addr1, (0xff & ~CODE_DIRTY_FLAG));
++                cpu_physical_memory_set_dirty_flag(addr1, MIGRATION_DIRTY_FLAG);
++                cpu_physical_memory_set_dirty_flag(addr1, VGA_DIRTY_FLAG);
+             }
+         }
+     }
+diff --git a/include/exec/memory-internal.h b/include/exec/memory-internal.h
+index 571a5ef..55b4022 100644
+--- a/include/exec/memory-internal.h
++++ b/include/exec/memory-internal.h
+@@ -98,7 +98,9 @@ static inline void cpu_physical_memory_set_dirty_flag(ram_addr_t addr,
+ 
+ static inline void cpu_physical_memory_set_dirty(ram_addr_t addr)
+ {
+-    cpu_physical_memory_set_dirty_flags(addr, 0xff);
++    cpu_physical_memory_set_dirty_flag(addr, MIGRATION_DIRTY_FLAG);
++    cpu_physical_memory_set_dirty_flag(addr, VGA_DIRTY_FLAG);
++    cpu_physical_memory_set_dirty_flag(addr, CODE_DIRTY_FLAG);
+ }
+ 
+ static inline int cpu_physical_memory_clear_dirty_flags(ram_addr_t addr,
+-- 
+1.7.1
+

@@ -1,0 +1,105 @@
+From 2a3a2063076b590d9ef81a7d7cdc71520647734b Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Tue, 9 Sep 2014 16:04:57 +0200
+Subject: [PATCH 07/12] pflash_cfi01: write flash contents to bdrv on incoming migration
+
+Message-id: <1410278697-29800-2-git-send-email-lersek@redhat.com>
+Patchwork-id: 60923
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 1/1] pflash_cfi01: write flash contents to bdrv on incoming migration
+Bugzilla: 1139702
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+A drive that backs a pflash device is special:
+- it is very small,
+- its entire contents are kept in a RAMBlock at all times, covering the
+  guest-phys address range that provides the guest's view of the emulated
+  flash chip.
+
+The pflash device model keeps the drive (the host-side file) and the
+guest-visible flash contents in sync. When migrating the guest, the
+guest-visible flash contents (the RAMBlock) is migrated by default, but on
+the target host, the drive (the host-side file) remains in full sync with
+the RAMBlock only if:
+- the source and target hosts share the storage underlying the pflash
+  drive,
+- or the migration requests full or incremental block migration too, which
+  then covers all drives.
+
+Due to the special nature of pflash drives, the following scenario makes
+sense as well:
+- no full nor incremental block migration, covering all drives, alongside
+  the base migration (justified eg. by shared storage for "normal" (big)
+  drives),
+- non-shared storage for pflash drives.
+
+In this case, currently only those portions of the flash drive are updated
+on the target disk that the guest reprograms while running on the target
+host.
+
+In order to restore accord, dump the entire flash contents to the bdrv in
+a post_load() callback.
+
+- The read-only check follows the other call-sites of pflash_update();
+- both "pfl->ro" and pflash_update() reflect / consider the case when
+  "pfl->bs" is NULL;
+- the total size of the flash device is calculated as in
+  pflash_cfi01_realize().
+
+When using shared storage, or requesting full or incremental block
+migration along with the normal migration, the patch should incur a
+harmless rewrite from the target side.
+
+It is assumed that, on the target host, RAM is loaded ahead of the call to
+pflash_post_load().
+
+Suggested-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 4c0cfc72b31a79f737a64ebbe0411e4b83e25771)
+---
+ hw/block/pflash_cfi01.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/block/pflash_cfi01.c |   14 ++++++++++++++
+ 1 files changed, 14 insertions(+), 0 deletions(-)
+
+diff --git a/hw/block/pflash_cfi01.c b/hw/block/pflash_cfi01.c
+index 18eb0bc..e8b47fb 100644
+--- a/hw/block/pflash_cfi01.c
++++ b/hw/block/pflash_cfi01.c
+@@ -85,10 +85,13 @@ struct pflash_t {
+     void *storage;
+ };
+ 
++static int pflash_post_load(void *opaque, int version_id);
++
+ static const VMStateDescription vmstate_pflash = {
+     .name = "pflash_cfi01",
+     .version_id = 1,
+     .minimum_version_id = 1,
++    .post_load = pflash_post_load,
+     .fields = (VMStateField[]) {
+         VMSTATE_UINT8(wcycle, pflash_t),
+         VMSTATE_UINT8(cmd, pflash_t),
+@@ -768,3 +771,14 @@ MemoryRegion *pflash_cfi01_get_memory(pflash_t *fl)
+ {
+     return &fl->mem;
+ }
++
++static int pflash_post_load(void *opaque, int version_id)
++{
++    pflash_t *pfl = opaque;
++
++    if (!pfl->ro) {
++        DPRINTF("%s: updating bdrv for %s\n", __func__, pfl->name);
++        pflash_update(pfl, 0, pfl->sector_len * pfl->nb_blocs);
++    }
++    return 0;
++}
+-- 
+1.7.1
+

@@ -1,0 +1,77 @@
+From cda3f47a339a8836037c0c88cd3cb4ac7c299211 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 9 Sep 2013 14:27:54 +0200
+Subject: [PATCH 03/38] block: package committing code in qmp_transaction()
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1378736903-18489-4-git-send-email-kwolf@redhat.com>
+Patchwork-id: 54190
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 03/32] block: package committing code in qmp_transaction()
+Bugzilla: 1005818
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Wenchao Xia <xiawenc@linux.vnet.ibm.com>
+
+Bugzilla: 1005818
+
+The code is simply moved into a separate function.
+
+Signed-off-by: Wenchao Xia <xiawenc@linux.vnet.ibm.com>
+Reviewed-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 3b0047e86a1c215d830b1ae1da0778db4636b83a)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ blockdev.c | 19 ++++++++++++-------
+ 1 file changed, 12 insertions(+), 7 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev.c |   19 ++++++++++++-------
+ 1 files changed, 12 insertions(+), 7 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index 9eab803..eabb3f8 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -871,6 +871,17 @@ static void external_snapshot_prepare(BlockdevAction *action,
+     }
+ }
+ 
++static void external_snapshot_commit(BlkTransactionStates *states)
++{
++    /* This removes our old bs from the bdrv_states, and adds the new bs */
++    bdrv_append(states->new_bs, states->old_bs);
++    /* We don't need (or want) to use the transactional
++     * bdrv_reopen_multiple() across all the entries at once, because we
++     * don't want to abort all of them if one of them fails the reopen */
++    bdrv_reopen(states->new_bs, states->new_bs->open_flags & ~BDRV_O_RDWR,
++                NULL);
++}
++
+ /*
+  * 'Atomic' group snapshots.  The snapshots are taken as a set, and if any fail
+  *  then we do not pivot any of the devices in the group, and abandon the
+@@ -916,13 +927,7 @@ void qmp_transaction(BlockdevActionList *dev_list, Error **errp)
+     /* Now we are going to do the actual pivot.  Everything up to this point
+      * is reversible, but we are committed at this point */
+     QSIMPLEQ_FOREACH(states, &snap_bdrv_states, entry) {
+-        /* This removes our old bs from the bdrv_states, and adds the new bs */
+-        bdrv_append(states->new_bs, states->old_bs);
+-        /* We don't need (or want) to use the transactional
+-         * bdrv_reopen_multiple() across all the entries at once, because we
+-         * don't want to abort all of them if one of them fails the reopen */
+-        bdrv_reopen(states->new_bs, states->new_bs->open_flags & ~BDRV_O_RDWR,
+-                    NULL);
++        external_snapshot_commit(states);
+     }
+ 
+     /* success */
+-- 
+1.7.1
+

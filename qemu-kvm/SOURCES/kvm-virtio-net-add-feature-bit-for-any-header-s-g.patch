@@ -1,0 +1,128 @@
+From 01ebac2f7d54e80a690c855680d35574d118b072 Mon Sep 17 00:00:00 2001
+From: Michael S. Tsirkin <mst@redhat.com>
+Date: Wed, 12 Mar 2014 06:52:43 +0100
+Subject: [PATCH 06/16] virtio-net: add feature bit for any header s/g
+
+Message-id: <1394169006-8402-1-git-send-email-mst@redhat.com>
+Patchwork-id: 58046
+O-Subject: [PATCH qemu-kvm RHEL7.0] virtio-net: add feature bit for any header s/g
+Bugzilla: 990989
+RH-Acked-by: Xiao Wang <jasowang@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Old qemu versions required that 1st s/g entry is the header.
+
+Since QEMU 1.5, patchset titled "virtio-net: iovec handling cleanup"
+removed this limitation but a feature bit is needed so guests know it's
+safe to lay out header differently.
+
+This patch applies on top and adds such a feature bit to QEMU.
+It is set by default for virtio-net.
+virtio net header inline with the data is beneficial
+for latency and small packet bandwidth - guest driver
+code utilizing this feature has been acked but missed 3.11
+by a narrow margin, it's pending for 3.12.
+
+This feature bit is cleared by default when compatibility with old
+machine types is requested.
+
+Other performance-sensitive devices (blk and scsi)
+don't yet support arbitrary s/g layouts, so
+we only set this bit for virtio-net for now.
+There are plans to allow arbitrary layouts there, but
+no code has been posted yet.
+
+Cc: Rusty Russell <rusty@rustcorp.com.au>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 488f069bd1f3aeb6ee748acb02b7581831bcb3f8)
+
+Brew build: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7155286
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=990989
+Tested: on developer's box
+
+Conflicts:
+	include/hw/i386/pc.h
+---
+
+Oops, the patch got lost somehow.
+I was sure our last rebase included it but no ...
+Pls review ASAP and we'll discuss setting blocker for this one
+separately.
+
+Impossible to fix in zstream since it would affect
+migration.
+
+ include/hw/i386/pc.h           | 4 ++++
+ include/hw/virtio/virtio-net.h | 1 +
+ include/hw/virtio/virtio.h     | 2 ++
+ hw/i386/pc_piix.c              | 4 ++++
+ 4 files changed, 11 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/pc_piix.c              |    4 ++++
+ include/hw/i386/pc.h           |    4 ++++
+ include/hw/virtio/virtio-net.h |    1 +
+ include/hw/virtio/virtio.h     |    2 ++
+ 4 files changed, 11 insertions(+), 0 deletions(-)
+
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index 697f12f..98a5253 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -904,6 +904,10 @@ static QEMUMachine pc_machine_rhel700 = {
+         .driver   = TYPE_USB_DEVICE,\
+         .property = "msos-desc",\
+         .value    = "no",\
++    },{\
++        .driver   = "virtio-net-pci",\
++        .property = "any_layout",\
++        .value    = "off",\
+     }
+ 
+ static void pc_compat_rhel650(QEMUMachineInitArgs *args)
+diff --git a/include/hw/i386/pc.h b/include/hw/i386/pc.h
+index f56e9ea..8a69347 100644
+--- a/include/hw/i386/pc.h
++++ b/include/hw/i386/pc.h
+@@ -274,6 +274,10 @@ int e820_add_entry(uint64_t, uint64_t, uint32_t);
+             .driver = TYPE_X86_CPU,\
+             .property = "pmu",\
+             .value = "on",\
++        },{\
++            .driver   = "virtio-net-pci",\
++            .property = "any_layout",\
++            .value    = "off",\
+         }
+ 
+ #define PC_COMPAT_1_4 \
+diff --git a/include/hw/virtio/virtio-net.h b/include/hw/virtio/virtio-net.h
+index beeead7..75723a8 100644
+--- a/include/hw/virtio/virtio-net.h
++++ b/include/hw/virtio/virtio-net.h
+@@ -231,6 +231,7 @@ struct virtio_net_ctrl_mq {
+ 
+ #define DEFINE_VIRTIO_NET_FEATURES(_state, _field) \
+         DEFINE_VIRTIO_COMMON_FEATURES(_state, _field), \
++        DEFINE_PROP_BIT("any_layout", _state, _field, VIRTIO_F_ANY_LAYOUT, true), \
+         DEFINE_PROP_BIT("csum", _state, _field, VIRTIO_NET_F_CSUM, true), \
+         DEFINE_PROP_BIT("guest_csum", _state, _field, VIRTIO_NET_F_GUEST_CSUM, true), \
+         DEFINE_PROP_BIT("gso", _state, _field, VIRTIO_NET_F_GSO, true), \
+diff --git a/include/hw/virtio/virtio.h b/include/hw/virtio/virtio.h
+index cd886c3..9e22865 100644
+--- a/include/hw/virtio/virtio.h
++++ b/include/hw/virtio/virtio.h
+@@ -43,6 +43,8 @@
+ /* We notify when the ring is completely used, even if the guest is suppressing
+  * callbacks */
+ #define VIRTIO_F_NOTIFY_ON_EMPTY        24
++/* Can the device handle any descriptor layout? */
++#define VIRTIO_F_ANY_LAYOUT             27
+ /* We support indirect buffer descriptors */
+ #define VIRTIO_RING_F_INDIRECT_DESC     28
+ /* The Guest publishes the used index for which it expects an interrupt
+-- 
+1.7.1
+

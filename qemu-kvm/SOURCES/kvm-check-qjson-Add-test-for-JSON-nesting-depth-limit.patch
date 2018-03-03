@@ -1,0 +1,73 @@
+From 38d4fe12ad2e3bc18842201f437c480120eace2b Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 27 Jul 2016 07:35:02 +0200
+Subject: [PATCH 04/16] check-qjson: Add test for JSON nesting depth limit
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1469604913-12442-6-git-send-email-armbru@redhat.com>
+Patchwork-id: 71481
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 04/15] check-qjson: Add test for JSON nesting depth limit
+Bugzilla: 1276036
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+This would have prevented the regression mentioned in the previous
+commit.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Message-Id: <1448486613-17634-4-git-send-email-armbru@redhat.com>
+(cherry picked from commit f0ae0304c7a41a42b7d4a6cde450da938d3c2cc7)
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/check-qjson.c | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/tests/check-qjson.c b/tests/check-qjson.c
+index 4e74548..c5dd74d 100644
+--- a/tests/check-qjson.c
++++ b/tests/check-qjson.c
+@@ -1465,6 +1465,30 @@ static void unterminated_literal(void)
+     g_assert(obj == NULL);
+ }
+ 
++static char *make_nest(char *buf, size_t cnt)
++{
++    memset(buf, '[', cnt - 1);
++    buf[cnt - 1] = '{';
++    buf[cnt] = '}';
++    memset(buf + cnt + 1, ']', cnt - 1);
++    buf[2 * cnt] = 0;
++    return buf;
++}
++
++static void limits_nesting(void)
++{
++    enum { max_nesting = 1024 }; /* see qobject/json-streamer.c */
++    char buf[2 * (max_nesting + 1) + 1];
++    QObject *obj;
++
++    obj = qobject_from_json(make_nest(buf, max_nesting));
++    g_assert(obj != NULL);
++    qobject_decref(obj);
++
++    obj = qobject_from_json(make_nest(buf, max_nesting + 1));
++    g_assert(obj == NULL);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+@@ -1500,6 +1524,7 @@ int main(int argc, char **argv)
+     g_test_add_func("/errors/invalid_array_comma", invalid_array_comma);
+     g_test_add_func("/errors/invalid_dict_comma", invalid_dict_comma);
+     g_test_add_func("/errors/unterminated/literal", unterminated_literal);
++    g_test_add_func("/errors/limits/nesting", limits_nesting);
+ 
+     return g_test_run();
+ }
+-- 
+1.8.3.1
+

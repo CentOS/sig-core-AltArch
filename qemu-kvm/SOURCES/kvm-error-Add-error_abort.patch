@@ -1,0 +1,123 @@
+From 2112c4a8297592045ac8ed8b0677e81208296364 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Thu, 23 Oct 2014 10:10:05 +0200
+Subject: [PATCH 02/19] error: Add error_abort
+
+Message-id: <1414059011-15516-3-git-send-email-kwolf@redhat.com>
+Patchwork-id: 61836
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v2 2/8] error: Add error_abort
+Bugzilla: 1088176
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Peter Crosthwaite <peter.crosthwaite@xilinx.com>
+
+Add a special Error * that can be passed to error handling APIs to
+signal that any errors are fatal and should abort QEMU. There are two
+advantages to this:
+
+- allows for brevity when wishing to assert success of Error **
+  accepting APIs. No need for this pattern:
+        Error * local_err = NULL;
+        api_call(foo, bar, &local_err);
+        assert_no_error(local_err);
+  This also removes the need for _nofail variants of APIs with
+  asserting call sites now reduced to 1LOC.
+- SIGABRT happens from within the offending API. When a fatal error
+  occurs in an API call (when the caller is asserting sucess) failure
+  often means the API itself is broken. With the abort happening in the
+  API call now, the stack frames into the call are available at debug
+  time. In the assert_no_error scheme the abort happens after the fact.
+
+The exact semantic is that when an error is raised, if the argument
+Error ** matches &error_abort, then the abort occurs immediately. The
+error messaged is reported.
+
+For error_propagate, if the destination error is &error_abort, then
+the abort happens at propagation time.
+
+Signed-off-by: Peter Crosthwaite <peter.crosthwaite@xilinx.com>
+Reviewed-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit 5d24ee70bcbcf578614193526bcd5ed30a8eb16c)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	util/error.c
+
+Conflicts because RHEL 7 doesn't have error_set_win32().
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ include/qapi/error.h |  6 ++++++
+ util/error.c         | 17 ++++++++++++++++-
+ 2 files changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/include/qapi/error.h b/include/qapi/error.h
+index ffd1cea..fc7f44a 100644
+--- a/include/qapi/error.h
++++ b/include/qapi/error.h
+@@ -82,4 +82,10 @@ void error_propagate(Error **dst_err, Error *local_err);
+  */
+ void error_free(Error *err);
+ 
++/**
++ * If passed to error_set and friends, abort().
++ */
++
++extern Error *error_abort;
++
+ #endif
+diff --git a/util/error.c b/util/error.c
+index 53b0435..82658bb 100644
+--- a/util/error.c
++++ b/util/error.c
+@@ -23,6 +23,8 @@ struct Error
+     ErrorClass err_class;
+ };
+ 
++Error *error_abort;
++
+ void error_set(Error **errp, ErrorClass err_class, const char *fmt, ...)
+ {
+     Error *err;
+@@ -40,6 +42,11 @@ void error_set(Error **errp, ErrorClass err_class, const char *fmt, ...)
+     va_end(ap);
+     err->err_class = err_class;
+ 
++    if (errp == &error_abort) {
++        error_report("%s", error_get_pretty(err));
++        abort();
++    }
++
+     *errp = err;
+ }
+ 
+@@ -68,6 +75,11 @@ void error_set_errno(Error **errp, int os_errno, ErrorClass err_class,
+     va_end(ap);
+     err->err_class = err_class;
+ 
++    if (errp == &error_abort) {
++        error_report("%s", error_get_pretty(err));
++        abort();
++    }
++
+     *errp = err;
+ }
+ 
+@@ -112,7 +124,10 @@ void error_free(Error *err)
+ 
+ void error_propagate(Error **dst_err, Error *local_err)
+ {
+-    if (dst_err && !*dst_err) {
++    if (local_err && dst_err == &error_abort) {
++        error_report("%s", error_get_pretty(local_err));
++        abort();
++    } else if (dst_err && !*dst_err) {
+         *dst_err = local_err;
+     } else if (local_err) {
+         error_free(local_err);
+-- 
+1.8.3.1
+

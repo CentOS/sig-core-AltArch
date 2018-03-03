@@ -1,0 +1,155 @@
+From 339b5cbcea1d459d2a0fc4d289e17fc71622be23 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Tue, 4 Mar 2014 19:38:27 +0100
+Subject: [PATCH 6/6] block: Set block filename sizes to PATH_MAX instead of 1024
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <cd1c834d5d15020c9521e95aa24d7db675dc12e2.1393961758.git.jcody@redhat.com>
+Patchwork-id: 58013
+O-Subject: [RHEL7 qemu-kvm PATCH] block: Set block filename sizes to PATH_MAX instead of 1024
+Bugzilla: 1072339
+RH-Acked-by: Eric Blake <eblake@redhat.com>
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+This is an interim fix for a regression introduced by:
+
+    commit dc5a137125d6ac641c566f10e68bf6e1fe31bcb5
+    qemu-img: make "info" backing file output correct and easier to use
+
+In that commit, bdrv_get_full_backing_filename() was introduced,
+which replaced calling path_combine() manually.  The difference
+is that rather than using the filename string as passed to
+bdrv_open(), it uses the filename string attached to the BDS.
+
+Both the backing_file and filename strings in the BDS are limited to
+1024 characters.  The backing_file string built up in bdrv_open(),
+however, has a limit of PATH_MAX, which is 4096 under Linux.
+
+This difference comes into play when using an image chain that has
+a medium-to-large number of images, all of which have relative-pathed
+backing file references to the parent directory.
+
+For instance, consider the following backing chain:
+
+tstA
+├── base.qcow2
+├── sn1.qcow2   (backing file ../tstA/base.qcow2)
+├── sn2.qcow2   (backing file ../tstA/sn1.qcow2)
+└── sn3.qcow2   (backing file ../tstA/sn2.qcow2)
+
+The backing filename string is built up with the relative paths intact,
+like so:
+
+    base.qcow2:  ../tstA../tstA../tstA/base.qcow2
+
+The backing filename is then passed into the bdrv_open() call to open
+the backing file.
+
+When using lv volume names, the snapshot and pathname ends up longer,
+and after ~23 snapshots we have hit or exceeded the 1024 byte limit
+for the BDS filename.
+
+This fix is different then the approach for RHEL6.6/6.5.z, because in
+those it was trivial to modify bdrv_get_full_backing_filename().  In
+RHEL7, there are places that use bdrv_get_backing_filename(), which
+call bdrv_get_full_backing_filename(), yet do not have access to a
+filename string that does not originate from the BDS.  The simplest
+approach, that should yield identical results, is to set all of the
+filename and backing_file string sizes to PATH_MAX instead of 1024.
+
+This is not a long-term solution, because a character limit of 4096
+bytes will be hit with additional images.  The proper long-term
+solution should happen upstream first, and consist of:
+
+1) dynamically allocated filename strings in the BDS
+2) flattening redundant relative pathname strings
+
+This is a bug that was reported in RHEL6, that also occurs in RHEL7.  To
+prevent a regression in RHEL7.0, this temporary solution will prevent
+the regression, while not eliminating the ultimate problem.
+
+Since this is not the final solution, and the fix really is relevant
+just to undo a regression, the fix is downstream only.  It will be
+replaced by the final upstream fix, once complete.
+
+BZ 1072339
+RHEL Brew: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7140291
+RHEV Brew: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7140320
+---
+ block/mirror.c            | 2 +-
+ block/qapi.c              | 2 +-
+ block/stream.c            | 2 +-
+ include/block/block_int.h | 6 +++---
+ 4 files changed, 6 insertions(+), 6 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/mirror.c            |    2 +-
+ block/qapi.c              |    2 +-
+ block/stream.c            |    2 +-
+ include/block/block_int.h |    6 +++---
+ 4 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/block/mirror.c b/block/mirror.c
+index ba1428b..47e14cd 100644
+--- a/block/mirror.c
++++ b/block/mirror.c
+@@ -297,7 +297,7 @@ static void coroutine_fn mirror_run(void *opaque)
+     int64_t sector_num, end, sectors_per_chunk, length;
+     uint64_t last_pause_ns;
+     BlockDriverInfo bdi;
+-    char backing_filename[1024];
++    char backing_filename[PATH_MAX];
+     int ret = 0;
+     int n;
+ 
+diff --git a/block/qapi.c b/block/qapi.c
+index 77e1719..2d4bdcd 100644
+--- a/block/qapi.c
++++ b/block/qapi.c
+@@ -112,7 +112,7 @@ void bdrv_query_image_info(BlockDriverState *bs,
+ {
+     uint64_t total_sectors;
+     const char *backing_filename;
+-    char backing_filename2[1024];
++    char backing_filename2[PATH_MAX];
+     BlockDriverInfo bdi;
+     int ret;
+     Error *err = NULL;
+diff --git a/block/stream.c b/block/stream.c
+index 3a7d8f3..2a6f533 100644
+--- a/block/stream.c
++++ b/block/stream.c
+@@ -32,7 +32,7 @@ typedef struct StreamBlockJob {
+     RateLimit limit;
+     BlockDriverState *base;
+     BlockdevOnError on_error;
+-    char backing_file_id[1024];
++    char backing_file_id[PATH_MAX];
+ } StreamBlockJob;
+ 
+ static int coroutine_fn stream_populate(BlockDriverState *bs,
+diff --git a/include/block/block_int.h b/include/block/block_int.h
+index 2ec4bb2..53fc98c 100644
+--- a/include/block/block_int.h
++++ b/include/block/block_int.h
+@@ -269,9 +269,9 @@ struct BlockDriverState {
+     const BlockDevOps *dev_ops;
+     void *dev_opaque;
+ 
+-    char filename[1024];
+-    char backing_file[1024]; /* if non zero, the image is a diff of
+-                                this file image */
++    char filename[PATH_MAX];
++    char backing_file[PATH_MAX]; /* if non zero, the image is a diff of
++                                    this file image */
+     char backing_format[16]; /* if non-zero and backing_file exists */
+     int is_temporary;
+ 
+-- 
+1.7.1
+

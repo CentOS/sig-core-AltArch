@@ -1,0 +1,140 @@
+From 1cf1fcaf322e07354e830f2562db856ecbb1bf4c Mon Sep 17 00:00:00 2001
+Message-Id: <1cf1fcaf322e07354e830f2562db856ecbb1bf4c.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:17:45 +0100
+Subject: [PATCH 22/56] pc: fix regression for 64 bit PCI memory
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-23-git-send-email-mst@redhat.com>
+Patchwork-id: 56328
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 22/57] pc: fix regression for 64 bit PCI memory
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+commit 398489018183d613306ab022653552247d93919f
+    pc: limit 64 bit hole to 2G by default
+introduced a way for management to control
+the window allocated to the 64 bit PCI hole.
+
+This is useful, but existing management tools do not know how to set
+this property.  As a result, e.g. specifying a large ivshmem device with
+size > 4G is broken by default.  For example this configuration no
+longer works:
+
+-device ivshmem,size=4294967296,chardev=cfoo
+-chardev socket,path=/tmp/sock,id=cfoo,server,nowait
+
+Fix this by detecting that hole size was not specified
+and defaulting to the backwards-compatible value of 1 << 62.
+
+Cc: qemu-stable@nongnu.org
+Cc: Igor Mammedov <imammedo@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 1466cef32dd5e7ef3c6477e96d85d92302ad02e3)
+
+Conflicts:
+	hw/pci-host/piix.c
+	hw/pci-host/q35.c
+---
+ include/hw/i386/pc.h | 11 ++++++++++-
+ hw/pci-host/piix.c   |  9 ++++++---
+ hw/pci-host/q35.c    |  8 +++++---
+ 3 files changed, 21 insertions(+), 7 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/pci-host/piix.c   |  9 ++++++---
+ hw/pci-host/q35.c    |  8 +++++---
+ include/hw/i386/pc.h | 11 ++++++++++-
+ 3 files changed, 21 insertions(+), 7 deletions(-)
+
+diff --git a/hw/pci-host/piix.c b/hw/pci-host/piix.c
+index 0c26835..6502d1c 100644
+--- a/hw/pci-host/piix.c
++++ b/hw/pci-host/piix.c
+@@ -319,6 +319,7 @@ PCIBus *i440fx_init(PCII440FXState **pi440fx_state,
+     PCII440FXState *f;
+     unsigned i;
+     I440FXState *i440fx;
++    uint64_t pci_hole64_size;
+ 
+     dev = qdev_create(NULL, TYPE_I440FX_PCI_HOST_BRIDGE);
+     s = PCI_HOST_BRIDGE(dev);
+@@ -350,13 +351,15 @@ PCIBus *i440fx_init(PCII440FXState **pi440fx_state,
+                              pci_hole_start, pci_hole_size);
+     memory_region_add_subregion(f->system_memory, pci_hole_start, &f->pci_hole);
+ 
++    pci_hole64_size = pci_host_get_hole64_size(i440fx->pci_hole64_size);
++
+     pc_init_pci64_hole(&i440fx->pci_info, 0x100000000ULL + above_4g_mem_size,
+-                       i440fx->pci_hole64_size);
++                       pci_hole64_size);
+     memory_region_init_alias(&f->pci_hole_64bit, "pci-hole64",
+                              f->pci_address_space,
+                              i440fx->pci_info.w64.begin,
+-                             i440fx->pci_hole64_size);
+-    if (i440fx->pci_hole64_size) {
++                             pci_hole64_size);
++    if (pci_hole64_size) {
+         memory_region_add_subregion(f->system_memory,
+                                     i440fx->pci_info.w64.begin,
+                                     &f->pci_hole_64bit);
+diff --git a/hw/pci-host/q35.c b/hw/pci-host/q35.c
+index 943e55f..05779b8 100644
+--- a/hw/pci-host/q35.c
++++ b/hw/pci-host/q35.c
+@@ -325,6 +325,7 @@ static int mch_init(PCIDevice *d)
+ {
+     int i;
+     MCHPCIState *mch = MCH_PCI_DEVICE(d);
++    uint64_t pci_hole64_size;
+ 
+     /* setup pci memory regions */
+     memory_region_init_alias(&mch->pci_hole, "pci-hole",
+@@ -334,13 +335,14 @@ static int mch_init(PCIDevice *d)
+     memory_region_add_subregion(mch->system_memory, mch->below_4g_mem_size,
+                                 &mch->pci_hole);
+ 
++    pci_hole64_size = pci_host_get_hole64_size(mch->pci_hole64_size);
+     pc_init_pci64_hole(&mch->pci_info, 0x100000000ULL + mch->above_4g_mem_size,
+-                       mch->pci_hole64_size);
++                       pci_hole64_size);
+     memory_region_init_alias(&mch->pci_hole_64bit, "pci-hole64",
+                              mch->pci_address_space,
+                              mch->pci_info.w64.begin,
+-                             mch->pci_hole64_size);
+-    if (mch->pci_hole64_size) {
++                             pci_hole64_size);
++    if (pci_hole64_size) {
+         memory_region_add_subregion(mch->system_memory,
+                                     mch->pci_info.w64.begin,
+                                     &mch->pci_hole_64bit);
+diff --git a/include/hw/i386/pc.h b/include/hw/i386/pc.h
+index fe21bc3..abaaf93 100644
+--- a/include/hw/i386/pc.h
++++ b/include/hw/i386/pc.h
+@@ -105,7 +105,16 @@ PcGuestInfo *pc_guest_info_init(ram_addr_t below_4g_mem_size,
+ #define PCI_HOST_PROP_PCI_HOLE64_START "pci-hole64-start"
+ #define PCI_HOST_PROP_PCI_HOLE64_END   "pci-hole64-end"
+ #define PCI_HOST_PROP_PCI_HOLE64_SIZE  "pci-hole64-size"
+-#define DEFAULT_PCI_HOLE64_SIZE (1ULL << 31)
++#define DEFAULT_PCI_HOLE64_SIZE (~0x0ULL)
++
++static inline uint64_t pci_host_get_hole64_size(uint64_t pci_hole64_size)
++{
++    if (pci_hole64_size == DEFAULT_PCI_HOLE64_SIZE) {
++        return 1ULL << 62;
++    } else {
++        return pci_hole64_size;
++    }
++}
+ 
+ void pc_init_pci64_hole(PcPciInfo *pci_info, uint64_t pci_hole64_start,
+                         uint64_t pci_hole64_size);
+-- 
+1.7.11.7
+

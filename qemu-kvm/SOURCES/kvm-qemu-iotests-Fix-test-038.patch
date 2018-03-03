@@ -1,0 +1,89 @@
+From 8e9c1ae6f17f51f05a6e0cf5aacf8bbd7341eee4 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Fri, 13 Sep 2013 10:37:12 +0200
+Subject: [PATCH 37/38] qemu-iotests: Fix test 038
+
+Message-id: <1379499002-5231-6-git-send-email-mreitz@redhat.com>
+Patchwork-id: 54436
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 5/6] qemu-iotests: Fix test 038
+Bugzilla: 1006959
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+BZ: 1006959
+
+Test 038 uses asynchronous I/O, resulting (potentially) in a different
+output for every run (regarding the order of the I/O accesses). This can
+be fixed by simply sorting the I/O access messages, since their order is
+irrelevant anyway (for this asynchonous I/O).
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit c21bddf27fd8029890e9fc2ee314788919eababf)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ tests/qemu-iotests/038     |    3 ++-
+ tests/qemu-iotests/038.out |   10 +++++-----
+ 2 files changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/tests/qemu-iotests/038 b/tests/qemu-iotests/038
+index 36125ea..90de1a7 100755
+--- a/tests/qemu-iotests/038
++++ b/tests/qemu-iotests/038
+@@ -95,7 +95,8 @@ function overlay_io()
+ }
+ 
+ overlay_io | $QEMU_IO $TEST_IMG | _filter_qemu_io |\
+-	sed -e 's/bytes at offset [0-9]*/bytes at offset XXX/g'
++    sed -e 's/bytes at offset [0-9]*/bytes at offset XXX/g' \
++    -e 's/qemu-io> //g' | paste - - | sort | tr '\t' '\n'
+ 
+ echo
+ echo "== Verify image content =="
+diff --git a/tests/qemu-iotests/038.out b/tests/qemu-iotests/038.out
+index 9cd0cd8..96c2f84 100644
+--- a/tests/qemu-iotests/038.out
++++ b/tests/qemu-iotests/038.out
+@@ -517,7 +517,7 @@ qemu-io> wrote 65536/65536 bytes at offset 16711680
+ qemu-io> Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=6442450944 backing_file='TEST_DIR/t.IMGFMT.base' 
+ 
+ == Some concurrent requests touching the same cluster ==
+-qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> qemu-io> wrote 65536/65536 bytes at offset XXX
++wrote 65536/65536 bytes at offset XXX
+ 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ wrote 65536/65536 bytes at offset XXX
+ 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+@@ -577,8 +577,6 @@ wrote 65536/65536 bytes at offset XXX
+ 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ wrote 65536/65536 bytes at offset XXX
+ 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+-wrote 81920/81920 bytes at offset XXX
+-80 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ wrote 65536/65536 bytes at offset XXX
+ 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ wrote 65536/65536 bytes at offset XXX
+@@ -645,8 +643,6 @@ wrote 65536/65536 bytes at offset XXX
+ 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ wrote 65536/65536 bytes at offset XXX
+ 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+-wrote 81920/81920 bytes at offset XXX
+-80 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ wrote 65536/65536 bytes at offset XXX
+ 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ wrote 65536/65536 bytes at offset XXX
+@@ -705,6 +701,10 @@ wrote 65536/65536 bytes at offset XXX
+ 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ wrote 65536/65536 bytes at offset XXX
+ 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote 81920/81920 bytes at offset XXX
++80 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote 81920/81920 bytes at offset XXX
++80 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ 
+ == Verify image content ==
+ qemu-io> read 4096/4096 bytes at offset 2064384
+-- 
+1.7.1
+

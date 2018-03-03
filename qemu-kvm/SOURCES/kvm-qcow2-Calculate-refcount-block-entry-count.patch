@@ -1,0 +1,61 @@
+From 48ec01bf0d7ad38571741cf9aca816a0bfdddbe0 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:22:10 +0200
+Subject: [PATCH 16/42] qcow2: Calculate refcount block entry count
+
+Message-id: <1434212556-3927-17-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66035
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 16/42] qcow2: Calculate refcount block entry count
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1129893
+
+The size of a refblock entry is (in theory) variable; calculate
+therefore the number of entries per refblock and the according bit shift
+(1 << x == entry count) when opening an image.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 1d13d654666a7fd6d6a85a0ce9285dbf0d0444c2)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2.c | 3 +++
+ block/qcow2.h | 2 ++
+ 2 files changed, 5 insertions(+)
+
+diff --git a/block/qcow2.c b/block/qcow2.c
+index be7e8e8..fae8b26 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -604,6 +604,9 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
+ 
+     s->l2_bits = s->cluster_bits - 3; /* L2 is always one cluster */
+     s->l2_size = 1 << s->l2_bits;
++    /* 2^(s->refcount_order - 3) is the refcount width in bytes */
++    s->refcount_block_bits = s->cluster_bits - (s->refcount_order - 3);
++    s->refcount_block_size = 1 << s->refcount_block_bits;
+     bs->total_sectors = header.size / 512;
+     s->csize_shift = (62 - (s->cluster_bits - 8));
+     s->csize_mask = (1 << (s->cluster_bits - 8)) - 1;
+diff --git a/block/qcow2.h b/block/qcow2.h
+index 2138462..b65f629 100644
+--- a/block/qcow2.h
++++ b/block/qcow2.h
+@@ -213,6 +213,8 @@ typedef struct BDRVQcowState {
+     int l2_size;
+     int l1_size;
+     int l1_vm_state_index;
++    int refcount_block_bits;
++    int refcount_block_size;
+     int csize_shift;
+     int csize_mask;
+     uint64_t cluster_offset_mask;
+-- 
+1.8.3.1
+

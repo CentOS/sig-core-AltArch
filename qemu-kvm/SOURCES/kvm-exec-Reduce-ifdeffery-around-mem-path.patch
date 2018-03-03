@@ -1,0 +1,119 @@
+From 24775aa5499bad8dea9c067908390c778b4ede6c Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 18 Sep 2013 09:31:04 +0200
+Subject: [PATCH 20/29] exec: Reduce ifdeffery around -mem-path
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1379496669-22778-4-git-send-email-armbru@redhat.com>
+Patchwork-id: 54423
+O-Subject: [PATCH 7.0 qemu-kvm 3/8] exec: Reduce ifdeffery around -mem-path
+Bugzilla: 1009328
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Instead of spreading its ifdeffery everywhere, confine it to
+qemu_ram_alloc_from_ptr().  Everywhere else, simply test block->fd,
+which is non-negative exactly when block uses -mem-path.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Acked-by: Laszlo Ersek <lersek@redhat.com>
+Acked-by: Stefano Stabellini <stefano.stabellini@eu.citrix.com>
+Message-id: 1375276272-15988-4-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <anthony@codemonkey.ws>
+(cherry picked from commit 3435f39513a104294b5e3bbf3612047028d25cfc)
+---
+ exec.c                 | 37 ++++++++++---------------------------
+ include/exec/cpu-all.h |  2 --
+ 2 files changed, 10 insertions(+), 29 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ exec.c                 |   37 ++++++++++---------------------------
+ include/exec/cpu-all.h |    2 --
+ 2 files changed, 10 insertions(+), 29 deletions(-)
+
+diff --git a/exec.c b/exec.c
+index ef8d311..32ed61c 100644
+--- a/exec.c
++++ b/exec.c
+@@ -1045,6 +1045,7 @@ ram_addr_t qemu_ram_alloc_from_ptr(ram_addr_t size, void *host,
+ 
+     size = TARGET_PAGE_ALIGN(size);
+     new_block = g_malloc0(sizeof(*new_block));
++    new_block->fd = -1;
+ 
+     /* This assumes the iothread lock is taken here too.  */
+     qemu_mutex_lock_ramlist();
+@@ -1149,17 +1150,9 @@ void qemu_ram_free(ram_addr_t addr)
+                 ;
+             } else if (xen_enabled()) {
+                 xen_invalidate_map_cache_entry(block->host);
+-            } else if (mem_path) {
+-#if defined (__linux__) && !defined(TARGET_S390X)
+-                if (block->fd) {
+-                    munmap(block->host, block->length);
+-                    close(block->fd);
+-                } else {
+-                    qemu_anon_ram_free(block->host, block->length);
+-                }
+-#else
+-                abort();
+-#endif
++            } else if (block->fd >= 0) {
++                munmap(block->host, block->length);
++                close(block->fd);
+             } else {
+                 qemu_anon_ram_free(block->host, block->length);
+             }
+@@ -1190,25 +1183,15 @@ void qemu_ram_remap(ram_addr_t addr, ram_addr_t length)
+             } else {
+                 flags = MAP_FIXED;
+                 munmap(vaddr, length);
+-                if (mem_path) {
+-#if defined(__linux__) && !defined(TARGET_S390X)
+-                    if (block->fd) {
++                if (block->fd >= 0) {
+ #ifdef MAP_POPULATE
+-                        flags |= mem_prealloc ? MAP_POPULATE | MAP_SHARED :
+-                            MAP_PRIVATE;
++                    flags |= mem_prealloc ? MAP_POPULATE | MAP_SHARED :
++                        MAP_PRIVATE;
+ #else
+-                        flags |= MAP_PRIVATE;
+-#endif
+-                        area = mmap(vaddr, length, PROT_READ | PROT_WRITE,
+-                                    flags, block->fd, offset);
+-                    } else {
+-                        flags |= MAP_PRIVATE | MAP_ANONYMOUS;
+-                        area = mmap(vaddr, length, PROT_READ | PROT_WRITE,
+-                                    flags, -1, 0);
+-                    }
+-#else
+-                    abort();
++                    flags |= MAP_PRIVATE;
+ #endif
++                    area = mmap(vaddr, length, PROT_READ | PROT_WRITE,
++                                flags, block->fd, offset);
+                 } else {
+ #if defined(TARGET_S390X) && defined(CONFIG_KVM)
+                     flags |= MAP_SHARED | MAP_ANONYMOUS;
+diff --git a/include/exec/cpu-all.h b/include/exec/cpu-all.h
+index e9c3717..c369b25 100644
+--- a/include/exec/cpu-all.h
++++ b/include/exec/cpu-all.h
+@@ -476,9 +476,7 @@ typedef struct RAMBlock {
+      * Writes must take both locks.
+      */
+     QTAILQ_ENTRY(RAMBlock) next;
+-#if defined(__linux__) && !defined(TARGET_S390X)
+     int fd;
+-#endif
+ } RAMBlock;
+ 
+ typedef struct RAMList {
+-- 
+1.7.1
+

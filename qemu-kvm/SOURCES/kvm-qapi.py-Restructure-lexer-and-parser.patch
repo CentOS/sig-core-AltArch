@@ -1,0 +1,333 @@
+From db918ab21be13a3c1f3c65d3821c06cf12528099 Mon Sep 17 00:00:00 2001
+Message-Id: <db918ab21be13a3c1f3c65d3821c06cf12528099.1387369730.git.minovotn@redhat.com>
+In-Reply-To: <091eecc4fa42754760dfff393dabcc2b444e9693.1387369730.git.minovotn@redhat.com>
+References: <091eecc4fa42754760dfff393dabcc2b444e9693.1387369730.git.minovotn@redhat.com>
+From: Markus Armbruster <armbru@redhat.com>
+Date: Tue, 10 Dec 2013 15:29:13 +0100
+Subject: [PATCH 13/21] qapi.py: Restructure lexer and parser
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1386689361-30281-11-git-send-email-armbru@redhat.com>
+Patchwork-id: 56127
+O-Subject: [PATCH 7.0 qemu-kvm 10/18] qapi.py: Restructure lexer and parser
+Bugzilla: 997915
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+The parser has a rather unorthodox structure:
+
+    Until EOF:
+
+        Read a section:
+
+            Generator function get_expr() yields one section after the
+            other, as a string.  An unindented, non-empty line that
+            isn't a comment starts a new section.
+
+        Lexing:
+
+            Split section into a list of tokens (strings), with help
+            of generator function tokenize().
+
+        Parsing:
+
+            Parse the first expression from the list of tokens, with
+            parse(), throw away any remaining tokens.
+
+            In parse_schema(): record value of an enum, union or
+            struct key (if any) in the appropriate global table,
+            append expression to the list of expressions.
+
+    Return list of expressions.
+
+Known issues:
+
+(1) Indentation is significant, unlike in real JSON.
+
+(2) Neither lexer nor parser have any idea of source positions.  Error
+    reporting is hard, let's go shopping.
+
+(3) The one error we bother to detect, we "report" via raise.
+
+(4) The lexer silently ignores invalid characters.
+
+(5) If everything in a section gets ignored, the parser crashes.
+
+(6) The lexer treats a string containing a structural character exactly
+    like the structural character.
+
+(7) Tokens trailing the first expression in a section are silently
+    ignored.
+
+(8) The parser accepts any token in place of a colon.
+
+(9) The parser treats comma as optional.
+
+(10) parse() crashes on unexpected EOF.
+
+(11) parse_schema() crashes when a section's expression isn't a JSON
+    object.
+
+Replace this piece of original art by a thoroughly unoriginal design.
+Takes care of (1), (2), (5), (6) and (7), and lays the groundwork for
+addressing the others.  Generated source files remain unchanged.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Message-id: 1374939721-7876-4-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit c7a3f25200c8692e969f21c7f2555630ec0d0d30)
+---
+ scripts/qapi.py                                | 163 +++++++++++++------------
+ tests/qapi-schema/indented-expr.out            |   2 +-
+ tests/qapi-schema/missing-colon.out            |   4 +-
+ tests/qapi-schema/quoted-structural-chars.err  |   1 +
+ tests/qapi-schema/quoted-structural-chars.exit |   2 +-
+ tests/qapi-schema/quoted-structural-chars.out  |   3 -
+ 6 files changed, 88 insertions(+), 87 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ scripts/qapi.py                                | 163 +++++++++++++------------
+ tests/qapi-schema/indented-expr.out            |   2 +-
+ tests/qapi-schema/missing-colon.out            |   4 +-
+ tests/qapi-schema/quoted-structural-chars.err  |   1 +
+ tests/qapi-schema/quoted-structural-chars.exit |   2 +-
+ tests/qapi-schema/quoted-structural-chars.out  |   3 -
+ 6 files changed, 88 insertions(+), 87 deletions(-)
+
+diff --git a/scripts/qapi.py b/scripts/qapi.py
+index 38c808e..58e315b 100644
+--- a/scripts/qapi.py
++++ b/scripts/qapi.py
+@@ -2,9 +2,11 @@
+ # QAPI helper library
+ #
+ # Copyright IBM, Corp. 2011
++# Copyright (c) 2013 Red Hat Inc.
+ #
+ # Authors:
+ #  Anthony Liguori <aliguori@us.ibm.com>
++#  Markus Armbruster <armbru@redhat.com>
+ #
+ # This work is licensed under the terms of the GNU GPLv2.
+ # See the COPYING.LIB file in the top-level directory.
+@@ -32,91 +34,92 @@ builtin_type_qtypes = {
+     'uint64':   'QTYPE_QINT',
+ }
+ 
+-def tokenize(data):
+-    while len(data):
+-        ch = data[0]
+-        data = data[1:]
+-        if ch in ['{', '}', ':', ',', '[', ']']:
+-            yield ch
+-        elif ch in ' \n':
+-            None
+-        elif ch == "'":
+-            string = ''
+-            esc = False
+-            while True:
+-                if (data == ''):
+-                    raise Exception("Mismatched quotes")
+-                ch = data[0]
+-                data = data[1:]
+-                if esc:
+-                    string += ch
+-                    esc = False
+-                elif ch == "\\":
+-                    esc = True
+-                elif ch == "'":
+-                    break
+-                else:
+-                    string += ch
+-            yield string
+-
+-def parse(tokens):
+-    if tokens[0] == '{':
+-        ret = OrderedDict()
+-        tokens = tokens[1:]
+-        while tokens[0] != '}':
+-            key = tokens[0]
+-            tokens = tokens[1:]
+-
+-            tokens = tokens[1:] # :
+-
+-            value, tokens = parse(tokens)
+-
+-            if tokens[0] == ',':
+-                tokens = tokens[1:]
+-
+-            ret[key] = value
+-        tokens = tokens[1:]
+-        return ret, tokens
+-    elif tokens[0] == '[':
+-        ret = []
+-        tokens = tokens[1:]
+-        while tokens[0] != ']':
+-            value, tokens = parse(tokens)
+-            if tokens[0] == ',':
+-                tokens = tokens[1:]
+-            ret.append(value)
+-        tokens = tokens[1:]
+-        return ret, tokens
+-    else:
+-        return tokens[0], tokens[1:]
+-
+-def evaluate(string):
+-    return parse(map(lambda x: x, tokenize(string)))[0]
+-
+-def get_expr(fp):
+-    expr = ''
+-
+-    for line in fp:
+-        if line.startswith('#') or line == '\n':
+-            continue
+-
+-        if line.startswith(' '):
+-            expr += line
+-        elif expr:
+-            yield expr
+-            expr = line
++class QAPISchema:
++
++    def __init__(self, fp):
++        self.fp = fp
++        self.src = fp.read()
++        if self.src == '' or self.src[-1] != '\n':
++            self.src += '\n'
++        self.cursor = 0
++        self.exprs = []
++        self.accept()
++
++        while self.tok != None:
++            self.exprs.append(self.get_expr())
++
++    def accept(self):
++        while True:
++            bol = self.cursor == 0 or self.src[self.cursor-1] == '\n'
++            self.tok = self.src[self.cursor]
++            self.cursor += 1
++            self.val = None
++
++            if self.tok == '#' and bol:
++                self.cursor = self.src.find('\n', self.cursor)
++            elif self.tok in ['{', '}', ':', ',', '[', ']']:
++                return
++            elif self.tok == "'":
++                string = ''
++                esc = False
++                while True:
++                    ch = self.src[self.cursor]
++                    self.cursor += 1
++                    if ch == '\n':
++                        raise Exception("Mismatched quotes")
++                    if esc:
++                        string += ch
++                        esc = False
++                    elif ch == "\\":
++                        esc = True
++                    elif ch == "'":
++                        self.val = string
++                        return
++                    else:
++                        string += ch
++            elif self.tok == '\n':
++                if self.cursor == len(self.src):
++                    self.tok = None
++                    return
++
++    def get_members(self):
++        expr = OrderedDict()
++        while self.tok != '}':
++            key = self.val
++            self.accept()
++            self.accept()        # :
++            expr[key] = self.get_expr()
++            if self.tok == ',':
++                self.accept()
++        self.accept()
++        return expr
++
++    def get_values(self):
++        expr = []
++        while self.tok != ']':
++            expr.append(self.get_expr())
++            if self.tok == ',':
++                self.accept()
++        self.accept()
++        return expr
++
++    def get_expr(self):
++        if self.tok == '{':
++            self.accept()
++            expr = self.get_members()
++        elif self.tok == '[':
++            self.accept()
++            expr = self.get_values()
+         else:
+-            expr += line
+-
+-    if expr:
+-        yield expr
++            expr = self.val
++            self.accept()
++        return expr
+ 
+ def parse_schema(fp):
++    schema = QAPISchema(fp)
+     exprs = []
+ 
+-    for expr in get_expr(fp):
+-        expr_eval = evaluate(expr)
+-
++    for expr_eval in schema.exprs:
+         if expr_eval.has_key('enum'):
+             add_enum(expr_eval['enum'])
+         elif expr_eval.has_key('union'):
+diff --git a/tests/qapi-schema/indented-expr.out b/tests/qapi-schema/indented-expr.out
+index 98ae692..98af89a 100644
+--- a/tests/qapi-schema/indented-expr.out
++++ b/tests/qapi-schema/indented-expr.out
+@@ -1,3 +1,3 @@
+-[OrderedDict([('id', 'eins')])]
++[OrderedDict([('id', 'eins')]), OrderedDict([('id', 'zwei')])]
+ []
+ []
+diff --git a/tests/qapi-schema/missing-colon.out b/tests/qapi-schema/missing-colon.out
+index 50f827e..e67068c 100644
+--- a/tests/qapi-schema/missing-colon.out
++++ b/tests/qapi-schema/missing-colon.out
+@@ -1,3 +1,3 @@
+-[OrderedDict([('enum', ','), ('data', ['good', 'bad', 'ugly'])])]
+-[',']
++[OrderedDict([('enum', None), ('data', ['good', 'bad', 'ugly'])])]
++[None]
+ []
+diff --git a/tests/qapi-schema/quoted-structural-chars.err b/tests/qapi-schema/quoted-structural-chars.err
+index e69de29..48c849d 100644
+--- a/tests/qapi-schema/quoted-structural-chars.err
++++ b/tests/qapi-schema/quoted-structural-chars.err
+@@ -0,0 +1 @@
++Crashed: <type 'exceptions.AttributeError'>
+diff --git a/tests/qapi-schema/quoted-structural-chars.exit b/tests/qapi-schema/quoted-structural-chars.exit
+index 573541a..d00491f 100644
+--- a/tests/qapi-schema/quoted-structural-chars.exit
++++ b/tests/qapi-schema/quoted-structural-chars.exit
+@@ -1 +1 @@
+-0
++1
+diff --git a/tests/qapi-schema/quoted-structural-chars.out b/tests/qapi-schema/quoted-structural-chars.out
+index 85405be..e69de29 100644
+--- a/tests/qapi-schema/quoted-structural-chars.out
++++ b/tests/qapi-schema/quoted-structural-chars.out
+@@ -1,3 +0,0 @@
+-[OrderedDict([('key1', 'value1'), ('key2', [])])]
+-[]
+-[]
+-- 
+1.7.11.7
+

@@ -1,0 +1,68 @@
+From bcc312ef8d0c8ff3c8743e01bd24fd26c4cc96f6 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sun, 19 Jan 2014 18:07:57 +0100
+Subject: [PATCH 23/34] block/drive-mirror: Check for NULL backing_hd
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1390154881-17140-4-git-send-email-mreitz@redhat.com>
+Patchwork-id: 56816
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 3/7] block/drive-mirror: Check for NULL backing_hd
+Bugzilla: 921890
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+BZ: 921890
+
+It should be possible to execute the QMP "drive-mirror" command in
+"none" sync mode and "absolute-paths" mode even for block devices
+lacking a backing file.
+
+"absolute-paths" does in fact not require a backing file to be present,
+as can be seen from the "top" sync mode code path. "top" basically
+states that the device should indeed have a backing file - however, the
+current code catches the case if it doesn't and then simply treats it as
+"full" sync mode, creating a target image without a backing file (in
+"absolute-paths" mode). Thus, "absolute-paths" does not imply the target
+file must indeed have a backing file.
+
+Therefore, the target file may be left unbacked in case of "none" sync
+mode as well, if the specified device is not backed either. Currently,
+qemu will crash trying to dereference the backing file pointer since it
+assumes that it will always be non-NULL in that case ("none" with
+"absolute-paths").
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Wenchao Xia <xiawenc@linux.vnet.ibm.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 1452686495922b81d6cf43edf025c1aef15965c0)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ blockdev.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev.c |    4 +++-
+ 1 files changed, 3 insertions(+), 1 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index 0ba2504..06bbf30 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -1611,7 +1611,9 @@ void qmp_drive_mirror(const char *device, const char *target,
+         return;
+     }
+ 
+-    if (sync == MIRROR_SYNC_MODE_FULL && mode != NEW_IMAGE_MODE_EXISTING) {
++    if ((sync == MIRROR_SYNC_MODE_FULL || !source)
++        && mode != NEW_IMAGE_MODE_EXISTING)
++    {
+         /* create new image w/o backing file */
+         assert(format && drv);
+         bdrv_img_create(target, format,
+-- 
+1.7.1
+

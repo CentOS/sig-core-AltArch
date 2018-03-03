@@ -1,0 +1,70 @@
+From c538b7706e6f03a1eae8f11f9f89b9cbee73dbc9 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Sat, 11 Jan 2014 18:00:08 +0100
+Subject: [PATCH 18/22] piix: fix 32bit pci hole
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1389463208-6278-19-git-send-email-lersek@redhat.com>
+Patchwork-id: 56630
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 18/18] piix: fix 32bit pci hole
+Bugzilla: 1032346
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Andrew Jones <drjones@redhat.com>
+
+From: Gerd Hoffmann <kraxel@redhat.com>
+
+Make the 32bit pci hole start at end of ram, so all possible address
+space is covered.
+
+We used to try and make addresses aligned so they are easier to cover
+with MTRRs, but since they are cosmetic on KVM, this is probably not
+worth worrying about.
+Of course the firmware can use less than that.  Leaving space unused is
+no problem, mapping pci bars outside the hole causes problems though.
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit ddaaefb4dd427d6d2e41c1cfbe0cd8d8e8d6aad9)
+
+Conflicts:
+	hw/i386/pc_piix.c
+	hw/pci-host/piix.c
+	include/hw/i386/pc.h
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+---
+ hw/pci-host/piix.c | 10 +---------
+ 1 file changed, 1 insertion(+), 9 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/pci-host/piix.c |   10 +---------
+ 1 files changed, 1 insertions(+), 9 deletions(-)
+
+diff --git a/hw/pci-host/piix.c b/hw/pci-host/piix.c
+index 9284c8d..5757b1d 100644
+--- a/hw/pci-host/piix.c
++++ b/hw/pci-host/piix.c
+@@ -337,15 +337,7 @@ PCIBus *i440fx_init(PCII440FXState **pi440fx_state,
+     f->ram_memory = ram_memory;
+ 
+     i440fx = I440FX_PCI_HOST_BRIDGE(dev);
+-    /* Set PCI window size the way seabios has always done it. */
+-    /* Power of 2 so bios can cover it with a single MTRR */
+-    if (ram_size <= 0x80000000) {
+-        i440fx->pci_info.w32.begin = 0x80000000;
+-    } else if (ram_size <= 0xc0000000) {
+-        i440fx->pci_info.w32.begin = 0xc0000000;
+-    } else {
+-        i440fx->pci_info.w32.begin = 0xe0000000;
+-    }
++    i440fx->pci_info.w32.begin = pci_hole_start;
+ 
+     memory_region_init_alias(&f->pci_hole, "pci-hole", f->pci_address_space,
+                              pci_hole_start, pci_hole_size);
+-- 
+1.7.1
+

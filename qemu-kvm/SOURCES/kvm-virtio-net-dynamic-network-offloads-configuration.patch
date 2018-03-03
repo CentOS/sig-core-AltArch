@@ -1,0 +1,256 @@
+From 4fcf18be2584d1e2071b55f0987169a715890cca Mon Sep 17 00:00:00 2001
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+Date: Thu, 17 Aug 2017 09:45:35 +0200
+Subject: [PATCH 1/2] virtio-net: dynamic network offloads configuration
+
+RH-Author: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Message-id: <20170817094536.12740-2-dgilbert@redhat.com>
+Patchwork-id: 76021
+O-Subject: [RHEL-7.5/7.4.z/7.3.z/7.2.z qemu-kvm PATCH v2 1/2] virtio-net: dynamic network offloads configuration
+Bugzilla: 1482468
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+
+From: Dmitry Fleytman <dfleytma@redhat.com>
+
+Virtio-net driver currently negotiates network offloads
+on startup via features mechanism and have no ability to
+disable and re-enable offloads later.
+This patch introduced a new control command that allows
+to configure device network offloads state dynamically.
+The patch also introduces a new feature flag
+VIRTIO_NET_F_CTRL_GUEST_OFFLOADS.
+
+Signed-off-by: Dmitry Fleytman <dfleytma@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Message-id: 20130520081814.GA8162@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit 644c98587d4ccc09e7592e1688e4e7fa363c5a75)
+
+RHEL7.0 qemu-kvm only: Configure ctrl_guest_offloads off
+Signed-off-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/net/virtio-net.c            | 99 +++++++++++++++++++++++++++++++++++-------
+ include/hw/i386/pc.h           |  4 ++
+ include/hw/virtio/virtio-net.h | 14 ++++++
+ 3 files changed, 102 insertions(+), 15 deletions(-)
+
+diff --git a/hw/net/virtio-net.c b/hw/net/virtio-net.c
+index 3fde455..eb2feaf 100644
+--- a/hw/net/virtio-net.c
++++ b/hw/net/virtio-net.c
+@@ -477,6 +477,34 @@ static uint32_t virtio_net_bad_features(VirtIODevice *vdev)
+     return features;
+ }
+ 
++static void virtio_net_apply_guest_offloads(VirtIONet *n)
++{
++    tap_set_offload(qemu_get_subqueue(n->nic, 0)->peer,
++            !!(n->curr_guest_offloads & (1ULL << VIRTIO_NET_F_GUEST_CSUM)),
++            !!(n->curr_guest_offloads & (1ULL << VIRTIO_NET_F_GUEST_TSO4)),
++            !!(n->curr_guest_offloads & (1ULL << VIRTIO_NET_F_GUEST_TSO6)),
++            !!(n->curr_guest_offloads & (1ULL << VIRTIO_NET_F_GUEST_ECN)),
++            !!(n->curr_guest_offloads & (1ULL << VIRTIO_NET_F_GUEST_UFO)));
++}
++
++static uint64_t virtio_net_guest_offloads_by_features(uint32_t features)
++{
++    static const uint64_t guest_offloads_mask =
++        (1ULL << VIRTIO_NET_F_GUEST_CSUM) |
++        (1ULL << VIRTIO_NET_F_GUEST_TSO4) |
++        (1ULL << VIRTIO_NET_F_GUEST_TSO6) |
++        (1ULL << VIRTIO_NET_F_GUEST_ECN)  |
++        (1ULL << VIRTIO_NET_F_GUEST_UFO);
++
++    return guest_offloads_mask & features;
++}
++
++static inline uint64_t virtio_net_supported_guest_offloads(VirtIONet *n)
++{
++    VirtIODevice *vdev = VIRTIO_DEVICE(n);
++    return virtio_net_guest_offloads_by_features(vdev->guest_features);
++}
++
+ static void virtio_net_set_features(VirtIODevice *vdev, uint32_t features)
+ {
+     VirtIONet *n = VIRTIO_NET(vdev);
+@@ -487,12 +515,9 @@ static void virtio_net_set_features(VirtIODevice *vdev, uint32_t features)
+     virtio_net_set_mrg_rx_bufs(n, !!(features & (1 << VIRTIO_NET_F_MRG_RXBUF)));
+ 
+     if (n->has_vnet_hdr) {
+-        tap_set_offload(qemu_get_subqueue(n->nic, 0)->peer,
+-                        (features >> VIRTIO_NET_F_GUEST_CSUM) & 1,
+-                        (features >> VIRTIO_NET_F_GUEST_TSO4) & 1,
+-                        (features >> VIRTIO_NET_F_GUEST_TSO6) & 1,
+-                        (features >> VIRTIO_NET_F_GUEST_ECN)  & 1,
+-                        (features >> VIRTIO_NET_F_GUEST_UFO)  & 1);
++        n->curr_guest_offloads =
++            virtio_net_guest_offloads_by_features(features);
++        virtio_net_apply_guest_offloads(n);
+     }
+ 
+     for (i = 0;  i < n->max_queues; i++) {
+@@ -547,6 +572,43 @@ static int virtio_net_handle_rx_mode(VirtIONet *n, uint8_t cmd,
+     return VIRTIO_NET_OK;
+ }
+ 
++static int virtio_net_handle_offloads(VirtIONet *n, uint8_t cmd,
++                                     struct iovec *iov, unsigned int iov_cnt)
++{
++    VirtIODevice *vdev = VIRTIO_DEVICE(n);
++    uint64_t offloads;
++    size_t s;
++
++    if (!((1 << VIRTIO_NET_F_CTRL_GUEST_OFFLOADS) & vdev->guest_features)) {
++        return VIRTIO_NET_ERR;
++    }
++
++    s = iov_to_buf(iov, iov_cnt, 0, &offloads, sizeof(offloads));
++    if (s != sizeof(offloads)) {
++        return VIRTIO_NET_ERR;
++    }
++
++    if (cmd == VIRTIO_NET_CTRL_GUEST_OFFLOADS_SET) {
++        uint64_t supported_offloads;
++
++        if (!n->has_vnet_hdr) {
++            return VIRTIO_NET_ERR;
++        }
++
++        supported_offloads = virtio_net_supported_guest_offloads(n);
++        if (offloads & ~supported_offloads) {
++            return VIRTIO_NET_ERR;
++        }
++
++        n->curr_guest_offloads = offloads;
++        virtio_net_apply_guest_offloads(n);
++
++        return VIRTIO_NET_OK;
++    } else {
++        return VIRTIO_NET_ERR;
++    }
++}
++
+ static int virtio_net_handle_mac(VirtIONet *n, uint8_t cmd,
+                                  struct iovec *iov, unsigned int iov_cnt)
+ {
+@@ -735,6 +797,8 @@ static void virtio_net_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
+             status = virtio_net_handle_vlan_table(n, ctrl.cmd, iov, iov_cnt);
+         } else if (ctrl.class == VIRTIO_NET_CTRL_MQ) {
+             status = virtio_net_handle_mq(n, ctrl.cmd, iov, iov_cnt);
++        } else if (ctrl.class == VIRTIO_NET_CTRL_GUEST_OFFLOADS) {
++            status = virtio_net_handle_offloads(n, ctrl.cmd, iov, iov_cnt);
+         }
+ 
+         s = iov_from_buf(elem.in_sg, elem.in_num, 0, &status, sizeof(status));
+@@ -1253,6 +1317,10 @@ static void virtio_net_save(QEMUFile *f, void *opaque)
+             qemu_put_be32(f, n->vqs[i].tx_waiting);
+         }
+     }
++
++    if ((1 << VIRTIO_NET_F_CTRL_GUEST_OFFLOADS) & vdev->guest_features) {
++        qemu_put_be64(f, n->curr_guest_offloads);
++    }
+ }
+ 
+ static int virtio_net_load(QEMUFile *f, void *opaque, int version_id)
+@@ -1317,15 +1385,6 @@ static int virtio_net_load(QEMUFile *f, void *opaque, int version_id)
+             error_report("virtio-net: saved image requires vnet_hdr=on");
+             return -1;
+         }
+-
+-        if (n->has_vnet_hdr) {
+-            tap_set_offload(qemu_get_queue(n->nic)->peer,
+-                    (vdev->guest_features >> VIRTIO_NET_F_GUEST_CSUM) & 1,
+-                    (vdev->guest_features >> VIRTIO_NET_F_GUEST_TSO4) & 1,
+-                    (vdev->guest_features >> VIRTIO_NET_F_GUEST_TSO6) & 1,
+-                    (vdev->guest_features >> VIRTIO_NET_F_GUEST_ECN)  & 1,
+-                    (vdev->guest_features >> VIRTIO_NET_F_GUEST_UFO)  & 1);
+-        }
+     }
+ 
+     if (version_id >= 9) {
+@@ -1364,6 +1423,16 @@ static int virtio_net_load(QEMUFile *f, void *opaque, int version_id)
+         }
+     }
+ 
++    if ((1 << VIRTIO_NET_F_CTRL_GUEST_OFFLOADS) & vdev->guest_features) {
++        n->curr_guest_offloads = qemu_get_be64(f);
++    } else {
++        n->curr_guest_offloads = virtio_net_supported_guest_offloads(n);
++    }
++
++    if (peer_has_vnet_hdr(n)) {
++        virtio_net_apply_guest_offloads(n);
++    }
++
+     virtio_net_set_queues(n);
+ 
+     /* Find the first multicast entry in the saved MAC filter */
+diff --git a/include/hw/i386/pc.h b/include/hw/i386/pc.h
+index 3b8f7d8..89bb458 100644
+--- a/include/hw/i386/pc.h
++++ b/include/hw/i386/pc.h
+@@ -318,6 +318,10 @@ int e820_add_entry(uint64_t, uint64_t, uint32_t);
+             .property = "vectors",\
+             /* DEV_NVECTORS_UNSPECIFIED as a uint32_t string */\
+             .value    = stringify(0xFFFFFFFF),\
++        },{ \
++            .driver   = "virtio-net-pci", \
++            .property = "ctrl_guest_offloads", \
++            .value    = "off", \
+         },{\
+             .driver   = "e1000",\
+             .property = "romfile",\
+diff --git a/include/hw/virtio/virtio-net.h b/include/hw/virtio/virtio-net.h
+index a02fc50..02fa5c5 100644
+--- a/include/hw/virtio/virtio-net.h
++++ b/include/hw/virtio/virtio-net.h
+@@ -31,6 +31,8 @@
+ /* The feature bitmap for virtio net */
+ #define VIRTIO_NET_F_CSUM       0       /* Host handles pkts w/ partial csum */
+ #define VIRTIO_NET_F_GUEST_CSUM 1       /* Guest handles pkts w/ partial csum */
++#define VIRTIO_NET_F_CTRL_GUEST_OFFLOADS 2 /* Control channel offload
++                                         * configuration support */
+ #define VIRTIO_NET_F_MAC        5       /* Host has given MAC address. */
+ #define VIRTIO_NET_F_GSO        6       /* Host handles pkts w/ any GSO type */
+ #define VIRTIO_NET_F_GUEST_TSO4 7       /* Guest can handle TSOv4 in. */
+@@ -190,6 +192,7 @@ typedef struct VirtIONet {
+     size_t config_size;
+     char *netclient_name;
+     char *netclient_type;
++    uint64_t curr_guest_offloads;
+ } VirtIONet;
+ 
+ #define VIRTIO_NET_CTRL_MAC    1
+@@ -229,6 +232,15 @@ struct virtio_net_ctrl_mq {
+  #define VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN        1
+  #define VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX        0x8000
+ 
++/*
++ * Control network offloads
++ *
++ * Dynamic offloads are available with the
++ * VIRTIO_NET_F_CTRL_GUEST_OFFLOADS feature bit.
++ */
++#define VIRTIO_NET_CTRL_GUEST_OFFLOADS   5
++ #define VIRTIO_NET_CTRL_GUEST_OFFLOADS_SET        0
++
+ #define DEFINE_VIRTIO_NET_FEATURES(_state, _field) \
+         DEFINE_VIRTIO_COMMON_FEATURES(_state, _field), \
+         DEFINE_PROP_BIT("any_layout", _state, _field, VIRTIO_F_ANY_LAYOUT, true), \
+@@ -250,6 +262,8 @@ struct virtio_net_ctrl_mq {
+         DEFINE_PROP_BIT("ctrl_vlan", _state, _field, VIRTIO_NET_F_CTRL_VLAN, true), \
+         DEFINE_PROP_BIT("ctrl_rx_extra", _state, _field, VIRTIO_NET_F_CTRL_RX_EXTRA, true), \
+         DEFINE_PROP_BIT("ctrl_mac_addr", _state, _field, VIRTIO_NET_F_CTRL_MAC_ADDR, true), \
++        /* RHEL 7.0 qemu-kvm: ctrl_guest_offloads always configured off */ \
++        DEFINE_PROP_BIT("ctrl_guest_offloads", _state, _field, VIRTIO_NET_F_CTRL_GUEST_OFFLOADS, false), \
+         DEFINE_PROP_BIT("mq", _state, _field, VIRTIO_NET_F_MQ, false)
+ 
+ #define DEFINE_VIRTIO_NET_PROPERTIES(_state, _field)                           \
+-- 
+1.8.3.1
+

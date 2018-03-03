@@ -1,0 +1,213 @@
+From 7a7ee1756f309f4f69ed9929b2d7a652f9a879b2 Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Fri, 10 Apr 2015 16:45:53 +0200
+Subject: [PATCH 12/14] x86: kvm: Add MTRR support for kvm_get|put_msrs()
+
+Message-id: <20150410164553.16166.97985.stgit@gimli.home>
+Patchwork-id: 64798
+O-Subject: [RHEL7.2 qemu-kvm PATCH 2/3] x86: kvm: Add MTRR support for kvm_get|put_msrs()
+Bugzilla: 1210510
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Upstream: d1ae67f626c5ed5729e1d8212834291b409d26df
+
+The MTRR state in KVM currently runs completely independent of the
+QEMU state in CPUX86State.mtrr_*.  This means that on migration, the
+target loses MTRR state from the source.  Generally that's ok though
+because KVM ignores it and maps everything as write-back anyway.  The
+exception to this rule is when we have an assigned device and an IOMMU
+that doesn't promote NoSnoop transactions from that device to be cache
+coherent.  In that case KVM trusts the guest mapping of memory as
+configured in the MTRR.
+
+This patch updates kvm_get|put_msrs() so that we retrieve the actual
+vCPU MTRR settings and therefore keep CPUX86State synchronized for
+migration.  kvm_put_msrs() is also used on vCPU reset and therefore
+allows future modificaitons of MTRR state at reset to be realized.
+
+Note that the entries array used by both functions was already
+slightly undersized for holding every possible MSR, so this patch
+increases it beyond the 28 new entries necessary for MTRR state.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/cpu.h |   2 ++
+ target-i386/kvm.c | 101 ++++++++++++++++++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 101 insertions(+), 2 deletions(-)
+
+diff --git a/target-i386/cpu.h b/target-i386/cpu.h
+index 763fbf2..e9edd3d 100644
+--- a/target-i386/cpu.h
++++ b/target-i386/cpu.h
+@@ -332,6 +332,8 @@
+ #define MSR_MTRRphysBase(reg)           (0x200 + 2 * (reg))
+ #define MSR_MTRRphysMask(reg)           (0x200 + 2 * (reg) + 1)
+ 
++#define MSR_MTRRphysIndex(addr)         ((((addr) & ~1u) - 0x200) / 2)
++
+ #define MSR_MTRRfix64K_00000            0x250
+ #define MSR_MTRRfix16K_80000            0x258
+ #define MSR_MTRRfix16K_A0000            0x259
+diff --git a/target-i386/kvm.c b/target-i386/kvm.c
+index 65362ac..97ae345 100644
+--- a/target-i386/kvm.c
++++ b/target-i386/kvm.c
+@@ -73,6 +73,7 @@ static int lm_capable_kernel;
+ static bool has_msr_hv_hypercall;
+ static bool has_msr_hv_vapic;
+ static bool has_msr_hv_tsc;
++static bool has_msr_mtrr;
+ 
+ static bool has_msr_architectural_pmu;
+ static uint32_t num_architectural_pmu_counters;
+@@ -711,6 +712,10 @@ int kvm_arch_init_vcpu(CPUState *cs)
+         env->kvm_xsave_buf = qemu_memalign(4096, sizeof(struct kvm_xsave));
+     }
+ 
++    if (env->features[FEAT_1_EDX] & CPUID_MTRR) {
++        has_msr_mtrr = true;
++    }
++
+     return 0;
+ }
+ 
+@@ -1117,7 +1122,7 @@ static int kvm_put_msrs(X86CPU *cpu, int level)
+     CPUX86State *env = &cpu->env;
+     struct {
+         struct kvm_msrs info;
+-        struct kvm_msr_entry entries[100];
++        struct kvm_msr_entry entries[150];
+     } msr_data;
+     struct kvm_msr_entry *msrs = msr_data.entries;
+     int n = 0, i;
+@@ -1219,6 +1224,37 @@ static int kvm_put_msrs(X86CPU *cpu, int level)
+             kvm_msr_entry_set(&msrs[n++], HV_X64_MSR_REFERENCE_TSC,
+                               env->msr_hv_tsc);
+         }
++        if (has_msr_mtrr) {
++            kvm_msr_entry_set(&msrs[n++], MSR_MTRRdefType, env->mtrr_deftype);
++            kvm_msr_entry_set(&msrs[n++],
++                              MSR_MTRRfix64K_00000, env->mtrr_fixed[0]);
++            kvm_msr_entry_set(&msrs[n++],
++                              MSR_MTRRfix16K_80000, env->mtrr_fixed[1]);
++            kvm_msr_entry_set(&msrs[n++],
++                              MSR_MTRRfix16K_A0000, env->mtrr_fixed[2]);
++            kvm_msr_entry_set(&msrs[n++],
++                              MSR_MTRRfix4K_C0000, env->mtrr_fixed[3]);
++            kvm_msr_entry_set(&msrs[n++],
++                              MSR_MTRRfix4K_C8000, env->mtrr_fixed[4]);
++            kvm_msr_entry_set(&msrs[n++],
++                              MSR_MTRRfix4K_D0000, env->mtrr_fixed[5]);
++            kvm_msr_entry_set(&msrs[n++],
++                              MSR_MTRRfix4K_D8000, env->mtrr_fixed[6]);
++            kvm_msr_entry_set(&msrs[n++],
++                              MSR_MTRRfix4K_E0000, env->mtrr_fixed[7]);
++            kvm_msr_entry_set(&msrs[n++],
++                              MSR_MTRRfix4K_E8000, env->mtrr_fixed[8]);
++            kvm_msr_entry_set(&msrs[n++],
++                              MSR_MTRRfix4K_F0000, env->mtrr_fixed[9]);
++            kvm_msr_entry_set(&msrs[n++],
++                              MSR_MTRRfix4K_F8000, env->mtrr_fixed[10]);
++            for (i = 0; i < MSR_MTRRcap_VCNT; i++) {
++                kvm_msr_entry_set(&msrs[n++],
++                                  MSR_MTRRphysBase(i), env->mtrr_var[i].base);
++                kvm_msr_entry_set(&msrs[n++],
++                                  MSR_MTRRphysMask(i), env->mtrr_var[i].mask);
++            }
++        }
+     }
+     if (env->mcg_cap) {
+         int i;
+@@ -1418,7 +1454,7 @@ static int kvm_get_msrs(X86CPU *cpu)
+     CPUX86State *env = &cpu->env;
+     struct {
+         struct kvm_msrs info;
+-        struct kvm_msr_entry entries[100];
++        struct kvm_msr_entry entries[150];
+     } msr_data;
+     struct kvm_msr_entry *msrs = msr_data.entries;
+     int ret, i, n;
+@@ -1500,6 +1536,24 @@ static int kvm_get_msrs(X86CPU *cpu)
+     if (has_msr_hv_tsc) {
+         msrs[n++].index = HV_X64_MSR_REFERENCE_TSC;
+     }
++    if (has_msr_mtrr) {
++        msrs[n++].index = MSR_MTRRdefType;
++        msrs[n++].index = MSR_MTRRfix64K_00000;
++        msrs[n++].index = MSR_MTRRfix16K_80000;
++        msrs[n++].index = MSR_MTRRfix16K_A0000;
++        msrs[n++].index = MSR_MTRRfix4K_C0000;
++        msrs[n++].index = MSR_MTRRfix4K_C8000;
++        msrs[n++].index = MSR_MTRRfix4K_D0000;
++        msrs[n++].index = MSR_MTRRfix4K_D8000;
++        msrs[n++].index = MSR_MTRRfix4K_E0000;
++        msrs[n++].index = MSR_MTRRfix4K_E8000;
++        msrs[n++].index = MSR_MTRRfix4K_F0000;
++        msrs[n++].index = MSR_MTRRfix4K_F8000;
++        for (i = 0; i < MSR_MTRRcap_VCNT; i++) {
++            msrs[n++].index = MSR_MTRRphysBase(i);
++            msrs[n++].index = MSR_MTRRphysMask(i);
++        }
++    }
+ 
+     msr_data.info.nmsrs = n;
+     ret = kvm_vcpu_ioctl(CPU(cpu), KVM_GET_MSRS, &msr_data);
+@@ -1614,6 +1668,49 @@ static int kvm_get_msrs(X86CPU *cpu)
+         case HV_X64_MSR_REFERENCE_TSC:
+             env->msr_hv_tsc = msrs[i].data;
+             break;
++        case MSR_MTRRdefType:
++            env->mtrr_deftype = msrs[i].data;
++            break;
++        case MSR_MTRRfix64K_00000:
++            env->mtrr_fixed[0] = msrs[i].data;
++            break;
++        case MSR_MTRRfix16K_80000:
++            env->mtrr_fixed[1] = msrs[i].data;
++            break;
++        case MSR_MTRRfix16K_A0000:
++            env->mtrr_fixed[2] = msrs[i].data;
++            break;
++        case MSR_MTRRfix4K_C0000:
++            env->mtrr_fixed[3] = msrs[i].data;
++            break;
++        case MSR_MTRRfix4K_C8000:
++            env->mtrr_fixed[4] = msrs[i].data;
++            break;
++        case MSR_MTRRfix4K_D0000:
++            env->mtrr_fixed[5] = msrs[i].data;
++            break;
++        case MSR_MTRRfix4K_D8000:
++            env->mtrr_fixed[6] = msrs[i].data;
++            break;
++        case MSR_MTRRfix4K_E0000:
++            env->mtrr_fixed[7] = msrs[i].data;
++            break;
++        case MSR_MTRRfix4K_E8000:
++            env->mtrr_fixed[8] = msrs[i].data;
++            break;
++        case MSR_MTRRfix4K_F0000:
++            env->mtrr_fixed[9] = msrs[i].data;
++            break;
++        case MSR_MTRRfix4K_F8000:
++            env->mtrr_fixed[10] = msrs[i].data;
++            break;
++        case MSR_MTRRphysBase(0) ... MSR_MTRRphysMask(MSR_MTRRcap_VCNT - 1):
++            if (index & 1) {
++                env->mtrr_var[MSR_MTRRphysIndex(index)].mask = msrs[i].data;
++            } else {
++                env->mtrr_var[MSR_MTRRphysIndex(index)].base = msrs[i].data;
++            }
++            break;
+         }
+     }
+ 
+-- 
+1.8.3.1
+

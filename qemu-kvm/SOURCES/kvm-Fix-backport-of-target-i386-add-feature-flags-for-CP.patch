@@ -1,0 +1,84 @@
+From 7530a2f3975b76711467226f8b279baf36d92e46 Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Tue, 6 Sep 2016 21:45:05 +0200
+Subject: [PATCH 1/2] Fix backport of "target-i386: add feature flags for
+ CPUID[EAX=0xd, ECX=1]"
+
+RH-Author: Eduardo Habkost <ehabkost@redhat.com>
+Message-id: <1473198305-8442-1-git-send-email-ehabkost@redhat.com>
+Patchwork-id: 72260
+O-Subject: [RHEL-7.3 qemu-kvm PATCH] Fix backport of "target-i386: add feature flags for CPUID[EAX=0xd, ECX=1]"
+Bugzilla: 1371619
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Upstream status: commit 0bb0b2d2fe7f645ddaf1f0ff40ac669c9feb4aa1
+
+commit 5fcaf5176d7545518c76f3aa8ea7ce6fb063c62d (the backport of
+upstream commit 0bb0b2d2fe7f645ddaf1f0ff40ac669c9feb4aa1) had a
+serious bug: as the qemu-kvm-1.5.3 code doesn't have
+FeatureWordInfo and loops for assigning cpu->features,
+cpu->features[FEAT_XSAVE] was always zero, so that commit
+basically cleared all XSAVE feature bits in all CPU models.
+
+Fix it by handling FEAT_XSAVE everywhere it matters: in the
+plus_features/minus_features handling, in the loading of CPU
+model definition, and kvm_cpu_fill_host().
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/cpu.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index 80106ba..1001c47 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -1201,6 +1201,8 @@ static void kvm_cpu_fill_host(x86_def_t *x86_cpu_def)
+     } else {
+         x86_cpu_def->features[FEAT_7_0_EBX] = 0;
+     }
++    x86_cpu_def->features[FEAT_XSAVE] =
++                kvm_arch_get_supported_cpuid(s, 0xd, 1, R_EAX);
+ 
+     x86_cpu_def->xlevel = kvm_arch_get_supported_cpuid(s, 0x80000000, 0, R_EAX);
+     x86_cpu_def->features[FEAT_8000_0001_EDX] =
+@@ -1281,6 +1283,9 @@ static int kvm_check_features_against_host(X86CPU *cpu)
+         {&env->features[FEAT_7_0_EBX],
+             &host_def.features[FEAT_7_0_EBX],
+             FEAT_7_0_EBX },
++        {&env->features[FEAT_XSAVE],
++            &host_def.features[FEAT_XSAVE],
++            FEAT_XSAVE },
+         {&env->features[FEAT_SVM],
+             &host_def.features[FEAT_SVM],
+             FEAT_SVM },
+@@ -1819,6 +1824,7 @@ static void cpu_x86_parse_featurestr(X86CPU *cpu, char *features, Error **errp)
+     env->features[FEAT_KVM] |= plus_features[FEAT_KVM];
+     env->features[FEAT_SVM] |= plus_features[FEAT_SVM];
+     env->features[FEAT_7_0_EBX] |= plus_features[FEAT_7_0_EBX];
++    env->features[FEAT_XSAVE] |= plus_features[FEAT_XSAVE];
+     env->features[FEAT_1_EDX] &= ~minus_features[FEAT_1_EDX];
+     env->features[FEAT_1_ECX] &= ~minus_features[FEAT_1_ECX];
+     env->features[FEAT_8000_0001_EDX] &= ~minus_features[FEAT_8000_0001_EDX];
+@@ -1827,6 +1833,7 @@ static void cpu_x86_parse_featurestr(X86CPU *cpu, char *features, Error **errp)
+     env->features[FEAT_KVM] &= ~minus_features[FEAT_KVM];
+     env->features[FEAT_SVM] &= ~minus_features[FEAT_SVM];
+     env->features[FEAT_7_0_EBX] &= ~minus_features[FEAT_7_0_EBX];
++    env->features[FEAT_XSAVE] &= ~minus_features[FEAT_XSAVE];
+ 
+ out:
+     return;
+@@ -1962,6 +1969,7 @@ static void cpu_x86_register(X86CPU *cpu, const char *name, Error **errp)
+     env->features[FEAT_SVM] = def->features[FEAT_SVM];
+     env->features[FEAT_C000_0001_EDX] = def->features[FEAT_C000_0001_EDX];
+     env->features[FEAT_7_0_EBX] = def->features[FEAT_7_0_EBX];
++    env->features[FEAT_XSAVE] = def->features[FEAT_XSAVE];
+     env->cpuid_xlevel2 = def->xlevel2;
+ 
+     object_property_set_str(OBJECT(cpu), def->model_id, "model-id", errp);
+-- 
+1.8.3.1
+

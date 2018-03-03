@@ -1,0 +1,96 @@
+From 64b612d6551f21f7c3e34fa522b5b9c13f2b4ed8 Mon Sep 17 00:00:00 2001
+Message-Id: <64b612d6551f21f7c3e34fa522b5b9c13f2b4ed8.1387382496.git.minovotn@redhat.com>
+In-Reply-To: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+References: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+From: Nigel Croxon <ncroxon@redhat.com>
+Date: Thu, 14 Nov 2013 22:52:59 +0100
+Subject: [PATCH 23/46] rdma: don't use negative index to array
+
+RH-Author: Nigel Croxon <ncroxon@redhat.com>
+Message-id: <1384469598-13137-24-git-send-email-ncroxon@redhat.com>
+Patchwork-id: 55707
+O-Subject: [RHEL7.0 PATCH 23/42] rdma: don't use negative index to array
+Bugzilla: 1011720
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: 1011720
+https://bugzilla.redhat.com/show_bug.cgi?id=1011720
+
+>From commit ID:
+commit 44b5949491a47043c4f7c4ff09f0191f82919a82
+Author: Isaku Yamahata <yamahata@private.email.ne.jp>
+Date:   Sat Aug 3 22:54:51 2013 -0400
+
+    rdma: don't use negative index to array
+
+    Reviewed-by: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Isaku Yamahata <yamahata@private.email.ne.jp>
+    Signed-off-by: Michael R. Hines <mrhines@us.ibm.com>
+    Message-id: 1375584894-9917-5-git-send-email-mrhines@linux.vnet.ibm.com
+    Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+---
+ migration-rdma.c |   27 +++++++++++++++------------
+ 1 files changed, 15 insertions(+), 12 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ migration-rdma.c | 27 +++++++++++++++------------
+ 1 file changed, 15 insertions(+), 12 deletions(-)
+
+diff --git a/migration-rdma.c b/migration-rdma.c
+index c958e5f..7266803 100644
+--- a/migration-rdma.c
++++ b/migration-rdma.c
+@@ -1933,10 +1933,21 @@ static int qemu_rdma_write_flush(QEMUFile *f, RDMAContext *rdma)
+ static inline int qemu_rdma_buffer_mergable(RDMAContext *rdma,
+                     uint64_t offset, uint64_t len)
+ {
+-    RDMALocalBlock *block =
+-        &(rdma->local_ram_blocks.block[rdma->current_index]);
+-    uint8_t *host_addr = block->local_host_addr + (offset - block->offset);
+-    uint8_t *chunk_end = ram_chunk_end(block, rdma->current_chunk);
++    RDMALocalBlock *block;
++    uint8_t *host_addr;
++    uint8_t *chunk_end;
++
++    if (rdma->current_index < 0) {
++        return 0;
++    }
++
++    if (rdma->current_chunk < 0) {
++        return 0;
++    }
++
++    block = &(rdma->local_ram_blocks.block[rdma->current_index]);
++    host_addr = block->local_host_addr + (offset - block->offset);
++    chunk_end = ram_chunk_end(block, rdma->current_chunk);
+ 
+     if (rdma->current_length == 0) {
+         return 0;
+@@ -1949,10 +1960,6 @@ static inline int qemu_rdma_buffer_mergable(RDMAContext *rdma,
+         return 0;
+     }
+ 
+-    if (rdma->current_index < 0) {
+-        return 0;
+-    }
+-
+     if (offset < block->offset) {
+         return 0;
+     }
+@@ -1961,10 +1968,6 @@ static inline int qemu_rdma_buffer_mergable(RDMAContext *rdma,
+         return 0;
+     }
+ 
+-    if (rdma->current_chunk < 0) {
+-        return 0;
+-    }
+-
+     if ((host_addr + len) > chunk_end) {
+         return 0;
+     }
+-- 
+1.7.11.7
+

@@ -1,0 +1,60 @@
+From 9aeb00acc02f49c754f0bbde5894b45b41407f63 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Tue, 18 Nov 2014 11:58:56 +0100
+Subject: [PATCH 33/41] vnc: sanitize bits_per_pixel from the client
+
+Message-id: <1416311936-5001-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 62424
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 1/1] vnc: sanitize bits_per_pixel from the client
+Bugzilla: 1157645
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+
+From: Petr Matousek <pmatouse@redhat.com>
+
+bits_per_pixel that are less than 8 could result in accessing
+non-initialized buffers later in the code due to the expectation
+that bytes_per_pixel value that is used to initialize these buffers is
+never zero.
+
+To fix this check that bits_per_pixel from the client is one of the
+values that the rfb protocol specification allows.
+
+This is CVE-2014-7815.
+
+Signed-off-by: Petr Matousek <pmatouse@redhat.com>
+
+[ kraxel: apply codestyle fix ]
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit e6908bfe8e07f2b452e78e677da1b45b1c0f6829)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ ui/vnc.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/ui/vnc.c b/ui/vnc.c
+index 3726352..a0e2d33 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -2024,6 +2024,16 @@ static void set_pixel_format(VncState *vs,
+         return;
+     }
+ 
++    switch (bits_per_pixel) {
++    case 8:
++    case 16:
++    case 32:
++        break;
++    default:
++        vnc_client_error(vs);
++        return;
++    }
++
+     vs->client_pf.rmax = red_max;
+     vs->client_pf.rbits = hweight_long(red_max);
+     vs->client_pf.rshift = red_shift;
+-- 
+1.8.3.1
+

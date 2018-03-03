@@ -1,0 +1,95 @@
+From 8ca7d4d814e7443da7f00696f37fb9f6f06dd668 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 4 Nov 2013 22:31:58 +0100
+Subject: [PATCH 05/87] iscsi: use bdrv_new() instead of stack structure
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-8-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55307
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 07/43] iscsi: use bdrv_new() instead of stack structure
+Bugzilla: 1026524
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Fam Zheng <famz@redhat.com>
+
+BZ: 1026524
+
+BlockDriverState structure needs bdrv_new() to initialize refcnt, don't
+allocate a local structure variable and memset to 0, becasue with coming
+refcnt implementation, bdrv_unref will crash if bs->refcnt not
+initialized to 1.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 13c91cb7e28b47f5c4227f7e88a1378570117704)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/iscsi.c | 16 +++++++++-------
+ 1 file changed, 9 insertions(+), 7 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/iscsi.c |   16 +++++++++-------
+ 1 files changed, 9 insertions(+), 7 deletions(-)
+
+diff --git a/block/iscsi.c b/block/iscsi.c
+index 4ab9edc..cc2017e 100644
+--- a/block/iscsi.c
++++ b/block/iscsi.c
+@@ -1252,11 +1252,11 @@ static int iscsi_create(const char *filename, QEMUOptionParameter *options)
+ {
+     int ret = 0;
+     int64_t total_size = 0;
+-    BlockDriverState bs;
++    BlockDriverState *bs;
+     IscsiLun *iscsilun = NULL;
+     QDict *bs_options;
+ 
+-    memset(&bs, 0, sizeof(BlockDriverState));
++    bs = bdrv_new("");
+ 
+     /* Read out options */
+     while (options && options->name) {
+@@ -1266,12 +1266,12 @@ static int iscsi_create(const char *filename, QEMUOptionParameter *options)
+         options++;
+     }
+ 
+-    bs.opaque = g_malloc0(sizeof(struct IscsiLun));
+-    iscsilun = bs.opaque;
++    bs->opaque = g_malloc0(sizeof(struct IscsiLun));
++    iscsilun = bs->opaque;
+ 
+     bs_options = qdict_new();
+     qdict_put(bs_options, "filename", qstring_from_str(filename));
+-    ret = iscsi_open(&bs, bs_options, 0);
++    ret = iscsi_open(bs, bs_options, 0);
+     QDECREF(bs_options);
+ 
+     if (ret != 0) {
+@@ -1285,7 +1285,7 @@ static int iscsi_create(const char *filename, QEMUOptionParameter *options)
+         ret = -ENODEV;
+         goto out;
+     }
+-    if (bs.total_sectors < total_size) {
++    if (bs->total_sectors < total_size) {
+         ret = -ENOSPC;
+         goto out;
+     }
+@@ -1295,7 +1295,9 @@ out:
+     if (iscsilun->iscsi != NULL) {
+         iscsi_destroy_context(iscsilun->iscsi);
+     }
+-    g_free(bs.opaque);
++    g_free(bs->opaque);
++    bs->opaque = NULL;
++    bdrv_delete(bs);
+     return ret;
+ }
+ 
+-- 
+1.7.1
+

@@ -1,0 +1,90 @@
+From 9fe83d3e480a74024150774c38373122084dfe10 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Wed, 6 Nov 2013 16:53:38 +0100
+Subject: [PATCH 81/87] qemu-iotests: Discard specific info in _img_info
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383756824-6921-16-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55570
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 15/21] qemu-iotests: Discard specific info in _img_info
+Bugzilla: 980771
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+BZ: 980771
+
+In _img_info, filter out additional information specific to the image
+format provided by qemu-img info, since tests designed for multiple
+image formats would produce different outputs for every image format
+otherwise.
+
+In a human-readable dump, that new information will always be last for
+each "image information block" (multiple blocks are emitted when
+inspecting the backing file chain). Every block is separated by an empty
+line. Therefore, in this case, everything starting with the line "Format
+specific information:" up to that empty line (or EOF, if it is the last
+block) has to be stripped.
+
+The JSON dump will always emit pretty JSON data. Therefore, the opening
+and closing braces of every object will be on lines which are indented
+by exactly the same amount, and all lines in between will have more
+indentation. Thus, in this case, everything starting with a line
+matching the regular expression /^ *"format-specific": {/ until /^ *},?/
+has to be stripped, where the number of spaces at the beginning of the
+respective lines is equal.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 4c2e946500c45685fdec61b3d929311dc26a2ad5)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ tests/qemu-iotests/common.rc | 20 +++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/common.rc |   20 +++++++++++++++++++-
+ 1 files changed, 19 insertions(+), 1 deletions(-)
+
+diff --git a/tests/qemu-iotests/common.rc b/tests/qemu-iotests/common.rc
+index 1b22db0..227c003 100644
+--- a/tests/qemu-iotests/common.rc
++++ b/tests/qemu-iotests/common.rc
+@@ -197,12 +197,30 @@ _check_test_img()
+ 
+ _img_info()
+ {
++    discard=0
++    regex_json_spec_start='^ *"format-specific": \{'
+     $QEMU_IMG info "$@" "$TEST_IMG" 2>&1 | \
+         sed -e "s#$IMGPROTO:$TEST_DIR#TEST_DIR#g" \
+             -e "s#$TEST_DIR#TEST_DIR#g" \
+             -e "s#$IMGFMT#IMGFMT#g" \
+             -e "/^disk size:/ D" \
+-            -e "/actual-size/ D"
++            -e "/actual-size/ D" | \
++        while IFS='' read line; do
++            if [[ $line == "Format specific information:" ]]; then
++                discard=1
++            elif [[ $line =~ $regex_json_spec_start ]]; then
++                discard=2
++                regex_json_spec_end="^${line%%[^ ]*}\\},? *$"
++            fi
++            if [[ $discard == 0 ]]; then
++                echo "$line"
++            elif [[ $discard == 1 && ! $line ]]; then
++                echo
++                discard=0
++            elif [[ $discard == 2 && $line =~ $regex_json_spec_end ]]; then
++                discard=0
++            fi
++        done
+ }
+ 
+ _get_pids_by_name()
+-- 
+1.7.1
+

@@ -1,0 +1,95 @@
+From 1ebfe2d9807a9ba4bfbec3104c6c8df50c89414d Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Fri, 29 May 2015 17:05:12 +0200
+Subject: [PATCH 2/8] qcow2: Discard VM state in active L1 after creating
+ snapshot
+
+Message-id: <1432919112-18076-3-git-send-email-kwolf@redhat.com>
+Patchwork-id: 65149
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 2/2] qcow2: Discard VM state in active L1 after creating snapshot
+Bugzilla: 1208808
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+During savevm, the VM state is written to the active L1 of the image and
+then a snapshot is taken. After that, the VM state isn't needed any more
+in the active L1 and should be discarded. This is implemented by this
+patch.
+
+The impact of not discarding the VM state is that a snapshot can never
+become smaller than any previous snapshot (because it would be padded
+with old VM state), and more importantly that future savevm operations
+cause unnecessary COWs (with associated flushes), which makes subsequent
+snapshots much slower.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit 1ebf561c11302f4fbe4afdd82758fe053cf1d5fc)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	block/qcow2.h
+
+Context-only conflict in qcow2.h.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block/qcow2-snapshot.c | 7 +++++++
+ block/qcow2.c          | 5 -----
+ block/qcow2.h          | 5 +++++
+ 3 files changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/block/qcow2-snapshot.c b/block/qcow2-snapshot.c
+index 84481be..6081482 100644
+--- a/block/qcow2-snapshot.c
++++ b/block/qcow2-snapshot.c
+@@ -407,6 +407,13 @@ int qcow2_snapshot_create(BlockDriverState *bs, QEMUSnapshotInfo *sn_info)
+ 
+     g_free(old_snapshot_list);
+ 
++    /* The VM state isn't needed any more in the active L1 table; in fact, it
++     * hurts by causing expensive COW for the next snapshot. */
++    qcow2_discard_clusters(bs, qcow2_vm_state_offset(s),
++                           align_offset(sn->vm_state_size, s->cluster_size)
++                                >> BDRV_SECTOR_BITS,
++                           QCOW2_DISCARD_NEVER);
++
+ #ifdef DEBUG_ALLOC
+     {
+       BdrvCheckResult result = {0};
+diff --git a/block/qcow2.c b/block/qcow2.c
+index babcb4b..6026f8a 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -2036,11 +2036,6 @@ static coroutine_fn int qcow2_co_flush_to_os(BlockDriverState *bs)
+     return 0;
+ }
+ 
+-static int64_t qcow2_vm_state_offset(BDRVQcowState *s)
+-{
+-	return (int64_t)s->l1_vm_state_index << (s->cluster_bits + s->l2_bits);
+-}
+-
+ static int qcow2_get_info(BlockDriverState *bs, BlockDriverInfo *bdi)
+ {
+     BDRVQcowState *s = bs->opaque;
+diff --git a/block/qcow2.h b/block/qcow2.h
+index 9ad8aad..e958ab4 100644
+--- a/block/qcow2.h
++++ b/block/qcow2.h
+@@ -417,6 +417,11 @@ static inline int64_t align_offset(int64_t offset, int n)
+     return offset;
+ }
+ 
++static inline int64_t qcow2_vm_state_offset(BDRVQcowState *s)
++{
++    return (int64_t)s->l1_vm_state_index << (s->cluster_bits + s->l2_bits);
++}
++
+ static inline uint64_t qcow2_max_refcount_clusters(BDRVQcowState *s)
+ {
+     return QCOW_MAX_REFTABLE_SIZE >> s->cluster_bits;
+-- 
+1.8.3.1
+

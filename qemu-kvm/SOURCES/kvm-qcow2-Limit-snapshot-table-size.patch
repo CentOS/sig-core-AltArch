@@ -1,0 +1,85 @@
+From 427c0839e73f5bb1b3b0fa33afd4a9e5ea3eb34b Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 25 Mar 2014 14:23:53 +0100
+Subject: [PATCH 46/49] qcow2: Limit snapshot table size
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1395753835-7591-47-git-send-email-kwolf@redhat.com>
+Patchwork-id: n/a
+O-Subject: [virt-devel] [EMBARGOED RHEL-7.0 qemu-kvm PATCH 46/48] qcow2: Limit snapshot table size
+Bugzilla: 1066691
+RH-Acked-by: Jeff Cody <jcody@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1066691
+Upstream status: Series embargoed
+
+Even with a limit of 64k snapshots, each snapshot could have a filename
+and an ID with up to 64k, which would still lead to pretty large
+allocations, which could potentially lead to qemu aborting. Limit the
+total size of the snapshot table to an average of 1k per entry when
+the limit of 64k snapshots is fully used. This should be plenty for any
+reasonable user.
+
+This also fixes potential integer overflows of s->snapshot_size.
+
+Suggested-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block/qcow2-snapshot.c |   13 +++++++++++++
+ block/qcow2.h          |    4 ++++
+ 2 files changed, 17 insertions(+), 0 deletions(-)
+
+diff --git a/block/qcow2-snapshot.c b/block/qcow2-snapshot.c
+index 626a8d4..84481be 100644
+--- a/block/qcow2-snapshot.c
++++ b/block/qcow2-snapshot.c
+@@ -116,8 +116,14 @@ int qcow2_read_snapshots(BlockDriverState *bs)
+         }
+         offset += name_size;
+         sn->name[name_size] = '\0';
++
++        if (offset - s->snapshots_offset > QCOW_MAX_SNAPSHOTS_SIZE) {
++            ret = -EFBIG;
++            goto fail;
++        }
+     }
+ 
++    assert(offset - s->snapshots_offset <= INT_MAX);
+     s->snapshots_size = offset - s->snapshots_offset;
+     return 0;
+ 
+@@ -150,7 +156,14 @@ static int qcow2_write_snapshots(BlockDriverState *bs)
+         offset += sizeof(extra);
+         offset += strlen(sn->id_str);
+         offset += strlen(sn->name);
++
++        if (offset > QCOW_MAX_SNAPSHOTS_SIZE) {
++            ret = -EFBIG;
++            goto fail;
++        }
+     }
++
++    assert(offset <= INT_MAX);
+     snapshots_size = offset;
+ 
+     /* Allocate space for the new snapshot list */
+diff --git a/block/qcow2.h b/block/qcow2.h
+index 87e256a..1cc1ef0 100644
+--- a/block/qcow2.h
++++ b/block/qcow2.h
+@@ -48,6 +48,10 @@
+  * (128 GB for 512 byte clusters, 2 EB for 2 MB clusters) */
+ #define QCOW_MAX_L1_SIZE 0x2000000
+ 
++/* Allow for an average of 1k per snapshot table entry, should be plenty of
++ * space for snapshot names and IDs */
++#define QCOW_MAX_SNAPSHOTS_SIZE (1024 * QCOW_MAX_SNAPSHOTS)
++
+ /* indicate that the refcount of the referenced cluster is exactly one. */
+ #define QCOW_OFLAG_COPIED     (1LL << 63)
+ /* indicate that the cluster is compressed (they never have the copied flag) */
+-- 
+1.7.1
+

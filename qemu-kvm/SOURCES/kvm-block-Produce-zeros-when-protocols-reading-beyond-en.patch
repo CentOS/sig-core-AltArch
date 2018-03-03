@@ -1,0 +1,106 @@
+From 12e88a4a74931578a5582b5caeca135fe85fb01b Mon Sep 17 00:00:00 2001
+From: Asias He <asias@redhat.com>
+Date: Thu, 12 Sep 2013 07:39:34 +0200
+Subject: [PATCH 14/29] block: Produce zeros when protocols reading beyond end of file
+
+RH-Author: Asias He <asias@redhat.com>
+Message-id: <1378971575-22416-4-git-send-email-asias@redhat.com>
+Patchwork-id: 54325
+O-Subject: [RHEL7.0 qemu-kvm PATCH 3/4] block: Produce zeros when protocols reading beyond end of file
+Bugzilla: 1007226
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+From: MORITA Kazutaka <morita.kazutaka@lab.ntt.co.jp>
+
+BZ: https://bugzilla.redhat.com/show_bug.cgi?id=1005052
+Brew: https://brewweb.devel.redhat.com/taskinfo?taskID=6275752
+
+While Asias is debugging an issue creating qcow2 images on top of
+non-file protocols.  It boils down to this example using NBD:
+
+$ qemu-io -c 'open -g nbd+unix:///?socket=/tmp/nbd.sock' -c 'read -v 0 512'
+
+Notice the open -g option to set bs->growable.  This means you can
+read/write beyond end of file.  Reading beyond end of file is supposed
+to produce zeroes.
+
+We rely on this behavior in qcow2_create2() during qcow2 image
+creation.  We create a new file and then write the qcow2 header
+structure using bdrv_pwrite().  Since QCowHeader is not a multiple of
+sector size, block.c first uses bdrv_read() on the empty file to fetch
+the first sector (should be all zeroes).
+
+Here is the output from the qemu-io NBD example above:
+
+$ qemu-io -c 'open -g nbd+unix:///?socket=/tmp/nbd.sock' -c 'read -v 0 512'
+00000000:  ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab  ................
+00000010:  ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab  ................
+00000020:  ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab  ................
+...
+
+We are not zeroing the buffer!  As a result qcow2 image creation on top
+of protocols is not guaranteed to work even when file creation is
+supported by the protocol.
+
+[Adapted this patch to use bs->zero_beyond_eof.
+-- Stefan]
+
+Signed-off-by: MORITA Kazutaka <morita.kazutaka@lab.ntt.co.jp>
+Signed-off-by: Asias He <asias@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 893a8f6220368a9ebff9a74bd48359928545cf6a)
+---
+ block.c | 30 +++++++++++++++++++++++++++++-
+ 1 file changed, 29 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c |   30 +++++++++++++++++++++++++++++-
+ 1 files changed, 29 insertions(+), 1 deletions(-)
+
+diff --git a/block.c b/block.c
+index dbcad0e..a3bc800 100644
+--- a/block.c
++++ b/block.c
+@@ -2555,7 +2555,35 @@ static int coroutine_fn bdrv_co_do_readv(BlockDriverState *bs,
+         }
+     }
+ 
+-    ret = drv->bdrv_co_readv(bs, sector_num, nb_sectors, qiov);
++    if (!(bs->zero_beyond_eof && bs->growable)) {
++        ret = drv->bdrv_co_readv(bs, sector_num, nb_sectors, qiov);
++    } else {
++        /* Read zeros after EOF of growable BDSes */
++        int64_t len, total_sectors, max_nb_sectors;
++
++        len = bdrv_getlength(bs);
++        if (len < 0) {
++            ret = len;
++            goto out;
++        }
++
++        total_sectors = len >> BDRV_SECTOR_BITS;
++        max_nb_sectors = MAX(0, total_sectors - sector_num);
++        if (max_nb_sectors > 0) {
++            ret = drv->bdrv_co_readv(bs, sector_num,
++                                     MIN(nb_sectors, max_nb_sectors), qiov);
++        } else {
++            ret = 0;
++        }
++
++        /* Reading beyond end of file is supposed to produce zeroes */
++        if (ret == 0 && total_sectors < sector_num + nb_sectors) {
++            uint64_t offset = MAX(0, total_sectors - sector_num);
++            uint64_t bytes = (sector_num + nb_sectors - offset) *
++                              BDRV_SECTOR_SIZE;
++            qemu_iovec_memset(qiov, offset * BDRV_SECTOR_SIZE, 0, bytes);
++        }
++    }
+ 
+ out:
+     tracked_request_end(&req);
+-- 
+1.7.1
+

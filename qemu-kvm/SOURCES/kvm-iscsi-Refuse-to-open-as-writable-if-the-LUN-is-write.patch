@@ -1,0 +1,103 @@
+From 8f412efbb8bb57fde0f924a7ad084f1c536c4a0b Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Tue, 20 Jan 2015 03:42:13 +0100
+Subject: [PATCH 06/16] iscsi: Refuse to open as writable if the LUN is write
+ protected
+
+Message-id: <1421725333-27072-1-git-send-email-famz@redhat.com>
+Patchwork-id: 63370
+O-Subject: [RHEL-7.2 qemu-kvm PATCH v2] iscsi: Refuse to open as writable if the LUN is write protected
+Bugzilla: 1032412
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+Before, when a write protected iSCSI target is attached as scsi-disk
+with BDRV_O_RDWR, we report it as writable, while in fact all writes
+will fail.
+
+One way to improve this is to report write protect flag as true to
+guest, but a even better way is to refuse using a write protected LUN to
+guest.
+
+Target write protect flag is checked with a mode sense query.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit c1d4096b0f033d0a52c542f0948403783c3682e9)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	block/iscsi.c
+
+Trivial context conflict: AioContext attach/detach functions are not
+present in downstream.
+---
+ block/iscsi.c | 43 +++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 43 insertions(+)
+
+diff --git a/block/iscsi.c b/block/iscsi.c
+index 4f42f29..3d61dd7 100644
+--- a/block/iscsi.c
++++ b/block/iscsi.c
+@@ -1290,6 +1290,41 @@ fail:
+     return NULL;
+ }
+ 
++
++static bool iscsi_is_write_protected(IscsiLun *iscsilun)
++{
++    struct scsi_task *task;
++    struct scsi_mode_sense *ms = NULL;
++    bool wrprotected = false;
++
++    task = iscsi_modesense6_sync(iscsilun->iscsi, iscsilun->lun,
++                                 1, SCSI_MODESENSE_PC_CURRENT,
++                                 0x3F, 0, 255);
++    if (task == NULL) {
++        error_report("iSCSI: Failed to send MODE_SENSE(6) command: %s",
++                     iscsi_get_error(iscsilun->iscsi));
++        goto out;
++    }
++
++    if (task->status != SCSI_STATUS_GOOD) {
++        error_report("iSCSI: Failed MODE_SENSE(6), LUN assumed writable");
++        goto out;
++    }
++    ms = scsi_datain_unmarshall(task);
++    if (!ms) {
++        error_report("iSCSI: Failed to unmarshall MODE_SENSE(6) data: %s",
++                     iscsi_get_error(iscsilun->iscsi));
++        goto out;
++    }
++    wrprotected = ms->device_specific_parameter & 0x80;
++
++out:
++    if (task) {
++        scsi_free_scsi_task(task);
++    }
++    return wrprotected;
++}
++
+ /*
+  * We support iscsi url's on the form
+  * iscsi://[<username>%<password>@]<host>[:<port>]/<targetname>/<lun>
+@@ -1405,6 +1440,14 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
+     scsi_free_scsi_task(task);
+     task = NULL;
+ 
++    /* Check the write protect flag of the LUN if we want to write */
++    if (iscsilun->type == TYPE_DISK && (flags & BDRV_O_RDWR) &&
++        iscsi_is_write_protected(iscsilun)) {
++        error_setg(errp, "Cannot open a write protected LUN as read-write");
++        ret = -EACCES;
++        goto out;
++    }
++
+     iscsi_readcapacity_sync(iscsilun, &local_err);
+     if (local_err != NULL) {
+         error_propagate(errp, local_err);
+-- 
+1.8.3.1
+

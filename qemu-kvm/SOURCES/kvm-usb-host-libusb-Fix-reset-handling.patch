@@ -1,0 +1,75 @@
+From d8c698663916222fea36f660f0e56a23a8688afc Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Wed, 6 Nov 2013 12:16:58 +0100
+Subject: [PATCH 63/81] usb-host-libusb: Fix reset handling
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1383740220-2049-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 55513
+O-Subject: [RHEL-7 qemu-kvm PATCH 1/3] usb-host-libusb: Fix reset handling
+Bugzilla: 980415
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+
+From: Hans de Goede <hdegoede@redhat.com>
+
+The guest will issue an initial device reset when the device is attached, but
+since the current usb-host-libusb code only actually does the reset when
+udev->configuration != 0, and on attach the device is not yet configured,
+the reset gets ignored. This means that the device gets passed to the guest
+in an unknown state, which is not good.
+
+The udev->configuration check is there because of the release / claim
+interfaces done around the libusb_device_reset call, but these are not
+necessary. If interfaces are claimed when libusb_device_reset gets called
+libusb will release + reclaim them itself.
+
+The usb_host_ep_update call also is not necessary. If the reset succeeds the
+original config and interface alt settings will be restored.
+
+Last if the reset fails, that means the device has either disconnected or
+morphed into an another device and has been completely re-enumerated,
+so it is treated by the host as a new device and our handle is invalid,
+so on reset failure we need to call usb_host_nodev().
+
+Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 5af35d7feccaa7d26b72c6c3d14116421d736b36)
+---
+ hw/usb/host-libusb.c | 10 ++++------
+ 1 file changed, 4 insertions(+), 6 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/host-libusb.c |   10 ++++------
+ 1 files changed, 4 insertions(+), 6 deletions(-)
+
+diff --git a/hw/usb/host-libusb.c b/hw/usb/host-libusb.c
+index f660770..9c8905e 100644
+--- a/hw/usb/host-libusb.c
++++ b/hw/usb/host-libusb.c
+@@ -1256,16 +1256,14 @@ static void usb_host_flush_ep_queue(USBDevice *dev, USBEndpoint *ep)
+ static void usb_host_handle_reset(USBDevice *udev)
+ {
+     USBHostDevice *s = USB_HOST_DEVICE(udev);
++    int rc;
+ 
+     trace_usb_host_reset(s->bus_num, s->addr);
+ 
+-    if (udev->configuration == 0) {
+-        return;
++    rc = libusb_reset_device(s->dh);
++    if (rc != 0) {
++        usb_host_nodev(s);
+     }
+-    usb_host_release_interfaces(s);
+-    libusb_reset_device(s->dh);
+-    usb_host_claim_interfaces(s, 0);
+-    usb_host_ep_update(s);
+ }
+ 
+ /*
+-- 
+1.7.1
+

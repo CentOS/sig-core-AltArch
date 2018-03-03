@@ -1,0 +1,536 @@
+From dc76b8c7582d037b1b150f9d809deb05d1a31b05 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sun, 19 Jan 2014 18:07:56 +0100
+Subject: [PATCH 22/34] qemu-iotests: make assert_no_active_block_jobs() common
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1390154881-17140-3-git-send-email-mreitz@redhat.com>
+Patchwork-id: 56815
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 2/7] qemu-iotests: make assert_no_active_block_jobs() common
+Bugzilla: 921890
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+From: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 921890
+
+Tests 030 and 041 both use query-block-jobs to check whether any block
+jobs are active.  Make this code common so that 'drive-backup' and other
+new feature tests will be able to reuse it.
+
+Suggested-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit ecc1c88efddb376687084c3387c38b3a458c5892)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ tests/qemu-iotests/030        | 54 ++++++++++++++++++--------------------
+ tests/qemu-iotests/041        | 60 ++++++++++++++++++++-----------------------
+ tests/qemu-iotests/iotests.py |  4 +++
+ 3 files changed, 57 insertions(+), 61 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/030        |   54 +++++++++++++++++-------------------
+ tests/qemu-iotests/041        |   60 +++++++++++++++++++----------------------
+ tests/qemu-iotests/iotests.py |    4 +++
+ 3 files changed, 57 insertions(+), 61 deletions(-)
+
+diff --git a/tests/qemu-iotests/030 b/tests/qemu-iotests/030
+index 3d128b3..9cf256b 100755
+--- a/tests/qemu-iotests/030
++++ b/tests/qemu-iotests/030
+@@ -31,10 +31,6 @@ test_img = os.path.join(iotests.test_dir, 'test.img')
+ class ImageStreamingTestCase(iotests.QMPTestCase):
+     '''Abstract base class for image streaming test cases'''
+ 
+-    def assert_no_active_streams(self):
+-        result = self.vm.qmp('query-block-jobs')
+-        self.assert_qmp(result, 'return', [])
+-
+     def cancel_and_wait(self, drive='drive0'):
+         '''Cancel a block job and wait for it to finish'''
+         result = self.vm.qmp('block-job-cancel', device=drive)
+@@ -48,7 +44,7 @@ class ImageStreamingTestCase(iotests.QMPTestCase):
+                     self.assert_qmp(event, 'data/device', drive)
+                     cancelled = True
+ 
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+ 
+     def create_image(self, name, size):
+         file = open(name, 'w')
+@@ -77,7 +73,7 @@ class TestSingleDrive(ImageStreamingTestCase):
+         os.remove(backing_img)
+ 
+     def test_stream(self):
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('block-stream', device='drive0')
+         self.assert_qmp(result, 'return', {})
+@@ -92,7 +88,7 @@ class TestSingleDrive(ImageStreamingTestCase):
+                     self.assert_qmp(event, 'data/len', self.image_len)
+                     completed = True
+ 
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+         self.vm.shutdown()
+ 
+         self.assertEqual(qemu_io('-c', 'map', backing_img),
+@@ -100,7 +96,7 @@ class TestSingleDrive(ImageStreamingTestCase):
+                          'image file map does not match backing file after streaming')
+ 
+     def test_stream_pause(self):
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('block-stream', device='drive0')
+         self.assert_qmp(result, 'return', {})
+@@ -129,7 +125,7 @@ class TestSingleDrive(ImageStreamingTestCase):
+                     self.assert_qmp(event, 'data/len', self.image_len)
+                     completed = True
+ 
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+         self.vm.shutdown()
+ 
+         self.assertEqual(qemu_io('-c', 'map', backing_img),
+@@ -137,7 +133,7 @@ class TestSingleDrive(ImageStreamingTestCase):
+                          'image file map does not match backing file after streaming')
+ 
+     def test_stream_partial(self):
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('block-stream', device='drive0', base=mid_img)
+         self.assert_qmp(result, 'return', {})
+@@ -152,7 +148,7 @@ class TestSingleDrive(ImageStreamingTestCase):
+                     self.assert_qmp(event, 'data/len', self.image_len)
+                     completed = True
+ 
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+         self.vm.shutdown()
+ 
+         self.assertEqual(qemu_io('-c', 'map', mid_img),
+@@ -177,7 +173,7 @@ class TestSmallerBackingFile(ImageStreamingTestCase):
+     # If this hangs, then you are missing a fix to complete streaming when the
+     # end of the backing file is reached.
+     def test_stream(self):
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('block-stream', device='drive0')
+         self.assert_qmp(result, 'return', {})
+@@ -192,7 +188,7 @@ class TestSmallerBackingFile(ImageStreamingTestCase):
+                     self.assert_qmp(event, 'data/len', self.image_len)
+                     completed = True
+ 
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+         self.vm.shutdown()
+ 
+ class TestErrors(ImageStreamingTestCase):
+@@ -243,7 +239,7 @@ class TestEIO(TestErrors):
+         os.remove(self.blkdebug_file)
+ 
+     def test_report(self):
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('block-stream', device='drive0')
+         self.assert_qmp(result, 'return', {})
+@@ -265,11 +261,11 @@ class TestEIO(TestErrors):
+                     self.assert_qmp(event, 'data/len', self.image_len)
+                     completed = True
+ 
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+         self.vm.shutdown()
+ 
+     def test_ignore(self):
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('block-stream', device='drive0', on_error='ignore')
+         self.assert_qmp(result, 'return', {})
+@@ -293,11 +289,11 @@ class TestEIO(TestErrors):
+                     self.assert_qmp(event, 'data/len', self.image_len)
+                     completed = True
+ 
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+         self.vm.shutdown()
+ 
+     def test_stop(self):
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('block-stream', device='drive0', on_error='stop')
+         self.assert_qmp(result, 'return', {})
+@@ -331,11 +327,11 @@ class TestEIO(TestErrors):
+                     self.assert_qmp(event, 'data/len', self.image_len)
+                     completed = True
+ 
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+         self.vm.shutdown()
+ 
+     def test_enospc(self):
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('block-stream', device='drive0', on_error='enospc')
+         self.assert_qmp(result, 'return', {})
+@@ -357,7 +353,7 @@ class TestEIO(TestErrors):
+                     self.assert_qmp(event, 'data/len', self.image_len)
+                     completed = True
+ 
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+         self.vm.shutdown()
+ 
+ class TestENOSPC(TestErrors):
+@@ -379,7 +375,7 @@ class TestENOSPC(TestErrors):
+         os.remove(self.blkdebug_file)
+ 
+     def test_enospc(self):
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('block-stream', device='drive0', on_error='enospc')
+         self.assert_qmp(result, 'return', {})
+@@ -413,7 +409,7 @@ class TestENOSPC(TestErrors):
+                     self.assert_qmp(event, 'data/len', self.image_len)
+                     completed = True
+ 
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+         self.vm.shutdown()
+ 
+ class TestStreamStop(ImageStreamingTestCase):
+@@ -433,7 +429,7 @@ class TestStreamStop(ImageStreamingTestCase):
+         os.remove(backing_img)
+ 
+     def test_stream_stop(self):
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('block-stream', device='drive0')
+         self.assert_qmp(result, 'return', {})
+@@ -463,7 +459,7 @@ class TestSetSpeed(ImageStreamingTestCase):
+     # This is a short performance test which is not run by default.
+     # Invoke "IMGFMT=qed ./030 TestSetSpeed.perf_test_throughput"
+     def perf_test_throughput(self):
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('block-stream', device='drive0')
+         self.assert_qmp(result, 'return', {})
+@@ -481,10 +477,10 @@ class TestSetSpeed(ImageStreamingTestCase):
+                     self.assert_qmp(event, 'data/len', self.image_len)
+                     completed = True
+ 
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+ 
+     def test_set_speed(self):
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('block-stream', device='drive0')
+         self.assert_qmp(result, 'return', {})
+@@ -515,12 +511,12 @@ class TestSetSpeed(ImageStreamingTestCase):
+         self.cancel_and_wait()
+ 
+     def test_set_speed_invalid(self):
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('block-stream', device='drive0', speed=-1)
+         self.assert_qmp(result, 'error/class', 'GenericError')
+ 
+-        self.assert_no_active_streams()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('block-stream', device='drive0')
+         self.assert_qmp(result, 'return', {})
+diff --git a/tests/qemu-iotests/041 b/tests/qemu-iotests/041
+index 720eeff..ff89427 100755
+--- a/tests/qemu-iotests/041
++++ b/tests/qemu-iotests/041
+@@ -32,10 +32,6 @@ target_img = os.path.join(iotests.test_dir, 'target.img')
+ class ImageMirroringTestCase(iotests.QMPTestCase):
+     '''Abstract base class for image mirroring test cases'''
+ 
+-    def assert_no_active_mirrors(self):
+-        result = self.vm.qmp('query-block-jobs')
+-        self.assert_qmp(result, 'return', [])
+-
+     def cancel_and_wait(self, drive='drive0', wait_ready=True):
+         '''Cancel a block job and wait for it to finish'''
+         if wait_ready:
+@@ -64,7 +60,7 @@ class ImageMirroringTestCase(iotests.QMPTestCase):
+                         self.assert_qmp(event, 'data/len', self.image_len)
+                     cancelled = True
+ 
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+     def complete_and_wait(self, drive='drive0', wait_ready=True):
+         '''Complete a block job and wait for it to finish'''
+@@ -91,7 +87,7 @@ class ImageMirroringTestCase(iotests.QMPTestCase):
+                     self.assert_qmp(event, 'data/len', self.image_len)
+                     completed = True
+ 
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+     def create_image(self, name, size):
+         file = open(name, 'w')
+@@ -142,7 +138,7 @@ class TestSingleDrive(ImageMirroringTestCase):
+             pass
+ 
+     def test_complete(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('drive-mirror', device='drive0', sync='full',
+                              target=target_img)
+@@ -156,7 +152,7 @@ class TestSingleDrive(ImageMirroringTestCase):
+                         'target image does not match source after mirroring')
+ 
+     def test_cancel(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('drive-mirror', device='drive0', sync='full',
+                              target=target_img)
+@@ -168,7 +164,7 @@ class TestSingleDrive(ImageMirroringTestCase):
+         self.vm.shutdown()
+ 
+     def test_cancel_after_ready(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('drive-mirror', device='drive0', sync='full',
+                              target=target_img)
+@@ -182,7 +178,7 @@ class TestSingleDrive(ImageMirroringTestCase):
+                         'target image does not match source after mirroring')
+ 
+     def test_pause(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('drive-mirror', device='drive0', sync='full',
+                              target=target_img)
+@@ -208,7 +204,7 @@ class TestSingleDrive(ImageMirroringTestCase):
+                         'target image does not match source after mirroring')
+ 
+     def test_small_buffer(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         # A small buffer is rounded up automatically
+         result = self.vm.qmp('drive-mirror', device='drive0', sync='full',
+@@ -223,7 +219,7 @@ class TestSingleDrive(ImageMirroringTestCase):
+                         'target image does not match source after mirroring')
+ 
+     def test_small_buffer2(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         qemu_img('create', '-f', iotests.imgfmt, '-o', 'cluster_size=%d,size=%d'
+                         % (TestSingleDrive.image_len, TestSingleDrive.image_len), target_img)
+@@ -239,7 +235,7 @@ class TestSingleDrive(ImageMirroringTestCase):
+                         'target image does not match source after mirroring')
+ 
+     def test_large_cluster(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         qemu_img('create', '-f', iotests.imgfmt, '-o', 'cluster_size=%d,backing_file=%s'
+                         % (TestSingleDrive.image_len, backing_img), target_img)
+@@ -294,7 +290,7 @@ class TestMirrorNoBacking(ImageMirroringTestCase):
+         os.remove(target_img)
+ 
+     def test_complete(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         qemu_img('create', '-f', iotests.imgfmt, '-o', 'backing_file=%s' % backing_img, target_img)
+         result = self.vm.qmp('drive-mirror', device='drive0', sync='full',
+@@ -309,7 +305,7 @@ class TestMirrorNoBacking(ImageMirroringTestCase):
+                         'target image does not match source after mirroring')
+ 
+     def test_cancel(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         qemu_img('create', '-f', iotests.imgfmt, '-o', 'backing_file=%s' % backing_img, target_img)
+         result = self.vm.qmp('drive-mirror', device='drive0', sync='full',
+@@ -324,7 +320,7 @@ class TestMirrorNoBacking(ImageMirroringTestCase):
+                         'target image does not match source after mirroring')
+ 
+     def test_large_cluster(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         # qemu-img create fails if the image is not there
+         qemu_img('create', '-f', iotests.imgfmt, '-o', 'size=%d'
+@@ -365,7 +361,7 @@ class TestMirrorResized(ImageMirroringTestCase):
+             pass
+ 
+     def test_complete_top(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('drive-mirror', device='drive0', sync='top',
+                              target=target_img)
+@@ -379,7 +375,7 @@ class TestMirrorResized(ImageMirroringTestCase):
+                         'target image does not match source after mirroring')
+ 
+     def test_complete_full(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('drive-mirror', device='drive0', sync='full',
+                              target=target_img)
+@@ -443,7 +439,7 @@ new_state = "1"
+         os.remove(self.blkdebug_file)
+ 
+     def test_report_read(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('drive-mirror', device='drive0', sync='full',
+                              target=target_img)
+@@ -467,11 +463,11 @@ new_state = "1"
+                     self.assert_qmp(event, 'data/len', self.image_len)
+                     completed = True
+ 
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+         self.vm.shutdown()
+ 
+     def test_ignore_read(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('drive-mirror', device='drive0', sync='full',
+                              target=target_img, on_source_error='ignore')
+@@ -487,7 +483,7 @@ new_state = "1"
+         self.vm.shutdown()
+ 
+     def test_large_cluster(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         # Test COW into the target image.  The first half of the
+         # cluster at MIRROR_GRANULARITY has to be copied from
+@@ -513,7 +509,7 @@ new_state = "1"
+                         'target image does not match source after mirroring')
+ 
+     def test_stop_read(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('drive-mirror', device='drive0', sync='full',
+                              target=target_img, on_source_error='stop')
+@@ -544,7 +540,7 @@ new_state = "1"
+         self.assert_qmp(result, 'return[0]/io-status', 'ok')
+ 
+         self.complete_and_wait(wait_ready=False)
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+         self.vm.shutdown()
+ 
+ class TestWriteErrors(ImageMirroringTestCase):
+@@ -594,7 +590,7 @@ new_state = "1"
+         os.remove(self.blkdebug_file)
+ 
+     def test_report_write(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('drive-mirror', device='drive0', sync='full',
+                              mode='existing', target=self.target_img)
+@@ -618,11 +614,11 @@ new_state = "1"
+                     self.assert_qmp(event, 'data/len', self.image_len)
+                     completed = True
+ 
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+         self.vm.shutdown()
+ 
+     def test_ignore_write(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('drive-mirror', device='drive0', sync='full',
+                              mode='existing', target=self.target_img,
+@@ -639,7 +635,7 @@ new_state = "1"
+         self.vm.shutdown()
+ 
+     def test_stop_write(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('drive-mirror', device='drive0', sync='full',
+                              mode='existing', target=self.target_img,
+@@ -671,7 +667,7 @@ new_state = "1"
+                     ready = True
+ 
+         self.complete_and_wait(wait_ready=False)
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+         self.vm.shutdown()
+ 
+ class TestSetSpeed(ImageMirroringTestCase):
+@@ -690,7 +686,7 @@ class TestSetSpeed(ImageMirroringTestCase):
+         os.remove(target_img)
+ 
+     def test_set_speed(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('drive-mirror', device='drive0', sync='full',
+                              target=target_img)
+@@ -723,13 +719,13 @@ class TestSetSpeed(ImageMirroringTestCase):
+         self.cancel_and_wait()
+ 
+     def test_set_speed_invalid(self):
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('drive-mirror', device='drive0', sync='full',
+                              target=target_img, speed=-1)
+         self.assert_qmp(result, 'error/class', 'GenericError')
+ 
+-        self.assert_no_active_mirrors()
++        self.assert_no_active_block_jobs()
+ 
+         result = self.vm.qmp('drive-mirror', device='drive0', sync='full',
+                              target=target_img)
+diff --git a/tests/qemu-iotests/iotests.py b/tests/qemu-iotests/iotests.py
+index 5cbac82..740464a 100644
+--- a/tests/qemu-iotests/iotests.py
++++ b/tests/qemu-iotests/iotests.py
+@@ -174,6 +174,10 @@ class QMPTestCase(unittest.TestCase):
+         result = self.dictpath(d, path)
+         self.assertEqual(result, value, 'values not equal "%s" and "%s"' % (str(result), str(value)))
+ 
++    def assert_no_active_block_jobs(self):
++        result = self.vm.qmp('query-block-jobs')
++        self.assert_qmp(result, 'return', [])
++
+ def notrun(reason):
+     '''Skip this test suite'''
+     # Each test in qemu-iotests has a number ("seq")
+-- 
+1.7.1
+

@@ -1,0 +1,63 @@
+From a06249cc31c0f8c2ae37c7e0ff047a922a265e7c Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 11 Feb 2014 16:24:43 +0100
+Subject: [PATCH 26/28] qemu-progress: Fix progress printing on SIGUSR1
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1392135884-10508-3-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57223
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 2/3] qemu-progress: Fix progress printing on SIGUSR1
+Bugzilla: 997878
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+Since commit a7aae221 ('Switch SIG_IPI to SIGUSR1'), SIGUSR1 is blocked
+during startup, breaking the progress report in tools.
+
+This patch reenables the signal when initialising a progress report.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+(cherry picked from commit 3c4b4e383e82ab3db307ee01f12ab0d4a28584dc)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ util/qemu-progress.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ util/qemu-progress.c |   10 ++++++++++
+ 1 files changed, 10 insertions(+), 0 deletions(-)
+
+diff --git a/util/qemu-progress.c b/util/qemu-progress.c
+index ad33fee..4ee5cd0 100644
+--- a/util/qemu-progress.c
++++ b/util/qemu-progress.c
+@@ -82,12 +82,22 @@ static void progress_dummy_init(void)
+ {
+ #ifdef CONFIG_POSIX
+     struct sigaction action;
++    sigset_t set;
+ 
+     memset(&action, 0, sizeof(action));
+     sigfillset(&action.sa_mask);
+     action.sa_handler = sigusr_print;
+     action.sa_flags = 0;
+     sigaction(SIGUSR1, &action, NULL);
++
++    /*
++     * SIGUSR1 is SIG_IPI and gets blocked in qemu_init_main_loop(). In the
++     * tools that use the progress report SIGUSR1 isn't used in this meaning
++     * and instead should print the progress, so reenable it.
++     */
++    sigemptyset(&set);
++    sigaddset(&set, SIGUSR1);
++    pthread_sigmask(SIG_UNBLOCK, &set, NULL);
+ #endif
+ 
+     state.print = progress_dummy_print;
+-- 
+1.7.1
+

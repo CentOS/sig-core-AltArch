@@ -1,0 +1,97 @@
+From 03b9104f9cf6c0b4f7b7976b987753afddb32599 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 18 May 2017 09:21:28 +0200
+Subject: [PATCH 15/18] serial: make tsr_retry unsigned
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <20170518092131.16571-16-famz@redhat.com>
+Patchwork-id: 75305
+O-Subject: [RHEL-7.4 qemu-kvm PATCH v3 15/18] serial: make tsr_retry unsigned
+Bugzilla: 1451470
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+It can never become negative; reflect this in the type of the field
+and simplify the conditions.
+
+Tested-by: Bret Ketchum <bcketchum@gmail.com>
+Reviewed-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 807464d8a7326e1025a2f392bf41636b0809d6da)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	hw/char/serial.c
+
+Downstream doesn't have 7385b275d9, so dropped the vmstate_serial_tsr
+hunk because the structure doesn't exist.
+
+The serial_post_load hunk is backported because it's safe, and good for
+the future backport of 7385b275d9 if there will be.
+---
+ hw/char/serial.c         | 10 +++++++---
+ include/hw/char/serial.h |  2 +-
+ 2 files changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/hw/char/serial.c b/hw/char/serial.c
+index 9986adf..afa1932 100644
+--- a/hw/char/serial.c
++++ b/hw/char/serial.c
+@@ -225,7 +225,7 @@ static gboolean serial_xmit(GIOChannel *chan, GIOCondition cond, void *opaque)
+ 
+     do {
+         assert(!(s->lsr & UART_LSR_TEMT));
+-        if (s->tsr_retry <= 0) {
++        if (s->tsr_retry == 0) {
+             assert(!(s->lsr & UART_LSR_THRE));
+ 
+             if (s->fcr & UART_FCR_FE) {
+@@ -248,7 +248,7 @@ static gboolean serial_xmit(GIOChannel *chan, GIOCondition cond, void *opaque)
+             /* in loopback mode, say that we just received a char */
+             serial_receive1(s, &s->tsr, 1);
+         } else if (qemu_chr_fe_write(s->chr, &s->tsr, 1) != 1) {
+-            if (s->tsr_retry >= 0 && s->tsr_retry < MAX_XMIT_RETRY &&
++            if (s->tsr_retry < MAX_XMIT_RETRY &&
+                 qemu_chr_fe_add_watch(s->chr, G_IO_OUT|G_IO_HUP,
+                                       serial_xmit, s) > 0) {
+                 s->tsr_retry++;
+@@ -296,7 +296,7 @@ static void serial_ioport_write(void *opaque, hwaddr addr, uint64_t val,
+             s->lsr &= ~UART_LSR_THRE;
+             s->lsr &= ~UART_LSR_TEMT;
+             serial_update_irq(s);
+-            if (s->tsr_retry <= 0) {
++            if (s->tsr_retry == 0) {
+                 serial_xmit(NULL, G_IO_OUT, s);
+             }
+         }
+@@ -619,6 +619,10 @@ static int serial_post_load(void *opaque, int version_id)
+     if (version_id < 3) {
+         s->fcr_vmstate = 0;
+     }
++    if (s->tsr_retry > MAX_XMIT_RETRY) {
++        s->tsr_retry = MAX_XMIT_RETRY;
++    }
++
+     /* Initialize fcr via setter to perform essential side-effects */
+     serial_ioport_write(s, 0x02, s->fcr_vmstate, 1);
+     serial_update_parameters(s);
+diff --git a/include/hw/char/serial.h b/include/hw/char/serial.h
+index 9ab81f6..2661f8c 100644
+--- a/include/hw/char/serial.h
++++ b/include/hw/char/serial.h
+@@ -55,7 +55,7 @@ struct SerialState {
+     int last_break_enable;
+     int it_shift;
+     int baudbase;
+-    int tsr_retry;
++    uint32_t tsr_retry;
+     uint32_t wakeup;
+ 
+     /* Time when the last byte was successfully sent out of the tsr */
+-- 
+1.8.3.1
+

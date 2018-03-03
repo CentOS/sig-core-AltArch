@@ -1,0 +1,92 @@
+From b3f60a169126dd6a4ef7c64442494d943f9ffbd2 Mon Sep 17 00:00:00 2001
+From: Marcel Apfelbaum <marcel.a@redhat.com>
+Date: Wed, 6 Nov 2013 16:32:33 +0100
+Subject: [PATCH 74/81] hw/misc: make pvpanic known to user
+
+RH-Author: Marcel Apfelbaum <marcel.a@redhat.com>
+Message-id: <1383755557-21590-6-git-send-email-marcel.a@redhat.com>
+Patchwork-id: 55550
+O-Subject: [RHEL-7 qemu-kvm PATCH v3 5/9] hw/misc: make pvpanic known to user
+Bugzilla: 990601
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+
+This patch is based on Hu Tao's:
+http://lists.nongnu.org/archive/html/qemu-devel/2013-08/msg00125.html
+
+The pvpanic device may be enabled now with "-device pvpanic"
+from command line.
+
+Signed-off-by: Marcel Apfelbaum <marcel.a@redhat.com>
+Reviewed-by: Hu Tao <hutao@cn.fujitsu.com>
+Message-id: 1376233843-19410-3-git-send-email-marcel.a@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit a5d3f640a0fa56eaed712c9361150568e32e1d08)
+Signed-off-by: Marcel Apfelbaum <marcel.a@redhat.com>
+
+Conflicts:
+	hw/misc/pvpanic.c
+
+Signed-off-by: Marcel Apfelbaum <marcel.a@redhat.com>
+---
+ hw/misc/pvpanic.c | 28 ++++++++++++----------------
+ 1 file changed, 12 insertions(+), 16 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/pvpanic.c |   28 ++++++++++++----------------
+ 1 files changed, 12 insertions(+), 16 deletions(-)
+
+diff --git a/hw/misc/pvpanic.c b/hw/misc/pvpanic.c
+index 1aab787..1d3178d 100644
+--- a/hw/misc/pvpanic.c
++++ b/hw/misc/pvpanic.c
+@@ -89,32 +89,28 @@ static const MemoryRegionOps pvpanic_ops = {
+ static int pvpanic_isa_initfn(ISADevice *dev)
+ {
+     PVPanicState *s = ISA_PVPANIC_DEVICE(dev);
++    FWCfgState *fw_cfg = fw_cfg_find();
++    uint16_t *pvpanic_port;
+ 
+-    memory_region_init_io(&s->io, &pvpanic_ops, s, "pvpanic", 1);
+-    isa_register_ioport(dev, &s->io, s->ioport);
++    if (!fw_cfg) {
++        return -1;
++    }
+ 
+-    return 0;
+-}
++    memory_region_init_io(&s->io, &pvpanic_ops, s, "pvpanic", 1);
+ 
+-static void pvpanic_fw_cfg(ISADevice *dev, FWCfgState *fw_cfg)
+-{
+-    PVPanicState *s = ISA_PVPANIC_DEVICE(dev);
+-    uint16_t *pvpanic_port = g_malloc(sizeof(*pvpanic_port));
++    pvpanic_port = g_malloc(sizeof(*pvpanic_port));
+     *pvpanic_port = cpu_to_le16(s->ioport);
+-
+     fw_cfg_add_file(fw_cfg, "etc/pvpanic-port", pvpanic_port,
+                     sizeof(*pvpanic_port));
++
++    isa_register_ioport(dev, &s->io, s->ioport);
++
++    return 0;
+ }
+ 
+ void pvpanic_init(ISABus *bus)
+ {
+-    ISADevice *dev;
+-    FWCfgState *fw_cfg = fw_cfg_find();
+-    if (!fw_cfg) {
+-        return;
+-    }
+-    dev = isa_create_simple (bus, TYPE_ISA_PVPANIC_DEVICE);
+-    pvpanic_fw_cfg(dev, fw_cfg);
++    isa_create_simple(bus, TYPE_ISA_PVPANIC_DEVICE);
+ }
+ 
+ static Property pvpanic_isa_properties[] = {
+-- 
+1.7.1
+

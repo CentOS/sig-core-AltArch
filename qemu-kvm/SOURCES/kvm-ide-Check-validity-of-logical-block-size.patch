@@ -1,0 +1,51 @@
+From e6e48f3e4e46ec72d85cfa663425ec820d438f5b Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Wed, 12 Aug 2015 14:18:40 +0200
+Subject: [PATCH 2/2] ide: Check validity of logical block size
+
+Message-id: <1439389120-20473-2-git-send-email-kwolf@redhat.com>
+Patchwork-id: 67519
+O-Subject: [RHEL-7.2 qemu-kvm PATCH] ide: Check validity of logical block size
+Bugzilla: 1134670
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Our IDE emulation can't handle logical block sizes other than 512. Check
+for it.
+
+The original assumption was that other values would silently be ignored
+(which is bad enough), but it's not quite true: The physical block size
+is exposed in IDENTIFY DEVICE as a multiple of the logical block size.
+Setting a logical block size therefore also corrupts the physical block
+size (4096/4096 doesn't silently downgrade to 4096/512, but 512/512).
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: John Snow <jsnow@redhat.com>
+(cherry picked from commit d20051856cd2fa8f10fed2d2a0b2751de5f7b20d)
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/ide/qdev.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/hw/ide/qdev.c b/hw/ide/qdev.c
+index 1d84e15..44f36c3 100644
+--- a/hw/ide/qdev.c
++++ b/hw/ide/qdev.c
+@@ -159,6 +159,11 @@ static int ide_dev_initfn(IDEDevice *dev, IDEDriveKind kind)
+         return -1;
+     }
+ 
++    if (dev->conf.logical_block_size != 512) {
++        error_report("logical_block_size must be 512 for IDE");
++        return -1;
++    }
++
+     blkconf_serial(&dev->conf, &dev->serial);
+     if (kind != IDE_CD
+         && blkconf_geometry(&dev->conf, &dev->chs_trans, 65536, 16, 255) < 0) {
+-- 
+1.8.3.1
+

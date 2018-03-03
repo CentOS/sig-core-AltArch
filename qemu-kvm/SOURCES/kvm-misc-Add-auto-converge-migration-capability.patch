@@ -1,0 +1,86 @@
+From b436b4fc9924560ab70e2ab45361de7054ddb052 Mon Sep 17 00:00:00 2001
+From: Nigel Croxon <ncroxon@redhat.com>
+Date: Wed, 31 Jul 2013 15:12:18 +0200
+Subject: Add 'auto-converge' migration capability
+
+RH-Author: Nigel Croxon <ncroxon@redhat.com>
+Message-id: <1375283539-18714-3-git-send-email-ncroxon@redhat.com>
+Patchwork-id: 52875
+O-Subject: [RHEL7 PATCH 2/3] Add 'auto-converge' migration capability
+Bugzilla: 985958
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Bugzilla: 985958 - Throttle-down guest to help with live migration convergence (backport to RHEL7.0)
+https://bugzilla.redhat.com/show_bug.cgi?id=985958
+
+Backported from the following upstream commit with 1 merge conflict.
+Hand merge qapi-schema.json.
+
+commit bde1e2ec2176c363c1783bf8887b6b1beb08dfee
+Author: Chegu Vinod <chegu_vinod@hp.com>
+Date:   Mon Jun 24 03:49:42 2013 -0600
+
+    Add 'auto-converge' migration capability
+
+    The auto-converge migration capability allows the user to specify if they
+    choose live migration seqeunce to automatically detect and force convergence.
+
+    Signed-off-by: Chegu Vinod <chegu_vinod@hp.com>
+    Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+    Reviewed-by: Eric Blake <eblake@redhat.com>
+    Signed-off-by: Juan Quintela <quintela@redhat.com>
+
+diff --git a/include/migration/migration.h b/include/migration/migration.h
+index e2acec6..1fc2666 100644
+--- a/include/migration/migration.h
++++ b/include/migration/migration.h
+@@ -119,6 +119,8 @@ void migrate_add_blocker(Error *reason);
+  */
+ void migrate_del_blocker(Error *reason);
+ 
++bool migrate_auto_converge(void);
++
+ int xbzrle_encode_buffer(uint8_t *old_buf, uint8_t *new_buf, int slen,
+                          uint8_t *dst, int dlen);
+ int xbzrle_decode_buffer(uint8_t *src, int slen, uint8_t *dst, int dlen);
+diff --git a/migration.c b/migration.c
+index bfbc345..6e29f72 100644
+--- a/migration.c
++++ b/migration.c
+@@ -474,6 +474,15 @@ void qmp_migrate_set_downtime(double value, Error **errp)
+     max_downtime = (uint64_t)value;
+ }
+ 
++bool migrate_auto_converge(void)
++{
++    MigrationState *s;
++
++    s = migrate_get_current();
++
++    return s->enabled_capabilities[MIGRATION_CAPABILITY_AUTO_CONVERGE];
++}
++
+ int migrate_use_xbzrle(void)
+ {
+     MigrationState *s;
+diff --git a/qapi-schema.json b/qapi-schema.json
+index 9302e7d..537f1d1 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -602,10 +602,13 @@
+ #          This feature allows us to minimize migration traffic for certain work
+ #          loads, by sending compressed difference of the pages
+ #
++# @auto-converge: If enabled, QEMU will automatically throttle down the guest
++#          to speed up convergence of RAM migration. (since 1.6)
++#
+ # Since: 1.2
+ ##
+ { 'enum': 'MigrationCapability',
+-  'data': ['xbzrle'] }
++  'data': ['xbzrle', 'auto-converge'] }
+ 
+ ##
+ # @MigrationCapabilityStatus

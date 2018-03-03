@@ -1,0 +1,105 @@
+From 39a68fd720126dd9c53af4f7fdeeecc0eeacc1ce Mon Sep 17 00:00:00 2001
+Message-Id: <39a68fd720126dd9c53af4f7fdeeecc0eeacc1ce.1418766606.git.jen@redhat.com>
+In-Reply-To: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+References: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 4 Dec 2014 00:05:08 -0600
+Subject: [CHANGE 14/31] vmdk: correctly propagate errors
+To: rhvirt-patches@redhat.com,
+    jen@redhat.com
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1417651524-18041-15-git-send-email-famz@redhat.com>
+Patchwork-id: 62687
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v5 14/30] vmdk: correctly propagate errors
+Bugzilla: 1134251
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+Now that we can return the "right" errors, use the Error** parameter
+to pass them back instead of just printing them.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 89ac8480a8c7f73dd943dcb1313d6bd984f9a870)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Jeff E. Nelson <jen@redhat.com>
+---
+ block/vmdk.c               | 11 ++++++-----
+ tests/qemu-iotests/059.out |  6 ++----
+ 2 files changed, 8 insertions(+), 9 deletions(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 94f7dae..c7b930f 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -572,6 +572,7 @@ static int vmdk_open_vmdk4(BlockDriverState *bs,
+         error_setg_errno(errp, -ret,
+                          "Could not read header from file '%s'",
+                          file->filename);
++        return -EINVAL;
+     }
+     if (header.capacity == 0) {
+         uint64_t desc_offset = le64_to_cpu(header.desc_offset);
+@@ -641,8 +642,8 @@ static int vmdk_open_vmdk4(BlockDriverState *bs,
+         char buf[64];
+         snprintf(buf, sizeof(buf), "VMDK version %d",
+                  le32_to_cpu(header.version));
+-        qerror_report(QERR_UNKNOWN_BLOCK_FORMAT_FEATURE,
+-                bs->device_name, "vmdk", buf);
++        error_set(errp, QERR_UNKNOWN_BLOCK_FORMAT_FEATURE,
++                  bs->device_name, "vmdk", buf);
+         return -ENOTSUP;
+     } else if (le32_to_cpu(header.version) == 3 && (flags & BDRV_O_RDWR)) {
+         /* VMware KB 2064959 explains that version 3 added support for
+@@ -654,7 +655,7 @@ static int vmdk_open_vmdk4(BlockDriverState *bs,
+     }
+ 
+     if (le32_to_cpu(header.num_gtes_per_gt) > 512) {
+-        error_report("L2 table size too big");
++        error_setg(errp, "L2 table size too big");
+         return -EINVAL;
+     }
+ 
+@@ -670,8 +671,8 @@ static int vmdk_open_vmdk4(BlockDriverState *bs,
+     }
+     if (bdrv_getlength(file) <
+             le64_to_cpu(header.grain_offset) * BDRV_SECTOR_SIZE) {
+-        error_report("File truncated, expecting at least %lld bytes",
+-                le64_to_cpu(header.grain_offset) * BDRV_SECTOR_SIZE);
++        error_setg(errp, "File truncated, expecting at least %lld bytes",
++                   le64_to_cpu(header.grain_offset) * BDRV_SECTOR_SIZE);
+         return -EINVAL;
+     }
+ 
+diff --git a/tests/qemu-iotests/059.out b/tests/qemu-iotests/059.out
+index 0220774..7c9ef90 100644
+--- a/tests/qemu-iotests/059.out
++++ b/tests/qemu-iotests/059.out
+@@ -7,8 +7,7 @@ no file open, try 'help open'
+ === Testing too big L2 table size ===
+ 
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864
+-L2 table size too big
+-qemu-io: can't open device TEST_DIR/t.vmdk: Could not open 'TEST_DIR/t.vmdk': Invalid argument
++qemu-io: can't open device TEST_DIR/t.vmdk: L2 table size too big
+ no file open, try 'help open'
+ === Testing too big L1 table size ===
+ 
+@@ -2045,8 +2044,7 @@ RW 12582912 VMFS "dummy.IMGFMT" 1
+ 
+ === Testing truncated sparse ===
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=107374182400
+-qemu-img: File truncated, expecting at least 13172736 bytes
+-qemu-img: Could not open 'TEST_DIR/t.IMGFMT': Could not open 'TEST_DIR/t.IMGFMT': Invalid argument
++qemu-img: Could not open 'TEST_DIR/t.IMGFMT': File truncated, expecting at least 13172736 bytes
+ 
+ === Testing version 3 ===
+ image: TEST_DIR/iotest-version3.IMGFMT
+-- 
+2.1.0
+

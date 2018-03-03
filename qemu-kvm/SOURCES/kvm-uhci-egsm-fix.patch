@@ -1,0 +1,56 @@
+From a558699e5f028623c2d5f9bb60d28b8f56b7766a Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Fri, 11 Jul 2014 14:20:36 +0200
+Subject: [PATCH 03/43] uhci: egsm fix
+
+Message-id: <1405088470-24115-4-git-send-email-kraxel@redhat.com>
+Patchwork-id: 59820
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 03/37] uhci: egsm fix
+Bugzilla: 1046873
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+When the guest goes suspend the uhci controller while there are
+pending resume requests on the ports go signal global resume
+instantly.
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 9f0f1a0c096f29a856f2e6903beda45b44ce9cdd)
+---
+ hw/usb/hcd-uhci.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/hcd-uhci.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/hw/usb/hcd-uhci.c b/hw/usb/hcd-uhci.c
+index 3380107..989c37a 100644
+--- a/hw/usb/hcd-uhci.c
++++ b/hw/usb/hcd-uhci.c
+@@ -191,6 +191,7 @@ bool ich9_uhci123_irqpin_override;
+ 
+ static void uhci_async_cancel(UHCIAsync *async);
+ static void uhci_queue_fill(UHCIQueue *q, UHCI_TD *td);
++static void uhci_resume(void *opaque);
+ 
+ static inline int32_t uhci_queue_token(UHCI_TD *td)
+ {
+@@ -500,6 +501,12 @@ static void uhci_port_write(void *opaque, hwaddr addr,
+             return;
+         }
+         s->cmd = val;
++        if (val & UHCI_CMD_EGSM) {
++            if ((s->ports[0].ctrl & UHCI_PORT_RD) ||
++                (s->ports[1].ctrl & UHCI_PORT_RD)) {
++                uhci_resume(s);
++            }
++        }
+         break;
+     case 0x02:
+         s->status &= ~val;
+-- 
+1.8.3.1
+

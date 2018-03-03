@@ -1,0 +1,66 @@
+From aa98e5248b83b5eed5230e582a21156373d9fc72 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Wed, 13 Aug 2014 07:59:41 +0200
+Subject: [PATCH 04/11] acpi: fix tables for no-hpet configuration
+
+Message-id: <1407916781-22610-2-git-send-email-lersek@redhat.com>
+Patchwork-id: 60549
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 1/1] acpi: fix tables for no-hpet configuration
+Bugzilla: 1129552
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+
+From: "Michael S. Tsirkin" <mst@redhat.com>
+
+acpi build tried to add offset of hpet table to rsdt even when hpet was
+disabled.  If no tables follow hpet, this could lead to a malformed
+rsdt.
+
+Fix it up.
+
+To avoid such errors in the future, rearrange code slightly to make it
+clear that acpi_add_table stores the offset of the following table - not
+of the previous one.
+
+Reported-by: TeLeMan <geleman@gmail.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Cc: qemu-stable@nongnu.org
+(cherry picked from commit 9ac1c4c07e7e6ab16a3e2149e9b32c0d092cb3f5)
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+---
+ hw/i386/acpi-build.c | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/acpi-build.c |    7 ++++---
+ 1 files changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/hw/i386/acpi-build.c b/hw/i386/acpi-build.c
+index 33012c9..8be1286 100644
+--- a/hw/i386/acpi-build.c
++++ b/hw/i386/acpi-build.c
+@@ -1076,15 +1076,16 @@ void acpi_build(PcGuestInfo *guest_info, AcpiBuildTables *tables)
+     /* ACPI tables pointed to by RSDT */
+     acpi_add_table(table_offsets, tables->table_data);
+     build_fadt(tables->table_data, tables->linker, &pm, facs, dsdt);
+-    acpi_add_table(table_offsets, tables->table_data);
+ 
++    acpi_add_table(table_offsets, tables->table_data);
+     build_ssdt(tables->table_data, tables->linker, &cpu, &pm, &misc, &pci,
+                guest_info);
+-    acpi_add_table(table_offsets, tables->table_data);
+ 
+-    build_madt(tables->table_data, tables->linker, &cpu, guest_info);
+     acpi_add_table(table_offsets, tables->table_data);
++    build_madt(tables->table_data, tables->linker, &cpu, guest_info);
++
+     if (misc.has_hpet) {
++        acpi_add_table(table_offsets, tables->table_data);
+         build_hpet(tables->table_data, tables->linker);
+     }
+     if (guest_info->numa_nodes) {
+-- 
+1.7.1
+

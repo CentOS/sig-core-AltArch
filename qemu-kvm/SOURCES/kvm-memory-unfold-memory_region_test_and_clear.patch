@@ -1,0 +1,60 @@
+From bde7a88eaae5b1f1d2dd83a4d4fd232991d2397d Mon Sep 17 00:00:00 2001
+From: Juan Quintela <quintela@redhat.com>
+Date: Tue, 14 Jan 2014 15:07:45 +0100
+Subject: [PATCH 34/40] memory: unfold memory_region_test_and_clear()
+
+RH-Author: Juan Quintela <quintela@redhat.com>
+Message-id: <1389712071-23303-35-git-send-email-quintela@redhat.com>
+Patchwork-id: 56689
+O-Subject: [RHEL7 qemu-kvm PATCH 34/40] memory: unfold memory_region_test_and_clear()
+Bugzilla: 997559
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+
+We are going to update the bitmap directly
+
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+Reviewed-by: Orit Wasserman <owasserm@redhat.com>
+(cherry picked from commit 12291ec18fdce3c1973c172f5a942a1bd26b9a5f)
+Signed-off-by: Juan Quintela <quintela@trasno.org>
+---
+ arch_init.c | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ arch_init.c |   10 +++++++---
+ 1 files changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/arch_init.c b/arch_init.c
+index d71fb33..41da357 100644
+--- a/arch_init.c
++++ b/arch_init.c
+@@ -48,6 +48,7 @@
+ #include "qmp-commands.h"
+ #include "trace.h"
+ #include "exec/cpu-all.h"
++#include "exec/ram_addr.h"
+ #include "hw/acpi/acpi.h"
+ 
+ #ifdef DEBUG_ARCH_INIT
+@@ -400,9 +401,12 @@ static void migration_bitmap_sync(void)
+ 
+     QTAILQ_FOREACH(block, &ram_list.blocks, next) {
+         for (addr = 0; addr < block->length; addr += TARGET_PAGE_SIZE) {
+-            if (memory_region_test_and_clear_dirty(block->mr,
+-                                                   addr, TARGET_PAGE_SIZE,
+-                                                   DIRTY_MEMORY_MIGRATION)) {
++            if (cpu_physical_memory_get_dirty(block->mr->ram_addr + addr,
++                                              TARGET_PAGE_SIZE,
++                                              DIRTY_MEMORY_MIGRATION)) {
++                cpu_physical_memory_reset_dirty(block->mr->ram_addr + addr,
++                                                TARGET_PAGE_SIZE,
++                                                DIRTY_MEMORY_MIGRATION);
+                 migration_bitmap_set_dirty(block->mr, addr);
+             }
+         }
+-- 
+1.7.1
+

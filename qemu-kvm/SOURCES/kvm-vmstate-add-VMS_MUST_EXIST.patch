@@ -1,0 +1,76 @@
+From 0aa1a1886452bb26cc60ac482f70d0ef78b85165 Mon Sep 17 00:00:00 2001
+From: Michael S. Tsirkin <mst@redhat.com>
+Date: Wed, 14 May 2014 08:52:47 +0200
+Subject: [PATCH 21/31] vmstate: add VMS_MUST_EXIST
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1400057538-6975-3-git-send-email-mst@redhat.com>
+Patchwork-id: 58869
+O-Subject: [PATCH qemu-kvm RHEL7.1 2/5] vmstate: add VMS_MUST_EXIST
+Bugzilla: 1095716
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+
+Can be used to verify a required field exists or validate
+state in some other way.
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Reviewed-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit 5bf81c8d63db0216a4d29dc87f9ce530bb791dd1)
+---
+ include/migration/vmstate.h |  1 +
+ savevm.c                    | 10 ++++++++++
+ 2 files changed, 11 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ include/migration/vmstate.h |    1 +
+ savevm.c                    |   10 ++++++++++
+ 2 files changed, 11 insertions(+), 0 deletions(-)
+
+diff --git a/include/migration/vmstate.h b/include/migration/vmstate.h
+index 11d93e1..95d1ce6 100644
+--- a/include/migration/vmstate.h
++++ b/include/migration/vmstate.h
+@@ -98,6 +98,7 @@ enum VMStateFlags {
+     VMS_MULTIPLY         = 0x200,  /* multiply "size" field by field_size */
+     VMS_VARRAY_UINT8     = 0x400,  /* Array with size in uint8_t field*/
+     VMS_VARRAY_UINT32    = 0x800,  /* Array with size in uint32_t field*/
++    VMS_MUST_EXIST       = 0x1000, /* Field must exist in input */
+ };
+ 
+ typedef struct {
+diff --git a/savevm.c b/savevm.c
+index 707caac..94512dd 100644
+--- a/savevm.c
++++ b/savevm.c
+@@ -1764,6 +1764,10 @@ int vmstate_load_state(QEMUFile *f, const VMStateDescription *vmsd,
+                     return ret;
+                 }
+             }
++        } else if (field->flags & VMS_MUST_EXIST) {
++            fprintf(stderr, "Input validation failed: %s/%s\n",
++                    vmsd->name, field->name);
++            return -1;
+         }
+         field++;
+     }
+@@ -1804,6 +1808,12 @@ void vmstate_save_state(QEMUFile *f, const VMStateDescription *vmsd,
+                     field->info->put(f, addr, size);
+                 }
+             }
++        } else {
++            if (field->flags & VMS_MUST_EXIST) {
++                fprintf(stderr, "Output state validation failed: %s/%s\n",
++                        vmsd->name, field->name);
++                assert(!(field->flags & VMS_MUST_EXIST));
++            }
+         }
+         field++;
+     }
+-- 
+1.7.1
+

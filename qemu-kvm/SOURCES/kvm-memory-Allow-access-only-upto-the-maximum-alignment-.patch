@@ -1,0 +1,169 @@
+From 2ee2492513f9685cb716dc1cb4cf5b580da43e07 Mon Sep 17 00:00:00 2001
+From: Bandan Das <bsd@redhat.com>
+Date: Wed, 25 Jan 2017 03:36:07 +0100
+Subject: [PATCH 01/11] memory: Allow access only upto the maximum alignment
+ for memory_region_* functions
+
+RH-Author: Bandan Das <bsd@redhat.com>
+Message-id: <jpgefzrn74o.fsf@linux.bootlegged.copy>
+Patchwork-id: 73367
+O-Subject: [RHEL-7.4 qemu-kvm PATCH] memory: Allow access only upto the maximum alignment for memory_region_* functions
+Bugzilla: 1342768
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1342768
+Brew: https://brewweb.engineering.redhat.com/brew/taskinfo?taskID=12437870
+Upstream: N/A, upstream doesn't exhibit this behavior
+
+Currently, there is no check in memory_region_iorange_* functions for whether
+the size requested is greater than the maximum alignment. This causes
+an abort with a specific version of the Linux kernel (4.7.0-RC1):
+/usr/libexec/qemu-kvm -kernel ~/vmlinuz-4.7.0-rc1 --enable-kvm -m 1G -vnc :2 -monitor stdio
+
+0  0x00007fb057cb65f7 in raise () from /lib64/libc.so.6
+1  0x00007fb057cb7ce8 in abort () from /lib64/libc.so.6
+2  0x00007fb05eca5537 in acpi_gpe_ioport_readb ()
+3  0x00007fb05eca5ff0 in gpe_readb ()
+4  0x00007fb05ede6f4c in memory_region_read_accessor ()
+5  0x00007fb05ede6993 in access_with_adjusted_size ()
+6  0x00007fb05ede7ce8 in memory_region_iorange_read ()
+7  0x00007fb05ede2ac7 in ioport_readl_thunk ()
+8  0x00007fb05ede3141 in cpu_inl ()
+9  0x00007fb05ede5c49 in kvm_cpu_exec ()
+10 0x00007fb05ed98485 in qemu_kvm_cpu_thread_fn ()
+11 0x00007fb05bcc9dc5 in start_thread () from /lib64/libpthread.so.0
+12 0x00007fb057d77ced in clone () from /lib64/libc.so.6
+
+This happens because guest code tries to read(l=4) from 0xafe2
+with GPE base being 0xafe0 which causes the abort in
+acpi_gpe_ioport_get_ptr() to trigger. This change adds a
+memory_access_size() which is similar to the one in upstream that
+forces size to be equal to the maximum alignment if it's greater.
+It also keeps the other checks present in upstream for safety and
+is called from the memory_region_read/write functions before
+calling the call specific access functions.
+
+Signed-off-by: Bandan Das <bsd@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ memory.c | 44 ++++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 40 insertions(+), 4 deletions(-)
+
+diff --git a/memory.c b/memory.c
+index 7bd6e87..573ecdd 100644
+--- a/memory.c
++++ b/memory.c
+@@ -381,6 +381,33 @@ static const MemoryRegionPortio *find_portio(MemoryRegion *mr, uint64_t offset,
+     return NULL;
+ }
+ 
++static int memory_access_size(MemoryRegion *mr, unsigned l, hwaddr addr)
++{
++  unsigned access_size_max = mr->ops->valid.max_access_size;
++
++  /* Regions are assumed to support 1-4 byte accesses unless
++     otherwise specified.  */
++  if (access_size_max == 0) {
++    access_size_max = 4;
++  }
++
++  /* Bound the maximum access by the alignment of the address.  */
++  if (!mr->ops->impl.unaligned) {
++    unsigned align_size_max = addr & -addr;
++    if (align_size_max != 0 && align_size_max < access_size_max) {
++        access_size_max = align_size_max;
++    }
++  }
++
++  /* Don't attempt accesses larger than the maximum.  */
++  if (l > access_size_max) {
++    l = access_size_max;
++  }
++  l = pow2floor(l);
++
++  return l;
++}
++
+ static void memory_region_iorange_read(IORange *iorange,
+                                        uint64_t offset,
+                                        unsigned width,
+@@ -389,6 +416,7 @@ static void memory_region_iorange_read(IORange *iorange,
+     MemoryRegionIORange *mrio
+         = container_of(iorange, MemoryRegionIORange, iorange);
+     MemoryRegion *mr = mrio->mr;
++    unsigned l;
+ 
+     offset += mrio->offset;
+     if (mr->ops->old_portio) {
+@@ -407,7 +435,8 @@ static void memory_region_iorange_read(IORange *iorange,
+         return;
+     }
+     *data = 0;
+-    access_with_adjusted_size(offset, data, width,
++    l = memory_access_size(mr, width, offset);
++    access_with_adjusted_size(offset, data, l,
+                               mr->ops->impl.min_access_size,
+                               mr->ops->impl.max_access_size,
+                               memory_region_read_accessor, mr);
+@@ -421,6 +450,7 @@ static void memory_region_iorange_write(IORange *iorange,
+     MemoryRegionIORange *mrio
+         = container_of(iorange, MemoryRegionIORange, iorange);
+     MemoryRegion *mr = mrio->mr;
++    unsigned l;
+ 
+     offset += mrio->offset;
+     if (mr->ops->old_portio) {
+@@ -437,7 +467,8 @@ static void memory_region_iorange_write(IORange *iorange,
+         }
+         return;
+     }
+-    access_with_adjusted_size(offset, &data, width,
++    l = memory_access_size(mr, width, offset);
++    access_with_adjusted_size(offset, &data, l,
+                               mr->ops->impl.min_access_size,
+                               mr->ops->impl.max_access_size,
+                               memory_region_write_accessor, mr);
+@@ -850,6 +881,7 @@ static uint64_t memory_region_dispatch_read1(MemoryRegion *mr,
+                                              unsigned size)
+ {
+     uint64_t data = 0;
++    unsigned l;
+ 
+     if (!memory_region_access_valid(mr, addr, size, false)) {
+         return -1U; /* FIXME: better signalling */
+@@ -859,8 +891,9 @@ static uint64_t memory_region_dispatch_read1(MemoryRegion *mr,
+         return mr->ops->old_mmio.read[ctz32(size)](mr->opaque, addr);
+     }
+ 
++    l = memory_access_size(mr, size, addr);
+     /* FIXME: support unaligned access */
+-    access_with_adjusted_size(addr, &data, size,
++    access_with_adjusted_size(addr, &data, l,
+                               mr->ops->impl.min_access_size,
+                               mr->ops->impl.max_access_size,
+                               memory_region_read_accessor, mr);
+@@ -902,6 +935,8 @@ static void memory_region_dispatch_write(MemoryRegion *mr,
+                                          uint64_t data,
+                                          unsigned size)
+ {
++    unsigned l;
++
+     if (!memory_region_access_valid(mr, addr, size, true)) {
+         return; /* FIXME: better signalling */
+     }
+@@ -913,8 +948,9 @@ static void memory_region_dispatch_write(MemoryRegion *mr,
+         return;
+     }
+ 
++    l = memory_access_size(mr, size, addr);
+     /* FIXME: support unaligned access */
+-    access_with_adjusted_size(addr, &data, size,
++    access_with_adjusted_size(addr, &data, l,
+                               mr->ops->impl.min_access_size,
+                               mr->ops->impl.max_access_size,
+                               memory_region_write_accessor, mr);
+-- 
+1.8.3.1
+

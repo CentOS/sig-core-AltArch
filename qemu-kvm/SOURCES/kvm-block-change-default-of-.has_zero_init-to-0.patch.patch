@@ -1,0 +1,295 @@
+From c8cc35838d42aa286242772d97e3a9be7bb786ba Mon Sep 17 00:00:00 2001
+Message-Id: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:08:49 +0100
+Subject: [PATCH 01/50] block: change default of .has_zero_init to 0
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-4-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56040
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 03/52] block: change default of .has_zero_init to 0
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Peter Lieven <pl@kamp.de>
+
+.has_zero_init defaults to 1 for all formats and protocols.
+
+this is a dangerous default since this means that all
+new added drivers need to manually overwrite it to 0 if
+they do not ensure that a device is zero initialized
+after bdrv_create().
+
+if a driver needs to explicitly set this value to
+1 its easier to verify the correctness in the review process.
+
+during review of the existing drivers it turned out
+that ssh and gluster had a wrong default of 1.
+both protocols support host_devices as backend
+which are not by default zero initialized. this
+wrong assumption will lead to possible corruption
+if qemu-img convert is used to write to such a backend.
+
+vpc and vmdk also defaulted to 1 altough they support
+fixed respectively flat extends. this has to be addresses
+in separate patches. both formats as well as the mentioned
+ssh and gluster are turned to the default of 0 with this
+patch for safety.
+
+a similar problem with the wrong default existed for
+iscsi most likely because the driver developer did
+oversee the default value of 1.
+
+Signed-off-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 3ac216270a62418519c08e88c17005a8f1539cf2)
+
+Conflicts: [due to get_block_status going in RHEL7 before this patch]
+	block/qcow2.c
+	block/qed.c
+	block/raw-posix.c
+	block/vdi.c
+---
+ block.c               |  8 +++++++-
+ block/cow.c           |  1 +
+ block/qcow.c          |  1 +
+ block/qcow2.c         |  1 +
+ block/qed.c           |  1 +
+ block/raw-posix.c     | 10 +---------
+ block/raw-win32.c     |  7 +------
+ block/rbd.c           |  1 +
+ block/sheepdog.c      |  1 +
+ block/vdi.c           |  1 +
+ include/block/block.h |  1 +
+ 11 files changed, 17 insertions(+), 16 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ block.c               |  8 +++++++-
+ block/cow.c           |  1 +
+ block/qcow.c          |  1 +
+ block/qcow2.c         |  1 +
+ block/qed.c           |  1 +
+ block/raw-posix.c     | 10 +---------
+ block/raw-win32.c     |  7 +------
+ block/rbd.c           |  1 +
+ block/sheepdog.c      |  1 +
+ block/vdi.c           |  1 +
+ include/block/block.h |  1 +
+ 11 files changed, 17 insertions(+), 16 deletions(-)
+
+diff --git a/block.c b/block.c
+index 8ef07bb..02994ec 100644
+--- a/block.c
++++ b/block.c
+@@ -3098,6 +3098,11 @@ int bdrv_flush_all(void)
+     return result;
+ }
+ 
++int bdrv_has_zero_init_1(BlockDriverState *bs)
++{
++    return 1;
++}
++
+ int bdrv_has_zero_init(BlockDriverState *bs)
+ {
+     assert(bs->drv);
+@@ -3111,7 +3116,8 @@ int bdrv_has_zero_init(BlockDriverState *bs)
+         return bs->drv->bdrv_has_zero_init(bs);
+     }
+ 
+-    return 1;
++    /* safe default */
++    return 0;
+ }
+ 
+ typedef struct BdrvCoGetBlockStatusData {
+diff --git a/block/cow.c b/block/cow.c
+index cd78129..cb9a3b0 100644
+--- a/block/cow.c
++++ b/block/cow.c
+@@ -386,6 +386,7 @@ static BlockDriver bdrv_cow = {
+     .bdrv_open      = cow_open,
+     .bdrv_close     = cow_close,
+     .bdrv_create    = cow_create,
++    .bdrv_has_zero_init     = bdrv_has_zero_init_1,
+ 
+     .bdrv_read              = cow_co_read,
+     .bdrv_write             = cow_co_write,
+diff --git a/block/qcow.c b/block/qcow.c
+index 6d029cc..6bc2358 100644
+--- a/block/qcow.c
++++ b/block/qcow.c
+@@ -906,6 +906,7 @@ static BlockDriver bdrv_qcow = {
+     .bdrv_close		= qcow_close,
+     .bdrv_reopen_prepare = qcow_reopen_prepare,
+     .bdrv_create	= qcow_create,
++    .bdrv_has_zero_init     = bdrv_has_zero_init_1,
+ 
+     .bdrv_co_readv          = qcow_co_readv,
+     .bdrv_co_writev         = qcow_co_writev,
+diff --git a/block/qcow2.c b/block/qcow2.c
+index 850d1c2..8de8892 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -2034,6 +2034,7 @@ static BlockDriver bdrv_qcow2 = {
+     .bdrv_close         = qcow2_close,
+     .bdrv_reopen_prepare  = qcow2_reopen_prepare,
+     .bdrv_create        = qcow2_create,
++    .bdrv_has_zero_init = bdrv_has_zero_init_1,
+     .bdrv_co_get_block_status = qcow2_co_get_block_status,
+     .bdrv_set_key       = qcow2_set_key,
+     .bdrv_make_empty    = qcow2_make_empty,
+diff --git a/block/qed.c b/block/qed.c
+index 7b13bb5..084dc0a 100644
+--- a/block/qed.c
++++ b/block/qed.c
+@@ -1603,6 +1603,7 @@ static BlockDriver bdrv_qed = {
+     .bdrv_close               = bdrv_qed_close,
+     .bdrv_reopen_prepare      = bdrv_qed_reopen_prepare,
+     .bdrv_create              = bdrv_qed_create,
++    .bdrv_has_zero_init       = bdrv_has_zero_init_1,
+     .bdrv_co_get_block_status = bdrv_qed_co_get_block_status,
+     .bdrv_make_empty          = bdrv_qed_make_empty,
+     .bdrv_aio_readv           = bdrv_qed_aio_readv,
+diff --git a/block/raw-posix.c b/block/raw-posix.c
+index eae1b40..c2b3dfd 100644
+--- a/block/raw-posix.c
++++ b/block/raw-posix.c
+@@ -1220,6 +1220,7 @@ static BlockDriver bdrv_file = {
+     .bdrv_reopen_abort = raw_reopen_abort,
+     .bdrv_close = raw_close,
+     .bdrv_create = raw_create,
++    .bdrv_has_zero_init = bdrv_has_zero_init_1,
+     .bdrv_co_get_block_status = raw_co_get_block_status,
+ 
+     .bdrv_aio_readv = raw_aio_readv,
+@@ -1563,11 +1564,6 @@ static int hdev_create(const char *filename, QEMUOptionParameter *options,
+     return ret;
+ }
+ 
+-static int hdev_has_zero_init(BlockDriverState *bs)
+-{
+-    return 0;
+-}
+-
+ static BlockDriver bdrv_host_device = {
+     .format_name        = "host_device",
+     .protocol_name        = "host_device",
+@@ -1580,7 +1576,6 @@ static BlockDriver bdrv_host_device = {
+     .bdrv_reopen_abort   = raw_reopen_abort,
+     .bdrv_create        = hdev_create,
+     .create_options     = raw_create_options,
+-    .bdrv_has_zero_init = hdev_has_zero_init,
+ 
+     .bdrv_aio_readv	= raw_aio_readv,
+     .bdrv_aio_writev	= raw_aio_writev,
+@@ -1711,7 +1706,6 @@ static BlockDriver bdrv_host_floppy = {
+     .bdrv_reopen_abort   = raw_reopen_abort,
+     .bdrv_create        = hdev_create,
+     .create_options     = raw_create_options,
+-    .bdrv_has_zero_init = hdev_has_zero_init,
+ 
+     .bdrv_aio_readv     = raw_aio_readv,
+     .bdrv_aio_writev    = raw_aio_writev,
+@@ -1821,7 +1815,6 @@ static BlockDriver bdrv_host_cdrom = {
+     .bdrv_reopen_abort   = raw_reopen_abort,
+     .bdrv_create        = hdev_create,
+     .create_options     = raw_create_options,
+-    .bdrv_has_zero_init = hdev_has_zero_init,
+ 
+     .bdrv_aio_readv     = raw_aio_readv,
+     .bdrv_aio_writev    = raw_aio_writev,
+@@ -1949,7 +1942,6 @@ static BlockDriver bdrv_host_cdrom = {
+     .bdrv_reopen_abort   = raw_reopen_abort,
+     .bdrv_create        = hdev_create,
+     .create_options     = raw_create_options,
+-    .bdrv_has_zero_init = hdev_has_zero_init,
+ 
+     .bdrv_aio_readv     = raw_aio_readv,
+     .bdrv_aio_writev    = raw_aio_writev,
+diff --git a/block/raw-win32.c b/block/raw-win32.c
+index 584790f..6ac3797 100644
+--- a/block/raw-win32.c
++++ b/block/raw-win32.c
+@@ -465,6 +465,7 @@ static BlockDriver bdrv_file = {
+     .bdrv_file_open	= raw_open,
+     .bdrv_close		= raw_close,
+     .bdrv_create	= raw_create,
++    .bdrv_has_zero_init = bdrv_has_zero_init_1,
+ 
+     .bdrv_aio_readv     = raw_aio_readv,
+     .bdrv_aio_writev    = raw_aio_writev,
+@@ -600,11 +601,6 @@ done:
+     return ret;
+ }
+ 
+-static int hdev_has_zero_init(BlockDriverState *bs)
+-{
+-    return 0;
+-}
+-
+ static BlockDriver bdrv_host_device = {
+     .format_name	= "host_device",
+     .protocol_name	= "host_device",
+@@ -612,7 +608,6 @@ static BlockDriver bdrv_host_device = {
+     .bdrv_probe_device	= hdev_probe_device,
+     .bdrv_file_open	= hdev_open,
+     .bdrv_close		= raw_close,
+-    .bdrv_has_zero_init = hdev_has_zero_init,
+ 
+     .bdrv_aio_readv     = raw_aio_readv,
+     .bdrv_aio_writev    = raw_aio_writev,
+diff --git a/block/rbd.c b/block/rbd.c
+index 169d3cf..b870401 100644
+--- a/block/rbd.c
++++ b/block/rbd.c
+@@ -974,6 +974,7 @@ static BlockDriver bdrv_rbd = {
+     .bdrv_file_open     = qemu_rbd_open,
+     .bdrv_close         = qemu_rbd_close,
+     .bdrv_create        = qemu_rbd_create,
++    .bdrv_has_zero_init = bdrv_has_zero_init_1,
+     .bdrv_get_info      = qemu_rbd_getinfo,
+     .create_options     = qemu_rbd_create_options,
+     .bdrv_getlength     = qemu_rbd_getlength,
+diff --git a/block/sheepdog.c b/block/sheepdog.c
+index e7c4448..09203ad 100644
+--- a/block/sheepdog.c
++++ b/block/sheepdog.c
+@@ -2411,6 +2411,7 @@ static BlockDriver bdrv_sheepdog_unix = {
+     .bdrv_file_open = sd_open,
+     .bdrv_close     = sd_close,
+     .bdrv_create    = sd_create,
++    .bdrv_has_zero_init = bdrv_has_zero_init_1,
+     .bdrv_getlength = sd_getlength,
+     .bdrv_truncate  = sd_truncate,
+ 
+diff --git a/block/vdi.c b/block/vdi.c
+index 84860fe..dcbc27c 100644
+--- a/block/vdi.c
++++ b/block/vdi.c
+@@ -792,6 +792,7 @@ static BlockDriver bdrv_vdi = {
+     .bdrv_close = vdi_close,
+     .bdrv_reopen_prepare = vdi_reopen_prepare,
+     .bdrv_create = vdi_create,
++    .bdrv_has_zero_init = bdrv_has_zero_init_1,
+     .bdrv_co_get_block_status = vdi_co_get_block_status,
+     .bdrv_make_empty = vdi_make_empty,
+ 
+diff --git a/include/block/block.h b/include/block/block.h
+index 656570e..15ffbd2 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -300,6 +300,7 @@ void bdrv_drain_all(void);
+ 
+ int bdrv_discard(BlockDriverState *bs, int64_t sector_num, int nb_sectors);
+ int bdrv_co_discard(BlockDriverState *bs, int64_t sector_num, int nb_sectors);
++int bdrv_has_zero_init_1(BlockDriverState *bs);
+ int bdrv_has_zero_init(BlockDriverState *bs);
+ int64_t bdrv_get_block_status(BlockDriverState *bs, int64_t sector_num,
+                               int nb_sectors, int *pnum);
+-- 
+1.7.11.7
+

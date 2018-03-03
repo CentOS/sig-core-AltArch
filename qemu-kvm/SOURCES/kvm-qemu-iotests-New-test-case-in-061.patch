@@ -1,0 +1,128 @@
+From af156d9a912c96203f26cde732f95357d7f63cd4 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Tue, 7 Jan 2014 21:57:18 +0100
+Subject: [PATCH 13/14] qemu-iotests: New test case in 061
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1389131839-12920-14-git-send-email-mreitz@redhat.com>
+Patchwork-id: 56549
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 13/14] qemu-iotests: New test case in 061
+Bugzilla: 1033490
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1033490
+
+Add one test case for zero cluster expansion on qcow2 version downgrade
+in shared L2 tables (i.e., L2 tables with a refcount > 1) and one for
+zero expansion on backed clusters in shared L2 tables.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit d982919d3897f36d79e215c46e3bc27fd6e27bf8)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ tests/qemu-iotests/061     | 28 ++++++++++++++++++++++++++++
+ tests/qemu-iotests/061.out | 27 +++++++++++++++++++++++++++
+ 2 files changed, 55 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/061     |   28 ++++++++++++++++++++++++++++
+ tests/qemu-iotests/061.out |   27 +++++++++++++++++++++++++++
+ 2 files changed, 55 insertions(+), 0 deletions(-)
+
+diff --git a/tests/qemu-iotests/061 b/tests/qemu-iotests/061
+index 86404e6..5f04bfa 100644
+--- a/tests/qemu-iotests/061
++++ b/tests/qemu-iotests/061
+@@ -146,6 +146,19 @@ _check_test_img
+ $QEMU_IO -c "read -P 0 0 128k" "$TEST_IMG" | _filter_qemu_io
+ 
+ echo
++echo "=== Testing zero expansion on shared L2 table ==="
++echo
++IMGOPTS="compat=1.1" _make_test_img 64M
++$QEMU_IO -c "write -z 0 128k" "$TEST_IMG" | _filter_qemu_io
++$QEMU_IMG snapshot -c foo "$TEST_IMG"
++$QEMU_IMG amend -o "compat=0.10" "$TEST_IMG"
++_check_test_img
++$QEMU_IO -c "read -P 0 0 128k" "$TEST_IMG" | _filter_qemu_io
++$QEMU_IMG snapshot -a foo "$TEST_IMG"
++_check_test_img
++$QEMU_IO -c "read -P 0 0 128k" "$TEST_IMG" | _filter_qemu_io
++
++echo
+ echo "=== Testing zero expansion on backed image ==="
+ echo
+ IMGOPTS="compat=1.1" TEST_IMG="$TEST_IMG.base" _make_test_img 64M
+@@ -172,6 +185,21 @@ $QEMU_IMG snapshot -a foo "$TEST_IMG"
+ _check_test_img
+ $QEMU_IO -c "read -P 0 0 64k" -c "read -P 0x2a 64k 64k" "$TEST_IMG" | _filter_qemu_io
+ 
++echo
++echo "=== Testing zero expansion on backed image with shared L2 table ==="
++echo
++IMGOPTS="compat=1.1" TEST_IMG="$TEST_IMG.base" _make_test_img 64M
++$QEMU_IO -c "write -P 0x2a 0 128k" "$TEST_IMG.base" | _filter_qemu_io
++IMGOPTS="compat=1.1,backing_file=$TEST_IMG.base" _make_test_img 64M
++$QEMU_IO -c "write -z 0 128k" "$TEST_IMG" | _filter_qemu_io
++$QEMU_IMG snapshot -c foo "$TEST_IMG"
++$QEMU_IMG amend -o "compat=0.10" "$TEST_IMG"
++_check_test_img
++$QEMU_IO -c "read -P 0 0 128k" "$TEST_IMG" | _filter_qemu_io
++$QEMU_IMG snapshot -a foo "$TEST_IMG"
++_check_test_img
++$QEMU_IO -c "read -P 0 0 128k" "$TEST_IMG" | _filter_qemu_io
++
+ # success, all done
+ echo "*** done"
+ rm -f $seq.full
+diff --git a/tests/qemu-iotests/061.out b/tests/qemu-iotests/061.out
+index 05bd1d5..d42127f 100644
+--- a/tests/qemu-iotests/061.out
++++ b/tests/qemu-iotests/061.out
+@@ -312,6 +312,18 @@ No errors were found on the image.
+ read 131072/131072 bytes at offset 0
+ 128 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ 
++=== Testing zero expansion on shared L2 table ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++wrote 131072/131072 bytes at offset 0
++128 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++No errors were found on the image.
++read 131072/131072 bytes at offset 0
++128 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++No errors were found on the image.
++read 131072/131072 bytes at offset 0
++128 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
+ === Testing zero expansion on backed image ===
+ 
+ Formatting 'TEST_DIR/t.IMGFMT.base', fmt=IMGFMT size=67108864 
+@@ -346,4 +358,19 @@ read 65536/65536 bytes at offset 0
+ 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ read 65536/65536 bytes at offset 65536
+ 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++=== Testing zero expansion on backed image with shared L2 table ===
++
++Formatting 'TEST_DIR/t.IMGFMT.base', fmt=IMGFMT size=67108864 
++wrote 131072/131072 bytes at offset 0
++128 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 backing_file='TEST_DIR/t.IMGFMT.base' 
++wrote 131072/131072 bytes at offset 0
++128 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++No errors were found on the image.
++read 131072/131072 bytes at offset 0
++128 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++No errors were found on the image.
++read 131072/131072 bytes at offset 0
++128 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ *** done
+-- 
+1.7.1
+

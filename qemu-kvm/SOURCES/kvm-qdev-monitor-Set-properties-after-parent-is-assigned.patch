@@ -1,0 +1,91 @@
+From b4d1a1c8b3448337e9b5e33706913b82356d22a7 Mon Sep 17 00:00:00 2001
+From: Amos Kong <akong@redhat.com>
+Date: Tue, 11 Mar 2014 23:59:22 +0100
+Subject: [PATCH 1/6] qdev-monitor: Set properties after parent is assigned in device_add
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Amos Kong <akong@redhat.com>
+Message-id: <1394582362-8252-1-git-send-email-akong@redhat.com>
+Patchwork-id: 58081
+O-Subject: [RHEL-7.0 qemu-kvm PATCH] qdev-monitor: Set properties after parent is assigned in device_add
+Bugzilla: 1046248
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Xiao Wang <jasowang@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+
+Bugzilla: 1046248
+Brew: https://brewweb.devel.redhat.com/taskinfo?taskID=7190260
+Upstream: backported from qemu-cpu subtree (qom-next branch)
+          commit bd140cf43d0373cca4c17efaf2ce730cdcbc0c4e
+
+Test steps:
+ (qemu) device_add e1000,addr=adsf
+  Property 'e1000.addr' doesn't take value 'adsf'
+ (qemu) info qtree
+  Then qemu crashed.
+
+Currently we set a link to the new device from its parent bus, but the
+device hasn't been added to QOM tree yet. When it fails to set properties,
+object_unparent() can't clean up the device.
+
+Delay setting of device properties until the device has been added to
+the QOM composition tree. This way, when setting a property fails,
+object_unparent() can clean up the device properly.
+
+Signed-off-by: Amos Kong <akong@redhat.com>
+Reviewed-by: Igor Mammedov <imammedo@redhat.com>
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+---
+ qdev-monitor.c | 15 +++++++++------
+ 1 file changed, 9 insertions(+), 6 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qdev-monitor.c |   15 +++++++++------
+ 1 files changed, 9 insertions(+), 6 deletions(-)
+
+diff --git a/qdev-monitor.c b/qdev-monitor.c
+index d7b9f04..ee891ea 100644
+--- a/qdev-monitor.c
++++ b/qdev-monitor.c
+@@ -522,7 +522,7 @@ DeviceState *qdev_device_add(QemuOpts *opts)
+         return NULL;
+     }
+ 
+-    /* create device, set properties */
++    /* create device */
+     dev = DEVICE(object_new(driver));
+ 
+     if (bus) {
+@@ -533,11 +533,7 @@ DeviceState *qdev_device_add(QemuOpts *opts)
+     if (id) {
+         dev->id = id;
+     }
+-    if (qemu_opt_foreach(opts, set_property, dev, 1) != 0) {
+-        object_unparent(OBJECT(dev));
+-        object_unref(OBJECT(dev));
+-        return NULL;
+-    }
++
+     if (dev->id) {
+         object_property_add_child(qdev_get_peripheral(), dev->id,
+                                   OBJECT(dev), NULL);
+@@ -549,6 +545,13 @@ DeviceState *qdev_device_add(QemuOpts *opts)
+         g_free(name);
+     }
+ 
++    /* set properties */
++    if (qemu_opt_foreach(opts, set_property, dev, 1) != 0) {
++        object_unparent(OBJECT(dev));
++        object_unref(OBJECT(dev));
++        return NULL;
++    }
++
+     dev->opts = opts;
+     object_property_set_bool(OBJECT(dev), true, "realized", &err);
+     if (err != NULL) {
+-- 
+1.7.1
+

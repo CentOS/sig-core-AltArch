@@ -1,0 +1,163 @@
+From c73b87743086200c3f9ad485dcd4e71bdee27881 Mon Sep 17 00:00:00 2001
+From: John Snow <jsnow@redhat.com>
+Date: Mon, 23 Nov 2015 17:38:26 +0100
+Subject: [PATCH 07/27] qemu-io: Factor out qemuio_command
+
+RH-Author: John Snow <jsnow@redhat.com>
+Message-id: <1448300320-7772-8-git-send-email-jsnow@redhat.com>
+Patchwork-id: 68438
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 07/21] qemu-io: Factor out qemuio_command
+Bugzilla: 1272523
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+It's duplicated code. Move it to qemu-io-cmds.c because it's not
+dependent on any static data of the qemu-io tool.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit dd5832967ac3fe96bd5bf9f199639176998ead69)
+Signed-off-by: John Snow <jsnow@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ cmd.c          | 43 +++++--------------------------------------
+ cmd.h          |  3 ++-
+ qemu-io-cmds.c | 24 ++++++++++++++++++++++++
+ 3 files changed, 31 insertions(+), 39 deletions(-)
+
+diff --git a/cmd.c b/cmd.c
+index d501aab..7ae978f 100644
+--- a/cmd.c
++++ b/cmd.c
+@@ -138,28 +138,11 @@ static char *get_prompt(void);
+ 
+ void command_loop(void)
+ {
+-    int c, i, done = 0, fetchable = 0, prompted = 0;
++    int i, done = 0, fetchable = 0, prompted = 0;
+     char *input;
+-    char **v;
+-    const cmdinfo_t *ct;
+ 
+     for (i = 0; !done && i < ncmdline; i++) {
+-        input = strdup(cmdline[i]);
+-        if (!input) {
+-            fprintf(stderr, _("cannot strdup command '%s': %s\n"),
+-                    cmdline[i], strerror(errno));
+-            exit(1);
+-        }
+-        v = breakline(input, &c);
+-        if (c) {
+-            ct = find_command(v[0]);
+-            if (ct) {
+-                done = command(ct, c, v);
+-            } else {
+-                fprintf(stderr, _("command \"%s\" not found\n"), v[0]);
+-            }
+-	}
+-        doneline(input, v);
++        done = qemuio_command(cmdline[i]);
+     }
+     if (cmdline) {
+         g_free(cmdline);
+@@ -179,20 +162,13 @@ void command_loop(void)
+         if (!fetchable) {
+             continue;
+         }
++
+         input = fetchline();
+         if (input == NULL) {
+             break;
+         }
+-        v = breakline(input, &c);
+-        if (c) {
+-            ct = find_command(v[0]);
+-            if (ct) {
+-                done = command(ct, c, v);
+-            } else {
+-                fprintf(stderr, _("command \"%s\" not found\n"), v[0]);
+-            }
+-        }
+-        doneline(input, v);
++        done = qemuio_command(input);
++        free(input);
+ 
+         prompted = 0;
+         fetchable = 0;
+@@ -328,15 +304,6 @@ char **breakline(char *input, int *count)
+     return rval;
+ }
+ 
+-void
+-doneline(
+-	char	*input,
+-	char	**vec)
+-{
+-	free(input);
+-	free(vec);
+-}
+-
+ #define EXABYTES(x)	((long long)(x) << 60)
+ #define PETABYTES(x)	((long long)(x) << 50)
+ #define TERABYTES(x)	((long long)(x) << 40)
+diff --git a/cmd.h b/cmd.h
+index ccf6336..d676408 100644
+--- a/cmd.h
++++ b/cmd.h
+@@ -59,7 +59,6 @@ int command(const cmdinfo_t *ci, int argc, char **argv);
+ 
+ /* from input.h */
+ char **breakline(char *input, int *count);
+-void doneline(char *input, char **vec);
+ char *fetchline(void);
+ 
+ void cvtstr(double value, char *str, size_t sz);
+@@ -77,4 +76,6 @@ void timestr(struct timeval *tv, char *str, size_t sz, int flags);
+ 
+ extern char *progname;
+ 
++bool qemuio_command(const char *cmd);
++
+ #endif	/* __COMMAND_H__ */
+diff --git a/qemu-io-cmds.c b/qemu-io-cmds.c
+index efa6070..09e4099 100644
+--- a/qemu-io-cmds.c
++++ b/qemu-io-cmds.c
+@@ -1824,6 +1824,30 @@ static int init_check_command(BlockDriverState *bs, const cmdinfo_t *ct)
+     return 1;
+ }
+ 
++bool qemuio_command(const char *cmd)
++{
++    char *input;
++    const cmdinfo_t *ct;
++    char **v;
++    int c;
++    bool done = false;
++
++    input = g_strdup(cmd);
++    v = breakline(input, &c);
++    if (c) {
++        ct = find_command(v[0]);
++        if (ct) {
++            done = command(ct, c, v);
++        } else {
++            fprintf(stderr, "command \"%s\" not found\n", v[0]);
++        }
++    }
++    g_free(input);
++    g_free(v);
++
++    return done;
++}
++
+ static void __attribute((constructor)) init_qemuio_commands(void)
+ {
+     /* initialize commands */
+-- 
+1.8.3.1
+

@@ -1,0 +1,208 @@
+From 9188bcfc8f33c9340acdb6279d01d09ca6fec591 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Wed, 20 Nov 2013 19:43:44 +0100
+Subject: [PATCH 01/25] block: qemu-iotests for vhdx, read sample dynamic image
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <b119331204efa951904aa6f73857c90665607fb2.1384975172.git.jcody@redhat.com>
+Patchwork-id: 55794
+O-Subject: [RHEL7 qemu-kvm PATCH 01/26] block: qemu-iotests for vhdx, read sample dynamic image
+Bugzilla: 879234
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+This adds the VHDX format to the qemu-iotests format, and adds
+a read test.  The test reads from an existing sample image, that
+was created with Hyper-V under Windwos Server 2012.
+
+The image file is a 1GB dynamic image, with 32MB blocks.
+
+The pattern 0xa5 exists from 0MB-33MB (past a block size boundary)
+
+The pattern 0x96 exists from 33MB-66MB (past another block boundary,
+and leaving a partial blank block)
+
+>From 66MB-1024MB, all reads should return 0.
+
+Although 1GB dynamic image with 66MB of data, the bzip2'ed image
+file size is only 874 bytes.
+
+This also adds in the IMGFMT_GENERIC flag, so r/o images can be
+tested (e.g. ./check -vhdx) without failing tests that assume
+r/w support.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 89e911816a1d5cdbc9480d5464c571d216cf5ea8)
+---
+ tests/qemu-iotests/064                             |  62 +++++++++++++++++++++
+ tests/qemu-iotests/064.out                         |  14 +++++
+ tests/qemu-iotests/common                          |   8 +++
+ tests/qemu-iotests/common.rc                       |   2 +-
+ tests/qemu-iotests/group                           |   1 +
+ .../sample_images/iotest-dynamic-1G.vhdx.bz2       | Bin 0 -> 874 bytes
+ 6 files changed, 86 insertions(+), 1 deletion(-)
+ create mode 100755 tests/qemu-iotests/064
+ create mode 100644 tests/qemu-iotests/064.out
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/064       |   62 ++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/064.out   |   14 +++++++++
+ tests/qemu-iotests/common    |    8 +++++
+ tests/qemu-iotests/common.rc |    2 +-
+ tests/qemu-iotests/group     |    1 +
+ 5 files changed, 86 insertions(+), 1 deletions(-)
+ create mode 100755 tests/qemu-iotests/064
+ create mode 100644 tests/qemu-iotests/064.out
+
+diff --git a/tests/qemu-iotests/064 b/tests/qemu-iotests/064
+new file mode 100755
+index 0000000..6789aa6
+--- /dev/null
++++ b/tests/qemu-iotests/064
+@@ -0,0 +1,62 @@
++#!/bin/bash
++#
++# Test VHDX read/write from a sample image created with Hyper-V
++#
++# Copyright (C) 2013 Red Hat, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++
++# creator
++owner=jcody@redhat.com
++
++seq=`basename $0`
++echo "QA output created by $seq"
++
++here=`pwd`
++tmp=/tmp/$$
++status=1	# failure is the default!
++
++_cleanup()
++{
++    _cleanup_test_img
++}
++trap "_cleanup; exit \$status" 0 1 2 3 15
++
++# get standard environment, filters and checks
++. ./common.rc
++. ./common.filter
++
++_supported_fmt vhdx
++_supported_proto generic
++_supported_os Linux
++
++_use_sample_img iotest-dynamic-1G.vhdx.bz2
++
++echo
++echo "=== Verify pattern 0xa5, 0 - 33MB ==="
++$QEMU_IO -r -c "read -pP 0xa5 0 33M" "$TEST_IMG" | _filter_qemu_io
++
++echo
++echo "=== Verify pattern 0x96, 33M - 66M ==="
++$QEMU_IO -r -c "read -pP 0x96 33M 33M" "$TEST_IMG" | _filter_qemu_io
++
++echo
++echo "=== Verify pattern 0x00, 66M - 1024M ==="
++$QEMU_IO -r -c "read -pP 0x00 66M 958M" "$TEST_IMG" | _filter_qemu_io
++
++# success, all done
++echo "*** done"
++rm -f $seq.full
++status=0
+diff --git a/tests/qemu-iotests/064.out b/tests/qemu-iotests/064.out
+new file mode 100644
+index 0000000..b9e8e4a
+--- /dev/null
++++ b/tests/qemu-iotests/064.out
+@@ -0,0 +1,14 @@
++QA output created by 064
++
++=== Verify pattern 0xa5, 0 - 33MB ===
++read 34603008/34603008 bytes at offset 0
++33 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++=== Verify pattern 0x96, 33M - 66M ===
++read 34603008/34603008 bytes at offset 34603008
++33 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++=== Verify pattern 0x00, 66M - 1024M ===
++read 1004535808/1004535808 bytes at offset 69206016
++958 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++*** done
+diff --git a/tests/qemu-iotests/common b/tests/qemu-iotests/common
+index fecaf85..2932e14 100644
+--- a/tests/qemu-iotests/common
++++ b/tests/qemu-iotests/common
+@@ -45,6 +45,7 @@ valgrind=false
+ rm -f $tmp.list $tmp.tmp $tmp.sed
+ 
+ export IMGFMT=raw
++export IMGFMT_GENERIC=true
+ export IMGPROTO=file
+ export IMGOPTS=""
+ export QEMU_IO_OPTIONS=""
+@@ -133,6 +134,7 @@ check options
+     -qed                test qed
+     -vdi                test vdi
+     -vpc                test vpc
++    -vhdx               test vhdx
+     -vmdk               test vmdk
+     -rbd                test rbd
+     -sheepdog           test sheepdog
+@@ -195,6 +197,12 @@ testlist options
+             xpand=false
+             ;;
+ 
++        -vhdx)
++            IMGFMT=vhdx
++            xpand=false
++            IMGFMT_GENERIC=false
++            ;;
++
+         -rbd)
+             IMGPROTO=rbd
+             xpand=false
+diff --git a/tests/qemu-iotests/common.rc b/tests/qemu-iotests/common.rc
+index 227c003..4e82604 100644
+--- a/tests/qemu-iotests/common.rc
++++ b/tests/qemu-iotests/common.rc
+@@ -339,7 +339,7 @@ _fail()
+ _supported_fmt()
+ {
+     for f; do
+-        if [ "$f" = "$IMGFMT" -o "$f" = "generic" ]; then
++        if [ "$f" = "$IMGFMT" -o "$f" = "generic" -a "$IMGFMT_GENERIC" = "true" ]; then
+             return
+         fi
+     done
+diff --git a/tests/qemu-iotests/group b/tests/qemu-iotests/group
+index 4a211bf..1a182ed 100644
+--- a/tests/qemu-iotests/group
++++ b/tests/qemu-iotests/group
+@@ -64,6 +64,7 @@
+ 059 rw auto
+ 060 rw auto
+ 063 rw auto
++064 rw auto
+ 065 rw auto
+ 067 rw auto
+ 068 rw auto
+-- 
+1.7.1
+

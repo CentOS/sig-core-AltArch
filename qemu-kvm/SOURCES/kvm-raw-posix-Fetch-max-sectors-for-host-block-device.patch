@@ -1,0 +1,67 @@
+From 52288902dd647cbcfa470a11867163a6e5983297 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 11 Jul 2016 05:33:38 +0200
+Subject: [PATCH 5/7] raw-posix: Fetch max sectors for host block device
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1468215219-30793-6-git-send-email-famz@redhat.com>
+Patchwork-id: 71109
+O-Subject: [RHEL-7.3 qemu-kvm PATCH 5/6] raw-posix: Fetch max sectors for host block device
+Bugzilla: 1318199
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+This is sometimes a useful value we should count in.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 6f6071745bd0366221f5a0160ed7d18d0e38b9f7)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/raw-posix.c | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/block/raw-posix.c b/block/raw-posix.c
+index 92fcb6c..ed97bd4 100644
+--- a/block/raw-posix.c
++++ b/block/raw-posix.c
+@@ -587,9 +587,33 @@ static void raw_reopen_abort(BDRVReopenState *state)
+     state->opaque = NULL;
+ }
+ 
++static int hdev_get_max_transfer_length(int fd)
++{
++#ifdef BLKSECTGET
++    int max_sectors = 0;
++    if (ioctl(fd, BLKSECTGET, &max_sectors) == 0) {
++        return max_sectors;
++    } else {
++        return -errno;
++    }
++#else
++    return -ENOSYS;
++#endif
++}
++
+ static void raw_refresh_limits(BlockDriverState *bs, Error **errp)
+ {
+     BDRVRawState *s = bs->opaque;
++    struct stat st;
++
++    if (!fstat(s->fd, &st)) {
++        if (S_ISBLK(st.st_mode)) {
++            int ret = hdev_get_max_transfer_length(s->fd);
++            if (ret >= 0) {
++                bs->bl.max_transfer_length = ret;
++            }
++        }
++    }
+ 
+     raw_probe_alignment(bs, s->fd, errp);
+     bs->bl.opt_mem_alignment = s->buf_align;
+-- 
+1.8.3.1
+

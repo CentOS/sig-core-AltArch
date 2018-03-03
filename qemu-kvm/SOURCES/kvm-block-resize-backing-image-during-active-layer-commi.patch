@@ -1,0 +1,96 @@
+From 31c90390db10329e2e7da072492fa7ec728abed0 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Tue, 11 Feb 2014 16:14:26 +0100
+Subject: [PATCH 20/28] block: resize backing image during active layer commit, if needed
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <b725bb85bfb2d59275a3a8b1a6c3c2c6341567c3.1392134912.git.jcody@redhat.com>
+Patchwork-id: 57216
+O-Subject: [RHEL7 qemu-kvm PATCH 2/6] block: resize backing image during active layer commit, if needed
+Bugzilla: 1047254
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+If the top image to commit is the active layer, and also larger than
+the base image, then an I/O error will likely be returned during
+block-commit.
+
+For instance, if we have a base image with a virtual size 10G, and a
+active layer image of size 20G, then committing the snapshot via
+'block-commit' will likely fail.
+
+This will automatically attempt to resize the base image, if the
+active layer image to be committed is larger.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 4da83585961631bfc10831dd26c4afda2a8b23e8)
+---
+ block/mirror.c | 38 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 38 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/mirror.c |   38 ++++++++++++++++++++++++++++++++++++++
+ 1 files changed, 38 insertions(+), 0 deletions(-)
+
+diff --git a/block/mirror.c b/block/mirror.c
+index 6e1f9b1..ba1428b 100644
+--- a/block/mirror.c
++++ b/block/mirror.c
+@@ -627,11 +627,49 @@ void commit_active_start(BlockDriverState *bs, BlockDriverState *base,
+                          BlockDriverCompletionFunc *cb,
+                          void *opaque, Error **errp)
+ {
++    int64_t length, base_length;
++    int orig_base_flags;
++
++    orig_base_flags = bdrv_get_flags(base);
++
+     if (bdrv_reopen(base, bs->open_flags, errp)) {
+         return;
+     }
++
++    length = bdrv_getlength(bs);
++    if (length < 0) {
++        error_setg(errp, "Unable to determine length of %s", bs->filename);
++        goto error_restore_flags;
++    }
++
++    base_length = bdrv_getlength(base);
++    if (base_length < 0) {
++        error_setg(errp, "Unable to determine length of %s", base->filename);
++        goto error_restore_flags;
++    }
++
++    if (length > base_length) {
++        if (bdrv_truncate(base, length) < 0) {
++            error_setg(errp, "Top image %s is larger than base image %s, and "
++                             "resize of base image failed",
++                             bs->filename, base->filename);
++            goto error_restore_flags;
++        }
++    }
++
+     bdrv_ref(base);
+     mirror_start_job(bs, base, speed, 0, 0,
+                      on_error, on_error, cb, opaque, errp,
+                      &commit_active_job_driver, false, base);
++    if (error_is_set(errp)) {
++        goto error_restore_flags;
++    }
++
++    return;
++
++error_restore_flags:
++    /* ignore error and errp for bdrv_reopen, because we want to propagate
++     * the original error */
++    bdrv_reopen(base, orig_base_flags, NULL);
++    return;
+ }
+-- 
+1.7.1
+

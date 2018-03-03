@@ -1,0 +1,72 @@
+From 9bffc974294d823d42b4b4d51e44abd26f7147a6 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:22:33 +0200
+Subject: [PATCH 39/42] qcow2: Respect new_block in alloc_refcount_block()
+
+Message-id: <1434212556-3927-40-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66058
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 39/42] qcow2: Respect new_block in alloc_refcount_block()
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1129893
+
+When choosing a new place for the refcount table, alloc_refcount_block()
+tries to infer the number of clusters used so far from its argument
+cluster_index (which comes from the idea that if any cluster with an
+index greater than cluster_index was in use, the refcount table would
+have to be big enough already to describe cluster_index).
+
+However, there is a cluster that may be at or after cluster_index, and
+which is not covered by the refcount structures, and that is the new
+refcount block new_block. Therefore, it should be taken into account for
+the blocks_used calculation.
+
+Also, because new_block already describes (or is intended to describe)
+cluster_index, we may not put the new refcount structures there.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Message-id: 1423598552-24301-2-git-send-email-mreitz@redhat.com
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit 14a58a4e0c2e98a7d9232e1c229a531ca231133b)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-refcount.c | 16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/block/qcow2-refcount.c b/block/qcow2-refcount.c
+index 87b932c..cee5b1f 100644
+--- a/block/qcow2-refcount.c
++++ b/block/qcow2-refcount.c
+@@ -319,8 +319,20 @@ static int alloc_refcount_block(BlockDriverState *bs,
+      */
+     BLKDBG_EVENT(bs->file, BLKDBG_REFTABLE_GROW);
+ 
+-    /* Calculate the number of refcount blocks needed so far */
+-    uint64_t blocks_used = DIV_ROUND_UP(cluster_index, s->refcount_block_size);
++    /* Calculate the number of refcount blocks needed so far; this will be the
++     * basis for calculating the index of the first cluster used for the
++     * self-describing refcount structures which we are about to create.
++     *
++     * Because we reached this point, there cannot be any refcount entries for
++     * cluster_index or higher indices yet. However, because new_block has been
++     * allocated to describe that cluster (and it will assume this role later
++     * on), we cannot use that index; also, new_block may actually have a higher
++     * cluster index than cluster_index, so it needs to be taken into account
++     * here (and 1 needs to be added to its value because that cluster is used).
++     */
++    uint64_t blocks_used = DIV_ROUND_UP(MAX(cluster_index + 1,
++                                            (new_block >> s->cluster_bits) + 1),
++                                        s->refcount_block_size);
+ 
+     if (blocks_used > QCOW_MAX_REFTABLE_SIZE / sizeof(uint64_t)) {
+         return -EFBIG;
+-- 
+1.8.3.1
+

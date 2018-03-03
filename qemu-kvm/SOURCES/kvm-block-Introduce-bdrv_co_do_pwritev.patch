@@ -1,0 +1,86 @@
+From f1f339c365d7e68790ba8f84d0e16daac462d627 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 3 Dec 2013 14:40:18 +0100
+Subject: [PATCH 15/37] block: Introduce bdrv_co_do_pwritev()
+
+Message-id: <1392117622-28812-16-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57180
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 15/37] block: Introduce bdrv_co_do_pwritev()
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+This is going to become the bdrv_co_do_preadv() equivalent for writes.
+In this patch, however, just a function taking byte offsets is created,
+it doesn't align anything yet.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+(cherry picked from commit 6601553e27091ffe240bea69227adce941fe12e8)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c | 24 ++++++++++++++++++------
+ 1 file changed, 18 insertions(+), 6 deletions(-)
+---
+ block.c |   24 ++++++++++++++++++------
+ 1 files changed, 18 insertions(+), 6 deletions(-)
+
+diff --git a/block.c b/block.c
+index d8168f5..7b8131c 100644
+--- a/block.c
++++ b/block.c
+@@ -3032,8 +3032,8 @@ static int coroutine_fn bdrv_aligned_pwritev(BlockDriverState *bs,
+ /*
+  * Handle a write request in coroutine context
+  */
+-static int coroutine_fn bdrv_co_do_writev(BlockDriverState *bs,
+-    int64_t sector_num, int nb_sectors, QEMUIOVector *qiov,
++static int coroutine_fn bdrv_co_do_pwritev(BlockDriverState *bs,
++    int64_t offset, unsigned int bytes, QEMUIOVector *qiov,
+     BdrvRequestFlags flags)
+ {
+     int ret;
+@@ -3044,21 +3044,33 @@ static int coroutine_fn bdrv_co_do_writev(BlockDriverState *bs,
+     if (bs->read_only) {
+         return -EACCES;
+     }
+-    if (bdrv_check_request(bs, sector_num, nb_sectors)) {
++    if (bdrv_check_byte_request(bs, offset, bytes)) {
+         return -EIO;
+     }
+ 
+     /* throttling disk I/O */
+     if (bs->io_limits_enabled) {
+-        bdrv_io_limits_intercept(bs, true, nb_sectors);
++        /* TODO Switch to byte granularity */
++        bdrv_io_limits_intercept(bs, true, bytes >> BDRV_SECTOR_BITS);
+     }
+ 
+-    ret = bdrv_aligned_pwritev(bs, sector_num << BDRV_SECTOR_BITS,
+-                               nb_sectors << BDRV_SECTOR_BITS, qiov, flags);
++    ret = bdrv_aligned_pwritev(bs, offset, bytes, qiov, flags);
+ 
+     return ret;
+ }
+ 
++static int coroutine_fn bdrv_co_do_writev(BlockDriverState *bs,
++    int64_t sector_num, int nb_sectors, QEMUIOVector *qiov,
++    BdrvRequestFlags flags)
++{
++    if (nb_sectors < 0 || nb_sectors > (INT_MAX >> BDRV_SECTOR_BITS)) {
++        return -EINVAL;
++    }
++
++    return bdrv_co_do_pwritev(bs, sector_num << BDRV_SECTOR_BITS,
++                              nb_sectors << BDRV_SECTOR_BITS, qiov, flags);
++}
++
+ int coroutine_fn bdrv_co_writev(BlockDriverState *bs, int64_t sector_num,
+     int nb_sectors, QEMUIOVector *qiov)
+ {
+-- 
+1.7.1
+

@@ -1,0 +1,507 @@
+From a2c4efbb5b968a80eb552757308c2fb2f28157c6 Mon Sep 17 00:00:00 2001
+From: Marcel Apfelbaum <marcel.a@redhat.com>
+Date: Sun, 19 Jan 2014 13:07:36 +0100
+Subject: [PATCH 11/11] exec: separate sections and nodes per address space
+
+RH-Author: Marcel Apfelbaum <marcel.a@redhat.com>
+Message-id: <1390136856-7024-3-git-send-email-marcel.a@redhat.com>
+Patchwork-id: 56811
+O-Subject: [RHEL-7 qemu-kvm PATCH v2 2/2] exec: separate sections and nodes per address space
+Bugzilla: 1003535
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+Every address space has its own nodes and sections, but
+it uses the same global arrays of nodes/section.
+
+This limits the number of devices that can be attached
+to the guest to 20-30 devices. It happens because:
+ - The sections array is limited to 2^12 entries.
+ - The main memory has at least 100 sections.
+ - Each device address space is actually an alias to
+   main memory, multiplying its number of nodes/sections.
+
+Remove the limitation by using separate arrays of
+nodes and sections for each address space.
+
+Closest upstream commit: 53cb28cbfea038f8ad50132dc8a684e638c7d48b
+Signed-off-by: Marcel Apfelbaum <marcel.a@redhat.com>
+---
+v1 -> v2:
+ - The series confilcted with Juan's series:
+   - [RHEL7 qemu-kvm PATCH 00/40] bitmap optmization
+ - Conflicts solved:
+   - AddressSpaceDispatch was moved to exec.c
+   - PhysPageEntry was moved to exec.c
+ - Moved also PhysPageMap to exec.c
+
+ exec.c | 166 ++++++++++++++++++++++++++++++++++-------------------------------
+ 1 file changed, 86 insertions(+), 80 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ exec.c |  166 +++++++++++++++++++++++++++++++++-------------------------------
+ 1 files changed, 86 insertions(+), 80 deletions(-)
+
+diff --git a/exec.c b/exec.c
+index 01c74cd..ce9310c 100644
+--- a/exec.c
++++ b/exec.c
+@@ -91,25 +91,32 @@ struct PhysPageEntry {
+     uint16_t ptr : 15;
+ };
+ 
++typedef PhysPageEntry Node[L2_SIZE];
++
++typedef struct PhysPageMap {
++    unsigned sections_nb;
++    unsigned sections_nb_alloc;
++    unsigned nodes_nb;
++    unsigned nodes_nb_alloc;
++    Node *nodes;
++    MemoryRegionSection *sections;
++} PhysPageMap;
++
+ struct AddressSpaceDispatch {
+     /* This is a multi-level map on the physical address space.
+      * The bottom level has pointers to MemoryRegionSections.
+      */
+     PhysPageEntry phys_map;
++    PhysPageMap map;
+     MemoryListener listener;
++    AddressSpace *as;
+ };
+ 
+-static MemoryRegionSection *phys_sections;
+-static unsigned phys_sections_nb, phys_sections_nb_alloc;
+ #define PHYS_SECTION_UNASSIGNED 0
+ #define PHYS_SECTION_NOTDIRTY 1
+ #define PHYS_SECTION_ROM 2
+ #define PHYS_SECTION_WATCH 3
+ 
+-/* Simple allocator for PhysPageEntry nodes */
+-static PhysPageEntry (*phys_map_nodes)[L2_SIZE];
+-static unsigned phys_map_nodes_nb, phys_map_nodes_nb_alloc;
+-
+ #define PHYS_MAP_NODE_NIL (((uint16_t)~0) >> 1)
+ 
+ static void io_mem_init(void);
+@@ -121,41 +128,38 @@ static MemoryRegion io_mem_watch;
+ 
+ #if !defined(CONFIG_USER_ONLY)
+ 
+-static void phys_map_node_reserve(unsigned nodes)
++static void phys_map_node_reserve(PhysPageMap *map, unsigned nodes)
+ {
+-    if (phys_map_nodes_nb + nodes > phys_map_nodes_nb_alloc) {
+-        typedef PhysPageEntry Node[L2_SIZE];
+-        phys_map_nodes_nb_alloc = MAX(phys_map_nodes_nb_alloc * 2, 16);
+-        phys_map_nodes_nb_alloc = MAX(phys_map_nodes_nb_alloc,
+-                                      phys_map_nodes_nb + nodes);
+-        phys_map_nodes = g_renew(Node, phys_map_nodes,
+-                                 phys_map_nodes_nb_alloc);
++    if (map->nodes_nb + nodes > map->nodes_nb_alloc) {
++        map->nodes_nb_alloc = MAX(map->nodes_nb_alloc * 2, 16);
++        map->nodes_nb_alloc = MAX(map->nodes_nb_alloc, map->nodes_nb + nodes);
++        map->nodes = g_renew(Node, map->nodes, map->nodes_nb_alloc);
+     }
+ }
+ 
+-static uint16_t phys_map_node_alloc(void)
++static uint16_t phys_map_node_alloc(PhysPageMap *map)
+ {
+     unsigned i;
+     uint16_t ret;
+ 
+-    ret = phys_map_nodes_nb++;
++    ret = map->nodes_nb++;
+     assert(ret != PHYS_MAP_NODE_NIL);
+-    assert(ret != phys_map_nodes_nb_alloc);
++    assert(ret != map->nodes_nb_alloc);
+     for (i = 0; i < L2_SIZE; ++i) {
+-        phys_map_nodes[ret][i].is_leaf = 0;
+-        phys_map_nodes[ret][i].ptr = PHYS_MAP_NODE_NIL;
++        map->nodes[ret][i].is_leaf = 0;
++        map->nodes[ret][i].ptr = PHYS_MAP_NODE_NIL;
+     }
+     return ret;
+ }
+ 
+-static void phys_map_nodes_reset(void)
++static void phys_map_nodes_reset(PhysPageMap *map)
+ {
+-    phys_map_nodes_nb = 0;
++    map->nodes_nb = 0;
+ }
+ 
+ 
+-static void phys_page_set_level(PhysPageEntry *lp, hwaddr *index,
+-                                hwaddr *nb, uint16_t leaf,
++static void phys_page_set_level(PhysPageMap *map, PhysPageEntry *lp,
++                                hwaddr *index, hwaddr *nb, uint16_t leaf,
+                                 int level)
+ {
+     PhysPageEntry *p;
+@@ -163,8 +167,8 @@ static void phys_page_set_level(PhysPageEntry *lp, hwaddr *index,
+     hwaddr step = (hwaddr)1 << (level * L2_BITS);
+ 
+     if (!lp->is_leaf && lp->ptr == PHYS_MAP_NODE_NIL) {
+-        lp->ptr = phys_map_node_alloc();
+-        p = phys_map_nodes[lp->ptr];
++        lp->ptr = phys_map_node_alloc(map);
++        p = map->nodes[lp->ptr];
+         if (level == 0) {
+             for (i = 0; i < L2_SIZE; i++) {
+                 p[i].is_leaf = 1;
+@@ -172,7 +176,7 @@ static void phys_page_set_level(PhysPageEntry *lp, hwaddr *index,
+             }
+         }
+     } else {
+-        p = phys_map_nodes[lp->ptr];
++        p = map->nodes[lp->ptr];
+     }
+     lp = &p[(*index >> (level * L2_BITS)) & (L2_SIZE - 1)];
+ 
+@@ -183,7 +187,7 @@ static void phys_page_set_level(PhysPageEntry *lp, hwaddr *index,
+             *index += step;
+             *nb -= step;
+         } else {
+-            phys_page_set_level(lp, index, nb, leaf, level - 1);
++            phys_page_set_level(map, lp, index, nb, leaf, level - 1);
+         }
+         ++lp;
+     }
+@@ -194,9 +198,10 @@ static void phys_page_set(AddressSpaceDispatch *d,
+                           uint16_t leaf)
+ {
+     /* Wildly overreserve - it doesn't matter much. */
+-    phys_map_node_reserve(3 * P_L2_LEVELS);
++    phys_map_node_reserve(&d->map, 3 * P_L2_LEVELS);
+ 
+-    phys_page_set_level(&d->phys_map, &index, &nb, leaf, P_L2_LEVELS - 1);
++    phys_page_set_level(&d->map, &d->phys_map, &index,
++                        &nb, leaf, P_L2_LEVELS - 1);
+ }
+ 
+ MemoryRegionSection *phys_page_find(AddressSpaceDispatch *d, hwaddr index)
+@@ -210,13 +215,13 @@ MemoryRegionSection *phys_page_find(AddressSpaceDispatch *d, hwaddr index)
+         if (lp.ptr == PHYS_MAP_NODE_NIL) {
+             goto not_found;
+         }
+-        p = phys_map_nodes[lp.ptr];
++        p = d->map.nodes[lp.ptr];
+         lp = p[(index >> (i * L2_BITS)) & (L2_SIZE - 1)];
+     }
+ 
+     s_index = lp.ptr;
+ not_found:
+-    return &phys_sections[s_index];
++    return &d->map.sections[s_index];
+ }
+ 
+ bool memory_region_is_unassigned(MemoryRegion *mr)
+@@ -657,7 +662,7 @@ hwaddr memory_region_section_get_iotlb(CPUArchState *env,
+            and avoid full address decoding in every device.
+            We can't use the high bits of pd for this because
+            IO_MEM_ROMD uses these as a ram address.  */
+-        iotlb = section - phys_sections;
++        iotlb = section - address_space_memory.dispatch->map.sections;
+         iotlb += memory_region_section_addr(section, paddr);
+     }
+ 
+@@ -683,13 +688,14 @@ hwaddr memory_region_section_get_iotlb(CPUArchState *env,
+ #define SUBPAGE_IDX(addr) ((addr) & ~TARGET_PAGE_MASK)
+ typedef struct subpage_t {
+     MemoryRegion iomem;
++    AddressSpace *as;
+     hwaddr base;
+     uint16_t sub_section[TARGET_PAGE_SIZE];
+ } subpage_t;
+ 
+ static int subpage_register (subpage_t *mmio, uint32_t start, uint32_t end,
+                              uint16_t section);
+-static subpage_t *subpage_init(hwaddr base);
++static subpage_t *subpage_init(AddressSpace *as, hwaddr base);
+ 
+ static void *(*phys_mem_alloc)(size_t size) = qemu_anon_ram_alloc;
+ 
+@@ -703,9 +709,9 @@ void phys_mem_set_alloc(void *(*alloc)(size_t))
+     phys_mem_alloc = alloc;
+ }
+ 
+-static void destroy_page_desc(uint16_t section_index)
++static void destroy_page_desc(PhysPageMap *map, uint16_t section_index)
+ {
+-    MemoryRegionSection *section = &phys_sections[section_index];
++    MemoryRegionSection *section = &map->sections[section_index];
+     MemoryRegion *mr = section->mr;
+ 
+     if (mr->subpage) {
+@@ -715,7 +721,8 @@ static void destroy_page_desc(uint16_t section_index)
+     }
+ }
+ 
+-static void destroy_l2_mapping(PhysPageEntry *lp, unsigned level)
++static void destroy_l2_mapping(PhysPageMap *map, PhysPageEntry *lp,
++                               unsigned level)
+ {
+     unsigned i;
+     PhysPageEntry *p;
+@@ -724,12 +731,12 @@ static void destroy_l2_mapping(PhysPageEntry *lp, unsigned level)
+         return;
+     }
+ 
+-    p = phys_map_nodes[lp->ptr];
++    p = map->nodes[lp->ptr];
+     for (i = 0; i < L2_SIZE; ++i) {
+         if (!p[i].is_leaf) {
+-            destroy_l2_mapping(&p[i], level - 1);
++            destroy_l2_mapping(map, &p[i], level - 1);
+         } else {
+-            destroy_page_desc(p[i].ptr);
++            destroy_page_desc(map, p[i].ptr);
+         }
+     }
+     lp->is_leaf = 0;
+@@ -738,24 +745,25 @@ static void destroy_l2_mapping(PhysPageEntry *lp, unsigned level)
+ 
+ static void destroy_all_mappings(AddressSpaceDispatch *d)
+ {
+-    destroy_l2_mapping(&d->phys_map, P_L2_LEVELS - 1);
+-    phys_map_nodes_reset();
++    destroy_l2_mapping(&d->map, &d->phys_map, P_L2_LEVELS - 1);
++    phys_map_nodes_reset(&d->map);
+ }
+ 
+-static uint16_t phys_section_add(MemoryRegionSection *section)
++static uint16_t phys_section_add(PhysPageMap *map,
++                                 MemoryRegionSection *section)
+ {
+-    if (phys_sections_nb == phys_sections_nb_alloc) {
+-        phys_sections_nb_alloc = MAX(phys_sections_nb_alloc * 2, 16);
+-        phys_sections = g_renew(MemoryRegionSection, phys_sections,
+-                                phys_sections_nb_alloc);
++    if (map->sections_nb == map->sections_nb_alloc) {
++        map->sections_nb_alloc = MAX(map->sections_nb_alloc * 2, 16);
++        map->sections = g_renew(MemoryRegionSection, map->sections,
++                                map->sections_nb_alloc);
+     }
+-    phys_sections[phys_sections_nb] = *section;
+-    return phys_sections_nb++;
++    map->sections[map->sections_nb] = *section;
++    return map->sections_nb++;
+ }
+ 
+-static void phys_sections_clear(void)
++static void phys_sections_clear(PhysPageMap *map)
+ {
+-    phys_sections_nb = 0;
++    map->sections_nb = 0;
+ }
+ 
+ static void register_subpage(AddressSpaceDispatch *d, MemoryRegionSection *section)
+@@ -773,16 +781,16 @@ static void register_subpage(AddressSpaceDispatch *d, MemoryRegionSection *secti
+     assert(existing->mr->subpage || existing->mr == &io_mem_unassigned);
+ 
+     if (!(existing->mr->subpage)) {
+-        subpage = subpage_init(base);
++        subpage = subpage_init(d->as, base);
+         subsection.mr = &subpage->iomem;
+         phys_page_set(d, base >> TARGET_PAGE_BITS, 1,
+-                      phys_section_add(&subsection));
++                      phys_section_add(&d->map, &subsection));
+     } else {
+         subpage = container_of(existing->mr, subpage_t, iomem);
+     }
+     start = section->offset_within_address_space & ~TARGET_PAGE_MASK;
+     end = start + section->size - 1;
+-    subpage_register(subpage, start, end, phys_section_add(section));
++    subpage_register(subpage, start, end, phys_section_add(&d->map, section));
+ }
+ 
+ 
+@@ -791,7 +799,7 @@ static void register_multipage(AddressSpaceDispatch *d, MemoryRegionSection *sec
+     hwaddr start_addr = section->offset_within_address_space;
+     ram_addr_t size = section->size;
+     hwaddr addr;
+-    uint16_t section_index = phys_section_add(section);
++    uint16_t section_index = phys_section_add(&d->map, section);
+ 
+     assert(size);
+ 
+@@ -1619,7 +1627,7 @@ static uint64_t subpage_read(void *opaque, hwaddr addr,
+            mmio, len, addr, idx);
+ #endif
+ 
+-    section = &phys_sections[mmio->sub_section[idx]];
++    section = &mmio->as->dispatch->map.sections[mmio->sub_section[idx]];
+     addr += mmio->base;
+     addr -= section->offset_within_address_space;
+     addr += section->offset_within_region;
+@@ -1638,7 +1646,7 @@ static void subpage_write(void *opaque, hwaddr addr,
+            __func__, mmio, len, addr, idx, value);
+ #endif
+ 
+-    section = &phys_sections[mmio->sub_section[idx]];
++    section = &mmio->as->dispatch->map.sections[mmio->sub_section[idx]];
+     addr += mmio->base;
+     addr -= section->offset_within_address_space;
+     addr += section->offset_within_region;
+@@ -1696,10 +1704,10 @@ static int subpage_register (subpage_t *mmio, uint32_t start, uint32_t end,
+     printf("%s: %p start %08x end %08x idx %08x eidx %08x mem %ld\n", __func__,
+            mmio, start, end, idx, eidx, memory);
+ #endif
+-    if (memory_region_is_ram(phys_sections[section].mr)) {
+-        MemoryRegionSection new_section = phys_sections[section];
++    if (memory_region_is_ram(mmio->as->dispatch->map.sections[section].mr)) {
++        MemoryRegionSection new_section = mmio->as->dispatch->map.sections[section];
+         new_section.mr = &io_mem_subpage_ram;
+-        section = phys_section_add(&new_section);
++        section = phys_section_add(&mmio->as->dispatch->map, &new_section);
+     }
+     for (; idx <= eidx; idx++) {
+         mmio->sub_section[idx] = section;
+@@ -1708,12 +1716,13 @@ static int subpage_register (subpage_t *mmio, uint32_t start, uint32_t end,
+     return 0;
+ }
+ 
+-static subpage_t *subpage_init(hwaddr base)
++static subpage_t *subpage_init(AddressSpace *as, hwaddr base)
+ {
+     subpage_t *mmio;
+ 
+     mmio = g_malloc0(sizeof(subpage_t));
+ 
++    mmio->as = as;
+     mmio->base = base;
+     memory_region_init_io(&mmio->iomem, &subpage_ops, mmio,
+                           "subpage", TARGET_PAGE_SIZE);
+@@ -1727,7 +1736,7 @@ static subpage_t *subpage_init(hwaddr base)
+     return mmio;
+ }
+ 
+-static uint16_t dummy_section(MemoryRegion *mr)
++static uint16_t dummy_section(PhysPageMap *map, MemoryRegion *mr)
+ {
+     MemoryRegionSection section = {
+         .mr = mr,
+@@ -1736,12 +1745,13 @@ static uint16_t dummy_section(MemoryRegion *mr)
+         .size = UINT64_MAX,
+     };
+ 
+-    return phys_section_add(&section);
++    return phys_section_add(map, &section);
+ }
+ 
+ MemoryRegion *iotlb_to_region(hwaddr index)
+ {
+-    return phys_sections[index & ~TARGET_PAGE_MASK].mr;
++    return address_space_memory.dispatch->map.sections[
++           index & ~TARGET_PAGE_MASK].mr;
+ }
+ 
+ static void io_mem_init(void)
+@@ -1761,23 +1771,19 @@ static void io_mem_init(void)
+ static void mem_begin(MemoryListener *listener)
+ {
+     AddressSpaceDispatch *d = container_of(listener, AddressSpaceDispatch, listener);
++    uint16_t n;
+ 
+     destroy_all_mappings(d);
+     d->phys_map.ptr = PHYS_MAP_NODE_NIL;
+-}
+-
+-static void core_begin(MemoryListener *listener)
+-{
+-    uint16_t n;
+ 
+-    phys_sections_clear();
+-    n = dummy_section(&io_mem_unassigned);
++    phys_sections_clear(&d->map);
++    n = dummy_section(&d->map, &io_mem_unassigned);
+     assert(n == PHYS_SECTION_UNASSIGNED);
+-    n = dummy_section(&io_mem_notdirty);
++    n = dummy_section(&d->map, &io_mem_notdirty);
+     assert(n == PHYS_SECTION_NOTDIRTY);
+-    n = dummy_section(&io_mem_rom);
++    n = dummy_section(&d->map, &io_mem_rom);
+     assert(n == PHYS_SECTION_ROM);
+-    n = dummy_section(&io_mem_watch);
++    n = dummy_section(&d->map, &io_mem_watch);
+     assert(n == PHYS_SECTION_WATCH);
+ }
+ 
+@@ -1822,7 +1828,6 @@ static void io_region_del(MemoryListener *listener,
+ }
+ 
+ static MemoryListener core_memory_listener = {
+-    .begin = core_begin,
+     .log_global_start = core_log_global_start,
+     .log_global_stop = core_log_global_stop,
+     .priority = 1,
+@@ -1840,7 +1845,7 @@ static MemoryListener tcg_memory_listener = {
+ 
+ void address_space_init_dispatch(AddressSpace *as)
+ {
+-    AddressSpaceDispatch *d = g_new(AddressSpaceDispatch, 1);
++    AddressSpaceDispatch *d = g_new0(AddressSpaceDispatch, 1);
+ 
+     d->phys_map  = (PhysPageEntry) { .ptr = PHYS_MAP_NODE_NIL, .is_leaf = 0 };
+     d->listener = (MemoryListener) {
+@@ -1849,6 +1854,7 @@ void address_space_init_dispatch(AddressSpace *as)
+         .region_nop = mem_add,
+         .priority = 0,
+     };
++    d->as = as;
+     as->dispatch = d;
+     memory_listener_register(&d->listener, as);
+ }
+@@ -1858,7 +1864,7 @@ void address_space_destroy_dispatch(AddressSpace *as)
+     AddressSpaceDispatch *d = as->dispatch;
+ 
+     memory_listener_unregister(&d->listener);
+-    destroy_l2_mapping(&d->phys_map, P_L2_LEVELS - 1);
++    destroy_l2_mapping(&d->map, &d->phys_map, P_L2_LEVELS - 1);
+     g_free(d);
+     as->dispatch = NULL;
+ }
+@@ -2446,7 +2452,7 @@ void stl_phys_notdirty(hwaddr addr, uint32_t val)
+     if (!memory_region_is_ram(section->mr) || section->readonly) {
+         addr = memory_region_section_addr(section, addr);
+         if (memory_region_is_ram(section->mr)) {
+-            section = &phys_sections[PHYS_SECTION_ROM];
++            section = &address_space_memory.dispatch->map.sections[PHYS_SECTION_ROM];
+         }
+         io_mem_write(section->mr, addr, val, 4);
+     } else {
+@@ -2479,7 +2485,7 @@ void stq_phys_notdirty(hwaddr addr, uint64_t val)
+     if (!memory_region_is_ram(section->mr) || section->readonly) {
+         addr = memory_region_section_addr(section, addr);
+         if (memory_region_is_ram(section->mr)) {
+-            section = &phys_sections[PHYS_SECTION_ROM];
++            section = &address_space_memory.dispatch->map.sections[PHYS_SECTION_ROM];
+         }
+ #ifdef TARGET_WORDS_BIGENDIAN
+         io_mem_write(section->mr, addr, val >> 32, 4);
+@@ -2508,7 +2514,7 @@ static inline void stl_phys_internal(hwaddr addr, uint32_t val,
+     if (!memory_region_is_ram(section->mr) || section->readonly) {
+         addr = memory_region_section_addr(section, addr);
+         if (memory_region_is_ram(section->mr)) {
+-            section = &phys_sections[PHYS_SECTION_ROM];
++            section = &address_space_memory.dispatch->map.sections[PHYS_SECTION_ROM];
+         }
+ #if defined(TARGET_WORDS_BIGENDIAN)
+         if (endian == DEVICE_LITTLE_ENDIAN) {
+@@ -2575,7 +2581,7 @@ static inline void stw_phys_internal(hwaddr addr, uint32_t val,
+     if (!memory_region_is_ram(section->mr) || section->readonly) {
+         addr = memory_region_section_addr(section, addr);
+         if (memory_region_is_ram(section->mr)) {
+-            section = &phys_sections[PHYS_SECTION_ROM];
++            section = &address_space_memory.dispatch->map.sections[PHYS_SECTION_ROM];
+         }
+ #if defined(TARGET_WORDS_BIGENDIAN)
+         if (endian == DEVICE_LITTLE_ENDIAN) {
+-- 
+1.7.1
+

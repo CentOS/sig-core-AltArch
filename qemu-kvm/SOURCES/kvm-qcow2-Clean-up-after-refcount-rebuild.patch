@@ -1,0 +1,94 @@
+From aa1df6fcd4c2dbfd39cac3e1d68208cca61643ce Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:22:23 +0200
+Subject: [PATCH 29/42] qcow2: Clean up after refcount rebuild
+
+Message-id: <1434212556-3927-30-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66048
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 29/42] qcow2: Clean up after refcount rebuild
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1129893
+
+Because the old refcount structure will be leaked after having rebuilt
+it, we need to recalculate the refcounts and run a leak-fixing operation
+afterwards (if leaks should be fixed at all).
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 791230d8bbd5c09d80845755a54074cd2d8b5a22)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-refcount.c | 45 +++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 45 insertions(+)
+
+diff --git a/block/qcow2-refcount.c b/block/qcow2-refcount.c
+index 651ddb6..fe36bbd 100644
+--- a/block/qcow2-refcount.c
++++ b/block/qcow2-refcount.c
+@@ -1983,12 +1983,57 @@ int qcow2_check_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
+                       nb_clusters);
+ 
+     if (rebuild && (fix & BDRV_FIX_ERRORS)) {
++        BdrvCheckResult old_res = *res;
++        int fresh_leaks = 0;
++
+         fprintf(stderr, "Rebuilding refcount structure\n");
+         ret = rebuild_refcount_structure(bs, res, &refcount_table,
+                                          &nb_clusters);
+         if (ret < 0) {
+             goto fail;
+         }
++
++        res->corruptions = 0;
++        res->leaks = 0;
++
++        /* Because the old reftable has been exchanged for a new one the
++         * references have to be recalculated */
++        rebuild = false;
++        memset(refcount_table, 0, nb_clusters * sizeof(uint16_t));
++        ret = calculate_refcounts(bs, res, 0, &rebuild, &refcount_table,
++                                  &nb_clusters);
++        if (ret < 0) {
++            goto fail;
++        }
++
++        if (fix & BDRV_FIX_LEAKS) {
++            /* The old refcount structures are now leaked, fix it; the result
++             * can be ignored, aside from leaks which were introduced by
++             * rebuild_refcount_structure() that could not be fixed */
++            BdrvCheckResult saved_res = *res;
++            *res = (BdrvCheckResult){ 0 };
++
++            compare_refcounts(bs, res, BDRV_FIX_LEAKS, &rebuild,
++                              &highest_cluster, refcount_table, nb_clusters);
++            if (rebuild) {
++                fprintf(stderr, "ERROR rebuilt refcount structure is still "
++                        "broken\n");
++            }
++
++            /* Any leaks accounted for here were introduced by
++             * rebuild_refcount_structure() because that function has created a
++             * new refcount structure from scratch */
++            fresh_leaks = res->leaks;
++            *res = saved_res;
++        }
++
++        if (res->corruptions < old_res.corruptions) {
++            res->corruptions_fixed += old_res.corruptions - res->corruptions;
++        }
++        if (res->leaks < old_res.leaks) {
++            res->leaks_fixed += old_res.leaks - res->leaks;
++        }
++        res->leaks += fresh_leaks;
+     } else if (fix) {
+         if (rebuild) {
+             fprintf(stderr, "ERROR need to rebuild refcount structures\n");
+-- 
+1.8.3.1
+

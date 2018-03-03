@@ -1,0 +1,70 @@
+From d451bbe0826ead2944fcea51e70cab1a40c0c478 Mon Sep 17 00:00:00 2001
+From: Vadim Rozenfeld <vrozenfe@redhat.com>
+Date: Mon, 3 Mar 2014 12:09:23 +0100
+Subject: [PATCH 11/12] target-i386: Cleanup 'foo' feature handling
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Vadim Rozenfeld <vrozenfe@redhat.com>
+Message-id: <1393848564-10511-12-git-send-email-vrozenfe@redhat.com>
+Patchwork-id: 57967
+O-Subject: [RHEL-7.0 qemu-kvm v4 PATCH 11/12] target-i386: Cleanup 'foo' feature handling
+Bugzilla: 1057173
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+
+From: Igor Mammedov <imammedo@redhat.com>
+
+Features check, enforce, hv_relaxed and hv_vapic are treated as boolean
+set to 'on' when passed from command line, so it's not necessary to
+handle each of them separately. Collapse them to one catch-all branch
+which will treat any feature in format 'foo' as boolean set to 'on'.
+
+Any unknown feature will be rejected by CPU property setter so there is no
+need to check for unknown feature in cpu_x86_parse_featurestr(), therefore
+it's replaced by above mentioned catch-all handler.
+
+Signed-off-by: Igor Mammedov <imammedo@redhat.com>
+Reviewed-by: Eduardo Habkost <ehabkost@redhat.com>
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit 258f5abe9a8786c410f98367e9e042ee16c249f2)
+---
+ target-i386/cpu.c | 13 ++-----------
+ 1 file changed, 2 insertions(+), 11 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/cpu.c |   13 ++-----------
+ 1 files changed, 2 insertions(+), 11 deletions(-)
+
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index 9f2a04e..8421dfc 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -1683,18 +1683,9 @@ static void cpu_x86_parse_featurestr(X86CPU *cpu, char *features, Error **errp)
+                 error_setg(errp, "unrecognized feature %s", featurestr);
+                 goto out;
+             }
+-        } else if (!strcmp(featurestr, "check")) {
+-            object_property_parse(OBJECT(cpu), "on", featurestr, errp);
+-        } else if (!strcmp(featurestr, "enforce")) {
+-            object_property_parse(OBJECT(cpu), "on", featurestr, errp);
+-        } else if (!strcmp(featurestr, "hv_relaxed")) {
+-            object_property_parse(OBJECT(cpu), "on", "hv-relaxed", errp);
+-        } else if (!strcmp(featurestr, "hv_vapic")) {
+-            object_property_parse(OBJECT(cpu), "on", "hv-vapic", errp);
+         } else {
+-            error_setg(errp, "feature string `%s' not in format (+feature|"
+-                       "-feature|feature=xyz)", featurestr);
+-            goto out;
++            feat2prop(featurestr);
++            object_property_parse(OBJECT(cpu), "on", featurestr, errp);
+         }
+         if (error_is_set(errp)) {
+             goto out;
+-- 
+1.7.1
+

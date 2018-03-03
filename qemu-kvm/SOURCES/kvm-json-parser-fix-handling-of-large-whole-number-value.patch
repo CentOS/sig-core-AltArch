@@ -1,0 +1,82 @@
+From 2263af4c1921520ddc9177c13a176860c0069fab Mon Sep 17 00:00:00 2001
+Message-Id: <2263af4c1921520ddc9177c13a176860c0069fab.1387369730.git.minovotn@redhat.com>
+In-Reply-To: <091eecc4fa42754760dfff393dabcc2b444e9693.1387369730.git.minovotn@redhat.com>
+References: <091eecc4fa42754760dfff393dabcc2b444e9693.1387369730.git.minovotn@redhat.com>
+From: Markus Armbruster <armbru@redhat.com>
+Date: Tue, 10 Dec 2013 15:29:04 +0100
+Subject: [PATCH 04/21] json-parser: fix handling of large whole number values
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1386689361-30281-2-git-send-email-armbru@redhat.com>
+Patchwork-id: 56120
+O-Subject: [PATCH 7.0 qemu-kvm 01/18] json-parser: fix handling of large whole number values
+Bugzilla: 997915
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+
+From: Michael Roth <mdroth@linux.vnet.ibm.com>
+
+Currently our JSON parser assumes that numbers lacking a fractional
+value are integers and attempts to store them as QInt/int64 values. This
+breaks in the case where the number overflows/underflows int64 values (which
+is still valid JSON)
+
+Fix this by detecting such cases and using a QFloat to store the value
+instead.
+
+Signed-off-by: Michael Roth <mdroth@linux.vnet.ibm.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Amos Kong <akong@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit 3d5b3ec6d460a92245215aaf7b349b0b9e5ffa25)
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+---
+ qobject/json-parser.c | 26 +++++++++++++++++++++++---
+ 1 file changed, 23 insertions(+), 3 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ qobject/json-parser.c | 26 +++++++++++++++++++++++---
+ 1 file changed, 23 insertions(+), 3 deletions(-)
+
+diff --git a/qobject/json-parser.c b/qobject/json-parser.c
+index 05279c1..e7947b3 100644
+--- a/qobject/json-parser.c
++++ b/qobject/json-parser.c
+@@ -640,9 +640,29 @@ static QObject *parse_literal(JSONParserContext *ctxt)
+     case JSON_STRING:
+         obj = QOBJECT(qstring_from_escaped_str(ctxt, token));
+         break;
+-    case JSON_INTEGER:
+-        obj = QOBJECT(qint_from_int(strtoll(token_get_value(token), NULL, 10)));
+-        break;
++    case JSON_INTEGER: {
++        /* A possibility exists that this is a whole-valued float where the
++         * fractional part was left out due to being 0 (.0). It's not a big
++         * deal to treat these as ints in the parser, so long as users of the
++         * resulting QObject know to expect a QInt in place of a QFloat in
++         * cases like these.
++         *
++         * However, in some cases these values will overflow/underflow a
++         * QInt/int64 container, thus we should assume these are to be handled
++         * as QFloats/doubles rather than silently changing their values.
++         *
++         * strtoll() indicates these instances by setting errno to ERANGE
++         */
++        int64_t value;
++
++        errno = 0; /* strtoll doesn't set errno on success */
++        value = strtoll(token_get_value(token), NULL, 10);
++        if (errno != ERANGE) {
++            obj = QOBJECT(qint_from_int(value));
++            break;
++        }
++        /* fall through to JSON_FLOAT */
++    }
+     case JSON_FLOAT:
+         /* FIXME dependent on locale */
+         obj = QOBJECT(qfloat_from_double(strtod(token_get_value(token), NULL)));
+-- 
+1.7.11.7
+

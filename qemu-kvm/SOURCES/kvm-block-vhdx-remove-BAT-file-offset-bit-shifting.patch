@@ -1,0 +1,84 @@
+From 989d971046a36afa7acb67855f565603297ad2e8 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Wed, 20 Nov 2013 19:44:01 +0100
+Subject: [PATCH 18/25] block: vhdx - remove BAT file offset bit shifting
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <348f6a1952aa68e9a5cfefb56a7e86f5ff1d01c9.1384975172.git.jcody@redhat.com>
+Patchwork-id: 55811
+O-Subject: [RHEL7 qemu-kvm PATCH 18/26] block: vhdx - remove BAT file offset bit shifting
+Bugzilla: 879234
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+Bit shifting can be fun, but in this case it was unnecessary.  The
+upper 44 bits of the 64-bit BAT entry is specifies the File Offset,
+so we shifted the bits to get access to the value.
+
+However, per the spec the value is in MB.  So we dutifully shifted back
+to the left by 20 bits, to convert to a true uint64_t file offset.
+
+This replaces those steps with just a bit mask, to get rid of the lower
+20 bits instead.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 0b7da092b40734538631c3ad461c1753a87535fc)
+---
+ block/vhdx.c | 6 ++----
+ block/vhdx.h | 1 -
+ 2 files changed, 2 insertions(+), 5 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vhdx.c |    6 ++----
+ block/vhdx.h |    1 -
+ 2 files changed, 2 insertions(+), 5 deletions(-)
+
+diff --git a/block/vhdx.c b/block/vhdx.c
+index baf8970..97099aa 100644
+--- a/block/vhdx.c
++++ b/block/vhdx.c
+@@ -985,7 +985,7 @@ static void vhdx_block_translate(BDRVVHDXState *s, int64_t sector_num,
+ 
+     sinfo->bytes_avail = sinfo->sectors_avail << s->logical_sector_size_bits;
+ 
+-    sinfo->file_offset = s->bat[sinfo->bat_idx] >> VHDX_BAT_FILE_OFF_BITS;
++    sinfo->file_offset = s->bat[sinfo->bat_idx] & VHDX_BAT_FILE_OFF_MASK;
+ 
+     sinfo->block_offset = block_offset << s->logical_sector_size_bits;
+ 
+@@ -999,7 +999,6 @@ static void vhdx_block_translate(BDRVVHDXState *s, int64_t sector_num,
+      * in the block, and add in the payload data block offset
+      * in the file, in bytes, to get the final read address */
+ 
+-    sinfo->file_offset <<= 20;  /* now in bytes, rather than 1MB units */
+     sinfo->file_offset += sinfo->block_offset;
+ }
+ 
+@@ -1110,8 +1109,7 @@ static void vhdx_update_bat_table_entry(BlockDriverState *bs, BDRVVHDXState *s,
+ {
+     /* The BAT entry is a uint64, with 44 bits for the file offset in units of
+      * 1MB, and 3 bits for the block state. */
+-    s->bat[sinfo->bat_idx]  = ((sinfo->file_offset>>20) <<
+-                               VHDX_BAT_FILE_OFF_BITS);
++    s->bat[sinfo->bat_idx]  = sinfo->file_offset;
+ 
+     s->bat[sinfo->bat_idx] |= state & VHDX_BAT_STATE_BIT_MASK;
+ 
+diff --git a/block/vhdx.h b/block/vhdx.h
+index a85c5c8..7deb7fd 100644
+--- a/block/vhdx.h
++++ b/block/vhdx.h
+@@ -229,7 +229,6 @@ typedef struct QEMU_PACKED VHDXLogDataSector {
+ /* upper 44 bits are the file offset in 1MB units lower 3 bits are the state
+    other bits are reserved */
+ #define VHDX_BAT_STATE_BIT_MASK 0x07
+-#define VHDX_BAT_FILE_OFF_BITS (64 - 44)
+ #define VHDX_BAT_FILE_OFF_MASK  0xFFFFFFFFFFF00000 /* upper 44 bits */
+ typedef uint64_t VHDXBatEntry;
+ 
+-- 
+1.7.1
+

@@ -1,0 +1,89 @@
+From 615429e3068cb4a3e57ee60d52f318aa6ca06f6d Mon Sep 17 00:00:00 2001
+Message-Id: <615429e3068cb4a3e57ee60d52f318aa6ca06f6d.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:09:22 +0100
+Subject: [PATCH 34/50] block/iscsi: check WRITE SAME support differently
+ depending on MAY_UNMAP
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-37-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56073
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 36/52] block/iscsi: check WRITE SAME support differently depending on MAY_UNMAP
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+The current check is right for MAY_UNMAP=1.  For MAY_UNMAP=0, just
+try and fall back to regular writes as soon as a WRITE SAME command
+fails.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit fa6252b0565526ec2347e248172f91771e0d9f47)
+---
+ block/iscsi.c | 19 +++++++++++++++++--
+ 1 file changed, 17 insertions(+), 2 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ block/iscsi.c | 19 +++++++++++++++++--
+ 1 file changed, 17 insertions(+), 2 deletions(-)
+
+diff --git a/block/iscsi.c b/block/iscsi.c
+index 7ae61f9..8b82fe7 100644
+--- a/block/iscsi.c
++++ b/block/iscsi.c
+@@ -55,6 +55,7 @@ typedef struct IscsiLun {
+     QEMUTimer *nop_timer;
+     uint8_t lbpme;
+     uint8_t lbprz;
++    uint8_t has_write_same;
+     struct scsi_inquiry_logical_block_provisioning lbp;
+     struct scsi_inquiry_block_limits bl;
+     unsigned char *zeroblock;
+@@ -978,8 +979,13 @@ coroutine_fn iscsi_co_write_zeroes(BlockDriverState *bs, int64_t sector_num,
+         return -EINVAL;
+     }
+ 
+-    if (!iscsilun->lbp.lbpws) {
+-        /* WRITE SAME is not supported by the target */
++    if (!(flags & BDRV_REQ_MAY_UNMAP) && !iscsilun->has_write_same) {
++        /* WRITE SAME without UNMAP is not supported by the target */
++        return -ENOTSUP;
++    }
++
++    if ((flags & BDRV_REQ_MAY_UNMAP) && !iscsilun->lbp.lbpws) {
++        /* WRITE SAME with UNMAP is not supported by the target */
+         return -ENOTSUP;
+     }
+ 
+@@ -1014,6 +1020,14 @@ retry:
+     }
+ 
+     if (iTask.status != SCSI_STATUS_GOOD) {
++        if (iTask.status == SCSI_STATUS_CHECK_CONDITION &&
++            iTask.task->sense.key == SCSI_SENSE_ILLEGAL_REQUEST &&
++            iTask.task->sense.ascq == SCSI_SENSE_ASCQ_INVALID_OPERATION_CODE) {
++            /* WRITE SAME is not supported by the target */
++            iscsilun->has_write_same = false;
++            return -ENOTSUP;
++        }
++
+         return -EIO;
+     }
+ 
+@@ -1377,6 +1391,7 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
+     }
+ 
+     iscsilun->type = inq->periperal_device_type;
++    iscsilun->has_write_same = true;
+ 
+     if ((ret = iscsi_readcapacity_sync(iscsilun)) != 0) {
+         goto out;
+-- 
+1.7.11.7
+

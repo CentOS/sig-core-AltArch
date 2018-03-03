@@ -1,0 +1,203 @@
+From a0f50f0877463e9370ffa411bd826d7c704ab9fe Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:22:30 +0200
+Subject: [PATCH 36/42] block: Don't probe for unknown backing file format
+
+Message-id: <1434212556-3927-37-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66055
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 36/42] block: Don't probe for unknown backing file format
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+BZ: 1129893
+
+If a qcow2 image specifies a backing file format that doesn't correspond
+to any format driver that qemu knows, we shouldn't fall back to probing,
+but simply error out.
+
+Not looking up the backing file driver in bdrv_open_backing_file(), but
+just filling in the "driver" option if it isn't there moves us closer to
+the goal of having everything in QDict options and gets us the error
+handling of bdrv_open(), which correctly refuses unknown drivers.
+
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Message-id: 1416935562-7760-4-git-send-email-kwolf@redhat.com
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit c5f6e493bb5339d244eae5d3f21c5b6d73996739)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	block.c
+	tests/qemu-iotests/114.out
+
+Downstream is missing a check whether the driver specified by the
+"driver" option is actually valid (if it is not, it will be probed
+anyway); this check is introduced upstream by
+17b005f1d422d4581f8ce95b75d603deb081f4f3, but that commit has a couple
+of dependencies and relies on a code path that is very different from
+downstream (e.g. not bdrv_file_open() anymore). So I just introduced the
+check in this patch.
+
+Also, the different code paths upstream and downstream result in the
+error message missing the "Could not open backing file:" part, which
+means that 114.out has to be fixed up.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block.c                    | 12 ++++++---
+ tests/qemu-iotests/114     | 61 ++++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/114.out | 13 ++++++++++
+ tests/qemu-iotests/group   |  1 +
+ 4 files changed, 83 insertions(+), 4 deletions(-)
+ create mode 100755 tests/qemu-iotests/114
+ create mode 100644 tests/qemu-iotests/114.out
+
+diff --git a/block.c b/block.c
+index fa6e192..e36fa2f 100644
+--- a/block.c
++++ b/block.c
+@@ -1010,7 +1010,6 @@ int bdrv_open_backing_file(BlockDriverState *bs, QDict *options, Error **errp)
+ {
+     char backing_filename[PATH_MAX];
+     int back_flags, ret;
+-    BlockDriver *back_drv = NULL;
+     Error *local_err = NULL;
+ 
+     if (bs->backing_hd != NULL) {
+@@ -1036,8 +1035,8 @@ int bdrv_open_backing_file(BlockDriverState *bs, QDict *options, Error **errp)
+ 
+     bs->backing_hd = bdrv_new("", &error_abort);
+ 
+-    if (bs->backing_format[0] != '\0') {
+-        back_drv = bdrv_find_format(bs->backing_format);
++    if (bs->backing_format[0] != '\0' && !qdict_haskey(options, "driver")) {
++        qdict_put(options, "driver", qstring_from_str(bs->backing_format));
+     }
+ 
+     /* backing files always opened read-only */
+@@ -1046,7 +1045,7 @@ int bdrv_open_backing_file(BlockDriverState *bs, QDict *options, Error **errp)
+ 
+     ret = bdrv_open(bs->backing_hd,
+                     *backing_filename ? backing_filename : NULL, options,
+-                    back_flags, back_drv, &local_err);
++                    back_flags, NULL, &local_err);
+     if (ret < 0) {
+         bdrv_unref(bs->backing_hd);
+         bs->backing_hd = NULL;
+@@ -1244,6 +1243,11 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+     if (drvname) {
+         drv = bdrv_find_format(drvname);
+         qdict_del(options, "driver");
++        if (!drv) {
++            error_setg(errp, "Unknown driver '%s'", drvname);
++            ret = -EINVAL;
++            goto unlink_and_fail;
++        }
+     }
+ 
+     if (!drv) {
+diff --git a/tests/qemu-iotests/114 b/tests/qemu-iotests/114
+new file mode 100755
+index 0000000..d02e7ff
+--- /dev/null
++++ b/tests/qemu-iotests/114
+@@ -0,0 +1,61 @@
++#!/bin/bash
++#
++# Test invalid backing file format in qcow2 images
++#
++# Copyright (C) 2014 Red Hat, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++
++# creator
++owner=kwolf@redhat.com
++
++seq="$(basename $0)"
++echo "QA output created by $seq"
++
++here="$PWD"
++tmp=/tmp/$$
++status=1	# failure is the default!
++
++_cleanup()
++{
++	_cleanup_test_img
++}
++trap "_cleanup; exit \$status" 0 1 2 3 15
++
++# get standard environment, filters and checks
++. ./common.rc
++. ./common.filter
++
++_supported_fmt qcow2
++_supported_proto generic
++_supported_os Linux
++
++
++TEST_IMG="$TEST_IMG.base" _make_test_img 64M
++_make_test_img -b "$TEST_IMG.base" 64M
++
++# Set an invalid backing file format
++$PYTHON qcow2.py "$TEST_IMG" add-header-ext 0xE2792ACA "foo"
++_img_info
++
++# Try opening the image. Should fail (and not probe) in the first case, but
++# overriding the backing file format should be possible.
++$QEMU_IO -c "open $TEST_IMG" -c "read 0 4k" 2>&1 | _filter_qemu_io | _filter_testdir
++$QEMU_IO -c "open -o backing.driver=$IMGFMT $TEST_IMG" -c "read 0 4k" | _filter_qemu_io
++
++# success, all done
++echo '*** done'
++rm -f $seq.full
++status=0
+diff --git a/tests/qemu-iotests/114.out b/tests/qemu-iotests/114.out
+new file mode 100644
+index 0000000..de8f529
+--- /dev/null
++++ b/tests/qemu-iotests/114.out
+@@ -0,0 +1,13 @@
++QA output created by 114
++Formatting 'TEST_DIR/t.IMGFMT.base', fmt=IMGFMT size=67108864 
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 backing_file='TEST_DIR/t.IMGFMT.base' 
++image: TEST_DIR/t.IMGFMT
++file format: IMGFMT
++virtual size: 64M (67108864 bytes)
++cluster_size: 65536
++backing file: TEST_DIR/t.IMGFMT.base
++backing file format: foo
++qemu-io: can't open device TEST_DIR/t.qcow2: Unknown driver 'foo'
++read 4096/4096 bytes at offset 0
++4 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++*** done
+diff --git a/tests/qemu-iotests/group b/tests/qemu-iotests/group
+index 695ab02..5867cf7 100644
+--- a/tests/qemu-iotests/group
++++ b/tests/qemu-iotests/group
+@@ -88,3 +88,4 @@
+ 105 rw auto quick
+ 107 rw auto quick
+ 108 rw auto quick
++114 rw auto quick
+-- 
+1.8.3.1
+

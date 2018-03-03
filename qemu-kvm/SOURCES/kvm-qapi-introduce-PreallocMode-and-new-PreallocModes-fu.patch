@@ -1,0 +1,163 @@
+From f984e0debc17b26f36c8f73027fac11d813826d7 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 10 Nov 2014 09:14:05 +0100
+Subject: [PATCH 28/41] qapi: introduce PreallocMode and new PreallocModes full
+ and falloc.
+
+Message-id: <1415610847-15383-3-git-send-email-mreitz@redhat.com>
+Patchwork-id: 62238
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v2 2/4] qapi: introduce PreallocMode and new PreallocModes full and falloc.
+Bugzilla: 1087724
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Hu Tao <hutao@cn.fujitsu.com>
+
+This patch prepares for the subsequent patches.
+
+Signed-off-by: Hu Tao <hutao@cn.fujitsu.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit ffeaac9b4e23a3033e8120cc34bacadc09487f1b)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	block/qcow2.c
+	qapi/block-core.json
+
+Downstream's qapi-schema.json has not (yet) been split into multiple
+files such as qapi/block-core.json.
+
+The conflicts in block/qcow2.c result from the fact that
+QEMUOptionParameter has not been replaced with QemuOpts downstream
+(upstream 1bd0e2d1c40ef1dbe717728197071e931abe22a4).
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2.c              | 28 +++++++++++++++++-----------
+ qapi-schema.json           | 18 ++++++++++++++++++
+ tests/qemu-iotests/049.out |  2 +-
+ 3 files changed, 36 insertions(+), 12 deletions(-)
+
+diff --git a/block/qcow2.c b/block/qcow2.c
+index a679355..99c6b93 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -30,6 +30,7 @@
+ #include "qemu/error-report.h"
+ #include "qapi/qmp/qerror.h"
+ #include "qapi/qmp/qbool.h"
++#include "qapi/util.h"
+ #include "trace.h"
+ 
+ /*
+@@ -1555,7 +1556,7 @@ static int preallocate(BlockDriverState *bs)
+ 
+ static int qcow2_create2(const char *filename, int64_t total_size,
+                          const char *backing_file, const char *backing_format,
+-                         int flags, size_t cluster_size, int prealloc,
++                         int flags, size_t cluster_size, PreallocMode prealloc,
+                          QEMUOptionParameter *options, int version,
+                          Error **errp)
+ {
+@@ -1690,7 +1691,7 @@ static int qcow2_create2(const char *filename, int64_t total_size,
+     }
+ 
+     /* And if we're supposed to preallocate metadata, do that now */
+-    if (prealloc) {
++    if (prealloc == PREALLOC_MODE_METADATA) {
+         BDRVQcowState *s = bs->opaque;
+         qemu_co_mutex_lock(&s->lock);
+         ret = preallocate(bs);
+@@ -1715,7 +1716,7 @@ static int qcow2_create(const char *filename, QEMUOptionParameter *options,
+     uint64_t sectors = 0;
+     int flags = 0;
+     size_t cluster_size = DEFAULT_CLUSTER_SIZE;
+-    int prealloc = 0;
++    PreallocMode prealloc = PREALLOC_MODE_OFF;
+     int version = 3;
+     Error *local_err = NULL;
+     int ret;
+@@ -1735,13 +1736,11 @@ static int qcow2_create(const char *filename, QEMUOptionParameter *options,
+                 cluster_size = options->value.n;
+             }
+         } else if (!strcmp(options->name, BLOCK_OPT_PREALLOC)) {
+-            if (!options->value.s || !strcmp(options->value.s, "off")) {
+-                prealloc = 0;
+-            } else if (!strcmp(options->value.s, "metadata")) {
+-                prealloc = 1;
+-            } else {
+-                error_setg(errp, "Invalid preallocation mode: '%s'",
+-                           options->value.s);
++            prealloc = qapi_enum_parse(PreallocMode_lookup, options->value.s,
++                                       PREALLOC_MODE_MAX, PREALLOC_MODE_OFF,
++                                       &local_err);
++            if (local_err) {
++                error_propagate(errp, local_err);
+                 return -EINVAL;
+             }
+         } else if (!strcmp(options->name, BLOCK_OPT_COMPAT_LEVEL)) {
+@@ -1762,7 +1761,14 @@ static int qcow2_create(const char *filename, QEMUOptionParameter *options,
+         options++;
+     }
+ 
+-    if (backing_file && prealloc) {
++    if (prealloc != PREALLOC_MODE_OFF &&
++        prealloc != PREALLOC_MODE_METADATA) {
++        error_setg(errp, "Unsupported preallocate mode: %s",
++                   PreallocMode_lookup[prealloc]);
++        return -EINVAL;
++    }
++
++    if (backing_file && prealloc != PREALLOC_MODE_OFF) {
+         error_setg(errp, "Backing file and preallocation cannot be used at "
+                    "the same time");
+         return -EINVAL;
+diff --git a/qapi-schema.json b/qapi-schema.json
+index 31ac5c5..2af2643 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -4118,6 +4118,24 @@
+ { 'command': 'blockdev-add', 'data': { 'options': 'BlockdevOptions' } }
+ 
+ ##
++# @PreallocMode
++#
++# Preallocation mode of QEMU image file
++#
++# @off: no preallocation
++# @metadata: preallocate only for metadata
++# @falloc: like @full preallocation but allocate disk space by
++#          posix_fallocate() rather than writing zeros.
++# @full: preallocate all data by writing zeros to device to ensure disk
++#        space is really available. @full preallocation also sets up
++#        metadata correctly.
++#
++# Since 2.2
++##
++{ 'enum': 'PreallocMode',
++  'data': [ 'off', 'metadata', 'falloc', 'full' ] }
++
++##
+ # @RxState:
+ #
+ # Packets receiving state
+diff --git a/tests/qemu-iotests/049.out b/tests/qemu-iotests/049.out
+index 96e83a4..b2fcf0b 100644
+--- a/tests/qemu-iotests/049.out
++++ b/tests/qemu-iotests/049.out
+@@ -179,7 +179,7 @@ qemu-img create -f qcow2 -o preallocation=metadata TEST_DIR/t.qcow2 64M
+ Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=67108864 encryption=off cluster_size=65536 preallocation='metadata' lazy_refcounts=off 
+ 
+ qemu-img create -f qcow2 -o preallocation=1234 TEST_DIR/t.qcow2 64M
+-qemu-img: TEST_DIR/t.qcow2: Invalid preallocation mode: '1234'
++qemu-img: TEST_DIR/t.qcow2: invalid parameter value: 1234
+ Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=67108864 encryption=off cluster_size=65536 preallocation='1234' lazy_refcounts=off 
+ 
+ == Check encryption option ==
+-- 
+1.8.3.1
+

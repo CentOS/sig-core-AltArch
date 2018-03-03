@@ -1,0 +1,112 @@
+From 04a8a3d76b171deb5eaf8318591e5cfaea3cc843 Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Thu, 23 Feb 2017 14:29:44 +0100
+Subject: [PATCH 14/17] target-i386: Loop-based copying and setting/unsetting
+ of feature words
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Eduardo Habkost <ehabkost@redhat.com>
+Message-id: <20170223142945.17790-14-ehabkost@redhat.com>
+Patchwork-id: 74045
+O-Subject: [RHEL-7.4 qemu-kvm PATCH v2 13/14] target-i386: Loop-based copying and setting/unsetting of feature words
+Bugzilla: 1382122
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Now that we have the feature word arrays, we don't need to manually copy
+each array item, we can simply iterate through each feature word.
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit e1c224b4eb3b8693c230bb2762a959ae1f531f76)
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/cpu.c | 44 ++++++++++----------------------------------
+ 1 file changed, 10 insertions(+), 34 deletions(-)
+
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index d611062..010b95f 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -1755,6 +1755,7 @@ static inline void feat2prop(char *s)
+ static void cpu_x86_parse_featurestr(X86CPU *cpu, char *features, Error **errp)
+ {
+     char *featurestr; /* Single 'key=value" string being parsed */
++    FeatureWord w;
+     /* Features to be added */
+     FeatureWordArray plus_features = { 0 };
+     /* Features to be removed */
+@@ -1844,28 +1845,11 @@ static void cpu_x86_parse_featurestr(X86CPU *cpu, char *features, Error **errp)
+         }
+         featurestr = strtok(NULL, ",");
+     }
+-    env->features[FEAT_1_EDX] |= plus_features[FEAT_1_EDX];
+-    env->features[FEAT_1_ECX] |= plus_features[FEAT_1_ECX];
+-    env->features[FEAT_8000_0001_EDX] |= plus_features[FEAT_8000_0001_EDX];
+-    env->features[FEAT_8000_0001_ECX] |= plus_features[FEAT_8000_0001_ECX];
+-    env->features[FEAT_C000_0001_EDX] |= plus_features[FEAT_C000_0001_EDX];
+-    env->features[FEAT_KVM] |= plus_features[FEAT_KVM];
+-    env->features[FEAT_SVM] |= plus_features[FEAT_SVM];
+-    env->features[FEAT_7_0_EBX] |= plus_features[FEAT_7_0_EBX];
+-    env->features[FEAT_7_0_ECX] |= plus_features[FEAT_7_0_ECX];
+-    env->features[FEAT_7_0_EDX] |= plus_features[FEAT_7_0_EDX];
+-    env->features[FEAT_XSAVE] |= plus_features[FEAT_XSAVE];
+-    env->features[FEAT_1_EDX] &= ~minus_features[FEAT_1_EDX];
+-    env->features[FEAT_1_ECX] &= ~minus_features[FEAT_1_ECX];
+-    env->features[FEAT_8000_0001_EDX] &= ~minus_features[FEAT_8000_0001_EDX];
+-    env->features[FEAT_8000_0001_ECX] &= ~minus_features[FEAT_8000_0001_ECX];
+-    env->features[FEAT_C000_0001_EDX] &= ~minus_features[FEAT_C000_0001_EDX];
+-    env->features[FEAT_KVM] &= ~minus_features[FEAT_KVM];
+-    env->features[FEAT_SVM] &= ~minus_features[FEAT_SVM];
+-    env->features[FEAT_7_0_EBX] &= ~minus_features[FEAT_7_0_EBX];
+-    env->features[FEAT_7_0_ECX] &= ~minus_features[FEAT_7_0_ECX];
+-    env->features[FEAT_7_0_EDX] &= ~minus_features[FEAT_7_0_EDX];
+-    env->features[FEAT_XSAVE] &= ~minus_features[FEAT_XSAVE];
++
++    for (w = 0; w < FEATURE_WORDS; w++) {
++        env->features[w] |= plus_features[w];
++        env->features[w] &= ~minus_features[w];
++    }
+ 
+ out:
+     return;
+@@ -1974,6 +1958,7 @@ static void cpu_x86_register(X86CPU *cpu, const char *name, Error **errp)
+ {
+     CPUX86State *env = &cpu->env;
+     x86_def_t def1, *def = &def1;
++    FeatureWord w;
+ 
+     memset(def, 0, sizeof(*def));
+ 
+@@ -1992,21 +1977,12 @@ static void cpu_x86_register(X86CPU *cpu, const char *name, Error **errp)
+     object_property_set_int(OBJECT(cpu), def->family, "family", errp);
+     object_property_set_int(OBJECT(cpu), def->model, "model", errp);
+     object_property_set_int(OBJECT(cpu), def->stepping, "stepping", errp);
+-    env->features[FEAT_1_EDX] = def->features[FEAT_1_EDX];
+-    env->features[FEAT_1_ECX] = def->features[FEAT_1_ECX];
+-    env->features[FEAT_8000_0001_EDX] = def->features[FEAT_8000_0001_EDX];
+-    env->features[FEAT_8000_0001_ECX] = def->features[FEAT_8000_0001_ECX];
+     object_property_set_int(OBJECT(cpu), def->xlevel, "xlevel", errp);
+-    env->features[FEAT_KVM] = def->features[FEAT_KVM];
+-    env->features[FEAT_SVM] = def->features[FEAT_SVM];
+-    env->features[FEAT_C000_0001_EDX] = def->features[FEAT_C000_0001_EDX];
+-    env->features[FEAT_7_0_EBX] = def->features[FEAT_7_0_EBX];
+-    env->features[FEAT_7_0_ECX] = def->features[FEAT_7_0_ECX];
+-    env->features[FEAT_7_0_EDX] = def->features[FEAT_7_0_EDX];
+-    env->features[FEAT_XSAVE] = def->features[FEAT_XSAVE];
+     env->cpuid_xlevel2 = def->xlevel2;
+-
+     object_property_set_str(OBJECT(cpu), def->model_id, "model-id", errp);
++    for (w = 0; w < FEATURE_WORDS; w++) {
++        env->features[w] = def->features[w];
++    }
+ }
+ 
+ X86CPU *cpu_x86_create(const char *cpu_model, DeviceState *icc_bridge,
+-- 
+1.8.3.1
+

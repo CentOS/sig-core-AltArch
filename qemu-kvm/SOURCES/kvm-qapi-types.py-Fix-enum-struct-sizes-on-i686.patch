@@ -1,0 +1,63 @@
+From 8c58dddfb0bdd43600840ff14b03b42bacfea18c Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 5 Nov 2013 14:08:56 +0100
+Subject: [PATCH 43/87] qapi-types.py: Fix enum struct sizes on i686
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383660558-32096-3-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55381
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 02/24] qapi-types.py: Fix enum struct sizes on i686
+Bugzilla: 978402
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Cole Robinson <crobinso@redhat.com>
+
+Unlike other list types, enum wasn't adding any padding, which caused
+a mismatch between the generated struct size and GenericList struct
+size. More details in a678e26cbe89f7a27cbce794c2c2784571ee9d21
+
+This crashed qemu if calling qmp query-tpm-types for example, which
+upsets libvirt capabilities probing. Reproducer on i686:
+
+(sleep 5; printf '{"execute":"qmp_capabilities"}\n{"execute":"query-tpm-types"}\n') | ./i386-softmmu/qemu-system-i386 -S -nodefaults -nographic -M none -qmp stdio
+
+https://bugs.launchpad.net/qemu/+bug/1219207
+
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Cole Robinson <crobinso@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Tested-by: Richard W.M. Jones <rjones@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit 02dc4bf5684d3fb46786fab2ecff98214b1df9fe)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ scripts/qapi-types.py | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ scripts/qapi-types.py |    5 ++++-
+ 1 files changed, 4 insertions(+), 1 deletions(-)
+
+diff --git a/scripts/qapi-types.py b/scripts/qapi-types.py
+index e9bd638..8680160 100644
+--- a/scripts/qapi-types.py
++++ b/scripts/qapi-types.py
+@@ -45,7 +45,10 @@ def generate_fwd_enum_struct(name, members):
+     return mcgen('''
+ typedef struct %(name)sList
+ {
+-    %(name)s value;
++    union {
++        %(name)s value;
++        uint64_t padding;
++    };
+     struct %(name)sList *next;
+ } %(name)sList;
+ ''',
+-- 
+1.7.1
+

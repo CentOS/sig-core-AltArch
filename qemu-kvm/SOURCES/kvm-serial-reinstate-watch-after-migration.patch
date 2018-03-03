@@ -1,0 +1,72 @@
+From ba96da130a625a71b574c1bb9f6027e3b8d655ab Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Fri, 9 Jun 2017 11:43:59 +0200
+Subject: [PATCH 4/6] serial: reinstate watch after migration
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <20170609114359.13036-4-pbonzini@redhat.com>
+Patchwork-id: 75566
+O-Subject: [RHEL7.4 qemu-kvm PATCH v2 3/3] serial: reinstate watch after migration
+Bugzilla: 1452067
+RH-Acked-by: David Hildenbrand <david@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Otherwise, a serial port can get stuck if it is migrated while flow control
+is in effect.
+
+Tested-by: Bret Ketchum <bcketchum@gmail.com>
+Reviewed-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 9f34a35e0020b0b2b2e21c086a486d7dfd18df4f)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/char/serial.c | 29 +++++++++++++++++++++++++----
+ 1 file changed, 25 insertions(+), 4 deletions(-)
+
+diff --git a/hw/char/serial.c b/hw/char/serial.c
+index 0518a6f..820960b 100644
+--- a/hw/char/serial.c
++++ b/hw/char/serial.c
+@@ -637,13 +637,34 @@ static int serial_post_load(void *opaque, int version_id)
+     if (version_id < 3) {
+         s->fcr_vmstate = 0;
+     }
+-    if (s->tsr_retry > MAX_XMIT_RETRY) {
+-        s->tsr_retry = MAX_XMIT_RETRY;
+-    }
+-
+     if (s->thr_ipending == -1) {
+         s->thr_ipending = ((s->iir & UART_IIR_ID) == UART_IIR_THRI);
+     }
++
++    if (s->tsr_retry > 0) {
++        /* tsr_retry > 0 implies LSR.TEMT = 0 (transmitter not empty).  */
++        if (s->lsr & UART_LSR_TEMT) {
++            error_report("inconsistent state in serial device "
++                         "(tsr empty, tsr_retry=%d", s->tsr_retry);
++            return -1;
++        }
++
++        if (s->tsr_retry > MAX_XMIT_RETRY) {
++            s->tsr_retry = MAX_XMIT_RETRY;
++        }
++
++        assert(s->watch_tag == 0);
++        s->watch_tag = qemu_chr_fe_add_watch(s->chr, G_IO_OUT|G_IO_HUP,
++                                             serial_watch_cb, s);
++    } else {
++        /* tsr_retry == 0 implies LSR.TEMT = 1 (transmitter empty).  */
++        if (!(s->lsr & UART_LSR_TEMT)) {
++            error_report("inconsistent state in serial device "
++                         "(tsr not empty, tsr_retry=0");
++            return -1;
++        }
++    }
++
+     s->last_break_enable = (s->lcr >> 6) & 1;
+     /* Initialize fcr via setter to perform essential side-effects */
+     serial_write_fcr(s, s->fcr_vmstate);
+-- 
+1.8.3.1
+

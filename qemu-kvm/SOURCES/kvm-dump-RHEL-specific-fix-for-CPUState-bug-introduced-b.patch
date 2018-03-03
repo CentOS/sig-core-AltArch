@@ -1,0 +1,126 @@
+From 2feb6c83f5f22cb4b5060d8224f42d25dcb21fe7 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Fri, 7 Nov 2014 17:17:48 +0100
+Subject: [PATCH 01/41] dump: RHEL-specific fix for CPUState bug introduced by
+ upstream c72bf4682
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Message-id: <1415380693-16593-2-git-send-email-lersek@redhat.com>
+Patchwork-id: 62187
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 01/26] dump: RHEL-specific fix for CPUState bug introduced by upstream c72bf4682
+Bugzilla: 1161563
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: dgibson <dgibson@redhat.com>
+
+In qemu-kvm-1.5.3-77.el7, the write_elf64_notes() and write_elf32_notes()
+functions are broken due to upstream commit c72bf4682.
+
+    commit c72bf468259935a80ea185f2cbe807c3da9c1bbd
+    Author: Jens Freimann <jfrei@linux.vnet.ibm.com>
+    Date:   Fri Apr 19 16:45:06 2013 +0200
+
+        cpu: Move cpu_write_elfXX_note() functions to CPUState
+
+        Convert cpu_write_elfXX_note() functions to CPUClass methods and
+        pass CPUState as argument. Update target-i386 accordingly.
+
+        Signed-off-by: Jens Freimann <jfrei@linux.vnet.ibm.com>
+        [AF: Retain stubs as CPUClass' default method implementation;
+         style changes]
+        Signed-off-by: Andreas Färber <afaerber@suse.de>
+
+This commit changed the signature of the following functions so that they
+take CPUState rather than CPUArchState:
+- cpu_write_elf64_note()
+- cpu_write_elf64_qemunote()
+- cpu_write_elf32_note()
+- cpu_write_elf32_qemunote()
+
+The callers of these functions, write_elf64_notes() and
+write_elf32_notes(), each iterate over CPUArchState objects (starting from
+"first_cpu") *twice*, the first loop calling cpu_write_elfXX_note(), the
+second loop calling cpu_write_elfXX_qemunote(). The loop variable is
+called "env". When calling the above functions after c72bf468, "env" (of
+type CPUArchState) needs to be converted to CPUState, with the
+ENV_GET_CPU() macro.
+
+Now, even before c72bf468, the *first* loop in each of both callers used
+to do the conversion already, because cpu_write_elfXX_note() needs a CPU
+index, and that's only reachable via cpu_index(ENV_GET_CPU(env)).
+Therefore the first loop in each caller already set the "cpu" local
+variable correctly, for each "env" in question.
+
+However, the *second* loop in each caller had never done that, because
+cpu_write_elfXX_qemunote() had never needed a CPUState for anything.
+
+Upstream commit c72bf4682 simply replaced "env" with "cpu" in both loop
+bodies (in both callers). This was correct for the first loops (because
+they already had set "cpu" correctly), but the commit missed to add
+
+    cpu = ENV_GET_CPU(env);
+
+to the second loops. Hence cpu_write_elfXX_qemunote() is always called
+with the last "cpu" value inherited from the first loop! (Which is why the
+bug is invisible for single-VCPU guests.)
+
+Add the missing assignments.
+
+For upstream, this was silently fixed in
+
+    commit 182735efaf956ccab50b6d74a4fed163e0f35660
+    Author: Andreas Färber <afaerber@suse.de>
+    Date:   Wed May 29 22:29:20 2013 +0200
+
+        cpu: Make first_cpu and next_cpu CPUState
+
+        Move next_cpu from CPU_COMMON to CPUState.
+        Move first_cpu variable to qom/cpu.h.
+
+        gdbstub needs to use CPUState::env_ptr for now.
+        cpu_copy() no longer needs to save and restore cpu_next.
+
+        Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+        [AF: Rebased, simplified cpu_copy()]
+        Signed-off-by: Andreas Färber <afaerber@suse.de>
+
+because it obviated and eliminated the
+
+    cpu = ENV_GET_CPU(env);
+
+conversions completely. The bug-introducing commit c72bf4682 had been
+released in v1.5.0 (and it persisted even into 1.5.3, which is why we have
+it in RHEL). The silent / unintended fix (182735ef) is part of v1.6.0 (and
+we never backported that commit to RHEL-7.0).
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/dump.c b/dump.c
+index b203a8d..a2b6e45 100644
+--- a/dump.c
++++ b/dump.c
+@@ -289,6 +289,7 @@ static int write_elf64_notes(DumpState *s)
+     }
+ 
+     for (env = first_cpu; env != NULL; env = env->next_cpu) {
++        cpu = ENV_GET_CPU(env);
+         ret = cpu_write_elf64_qemunote(fd_write_vmcore, cpu, s);
+         if (ret < 0) {
+             dump_error(s, "dump: failed to write CPU status.\n");
+@@ -341,6 +342,7 @@ static int write_elf32_notes(DumpState *s)
+     }
+ 
+     for (env = first_cpu; env != NULL; env = env->next_cpu) {
++        cpu = ENV_GET_CPU(env);
+         ret = cpu_write_elf32_qemunote(fd_write_vmcore, cpu, s);
+         if (ret < 0) {
+             dump_error(s, "dump: failed to write CPU status.\n");
+-- 
+1.8.3.1
+

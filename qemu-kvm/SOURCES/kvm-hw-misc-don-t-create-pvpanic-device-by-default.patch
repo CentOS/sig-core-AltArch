@@ -1,0 +1,207 @@
+From 45dc4ec297fdb6ba95e7a8c1f3d904fe88b0e282 Mon Sep 17 00:00:00 2001
+From: Marcel Apfelbaum <marcel.a@redhat.com>
+Date: Wed, 6 Nov 2013 16:32:37 +0100
+Subject: [PATCH 78/81] hw/misc: don't create pvpanic device by default
+
+RH-Author: Marcel Apfelbaum <marcel.a@redhat.com>
+Message-id: <1383755557-21590-10-git-send-email-marcel.a@redhat.com>
+Patchwork-id: 55554
+O-Subject: [RHEL-7 qemu-kvm PATCH v3 9/9] hw/misc: don't create pvpanic device by default
+Bugzilla: 990601
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+
+We don't need compatibility with 1.5 so we can simply
+revert the patch creating it by default.
+
+This patch:
+ - reverts "pvpanic: create pvpanic by default for machine 1.5"
+ - removes cannot_instantiate_with_device_add_yet flag
+
+Closest upstream commit (currently in qemu-devl-list):
+	[Qemu-devel] [PATCH v2 1.7] pc: get rid of builtin pvpanic for "-M pc-1.5"
+
+Related upstream commit:
+    commit 7f3e341a008c585deed174eaf1f826c88c67948a
+    Author: Marcel Apfelbaum <marcel.a@redhat.com>
+    Date:   Sun Aug 11 18:10:42 2013 +0300
+
+        hw/misc: don't create pvpanic device by default
+
+        This patch is based on Hu Tao's:
+        http://lists.nongnu.org/archive/html/qemu-devel/2013-08/msg00124.html
+
+        No need to hard-code pvpanic as part of the machine.
+        It can be added with "-device pvpanic" from command line (The next patch).
+        Anyway, for backport compatibility it is still part of 1.5
+        machine.
+
+        Signed-off-by: Marcel Apfelbaum <marcel.a@redhat.com>
+        Reviewed-by: Hu Tao <hutao@cn.fujitsu.com>
+        Message-id: 1376233843-19410-2-git-send-email-marcel.a@redhat.com
+        Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+
+losest upstream patch:
+
+Signed-off-by: Marcel Apfelbaum <marcel.a@redhat.com>
+---
+ hw/i386/pc_piix.c | 12 ------------
+ hw/i386/pc_q35.c  |  6 ------
+ hw/misc/pvpanic.c | 11 -----------
+ 3 files changed, 29 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/pc_piix.c |   12 ------------
+ hw/i386/pc_q35.c  |    6 ------
+ hw/misc/pvpanic.c |   11 -----------
+ 3 files changed, 0 insertions(+), 29 deletions(-)
+
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index 825a5b1..2d8e79f 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -57,7 +57,6 @@ static const int ide_iobase[MAX_IDE_BUS] = { 0x1f0, 0x170 };
+ static const int ide_iobase2[MAX_IDE_BUS] = { 0x3f6, 0x376 };
+ static const int ide_irq[MAX_IDE_BUS] = { 14, 15 };
+ 
+-static bool has_pvpanic = true;
+ static bool smbios_type1_defaults = true;
+ 
+ /* PC hardware initialisation */
+@@ -227,10 +226,6 @@ static void pc_init1(QEMUMachineInitArgs *args,
+     if (pci_enabled) {
+         pc_pci_device_init(pci_bus);
+     }
+-
+-    if (has_pvpanic) {
+-        pvpanic_init(isa_bus);
+-    }
+ }
+ 
+ static void pc_init_pci(QEMUMachineInitArgs *args)
+@@ -242,7 +237,6 @@ static void pc_init_pci(QEMUMachineInitArgs *args)
+ 
+ static void pc_init_pci_1_4(QEMUMachineInitArgs *args)
+ {
+-    has_pvpanic = false;
+     x86_cpu_compat_set_features("n270", FEAT_1_ECX, 0, CPUID_EXT_MOVBE);
+     x86_cpu_compat_set_features("Westmere", FEAT_1_ECX, 0, CPUID_EXT_PCLMULQDQ);
+     pc_init_pci(args);
+@@ -251,7 +245,6 @@ static void pc_init_pci_1_4(QEMUMachineInitArgs *args)
+ static void pc_init_pci_1_3(QEMUMachineInitArgs *args)
+ {
+     enable_compat_apic_id_mode();
+-    has_pvpanic = false;
+     pc_init_pci(args);
+ }
+ 
+@@ -260,7 +253,6 @@ static void pc_init_pci_1_2(QEMUMachineInitArgs *args)
+ {
+     disable_kvm_pv_eoi();
+     enable_compat_apic_id_mode();
+-    has_pvpanic = false;
+     pc_init_pci(args);
+ }
+ 
+@@ -269,14 +261,12 @@ static void pc_init_pci_1_0(QEMUMachineInitArgs *args)
+ {
+     disable_kvm_pv_eoi();
+     enable_compat_apic_id_mode();
+-    has_pvpanic = false;
+     pc_init_pci(args);
+ }
+ 
+ /* PC init function for pc-0.10 to pc-0.13, and reused by xenfv */
+ static void pc_init_pci_no_kvmclock(QEMUMachineInitArgs *args)
+ {
+-    has_pvpanic = false;
+     disable_kvm_pv_eoi();
+     enable_compat_apic_id_mode();
+     pc_init1(args, get_system_memory(), get_system_io(), 1, 0);
+@@ -284,7 +274,6 @@ static void pc_init_pci_no_kvmclock(QEMUMachineInitArgs *args)
+ 
+ static void pc_init_isa(QEMUMachineInitArgs *args)
+ {
+-    has_pvpanic = false;
+     if (!args->cpu_model) {
+         args->cpu_model = "486";
+     }
+@@ -931,7 +920,6 @@ static QEMUMachine pc_machine_rhel650 = {
+ 
+ static void pc_init_rhel640(QEMUMachineInitArgs *args)
+ {
+-    has_pvpanic = false;
+     x86_cpu_compat_set_features(NULL, FEAT_1_EDX, 0, CPUID_SEP);
+     pc_init_rhel650(args);
+ }
+diff --git a/hw/i386/pc_q35.c b/hw/i386/pc_q35.c
+index 64995ac..f308098 100644
+--- a/hw/i386/pc_q35.c
++++ b/hw/i386/pc_q35.c
+@@ -47,7 +47,6 @@
+ /* ICH9 AHCI has 6 ports */
+ #define MAX_SATA_PORTS     6
+ 
+-static bool has_pvpanic = true;
+ static bool smbios_type1_defaults = true;
+ 
+ /* PC hardware initialisation */
+@@ -205,17 +204,12 @@ static void pc_q35_init(QEMUMachineInitArgs *args)
+     if (pci_enabled) {
+         pc_pci_device_init(host_bus);
+     }
+-
+-    if (has_pvpanic) {
+-        pvpanic_init(isa_bus);
+-    }
+ }
+ 
+ #if 0 /* Disabled for Red Hat Enterprise Linux */
+ 
+ static void pc_q35_init_1_4(QEMUMachineInitArgs *args)
+ {
+-    has_pvpanic = false;
+     x86_cpu_compat_set_features("n270", FEAT_1_ECX, 0, CPUID_EXT_MOVBE);
+     x86_cpu_compat_set_features("Westmere", FEAT_1_ECX, 0, CPUID_EXT_PCLMULQDQ);
+     pc_q35_init(args);
+diff --git a/hw/misc/pvpanic.c b/hw/misc/pvpanic.c
+index 1d3178d..1838bc7 100644
+--- a/hw/misc/pvpanic.c
++++ b/hw/misc/pvpanic.c
+@@ -19,7 +19,6 @@
+ #include "qemu/log.h"
+ 
+ #include "hw/nvram/fw_cfg.h"
+-#include "hw/i386/pc.h"
+ 
+ /* The bit of supported pv event */
+ #define PVPANIC_F_PANICKED      0
+@@ -108,11 +107,6 @@ static int pvpanic_isa_initfn(ISADevice *dev)
+     return 0;
+ }
+ 
+-void pvpanic_init(ISABus *bus)
+-{
+-    isa_create_simple(bus, TYPE_ISA_PVPANIC_DEVICE);
+-}
+-
+ static Property pvpanic_isa_properties[] = {
+     DEFINE_PROP_UINT16("ioport", PVPanicState, ioport, 0x505),
+     DEFINE_PROP_END_OF_LIST(),
+@@ -125,11 +119,6 @@ static void pvpanic_isa_class_init(ObjectClass *klass, void *data)
+ 
+     ic->init = pvpanic_isa_initfn;
+     dc->props = pvpanic_isa_properties;
+-    /*
+-     * To be dropped in future backport of commit a5d3f64 "hw/misc:
+-     * make pvpanic known to user":
+-     */
+-    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static TypeInfo pvpanic_isa_info = {
+-- 
+1.7.1
+

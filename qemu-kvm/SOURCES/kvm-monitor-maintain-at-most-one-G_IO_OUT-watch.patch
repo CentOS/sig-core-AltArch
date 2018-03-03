@@ -1,0 +1,75 @@
+From 6d8b03e0e91a58a0b276e76363e0c836827c9a49 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Fri, 19 Jul 2013 13:05:23 +0200
+Subject: monitor: maintain at most one G_IO_OUT watch
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1374239123-4841-3-git-send-email-lersek@redhat.com>
+Patchwork-id: 52616
+O-Subject: [RHEL-7 qemu-kvm PATCH 2/2] monitor: maintain at most one G_IO_OUT watch
+Bugzilla: 970047
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+
+When monitor_flush() is invoked repeatedly outside the monitor_unblocked()
+callback, for example from tlb_info() -> ... -> print_pte(), several
+watches may be added for the same event.
+
+This is no problem per se because the extra monitor_unblocked() callbacks
+are harmless if mon->outbuf is empty, the watches will be removed
+gradually. However a big number of watches can grow "gpollfds" without
+limit in glib_pollfds_fill(), triggering a -1/EINVAL condition in
+g_poll().
+
+Keep at most one such watch, by following the pattern observable in eg.
+commits c874ea97 and c3d6b96e. The change has no effect when
+monitor_unblocked() calls monitor_flush() (when the watch can either be
+removed or renewed 1-for-1), but non-callback contexts won't create an
+additional watch when the monitor already has one.
+
+Related RHBZ: https://bugzilla.redhat.com/show_bug.cgi?id=970047
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Amit Shah <amit.shah@redhat.com>
+Reviewed-by: Anthony Liguori <aliguori@us.ibm.com>
+Message-id: 1373998781-29561-3-git-send-email-lersek@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit 293d2a0014a0e849477413f55aaa05f2743b2e04)
+
+diff --git a/monitor.c b/monitor.c
+index dee980c..deb0dc8 100644
+--- a/monitor.c
++++ b/monitor.c
+@@ -190,6 +190,7 @@ struct Monitor {
+     int suspend_cnt;
+     bool skip_flush;
+     QString *outbuf;
++    guint watch;
+     ReadLineState *rs;
+     MonitorControl *mc;
+     CPUArchState *mon_cpu;
+@@ -264,7 +265,10 @@ int monitor_read_password(Monitor *mon, ReadLineFunc *readline_func,
+ static gboolean monitor_unblocked(GIOChannel *chan, GIOCondition cond,
+                                   void *opaque)
+ {
+-    monitor_flush(opaque);
++    Monitor *mon = opaque;
++
++    mon->watch = 0;
++    monitor_flush(mon);
+     return FALSE;
+ }
+ 
+@@ -295,7 +299,10 @@ void monitor_flush(Monitor *mon)
+             QDECREF(mon->outbuf);
+             mon->outbuf = tmp;
+         }
+-        qemu_chr_fe_add_watch(mon->chr, G_IO_OUT, monitor_unblocked, mon);
++        if (mon->watch == 0) {
++            mon->watch = qemu_chr_fe_add_watch(mon->chr, G_IO_OUT,
++                                               monitor_unblocked, mon);
++        }
+     }
+ }
+ 

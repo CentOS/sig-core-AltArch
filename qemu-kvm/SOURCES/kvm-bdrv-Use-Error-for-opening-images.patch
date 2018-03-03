@@ -1,0 +1,565 @@
+From cbf4a883b38edbd2740c0ed374e1101fe56513bf Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 4 Nov 2013 22:32:09 +0100
+Subject: [PATCH 16/87] bdrv: Use "Error" for opening images
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-19-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55318
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 18/43] bdrv: Use "Error" for opening images
+Bugzilla: 1026524
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1026524
+
+Add an Error ** parameter to BlockDriver.bdrv_open and
+BlockDriver.bdrv_file_open to allow more specific error messages.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit 015a1036a74ad29bb6916754911ce25587ff4db3)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+
+Conflicts:
+	block/raw.c
+	block/raw_bsd.c
+
+Conflicts because raw_bsd.c does not exist downstream; instead, there is
+raw.c.
+---
+ block.c                   |  4 ++--
+ block/blkdebug.c          |  3 ++-
+ block/blkverify.c         |  3 ++-
+ block/bochs.c             |  3 ++-
+ block/cloop.c             |  3 ++-
+ block/cow.c               |  3 ++-
+ block/curl.c              |  3 ++-
+ block/dmg.c               |  3 ++-
+ block/gluster.c           |  2 +-
+ block/iscsi.c             |  5 +++--
+ block/nbd.c               |  3 ++-
+ block/parallels.c         |  3 ++-
+ block/qcow.c              |  3 ++-
+ block/qcow2.c             |  5 +++--
+ block/qed.c               |  5 +++--
+ block/raw-posix.c         | 12 ++++++++----
+ block/raw-win32.c         |  6 ++++--
+ block/raw.c               |  3 ++-
+ block/rbd.c               |  3 ++-
+ block/sheepdog.c          |  3 ++-
+ block/snapshot.c          |  2 +-
+ block/ssh.c               |  3 ++-
+ block/vdi.c               |  3 ++-
+ block/vhdx.c              |  3 ++-
+ block/vmdk.c              |  3 ++-
+ block/vpc.c               |  3 ++-
+ block/vvfat.c             |  3 ++-
+ include/block/block_int.h |  6 ++++--
+ 28 files changed, 67 insertions(+), 37 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c                   |    4 ++--
+ block/blkdebug.c          |    3 ++-
+ block/blkverify.c         |    3 ++-
+ block/bochs.c             |    3 ++-
+ block/cloop.c             |    3 ++-
+ block/cow.c               |    3 ++-
+ block/curl.c              |    3 ++-
+ block/dmg.c               |    3 ++-
+ block/gluster.c           |    2 +-
+ block/iscsi.c             |    5 +++--
+ block/nbd.c               |    3 ++-
+ block/parallels.c         |    3 ++-
+ block/qcow.c              |    3 ++-
+ block/qcow2.c             |    5 +++--
+ block/qed.c               |    5 +++--
+ block/raw-posix.c         |   12 ++++++++----
+ block/raw-win32.c         |    6 ++++--
+ block/raw.c               |    3 ++-
+ block/rbd.c               |    3 ++-
+ block/sheepdog.c          |    3 ++-
+ block/snapshot.c          |    2 +-
+ block/ssh.c               |    3 ++-
+ block/vdi.c               |    3 ++-
+ block/vhdx.c              |    3 ++-
+ block/vmdk.c              |    3 ++-
+ block/vpc.c               |    3 ++-
+ block/vvfat.c             |    3 ++-
+ include/block/block_int.h |    6 ++++--
+ 28 files changed, 67 insertions(+), 37 deletions(-)
+
+diff --git a/block.c b/block.c
+index 69b70d0..921fa33 100644
+--- a/block.c
++++ b/block.c
+@@ -733,7 +733,7 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
+     if (drv->bdrv_file_open) {
+         assert(file == NULL);
+         assert(drv->bdrv_parse_filename || filename != NULL);
+-        ret = drv->bdrv_file_open(bs, options, open_flags);
++        ret = drv->bdrv_file_open(bs, options, open_flags, NULL);
+     } else {
+         if (file == NULL) {
+             qerror_report(ERROR_CLASS_GENERIC_ERROR, "Can't use '%s' as a "
+@@ -744,7 +744,7 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
+         }
+         assert(file != NULL);
+         bs->file = file;
+-        ret = drv->bdrv_open(bs, options, open_flags);
++        ret = drv->bdrv_open(bs, options, open_flags, NULL);
+     }
+ 
+     if (ret < 0) {
+diff --git a/block/blkdebug.c b/block/blkdebug.c
+index d659d38..114c4c9 100644
+--- a/block/blkdebug.c
++++ b/block/blkdebug.c
+@@ -347,7 +347,8 @@ static QemuOptsList runtime_opts = {
+     },
+ };
+ 
+-static int blkdebug_open(BlockDriverState *bs, QDict *options, int flags)
++static int blkdebug_open(BlockDriverState *bs, QDict *options, int flags,
++                         Error **errp)
+ {
+     BDRVBlkdebugState *s = bs->opaque;
+     QemuOpts *opts;
+diff --git a/block/blkverify.c b/block/blkverify.c
+index 1d58cc3..5d716bb 100644
+--- a/block/blkverify.c
++++ b/block/blkverify.c
+@@ -116,7 +116,8 @@ static QemuOptsList runtime_opts = {
+     },
+ };
+ 
+-static int blkverify_open(BlockDriverState *bs, QDict *options, int flags)
++static int blkverify_open(BlockDriverState *bs, QDict *options, int flags,
++                          Error **errp)
+ {
+     BDRVBlkverifyState *s = bs->opaque;
+     QemuOpts *opts;
+diff --git a/block/bochs.c b/block/bochs.c
+index d7078c0..51d9a90 100644
+--- a/block/bochs.c
++++ b/block/bochs.c
+@@ -108,7 +108,8 @@ static int bochs_probe(const uint8_t *buf, int buf_size, const char *filename)
+     return 0;
+ }
+ 
+-static int bochs_open(BlockDriverState *bs, QDict *options, int flags)
++static int bochs_open(BlockDriverState *bs, QDict *options, int flags,
++                      Error **errp)
+ {
+     BDRVBochsState *s = bs->opaque;
+     int i;
+diff --git a/block/cloop.c b/block/cloop.c
+index 6ea7cf4..b907023 100644
+--- a/block/cloop.c
++++ b/block/cloop.c
+@@ -53,7 +53,8 @@ static int cloop_probe(const uint8_t *buf, int buf_size, const char *filename)
+     return 0;
+ }
+ 
+-static int cloop_open(BlockDriverState *bs, QDict *options, int flags)
++static int cloop_open(BlockDriverState *bs, QDict *options, int flags,
++                      Error **errp)
+ {
+     BDRVCloopState *s = bs->opaque;
+     uint32_t offsets_size, max_compressed_block_size = 1, i;
+diff --git a/block/cow.c b/block/cow.c
+index 6958808..ce8deb8 100644
+--- a/block/cow.c
++++ b/block/cow.c
+@@ -58,7 +58,8 @@ static int cow_probe(const uint8_t *buf, int buf_size, const char *filename)
+         return 0;
+ }
+ 
+-static int cow_open(BlockDriverState *bs, QDict *options, int flags)
++static int cow_open(BlockDriverState *bs, QDict *options, int flags,
++                    Error **errp)
+ {
+     BDRVCowState *s = bs->opaque;
+     struct cow_header_v2 cow_header;
+diff --git a/block/curl.c b/block/curl.c
+index b8935fd..1b0fcf1 100644
+--- a/block/curl.c
++++ b/block/curl.c
+@@ -395,7 +395,8 @@ static QemuOptsList runtime_opts = {
+     },
+ };
+ 
+-static int curl_open(BlockDriverState *bs, QDict *options, int flags)
++static int curl_open(BlockDriverState *bs, QDict *options, int flags,
++                     Error **errp)
+ {
+     BDRVCURLState *s = bs->opaque;
+     CURLState *state = NULL;
+diff --git a/block/dmg.c b/block/dmg.c
+index 3141cb5..d5e9b1f 100644
+--- a/block/dmg.c
++++ b/block/dmg.c
+@@ -92,7 +92,8 @@ static int read_uint32(BlockDriverState *bs, int64_t offset, uint32_t *result)
+     return 0;
+ }
+ 
+-static int dmg_open(BlockDriverState *bs, QDict *options, int flags)
++static int dmg_open(BlockDriverState *bs, QDict *options, int flags,
++                    Error **errp)
+ {
+     BDRVDMGState *s = bs->opaque;
+     uint64_t info_begin,info_end,last_in_offset,last_out_offset;
+diff --git a/block/gluster.c b/block/gluster.c
+index 90a51ca..fa46b6f 100644
+--- a/block/gluster.c
++++ b/block/gluster.c
+@@ -297,7 +297,7 @@ static QemuOptsList runtime_opts = {
+ };
+ 
+ static int qemu_gluster_open(BlockDriverState *bs,  QDict *options,
+-                             int bdrv_flags)
++                             int bdrv_flags, Error **errp)
+ {
+     BDRVGlusterState *s = bs->opaque;
+     int open_flags = O_BINARY;
+diff --git a/block/iscsi.c b/block/iscsi.c
+index cc2017e..8d49e35 100644
+--- a/block/iscsi.c
++++ b/block/iscsi.c
+@@ -1056,7 +1056,8 @@ static QemuOptsList runtime_opts = {
+  * We support iscsi url's on the form
+  * iscsi://[<username>%<password>@]<host>[:<port>]/<targetname>/<lun>
+  */
+-static int iscsi_open(BlockDriverState *bs, QDict *options, int flags)
++static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
++                      Error **errp)
+ {
+     IscsiLun *iscsilun = bs->opaque;
+     struct iscsi_context *iscsi = NULL;
+@@ -1271,7 +1272,7 @@ static int iscsi_create(const char *filename, QEMUOptionParameter *options)
+ 
+     bs_options = qdict_new();
+     qdict_put(bs_options, "filename", qstring_from_str(filename));
+-    ret = iscsi_open(bs, bs_options, 0);
++    ret = iscsi_open(bs, bs_options, 0, NULL);
+     QDECREF(bs_options);
+ 
+     if (ret != 0) {
+diff --git a/block/nbd.c b/block/nbd.c
+index 9c480b8..48a759e 100644
+--- a/block/nbd.c
++++ b/block/nbd.c
+@@ -463,7 +463,8 @@ static void nbd_teardown_connection(BlockDriverState *bs)
+     closesocket(s->sock);
+ }
+ 
+-static int nbd_open(BlockDriverState *bs, QDict *options, int flags)
++static int nbd_open(BlockDriverState *bs, QDict *options, int flags,
++                    Error **errp)
+ {
+     BDRVNBDState *s = bs->opaque;
+     int result;
+diff --git a/block/parallels.c b/block/parallels.c
+index 18b3ac0..2121e43 100644
+--- a/block/parallels.c
++++ b/block/parallels.c
+@@ -68,7 +68,8 @@ static int parallels_probe(const uint8_t *buf, int buf_size, const char *filenam
+     return 0;
+ }
+ 
+-static int parallels_open(BlockDriverState *bs, QDict *options, int flags)
++static int parallels_open(BlockDriverState *bs, QDict *options, int flags,
++                          Error **errp)
+ {
+     BDRVParallelsState *s = bs->opaque;
+     int i;
+diff --git a/block/qcow.c b/block/qcow.c
+index 4ab552e..b8887f0 100644
+--- a/block/qcow.c
++++ b/block/qcow.c
+@@ -92,7 +92,8 @@ static int qcow_probe(const uint8_t *buf, int buf_size, const char *filename)
+         return 0;
+ }
+ 
+-static int qcow_open(BlockDriverState *bs, QDict *options, int flags)
++static int qcow_open(BlockDriverState *bs, QDict *options, int flags,
++                     Error **errp)
+ {
+     BDRVQcowState *s = bs->opaque;
+     int len, i, shift, ret;
+diff --git a/block/qcow2.c b/block/qcow2.c
+index 8a30863..2e7e9f5 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -350,7 +350,8 @@ static QemuOptsList qcow2_runtime_opts = {
+     },
+ };
+ 
+-static int qcow2_open(BlockDriverState *bs, QDict *options, int flags)
++static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
++                      Error **errp)
+ {
+     BDRVQcowState *s = bs->opaque;
+     int len, i, ret = 0;
+@@ -1059,7 +1060,7 @@ static void qcow2_invalidate_cache(BlockDriverState *bs)
+               qbool_from_int(s->use_lazy_refcounts));
+ 
+     memset(s, 0, sizeof(BDRVQcowState));
+-    qcow2_open(bs, options, flags);
++    qcow2_open(bs, options, flags, NULL);
+ 
+     QDECREF(options);
+ 
+diff --git a/block/qed.c b/block/qed.c
+index 815ee1c..d49e0cd 100644
+--- a/block/qed.c
++++ b/block/qed.c
+@@ -373,7 +373,8 @@ static void bdrv_qed_rebind(BlockDriverState *bs)
+     s->bs = bs;
+ }
+ 
+-static int bdrv_qed_open(BlockDriverState *bs, QDict *options, int flags)
++static int bdrv_qed_open(BlockDriverState *bs, QDict *options, int flags,
++                         Error **errp)
+ {
+     BDRVQEDState *s = bs->opaque;
+     QEDHeader le_header;
+@@ -1547,7 +1548,7 @@ static void bdrv_qed_invalidate_cache(BlockDriverState *bs)
+ 
+     bdrv_qed_close(bs);
+     memset(s, 0, sizeof(BDRVQEDState));
+-    bdrv_qed_open(bs, NULL, bs->open_flags);
++    bdrv_qed_open(bs, NULL, bs->open_flags, NULL);
+ }
+ 
+ static int bdrv_qed_check(BlockDriverState *bs, BdrvCheckResult *result,
+diff --git a/block/raw-posix.c b/block/raw-posix.c
+index c7ab908..5f4e824 100644
+--- a/block/raw-posix.c
++++ b/block/raw-posix.c
+@@ -335,7 +335,8 @@ fail:
+     return ret;
+ }
+ 
+-static int raw_open(BlockDriverState *bs, QDict *options, int flags)
++static int raw_open(BlockDriverState *bs, QDict *options, int flags,
++                    Error **errp)
+ {
+     BDRVRawState *s = bs->opaque;
+ 
+@@ -1330,7 +1331,8 @@ static int check_hdev_writable(BDRVRawState *s)
+     return 0;
+ }
+ 
+-static int hdev_open(BlockDriverState *bs, QDict *options, int flags)
++static int hdev_open(BlockDriverState *bs, QDict *options, int flags,
++                     Error **errp)
+ {
+     BDRVRawState *s = bs->opaque;
+     int ret;
+@@ -1570,7 +1572,8 @@ static BlockDriver bdrv_host_device = {
+ };
+ 
+ #ifdef __linux__
+-static int floppy_open(BlockDriverState *bs, QDict *options, int flags)
++static int floppy_open(BlockDriverState *bs, QDict *options, int flags,
++                       Error **errp)
+ {
+     BDRVRawState *s = bs->opaque;
+     int ret;
+@@ -1692,7 +1695,8 @@ static BlockDriver bdrv_host_floppy = {
+     .bdrv_eject         = floppy_eject,
+ };
+ 
+-static int cdrom_open(BlockDriverState *bs, QDict *options, int flags)
++static int cdrom_open(BlockDriverState *bs, QDict *options, int flags,
++                      Error **errp)
+ {
+     BDRVRawState *s = bs->opaque;
+ 
+diff --git a/block/raw-win32.c b/block/raw-win32.c
+index a324e5b..1cfec65 100644
+--- a/block/raw-win32.c
++++ b/block/raw-win32.c
+@@ -234,7 +234,8 @@ static QemuOptsList raw_runtime_opts = {
+     },
+ };
+ 
+-static int raw_open(BlockDriverState *bs, QDict *options, int flags)
++static int raw_open(BlockDriverState *bs, QDict *options, int flags,
++                    Error **errp)
+ {
+     BDRVRawState *s = bs->opaque;
+     int access_flags;
+@@ -530,7 +531,8 @@ static int hdev_probe_device(const char *filename)
+     return 0;
+ }
+ 
+-static int hdev_open(BlockDriverState *bs, QDict *options, int flags)
++static int hdev_open(BlockDriverState *bs, QDict *options, int flags,
++                     Error **errp)
+ {
+     BDRVRawState *s = bs->opaque;
+     int access_flags, create_flags;
+diff --git a/block/raw.c b/block/raw.c
+index 7d82cf3..801591d 100644
+--- a/block/raw.c
++++ b/block/raw.c
+@@ -3,7 +3,8 @@
+ #include "block/block_int.h"
+ #include "qemu/module.h"
+ 
+-static int raw_open(BlockDriverState *bs, QDict *options, int flags)
++static int raw_open(BlockDriverState *bs, QDict *options, int flags,
++                    Error **errp)
+ {
+     bs->sg = bs->file->sg;
+     return 0;
+diff --git a/block/rbd.c b/block/rbd.c
+index 7b6e03b..8d4ae9f 100644
+--- a/block/rbd.c
++++ b/block/rbd.c
+@@ -457,7 +457,8 @@ static QemuOptsList runtime_opts = {
+     },
+ };
+ 
+-static int qemu_rbd_open(BlockDriverState *bs, QDict *options, int flags)
++static int qemu_rbd_open(BlockDriverState *bs, QDict *options, int flags,
++                         Error **errp)
+ {
+     BDRVRBDState *s = bs->opaque;
+     char pool[RBD_MAX_POOL_NAME_SIZE];
+diff --git a/block/sheepdog.c b/block/sheepdog.c
+index f7cc76e..a8ce933 100644
+--- a/block/sheepdog.c
++++ b/block/sheepdog.c
+@@ -1259,7 +1259,8 @@ static QemuOptsList runtime_opts = {
+     },
+ };
+ 
+-static int sd_open(BlockDriverState *bs, QDict *options, int flags)
++static int sd_open(BlockDriverState *bs, QDict *options, int flags,
++                   Error **errp)
+ {
+     int ret, fd;
+     uint32_t vid = 0;
+diff --git a/block/snapshot.c b/block/snapshot.c
+index 6c6d9de..51b4b96 100644
+--- a/block/snapshot.c
++++ b/block/snapshot.c
+@@ -97,7 +97,7 @@ int bdrv_snapshot_goto(BlockDriverState *bs,
+     if (bs->file) {
+         drv->bdrv_close(bs);
+         ret = bdrv_snapshot_goto(bs->file, snapshot_id);
+-        open_ret = drv->bdrv_open(bs, NULL, bs->open_flags);
++        open_ret = drv->bdrv_open(bs, NULL, bs->open_flags, NULL);
+         if (open_ret < 0) {
+             bdrv_delete(bs->file);
+             bs->drv = NULL;
+diff --git a/block/ssh.c b/block/ssh.c
+index d7e7bf8..f950fcc 100644
+--- a/block/ssh.c
++++ b/block/ssh.c
+@@ -608,7 +608,8 @@ static int connect_to_ssh(BDRVSSHState *s, QDict *options,
+     return ret;
+ }
+ 
+-static int ssh_file_open(BlockDriverState *bs, QDict *options, int bdrv_flags)
++static int ssh_file_open(BlockDriverState *bs, QDict *options, int bdrv_flags,
++                         Error **errp)
+ {
+     BDRVSSHState *s = bs->opaque;
+     int ret;
+diff --git a/block/vdi.c b/block/vdi.c
+index bc97c39..661c3f0 100644
+--- a/block/vdi.c
++++ b/block/vdi.c
+@@ -364,7 +364,8 @@ static int vdi_probe(const uint8_t *buf, int buf_size, const char *filename)
+     return result;
+ }
+ 
+-static int vdi_open(BlockDriverState *bs, QDict *options, int flags)
++static int vdi_open(BlockDriverState *bs, QDict *options, int flags,
++                    Error **errp)
+ {
+     BDRVVdiState *s = bs->opaque;
+     VdiHeader header;
+diff --git a/block/vhdx.c b/block/vhdx.c
+index 11d923f..6cb0412 100644
+--- a/block/vhdx.c
++++ b/block/vhdx.c
+@@ -717,7 +717,8 @@ exit:
+ }
+ 
+ 
+-static int vhdx_open(BlockDriverState *bs, QDict *options, int flags)
++static int vhdx_open(BlockDriverState *bs, QDict *options, int flags,
++                     Error **errp)
+ {
+     BDRVVHDXState *s = bs->opaque;
+     int ret = 0;
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 7456f9b..d9e2545 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -806,7 +806,8 @@ exit:
+     return ret;
+ }
+ 
+-static int vmdk_open(BlockDriverState *bs, QDict *options, int flags)
++static int vmdk_open(BlockDriverState *bs, QDict *options, int flags,
++                     Error **errp)
+ {
+     int ret;
+     BDRVVmdkState *s = bs->opaque;
+diff --git a/block/vpc.c b/block/vpc.c
+index 3cad52e..cf5e751 100644
+--- a/block/vpc.c
++++ b/block/vpc.c
+@@ -155,7 +155,8 @@ static int vpc_probe(const uint8_t *buf, int buf_size, const char *filename)
+     return 0;
+ }
+ 
+-static int vpc_open(BlockDriverState *bs, QDict *options, int flags)
++static int vpc_open(BlockDriverState *bs, QDict *options, int flags,
++                    Error **errp)
+ {
+     BDRVVPCState *s = bs->opaque;
+     int i;
+diff --git a/block/vvfat.c b/block/vvfat.c
+index dd0efca..bb3b0b6 100644
+--- a/block/vvfat.c
++++ b/block/vvfat.c
+@@ -1065,7 +1065,8 @@ static void vvfat_parse_filename(const char *filename, QDict *options,
+     qdict_put(options, "rw", qbool_from_int(rw));
+ }
+ 
+-static int vvfat_open(BlockDriverState *bs, QDict *options, int flags)
++static int vvfat_open(BlockDriverState *bs, QDict *options, int flags,
++                      Error **errp)
+ {
+     BDRVVVFATState *s = bs->opaque;
+     int cyls, heads, secs;
+diff --git a/include/block/block_int.h b/include/block/block_int.h
+index ea2c811..3450b46 100644
+--- a/include/block/block_int.h
++++ b/include/block/block_int.h
+@@ -86,8 +86,10 @@ struct BlockDriver {
+     void (*bdrv_reopen_commit)(BDRVReopenState *reopen_state);
+     void (*bdrv_reopen_abort)(BDRVReopenState *reopen_state);
+ 
+-    int (*bdrv_open)(BlockDriverState *bs, QDict *options, int flags);
+-    int (*bdrv_file_open)(BlockDriverState *bs, QDict *options, int flags);
++    int (*bdrv_open)(BlockDriverState *bs, QDict *options, int flags,
++                     Error **errp);
++    int (*bdrv_file_open)(BlockDriverState *bs, QDict *options, int flags,
++                          Error **errp);
+     int (*bdrv_read)(BlockDriverState *bs, int64_t sector_num,
+                      uint8_t *buf, int nb_sectors);
+     int (*bdrv_write)(BlockDriverState *bs, int64_t sector_num,
+-- 
+1.7.1
+

@@ -1,0 +1,101 @@
+From f1ae5247cd1de4374905421e105d371aea6d7c75 Mon Sep 17 00:00:00 2001
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Wed, 5 Mar 2014 14:15:03 +0100
+Subject: [PATCH 01/16] dataplane: Fix startup race.
+
+RH-Author: Stefan Hajnoczi <stefanha@redhat.com>
+Message-id: <1394028903-5087-1-git-send-email-stefanha@redhat.com>
+Patchwork-id: 58018
+O-Subject: [RHEL7 qemu-kvm PATCH] dataplane: Fix startup race.
+Bugzilla: 1069541
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: Cornelia Huck <cornelia.huck@de.ibm.com>
+
+Bugzilla: 1069541
+Upstream: 8caf907f07688972e5e7cd11526079b1665d6dba
+BREW: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7144761
+
+Avoid trying to setup dataplane again if dataplane setup is already in
+progress. This may happen if an eventfd is triggered during setup.
+
+I saw this occasionally with an experimental s390 irqfd implementation:
+
+virtio_blk_handle_output
+-> virtio_blk_data_plane_start
+-> virtio_ccw_set_host_notifier
+...
+-> virtio_queue_set_host_notifier_fd_handler
+-> virtio_queue_host_notifier_read
+-> virtio_queue_notify_vq
+-> virtio_blk_handle_output
+-> virtio_blk_data_plane_start
+-> vring_setup
+-> hostmem_init
+-> memory_listener_register
+-> BOOM
+
+As virtio-ccw tries to follow what virtio-pci does, it might be triggerable
+for other platforms as well.
+
+Signed-off-by: Cornelia Huck <cornelia.huck@de.ibm.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 8caf907f07688972e5e7cd11526079b1665d6dba)
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+---
+[----] : patches are identical
+[####] : number of functional differences between upstream/downstream patch
+[down] : patch is downstream-only
+The flags [FC] indicate (F)unctional and (C)ontextual differences, respectively
+
+001/1:[----] [-C] 'dataplane: Fix startup race.'
+
+ hw/block/dataplane/virtio-blk.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/block/dataplane/virtio-blk.c |    9 +++++++++
+ 1 files changed, 9 insertions(+), 0 deletions(-)
+
+diff --git a/hw/block/dataplane/virtio-blk.c b/hw/block/dataplane/virtio-blk.c
+index 411becc..0b002ba 100644
+--- a/hw/block/dataplane/virtio-blk.c
++++ b/hw/block/dataplane/virtio-blk.c
+@@ -42,6 +42,7 @@ typedef struct {
+ 
+ struct VirtIOBlockDataPlane {
+     bool started;
++    bool starting;
+     bool stopping;
+     QEMUBH *start_bh;
+     QemuThread thread;
+@@ -464,8 +465,15 @@ void virtio_blk_data_plane_start(VirtIOBlockDataPlane *s)
+         return;
+     }
+ 
++    if (s->starting) {
++        return;
++    }
++
++    s->starting = true;
++
+     vq = virtio_get_queue(s->vdev, 0);
+     if (!vring_setup(&s->vring, s->vdev, 0)) {
++        s->starting = false;
+         return;
+     }
+ 
+@@ -495,6 +503,7 @@ void virtio_blk_data_plane_start(VirtIOBlockDataPlane *s)
+     s->io_notifier = *ioq_get_notifier(&s->ioqueue);
+     aio_set_event_notifier(s->ctx, &s->io_notifier, handle_io, flush_io);
+ 
++    s->starting = false;
+     s->started = true;
+     trace_virtio_blk_data_plane_start(s);
+ 
+-- 
+1.7.1
+

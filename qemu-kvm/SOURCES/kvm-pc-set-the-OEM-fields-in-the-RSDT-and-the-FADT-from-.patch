@@ -1,0 +1,133 @@
+From 607904cf94b1dee91c74522aedebda308ffba93d Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Wed, 11 May 2016 12:33:48 +0200
+Subject: [PATCH 09/10] pc: set the OEM fields in the RSDT and the FADT from
+ the SLIC
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1462970028-10959-8-git-send-email-lersek@redhat.com>
+Patchwork-id: 70384
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 7/7] pc: set the OEM fields in the RSDT and the FADT from the SLIC
+Bugzilla: 1330969
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+
+The Microsoft spec about the SLIC and MSDM ACPI tables at
+<http://go.microsoft.com/fwlink/p/?LinkId=234834> requires the OEM ID and
+OEM Table ID fields to be consistent between the SLIC and the RSDT/XSDT.
+That further affects the FADT, because a similar match between the FADT
+and the RSDT/XSDT is required by the ACPI spec in general.
+
+This patch wires up the previous three patches.
+
+Cc: "Michael S. Tsirkin" <mst@redhat.com> (supporter:ACPI/SMBIOS)
+Cc: Igor Mammedov <imammedo@redhat.com> (supporter:ACPI/SMBIOS)
+Cc: Paolo Bonzini <pbonzini@redhat.com> (maintainer:X86)
+Cc: Richard W.M. Jones <rjones@redhat.com>
+Cc: Aleksei Kovura <alex3kov@zoho.com>
+Cc: Michael Tokarev <mjt@tls.msk.ru>
+Cc: Steven Newbury <steve@snewbury.org.uk>
+RHBZ: https://bugzilla.redhat.com/show_bug.cgi?id=1248758
+LP: https://bugs.launchpad.net/qemu/+bug/1533848
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Reviewed-by: Steven Newbury <steve@snewbury.org.uk>
+(cherry picked from commit ae12374951f07157f7a52c8d848b90f8eec722fb)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	hw/i386/acpi-build.c
+
+RHEL-7 backport note: conflict due to downstream lacking 7c2c1fa5f428
+("pc: acpi: use local var for accessing ACPI tables blob in
+acpi_build()").
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+---
+ hw/i386/acpi-build.c | 13 +++++++++----
+ qemu-options.hx      |  4 ++++
+ 2 files changed, 13 insertions(+), 4 deletions(-)
+---
+ hw/i386/acpi-build.c | 13 +++++++++----
+ qemu-options.hx      |  4 ++++
+ 2 files changed, 13 insertions(+), 4 deletions(-)
+
+diff --git a/hw/i386/acpi-build.c b/hw/i386/acpi-build.c
+index d9433e6..85291f5 100644
+--- a/hw/i386/acpi-build.c
++++ b/hw/i386/acpi-build.c
+@@ -511,7 +511,8 @@ static void fadt_setup(AcpiFadtDescriptorRev1 *fadt, AcpiPmInfo *pm)
+ /* FADT */
+ static void
+ build_fadt(GArray *table_data, GArray *linker, AcpiPmInfo *pm,
+-           unsigned facs, unsigned dsdt)
++           unsigned facs, unsigned dsdt,
++           const char *oem_id, const char *oem_table_id)
+ {
+     AcpiFadtDescriptorRev1 *fadt = acpi_data_push(table_data, sizeof(*fadt));
+ 
+@@ -532,7 +533,7 @@ build_fadt(GArray *table_data, GArray *linker, AcpiPmInfo *pm,
+     fadt_setup(fadt, pm);
+ 
+     build_header(linker, table_data,
+-                 (void *)fadt, "FACP", sizeof(*fadt), 1, NULL, NULL);
++                 (void *)fadt, "FACP", sizeof(*fadt), 1, oem_id, oem_table_id);
+ }
+ 
+ static void
+@@ -1065,6 +1066,7 @@ void acpi_build(PcGuestInfo *guest_info, AcpiBuildTables *tables)
+     AcpiMcfgInfo mcfg;
+     PcPciInfo pci;
+     uint8_t *u;
++    AcpiSlicOem slic_oem = { .id = NULL, .table_id = NULL };
+ 
+     acpi_get_cpu_info(&cpu);
+     acpi_get_pm_info(&pm);
+@@ -1072,6 +1074,7 @@ void acpi_build(PcGuestInfo *guest_info, AcpiBuildTables *tables)
+     acpi_get_hotplug_info(&misc);
+     acpi_get_misc_info(&misc);
+     acpi_get_pci_info(&pci);
++    acpi_get_slic_oem(&slic_oem);
+ 
+     table_offsets = g_array_new(false, true /* clear */,
+                                         sizeof(uint32_t));
+@@ -1095,7 +1098,8 @@ void acpi_build(PcGuestInfo *guest_info, AcpiBuildTables *tables)
+ 
+     /* ACPI tables pointed to by RSDT */
+     acpi_add_table(table_offsets, tables->table_data);
+-    build_fadt(tables->table_data, tables->linker, &pm, facs, dsdt);
++    build_fadt(tables->table_data, tables->linker, &pm, facs, dsdt,
++               slic_oem.id, slic_oem.table_id);
+ 
+     acpi_add_table(table_offsets, tables->table_data);
+     build_ssdt(tables->table_data, tables->linker, &cpu, &pm, &misc, &pci,
+@@ -1127,7 +1131,8 @@ void acpi_build(PcGuestInfo *guest_info, AcpiBuildTables *tables)
+ 
+     /* RSDT is pointed to by RSDP */
+     rsdt = tables->table_data->len;
+-    build_rsdt(tables->table_data, tables->linker, table_offsets, NULL, NULL);
++    build_rsdt(tables->table_data, tables->linker, table_offsets,
++               slic_oem.id, slic_oem.table_id);
+ 
+     /* RSDP is in FSEG memory, so allocate it separately */
+     build_rsdp(tables->rsdp, tables->linker, rsdt);
+diff --git a/qemu-options.hx b/qemu-options.hx
+index 62c3e06..24ffab6 100644
+--- a/qemu-options.hx
++++ b/qemu-options.hx
+@@ -1295,6 +1295,10 @@ ACPI headers (possible overridden by other options).
+ For data=, only data
+ portion of the table is used, all header information is specified in the
+ command line.
++If a SLIC table is supplied to QEMU, then the SLIC's oem_id and oem_table_id
++fields will override the same in the RSDT and the FADT (a.k.a. FACP), in order
++to ensure the field matches required by the Microsoft SLIC spec and the ACPI
++spec.
+ ETEXI
+ 
+ DEF("smbios", HAS_ARG, QEMU_OPTION_smbios,
+-- 
+1.8.3.1
+

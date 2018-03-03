@@ -1,0 +1,74 @@
+From 3272771d5dd899876eb8d7ea3af3ed1d2b2472d2 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Wed, 10 Sep 2014 11:06:09 +0200
+Subject: [PATCH 10/12] ide: Fix segfault when flushing a device that doesn't exist
+
+Message-id: <1410347169-4368-4-git-send-email-kwolf@redhat.com>
+Patchwork-id: 60955
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 3/3] ide: Fix segfault when flushing a device that doesn't exist
+Bugzilla: 1123372
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit f7f3ff1da0c451befc8d32f977f9c352d1303f40)
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/ide/core.c    |    4 +++-
+ tests/ide-test.c |   14 ++++++++++++++
+ 2 files changed, 17 insertions(+), 1 deletions(-)
+
+diff --git a/hw/ide/core.c b/hw/ide/core.c
+index 0313250..a2947a9 100644
+--- a/hw/ide/core.c
++++ b/hw/ide/core.c
+@@ -810,7 +810,9 @@ static void ide_flush_cb(void *opaque, int ret)
+         }
+     }
+ 
+-    bdrv_acct_done(s->bs, &s->acct);
++    if (s->bs) {
++        bdrv_acct_done(s->bs, &s->acct);
++    }
+     s->status = READY_STAT | SEEK_STAT;
+     ide_async_cmd_done(s);
+     ide_set_irq(s->bus);
+diff --git a/tests/ide-test.c b/tests/ide-test.c
+index 739d2bf..51f9239 100644
+--- a/tests/ide-test.c
++++ b/tests/ide-test.c
+@@ -462,6 +462,19 @@ static void test_flush(void)
+     ide_test_quit();
+ }
+ 
++static void test_flush_nodev(void)
++{
++    ide_test_start("");
++
++    /* FLUSH CACHE command on device 0*/
++    outb(IDE_BASE + reg_device, 0);
++    outb(IDE_BASE + reg_command, CMD_FLUSH_CACHE);
++
++    /* Just testing that qemu doesn't crash... */
++
++    ide_test_quit();
++}
++
+ int main(int argc, char **argv)
+ {
+     const char *arch = qtest_get_arch();
+@@ -493,6 +506,7 @@ int main(int argc, char **argv)
+     qtest_add_func("/ide/bmdma/teardown", test_bmdma_teardown);
+ 
+     qtest_add_func("/ide/flush", test_flush);
++    qtest_add_func("/ide/flush_nodev", test_flush_nodev);
+ 
+     ret = g_test_run();
+ 
+-- 
+1.7.1
+

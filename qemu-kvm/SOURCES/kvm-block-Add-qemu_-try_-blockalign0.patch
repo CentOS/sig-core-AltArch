@@ -1,0 +1,81 @@
+From ad8bc0d8901415eeea7bb27ef26f197918be0752 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:22:09 +0200
+Subject: [PATCH 15/42] block: Add qemu_{,try_}blockalign0()
+
+Message-id: <1434212556-3927-16-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66034
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 15/42] block: Add qemu_{,try_}blockalign0()
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1129893
+
+These functions call their non-0-counterparts and then fill the
+allocated buffer with 0 (if the allocation has been successful).
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 9ebd84480583bb6d9a7666c079d99ff3266c423d)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c               | 16 ++++++++++++++++
+ include/block/block.h |  2 ++
+ 2 files changed, 18 insertions(+)
+
+diff --git a/block.c b/block.c
+index 1afa544..22ab762 100644
+--- a/block.c
++++ b/block.c
+@@ -5178,6 +5178,11 @@ void *qemu_blockalign(BlockDriverState *bs, size_t size)
+     return qemu_memalign(bdrv_opt_mem_align(bs), size);
+ }
+ 
++void *qemu_blockalign0(BlockDriverState *bs, size_t size)
++{
++    return memset(qemu_blockalign(bs, size), 0, size);
++}
++
+ void *qemu_try_blockalign(BlockDriverState *bs, size_t size)
+ {
+     size_t align = bdrv_opt_mem_align(bs);
+@@ -5191,6 +5196,17 @@ void *qemu_try_blockalign(BlockDriverState *bs, size_t size)
+     return qemu_try_memalign(align, size);
+ }
+ 
++void *qemu_try_blockalign0(BlockDriverState *bs, size_t size)
++{
++    void *mem = qemu_try_blockalign(bs, size);
++
++    if (mem) {
++        memset(mem, 0, size);
++    }
++
++    return mem;
++}
++
+ /*
+  * Check if all memory in this vector is sector aligned.
+  */
+diff --git a/include/block/block.h b/include/block/block.h
+index 7b538b7..8339cac 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -417,7 +417,9 @@ void bdrv_img_create(const char *filename, const char *fmt,
+ size_t bdrv_opt_mem_align(BlockDriverState *bs);
+ void bdrv_set_guest_block_size(BlockDriverState *bs, int align);
+ void *qemu_blockalign(BlockDriverState *bs, size_t size);
++void *qemu_blockalign0(BlockDriverState *bs, size_t size);
+ void *qemu_try_blockalign(BlockDriverState *bs, size_t size);
++void *qemu_try_blockalign0(BlockDriverState *bs, size_t size);
+ bool bdrv_qiov_is_aligned(BlockDriverState *bs, QEMUIOVector *qiov);
+ 
+ struct HBitmapIter;
+-- 
+1.8.3.1
+

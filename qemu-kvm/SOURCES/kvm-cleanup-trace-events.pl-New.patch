@@ -1,0 +1,96 @@
+From 5fde31188fab75d48e9a3d508ac8f9088e09bf3d Mon Sep 17 00:00:00 2001
+Message-Id: <5fde31188fab75d48e9a3d508ac8f9088e09bf3d.1387276076.git.minovotn@redhat.com>
+In-Reply-To: <e610718166120379517e80d1a7aa12d60294209b.1387276076.git.minovotn@redhat.com>
+References: <e610718166120379517e80d1a7aa12d60294209b.1387276076.git.minovotn@redhat.com>
+From: Markus Armbruster <armbru@redhat.com>
+Date: Tue, 10 Dec 2013 15:12:50 +0100
+Subject: [PATCH 09/16] cleanup-trace-events.pl: New
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1386688376-29521-2-git-send-email-armbru@redhat.com>
+Patchwork-id: 56112
+O-Subject: [PATCH 7.0 qemu-kvm 1/7] cleanup-trace-events.pl: New
+Bugzilla: 997832
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Simple script to drop unused events and fix up source file comments.
+The next few commits put it to use.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit f0c03c8cf6184f25ba91449c1ff77e5e006ce514)
+---
+ scripts/cleanup-trace-events.pl | 51 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 51 insertions(+)
+ create mode 100755 scripts/cleanup-trace-events.pl
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ scripts/cleanup-trace-events.pl | 51 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 51 insertions(+)
+ create mode 100755 scripts/cleanup-trace-events.pl
+
+diff --git a/scripts/cleanup-trace-events.pl b/scripts/cleanup-trace-events.pl
+new file mode 100755
+index 0000000..cffbf16
+--- /dev/null
++++ b/scripts/cleanup-trace-events.pl
+@@ -0,0 +1,51 @@
++#!/usr/bin/perl
++# Copyright (C) 2013 Red Hat, Inc.
++#
++# Authors:
++#  Markus Armbruster <armbru@redhat.com>
++#
++# This work is licensed under the terms of the GNU GPL, version 2 or
++# later.  See the COPYING file in the top-level directory.
++
++# Usage: cleanup-trace-events.pl trace-events
++#
++# Print cleaned up trace-events to standard output.
++
++use warnings;
++use strict;
++
++my $buf = '';
++my %seen = ();
++
++sub out {
++    print $buf;
++    $buf = '';
++    %seen = ();
++}
++
++while (<>) {
++    if (/^(disable )?([a-z_0-9]+)\(/) {
++        open GREP, '-|', 'git', 'grep', '-l', "trace_$2"
++            or die "run git grep: $!";
++        my $fname;
++        while ($fname = <GREP>) {
++            chomp $fname;
++            next if $seen{$fname} || $fname eq 'trace-events';
++            $seen{$fname} = 1;
++            $buf = "# $fname\n" . $buf;
++        }
++        unless (close GREP) {
++            die "close git grep: $!"
++                if $!;
++            next;
++        }
++    } elsif (/^# ([^ ]*\.[ch])$/) {
++        out;
++        next;
++    } elsif (!/^#|^$/) {
++        warn "unintelligible line";
++    }
++    $buf .= $_;
++}
++
++out;
+-- 
+1.7.11.7
+

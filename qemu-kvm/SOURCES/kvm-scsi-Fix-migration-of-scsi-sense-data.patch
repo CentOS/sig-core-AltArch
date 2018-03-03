@@ -1,0 +1,119 @@
+From 5cd8edcba7977ebc8973af8a894716f3915e1dc7 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Wed, 19 Mar 2014 05:33:14 +0100
+Subject: [PATCH 2/2] scsi: Fix migration of scsi sense data
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1395207194-25330-3-git-send-email-famz@redhat.com>
+Patchwork-id: 58140
+O-Subject: [RHEL-7 qemu-kvm PATCH v2 2/2] scsi: Fix migration of scsi sense data
+Bugzilla: 1058173
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+c5f52875 changed the size of sense array in vmstate_scsi_device by
+mistake. This patch restores the old size, and add a subsection for the
+remaining part of the buffer size. So that migration is not broken.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 2e323f03bfa323636552b386c982412944ff86ae)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ hw/scsi/scsi-bus.c          | 30 +++++++++++++++++++++++++++++-
+ include/hw/scsi/scsi.h      |  1 +
+ include/migration/vmstate.h |  3 +++
+ 3 files changed, 33 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/scsi/scsi-bus.c          |   30 +++++++++++++++++++++++++++++-
+ include/hw/scsi/scsi.h      |    1 +
+ include/migration/vmstate.h |    3 +++
+ 3 files changed, 33 insertions(+), 1 deletions(-)
+
+diff --git a/hw/scsi/scsi-bus.c b/hw/scsi/scsi-bus.c
+index a0fbf06..77e0c10 100644
+--- a/hw/scsi/scsi-bus.c
++++ b/hw/scsi/scsi-bus.c
+@@ -1874,6 +1874,26 @@ static const VMStateInfo vmstate_info_scsi_requests = {
+     .put  = put_scsi_requests,
+ };
+ 
++static bool scsi_sense_state_needed(void *opaque)
++{
++    SCSIDevice *s = opaque;
++
++    return s->sense_len > SCSI_SENSE_BUF_SIZE_OLD;
++}
++
++static const VMStateDescription vmstate_scsi_sense_state = {
++    .name = "SCSIDevice/sense",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .minimum_version_id_old = 1,
++    .fields      = (VMStateField []) {
++        VMSTATE_UINT8_SUB_ARRAY(sense, SCSIDevice,
++                                SCSI_SENSE_BUF_SIZE_OLD,
++                                SCSI_SENSE_BUF_SIZE - SCSI_SENSE_BUF_SIZE_OLD),
++        VMSTATE_END_OF_LIST()
++    }
++};
++
+ const VMStateDescription vmstate_scsi_device = {
+     .name = "SCSIDevice",
+     .version_id = 1,
+@@ -1884,7 +1904,7 @@ const VMStateDescription vmstate_scsi_device = {
+         VMSTATE_UINT8(unit_attention.asc, SCSIDevice),
+         VMSTATE_UINT8(unit_attention.ascq, SCSIDevice),
+         VMSTATE_BOOL(sense_is_ua, SCSIDevice),
+-        VMSTATE_UINT8_ARRAY(sense, SCSIDevice, SCSI_SENSE_BUF_SIZE),
++        VMSTATE_UINT8_SUB_ARRAY(sense, SCSIDevice, 0, SCSI_SENSE_BUF_SIZE_OLD),
+         VMSTATE_UINT32(sense_len, SCSIDevice),
+         {
+             .name         = "requests",
+@@ -1896,6 +1916,14 @@ const VMStateDescription vmstate_scsi_device = {
+             .offset       = 0,
+         },
+         VMSTATE_END_OF_LIST()
++    },
++    .subsections = (VMStateSubsection []) {
++        {
++            .vmsd = &vmstate_scsi_sense_state,
++            .needed = scsi_sense_state_needed,
++        }, {
++            /* empty */
++        }
+     }
+ };
+ 
+diff --git a/include/hw/scsi/scsi.h b/include/hw/scsi/scsi.h
+index 4a1de1b..b0d6e8f 100644
+--- a/include/hw/scsi/scsi.h
++++ b/include/hw/scsi/scsi.h
+@@ -31,6 +31,7 @@ typedef struct SCSISense {
+     uint8_t ascq;
+ } SCSISense;
+ 
++#define SCSI_SENSE_BUF_SIZE_OLD 96
+ #define SCSI_SENSE_BUF_SIZE 252
+ 
+ struct SCSICommand {
+diff --git a/include/migration/vmstate.h b/include/migration/vmstate.h
+index ebc4d09..11d93e1 100644
+--- a/include/migration/vmstate.h
++++ b/include/migration/vmstate.h
+@@ -625,6 +625,9 @@ extern const VMStateInfo vmstate_info_bitmap;
+ #define VMSTATE_UINT8_ARRAY(_f, _s, _n)                               \
+     VMSTATE_UINT8_ARRAY_V(_f, _s, _n, 0)
+ 
++#define VMSTATE_UINT8_SUB_ARRAY(_f, _s, _start, _num)                \
++    VMSTATE_SUB_ARRAY(_f, _s, _start, _num, 0, vmstate_info_uint8, uint8_t)
++
+ #define VMSTATE_UINT8_2DARRAY(_f, _s, _n1, _n2)                       \
+     VMSTATE_UINT8_2DARRAY_V(_f, _s, _n1, _n2, 0)
+ 
+-- 
+1.7.1
+

@@ -1,0 +1,87 @@
+From 0e36c36c95c2616d020321782d4c8164c561eaec Mon Sep 17 00:00:00 2001
+Message-Id: <0e36c36c95c2616d020321782d4c8164c561eaec.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:09:14 +0100
+Subject: [PATCH 26/50] block: add bdrv_aio_write_zeroes
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-29-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56065
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 28/52] block: add bdrv_aio_write_zeroes
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+This will be used by the SCSI layer.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit d5ef94d43da8c57a2d597efbdec3d9a54d97fdf7)
+---
+ block.c               | 11 +++++++++++
+ include/block/block.h |  3 +++
+ trace-events          |  1 +
+ 3 files changed, 15 insertions(+)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ block.c               | 11 +++++++++++
+ include/block/block.h |  3 +++
+ trace-events          |  1 +
+ 3 files changed, 15 insertions(+)
+
+diff --git a/block.c b/block.c
+index c6cad55..fc15370 100644
+--- a/block.c
++++ b/block.c
+@@ -3690,6 +3690,17 @@ BlockDriverAIOCB *bdrv_aio_writev(BlockDriverState *bs, int64_t sector_num,
+                                  cb, opaque, true);
+ }
+ 
++BlockDriverAIOCB *bdrv_aio_write_zeroes(BlockDriverState *bs,
++        int64_t sector_num, int nb_sectors, BdrvRequestFlags flags,
++        BlockDriverCompletionFunc *cb, void *opaque)
++{
++    trace_bdrv_aio_write_zeroes(bs, sector_num, nb_sectors, flags, opaque);
++
++    return bdrv_co_aio_rw_vector(bs, sector_num, NULL, nb_sectors,
++                                 BDRV_REQ_ZERO_WRITE | flags,
++                                 cb, opaque, true);
++}
++
+ 
+ typedef struct MultiwriteCB {
+     int error;
+diff --git a/include/block/block.h b/include/block/block.h
+index 6042e10..bcf71e2 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -218,6 +218,9 @@ int bdrv_write(BlockDriverState *bs, int64_t sector_num,
+                const uint8_t *buf, int nb_sectors);
+ int bdrv_write_zeroes(BlockDriverState *bs, int64_t sector_num,
+                int nb_sectors, BdrvRequestFlags flags);
++BlockDriverAIOCB *bdrv_aio_write_zeroes(BlockDriverState *bs, int64_t sector_num,
++                                        int nb_sectors, BdrvRequestFlags flags,
++                                        BlockDriverCompletionFunc *cb, void *opaque);
+ int bdrv_make_zero(BlockDriverState *bs, BdrvRequestFlags flags);
+ int bdrv_writev(BlockDriverState *bs, int64_t sector_num, QEMUIOVector *qiov);
+ int bdrv_pread(BlockDriverState *bs, int64_t offset,
+diff --git a/trace-events b/trace-events
+index fa5a65c..40d4312 100644
+--- a/trace-events
++++ b/trace-events
+@@ -60,6 +60,7 @@ bdrv_aio_discard(void *bs, int64_t sector_num, int nb_sectors, void *opaque) "bs
+ bdrv_aio_flush(void *bs, void *opaque) "bs %p opaque %p"
+ bdrv_aio_readv(void *bs, int64_t sector_num, int nb_sectors, void *opaque) "bs %p sector_num %"PRId64" nb_sectors %d opaque %p"
+ bdrv_aio_writev(void *bs, int64_t sector_num, int nb_sectors, void *opaque) "bs %p sector_num %"PRId64" nb_sectors %d opaque %p"
++bdrv_aio_write_zeroes(void *bs, int64_t sector_num, int nb_sectors, int flags, void *opaque) "bs %p sector_num %"PRId64" nb_sectors %d flags %#x opaque %p"
+ bdrv_lock_medium(void *bs, bool locked) "bs %p locked %d"
+ bdrv_co_readv(void *bs, int64_t sector_num, int nb_sector) "bs %p sector_num %"PRId64" nb_sectors %d"
+ bdrv_co_copy_on_readv(void *bs, int64_t sector_num, int nb_sector) "bs %p sector_num %"PRId64" nb_sectors %d"
+-- 
+1.7.11.7
+

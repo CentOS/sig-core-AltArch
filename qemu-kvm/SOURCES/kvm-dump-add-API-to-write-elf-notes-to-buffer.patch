@@ -1,0 +1,70 @@
+From 251ac1dcd456c524eb7b79507c4a8a1bf4a4fa32 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Fri, 7 Nov 2014 17:17:54 +0100
+Subject: [PATCH 07/41] dump: add API to write elf notes to buffer
+
+Message-id: <1415380693-16593-8-git-send-email-lersek@redhat.com>
+Patchwork-id: 62193
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 07/26] dump: add API to write elf notes to buffer
+Bugzilla: 1157798
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: dgibson <dgibson@redhat.com>
+
+From: qiaonuohan <qiaonuohan@cn.fujitsu.com>
+
+the function can be used by write_elf32_notes/write_elf64_notes to write notes
+to a buffer. If fd_write_vmcore is used, write_elf32_notes/write_elf64_notes
+will write elf notes to vmcore directly. Instead, if buf_write_note is used,
+elf notes will be written to opaque->note_buf at first.
+
+Signed-off-by: Qiao Nuohan <qiaonuohan@cn.fujitsu.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit 4835ef7784502c231f243c3133054850d23dd837)
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/dump.c b/dump.c
+index 710893f..3c6d526 100644
+--- a/dump.c
++++ b/dump.c
+@@ -76,6 +76,9 @@ typedef struct DumpState {
+     int64_t begin;
+     int64_t length;
+     Error **errp;
++
++    uint8_t *note_buf;          /* buffer for notes */
++    size_t note_buf_offset;     /* the writing place in note_buf */
+ } DumpState;
+ 
+ static int dump_cleanup(DumpState *s)
+@@ -755,6 +758,22 @@ static int write_buffer(int fd, off_t offset, const void *buf, size_t size)
+     return 0;
+ }
+ 
++static int buf_write_note(const void *buf, size_t size, void *opaque)
++{
++    DumpState *s = opaque;
++
++    /* note_buf is not enough */
++    if (s->note_buf_offset + size > s->note_size) {
++        return -1;
++    }
++
++    memcpy(s->note_buf + s->note_buf_offset, buf, size);
++
++    s->note_buf_offset += size;
++
++    return 0;
++}
++
+ static ram_addr_t get_start_block(DumpState *s)
+ {
+     GuestPhysBlock *block;
+-- 
+1.8.3.1
+

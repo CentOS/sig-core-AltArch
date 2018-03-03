@@ -1,0 +1,555 @@
+From 11d85a217f6b3b15710bbc786adebd943774be09 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Fri, 20 Feb 2015 09:53:20 +0100
+Subject: [PATCH 14/16] Python-lang gdb script to extract x86_64 guest vmcore
+ from qemu coredump
+
+Message-id: <1424426001-3543-2-git-send-email-lersek@redhat.com>
+Patchwork-id: 63908
+O-Subject: [RHEL-7.2 qemu-kvm PATCH v2 1/2] Python-lang gdb script to extract x86_64 guest vmcore from qemu coredump
+Bugzilla: 828493
+RH-Acked-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+RH-Acked-by: Jeff Nelson <jenelson@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+When qemu dies unexpectedly, for example in response to an explicit
+abort() call, or (more importantly) when an external signal is delivered
+to it that results in a coredump, sometimes it is useful to extract the
+guest vmcore from the qemu process' memory image. The guest vmcore might
+help understand an emulation problem in qemu, or help debug the guest.
+
+This script reimplements (and cuts many features of) the
+qmp_dump_guest_memory() command in gdb/Python,
+
+  https://sourceware.org/gdb/current/onlinedocs/gdb/Python-API.html
+
+working off the saved memory image of the qemu process. The docstring in
+the patch (serving as gdb help text) describes the limitations relative to
+the QMP command.
+
+Dependencies of qmp_dump_guest_memory() have been reimplemented as needed.
+I sought to follow the general structure, sticking to original function
+names where possible. However, keeping it simple prevailed in some places.
+
+The patch has been tested with a 4 VCPU, 768 MB, RHEL-6.4
+(2.6.32-358.el6.x86_64) guest:
+
+- The script printed
+
+> guest RAM blocks:
+> target_start     target_end       host_addr        message count
+> ---------------- ---------------- ---------------- ------- -----
+> 0000000000000000 00000000000a0000 00007f95d0000000 added       1
+> 00000000000a0000 00000000000b0000 00007f960ac00000 added       2
+> 00000000000c0000 00000000000ca000 00007f95d00c0000 added       3
+> 00000000000ca000 00000000000cd000 00007f95d00ca000 joined      3
+> 00000000000cd000 00000000000d0000 00007f95d00cd000 joined      3
+> 00000000000d0000 00000000000f0000 00007f95d00d0000 joined      3
+> 00000000000f0000 0000000000100000 00007f95d00f0000 joined      3
+> 0000000000100000 0000000030000000 00007f95d0100000 joined      3
+> 00000000fc000000 00000000fc800000 00007f960ac00000 added       4
+> 00000000fffe0000 0000000100000000 00007f9618800000 added       5
+> dumping range at 00007f95d0000000 for length 00000000000a0000
+> dumping range at 00007f960ac00000 for length 0000000000010000
+> dumping range at 00007f95d00c0000 for length 000000002ff40000
+> dumping range at 00007f960ac00000 for length 0000000000800000
+> dumping range at 00007f9618800000 for length 0000000000020000
+
+- The vmcore was checked with "readelf", comparing the results against a
+  vmcore written by qmp_dump_guest_memory():
+
+> --- theirs      2013-09-12 17:38:59.797289404 +0200
+> +++ mine        2013-09-12 17:39:03.820289404 +0200
+> @@ -27,16 +27,16 @@
+>    Type           Offset             VirtAddr           PhysAddr
+>                   FileSiz            MemSiz              Flags  Align
+>    NOTE           0x0000000000000190 0x0000000000000000 0x0000000000000000
+> -                 0x0000000000000ca0 0x0000000000000ca0         0
+> -  LOAD           0x0000000000000e30 0x0000000000000000 0x0000000000000000
+> +                 0x000000000000001c 0x000000000000001c         0
+> +  LOAD           0x00000000000001ac 0x0000000000000000 0x0000000000000000
+>                   0x00000000000a0000 0x00000000000a0000         0
+> -  LOAD           0x00000000000a0e30 0x0000000000000000 0x00000000000a0000
+> +  LOAD           0x00000000000a01ac 0x0000000000000000 0x00000000000a0000
+>                   0x0000000000010000 0x0000000000010000         0
+> -  LOAD           0x00000000000b0e30 0x0000000000000000 0x00000000000c0000
+> +  LOAD           0x00000000000b01ac 0x0000000000000000 0x00000000000c0000
+>                   0x000000002ff40000 0x000000002ff40000         0
+> -  LOAD           0x000000002fff0e30 0x0000000000000000 0x00000000fc000000
+> +  LOAD           0x000000002fff01ac 0x0000000000000000 0x00000000fc000000
+>                   0x0000000000800000 0x0000000000800000         0
+> -  LOAD           0x00000000307f0e30 0x0000000000000000 0x00000000fffe0000
+> +  LOAD           0x00000000307f01ac 0x0000000000000000 0x00000000fffe0000
+>                   0x0000000000020000 0x0000000000020000         0
+>
+>  There is no dynamic section in this file.
+> @@ -47,13 +47,6 @@
+>
+>  No version information found in this file.
+>
+> -Notes at offset 0x00000190 with length 0x00000ca0:
+> +Notes at offset 0x00000190 with length 0x0000001c:
+>    Owner                Data size       Description
+> -  CORE         0x00000150      NT_PRSTATUS (prstatus structure)
+> -  CORE         0x00000150      NT_PRSTATUS (prstatus structure)
+> -  CORE         0x00000150      NT_PRSTATUS (prstatus structure)
+> -  CORE         0x00000150      NT_PRSTATUS (prstatus structure)
+> -  QEMU         0x000001b0      Unknown note type: (0x00000000)
+> -  QEMU         0x000001b0      Unknown note type: (0x00000000)
+> -  QEMU         0x000001b0      Unknown note type: (0x00000000)
+> -  QEMU         0x000001b0      Unknown note type: (0x00000000)
+> +  NONE         0x00000005      Unknown note type: (0x00000000)
+
+- The vmcore was checked with "crash" too, again comparing the results
+  against a vmcore written by qmp_dump_guest_memory():
+
+> --- guest.vmcore.log2   2013-09-12 17:52:27.074289201 +0200
+> +++ example.dump.log2   2013-09-12 17:52:15.904289203 +0200
+> @@ -22,11 +22,11 @@
+>  This GDB was configured as "x86_64-unknown-linux-gnu"...
+>
+>       KERNEL: /usr/lib/debug/lib/modules/2.6.32-358.el6.x86_64/vmlinux
+> -    DUMPFILE: /home/lacos/tmp/guest.vmcore
+> +    DUMPFILE: /home/lacos/tmp/example.dump
+>          CPUS: 4
+> -        DATE: Thu Sep 12 17:16:11 2013
+> -      UPTIME: 00:01:09
+> -LOAD AVERAGE: 0.07, 0.03, 0.00
+> +        DATE: Thu Sep 12 17:17:41 2013
+> +      UPTIME: 00:00:38
+> +LOAD AVERAGE: 0.18, 0.05, 0.01
+>         TASKS: 130
+>      NODENAME: localhost.localdomain
+>       RELEASE: 2.6.32-358.el6.x86_64
+> @@ -38,12 +38,12 @@
+>       COMMAND: "swapper"
+>          TASK: ffffffff81a8d020  (1 of 4)  [THREAD_INFO: ffffffff81a00000]
+>           CPU: 0
+> -       STATE: TASK_RUNNING (PANIC)
+> +       STATE: TASK_RUNNING (ACTIVE)
+> +     WARNING: panic task not found
+>
+>  crash> bt
+>  PID: 0      TASK: ffffffff81a8d020  CPU: 0   COMMAND: "swapper"
+> - #0 [ffffffff81a01ed0] default_idle at ffffffff8101495d
+> - #1 [ffffffff81a01ef0] cpu_idle at ffffffff81009fc6
+> + #0 [ffffffff81a01ef0] cpu_idle at ffffffff81009fc6
+>  crash> task ffffffff81a8d020
+>  PID: 0      TASK: ffffffff81a8d020  CPU: 0   COMMAND: "swapper"
+>  struct task_struct {
+> @@ -75,7 +75,7 @@
+>        prev = 0xffffffff81a8d080
+>      },
+>      on_rq = 0,
+> -    exec_start = 8618466836,
+> +    exec_start = 7469214014,
+>      sum_exec_runtime = 0,
+>      vruntime = 0,
+>      prev_sum_exec_runtime = 0,
+> @@ -149,7 +149,7 @@
+>    },
+>    tasks = {
+>      next = 0xffff88002d621948,
+> -    prev = 0xffff880029618f28
+> +    prev = 0xffff880023b74488
+>    },
+>    pushable_tasks = {
+>      prio = 140,
+> @@ -165,7 +165,7 @@
+>      }
+>    },
+>    mm = 0x0,
+> -  active_mm = 0xffff88002929b780,
+> +  active_mm = 0xffff8800297eb980,
+>    exit_state = 0,
+>    exit_code = 0,
+>    exit_signal = 0,
+> @@ -177,7 +177,7 @@
+>    sched_reset_on_fork = 0,
+>    pid = 0,
+>    tgid = 0,
+> -  stack_canary = 2483693585637059287,
+> +  stack_canary = 7266362296181431986,
+>    real_parent = 0xffffffff81a8d020,
+>    parent = 0xffffffff81a8d020,
+>    children = {
+> @@ -224,14 +224,14 @@
+>    set_child_tid = 0x0,
+>    clear_child_tid = 0x0,
+>    utime = 0,
+> -  stime = 3,
+> +  stime = 2,
+>    utimescaled = 0,
+> -  stimescaled = 3,
+> +  stimescaled = 2,
+>    gtime = 0,
+>    prev_utime = 0,
+>    prev_stime = 0,
+>    nvcsw = 0,
+> -  nivcsw = 1000,
+> +  nivcsw = 1764,
+>    start_time = {
+>      tv_sec = 0,
+>      tv_nsec = 0
+
+- <name_dropping>I asked for Dave Anderson's help with verifying the
+  extracted vmcore, and his comments make me think I should post
+  this.</name_dropping>
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 3e16d14fd93ca6059134ba6b4f65c1c3e4cd3a18)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ scripts/dump-guest-memory.py | 339 +++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 339 insertions(+)
+ create mode 100644 scripts/dump-guest-memory.py
+
+diff --git a/scripts/dump-guest-memory.py b/scripts/dump-guest-memory.py
+new file mode 100644
+index 0000000..1ed8b67
+--- /dev/null
++++ b/scripts/dump-guest-memory.py
+@@ -0,0 +1,339 @@
++# This python script adds a new gdb command, "dump-guest-memory". It
++# should be loaded with "source dump-guest-memory.py" at the (gdb)
++# prompt.
++#
++# Copyright (C) 2013, Red Hat, Inc.
++#
++# Authors:
++#   Laszlo Ersek <lersek@redhat.com>
++#
++# This work is licensed under the terms of the GNU GPL, version 2 or later. See
++# the COPYING file in the top-level directory.
++#
++# The leading docstring doesn't have idiomatic Python formatting. It is
++# printed by gdb's "help" command (the first line is printed in the
++# "help data" summary), and it should match how other help texts look in
++# gdb.
++
++import struct
++
++class DumpGuestMemory(gdb.Command):
++    """Extract guest vmcore from qemu process coredump.
++
++The sole argument is FILE, identifying the target file to write the
++guest vmcore to.
++
++This GDB command reimplements the dump-guest-memory QMP command in
++python, using the representation of guest memory as captured in the qemu
++coredump. The qemu process that has been dumped must have had the
++command line option "-machine dump-guest-core=on".
++
++For simplicity, the "paging", "begin" and "end" parameters of the QMP
++command are not supported -- no attempt is made to get the guest's
++internal paging structures (ie. paging=false is hard-wired), and guest
++memory is always fully dumped.
++
++Only x86_64 guests are supported.
++
++The CORE/NT_PRSTATUS and QEMU notes (that is, the VCPUs' statuses) are
++not written to the vmcore. Preparing these would require context that is
++only present in the KVM host kernel module when the guest is alive. A
++fake ELF note is written instead, only to keep the ELF parser of "crash"
++happy.
++
++Dependent on how busted the qemu process was at the time of the
++coredump, this command might produce unpredictable results. If qemu
++deliberately called abort(), or it was dumped in response to a signal at
++a halfway fortunate point, then its coredump should be in reasonable
++shape and this command should mostly work."""
++
++    TARGET_PAGE_SIZE = 0x1000
++    TARGET_PAGE_MASK = 0xFFFFFFFFFFFFF000
++
++    # Various ELF constants
++    EM_X86_64   = 62        # AMD x86-64 target machine
++    ELFDATA2LSB = 1         # little endian
++    ELFCLASS64  = 2
++    ELFMAG      = "\x7FELF"
++    EV_CURRENT  = 1
++    ET_CORE     = 4
++    PT_LOAD     = 1
++    PT_NOTE     = 4
++
++    # Special value for e_phnum. This indicates that the real number of
++    # program headers is too large to fit into e_phnum. Instead the real
++    # value is in the field sh_info of section 0.
++    PN_XNUM = 0xFFFF
++
++    # Format strings for packing and header size calculation.
++    ELF64_EHDR = ("4s" # e_ident/magic
++                  "B"  # e_ident/class
++                  "B"  # e_ident/data
++                  "B"  # e_ident/version
++                  "B"  # e_ident/osabi
++                  "8s" # e_ident/pad
++                  "H"  # e_type
++                  "H"  # e_machine
++                  "I"  # e_version
++                  "Q"  # e_entry
++                  "Q"  # e_phoff
++                  "Q"  # e_shoff
++                  "I"  # e_flags
++                  "H"  # e_ehsize
++                  "H"  # e_phentsize
++                  "H"  # e_phnum
++                  "H"  # e_shentsize
++                  "H"  # e_shnum
++                  "H"  # e_shstrndx
++                 )
++    ELF64_PHDR = ("I"  # p_type
++                  "I"  # p_flags
++                  "Q"  # p_offset
++                  "Q"  # p_vaddr
++                  "Q"  # p_paddr
++                  "Q"  # p_filesz
++                  "Q"  # p_memsz
++                  "Q"  # p_align
++                 )
++
++    def __init__(self):
++        super(DumpGuestMemory, self).__init__("dump-guest-memory",
++                                              gdb.COMMAND_DATA,
++                                              gdb.COMPLETE_FILENAME)
++        self.uintptr_t     = gdb.lookup_type("uintptr_t")
++        self.elf64_ehdr_le = struct.Struct("<%s" % self.ELF64_EHDR)
++        self.elf64_phdr_le = struct.Struct("<%s" % self.ELF64_PHDR)
++
++    def int128_get64(self, val):
++        assert (val["hi"] == 0)
++        return val["lo"]
++
++    def qtailq_foreach(self, head, field_str):
++        var_p = head["tqh_first"]
++        while (var_p != 0):
++            var = var_p.dereference()
++            yield var
++            var_p = var[field_str]["tqe_next"]
++
++    def qemu_get_ram_block(self, ram_addr):
++        ram_blocks = gdb.parse_and_eval("ram_list.blocks")
++        for block in self.qtailq_foreach(ram_blocks, "next"):
++            if (ram_addr - block["offset"] < block["length"]):
++                return block
++        raise gdb.GdbError("Bad ram offset %x" % ram_addr)
++
++    def qemu_get_ram_ptr(self, ram_addr):
++        block = self.qemu_get_ram_block(ram_addr)
++        return block["host"] + (ram_addr - block["offset"])
++
++    def memory_region_get_ram_ptr(self, mr):
++        if (mr["alias"] != 0):
++            return (self.memory_region_get_ram_ptr(mr["alias"].dereference()) +
++                    mr["alias_offset"])
++        return self.qemu_get_ram_ptr(mr["ram_addr"] & self.TARGET_PAGE_MASK)
++
++    def guest_phys_blocks_init(self):
++        self.guest_phys_blocks = []
++
++    def guest_phys_blocks_append(self):
++        print "guest RAM blocks:"
++        print ("target_start     target_end       host_addr        message "
++               "count")
++        print ("---------------- ---------------- ---------------- ------- "
++               "-----")
++
++        current_map_p = gdb.parse_and_eval("address_space_memory.current_map")
++        current_map = current_map_p.dereference()
++        for cur in range(current_map["nr"]):
++            flat_range   = (current_map["ranges"] + cur).dereference()
++            mr           = flat_range["mr"].dereference()
++
++            # we only care about RAM
++            if (not mr["ram"]):
++                continue
++
++            section_size = self.int128_get64(flat_range["addr"]["size"])
++            target_start = self.int128_get64(flat_range["addr"]["start"])
++            target_end   = target_start + section_size
++            host_addr    = (self.memory_region_get_ram_ptr(mr) +
++                            flat_range["offset_in_region"])
++            predecessor = None
++
++            # find continuity in guest physical address space
++            if (len(self.guest_phys_blocks) > 0):
++                predecessor = self.guest_phys_blocks[-1]
++                predecessor_size = (predecessor["target_end"] -
++                                    predecessor["target_start"])
++
++                # the memory API guarantees monotonically increasing
++                # traversal
++                assert (predecessor["target_end"] <= target_start)
++
++                # we want continuity in both guest-physical and
++                # host-virtual memory
++                if (predecessor["target_end"] < target_start or
++                    predecessor["host_addr"] + predecessor_size != host_addr):
++                    predecessor = None
++
++            if (predecessor is None):
++                # isolated mapping, add it to the list
++                self.guest_phys_blocks.append({"target_start": target_start,
++                                               "target_end"  : target_end,
++                                               "host_addr"   : host_addr})
++                message = "added"
++            else:
++                # expand predecessor until @target_end; predecessor's
++                # start doesn't change
++                predecessor["target_end"] = target_end
++                message = "joined"
++
++            print ("%016x %016x %016x %-7s %5u" %
++                   (target_start, target_end, host_addr.cast(self.uintptr_t),
++                    message, len(self.guest_phys_blocks)))
++
++    def cpu_get_dump_info(self):
++        # We can't synchronize the registers with KVM post-mortem, and
++        # the bits in (first_x86_cpu->env.hflags) seem to be stale; they
++        # may not reflect long mode for example. Hence just assume the
++        # most common values. This also means that instruction pointer
++        # etc. will be bogus in the dump, but at least the RAM contents
++        # should be valid.
++        self.dump_info = {"d_machine": self.EM_X86_64,
++                          "d_endian" : self.ELFDATA2LSB,
++                          "d_class"  : self.ELFCLASS64}
++
++    def encode_elf64_ehdr_le(self):
++        return self.elf64_ehdr_le.pack(
++                                 self.ELFMAG,                 # e_ident/magic
++                                 self.dump_info["d_class"],   # e_ident/class
++                                 self.dump_info["d_endian"],  # e_ident/data
++                                 self.EV_CURRENT,             # e_ident/version
++                                 0,                           # e_ident/osabi
++                                 "",                          # e_ident/pad
++                                 self.ET_CORE,                # e_type
++                                 self.dump_info["d_machine"], # e_machine
++                                 self.EV_CURRENT,             # e_version
++                                 0,                           # e_entry
++                                 self.elf64_ehdr_le.size,     # e_phoff
++                                 0,                           # e_shoff
++                                 0,                           # e_flags
++                                 self.elf64_ehdr_le.size,     # e_ehsize
++                                 self.elf64_phdr_le.size,     # e_phentsize
++                                 self.phdr_num,               # e_phnum
++                                 0,                           # e_shentsize
++                                 0,                           # e_shnum
++                                 0                            # e_shstrndx
++                                )
++
++    def encode_elf64_note_le(self):
++        return self.elf64_phdr_le.pack(self.PT_NOTE,         # p_type
++                                       0,                    # p_flags
++                                       (self.memory_offset -
++                                        len(self.note)),     # p_offset
++                                       0,                    # p_vaddr
++                                       0,                    # p_paddr
++                                       len(self.note),       # p_filesz
++                                       len(self.note),       # p_memsz
++                                       0                     # p_align
++                                      )
++
++    def encode_elf64_load_le(self, offset, start_hwaddr, range_size):
++        return self.elf64_phdr_le.pack(self.PT_LOAD, # p_type
++                                       0,            # p_flags
++                                       offset,       # p_offset
++                                       0,            # p_vaddr
++                                       start_hwaddr, # p_paddr
++                                       range_size,   # p_filesz
++                                       range_size,   # p_memsz
++                                       0             # p_align
++                                      )
++
++    def note_init(self, name, desc, type):
++        # name must include a trailing NUL
++        namesz = (len(name) + 1 + 3) / 4 * 4
++        descsz = (len(desc)     + 3) / 4 * 4
++        fmt = ("<"   # little endian
++               "I"   # n_namesz
++               "I"   # n_descsz
++               "I"   # n_type
++               "%us" # name
++               "%us" # desc
++               % (namesz, descsz))
++        self.note = struct.pack(fmt,
++                                len(name) + 1, len(desc), type, name, desc)
++
++    def dump_init(self):
++        self.guest_phys_blocks_init()
++        self.guest_phys_blocks_append()
++        self.cpu_get_dump_info()
++        # we have no way to retrieve the VCPU status from KVM
++        # post-mortem
++        self.note_init("NONE", "EMPTY", 0)
++
++        # Account for PT_NOTE.
++        self.phdr_num = 1
++
++        # We should never reach PN_XNUM for paging=false dumps: there's
++        # just a handful of discontiguous ranges after merging.
++        self.phdr_num += len(self.guest_phys_blocks)
++        assert (self.phdr_num < self.PN_XNUM)
++
++        # Calculate the ELF file offset where the memory dump commences:
++        #
++        #   ELF header
++        #   PT_NOTE
++        #   PT_LOAD: 1
++        #   PT_LOAD: 2
++        #   ...
++        #   PT_LOAD: len(self.guest_phys_blocks)
++        #   ELF note
++        #   memory dump
++        self.memory_offset = (self.elf64_ehdr_le.size +
++                              self.elf64_phdr_le.size * self.phdr_num +
++                              len(self.note))
++
++    def dump_begin(self, vmcore):
++        vmcore.write(self.encode_elf64_ehdr_le())
++        vmcore.write(self.encode_elf64_note_le())
++        running = self.memory_offset
++        for block in self.guest_phys_blocks:
++            range_size = block["target_end"] - block["target_start"]
++            vmcore.write(self.encode_elf64_load_le(running,
++                                                   block["target_start"],
++                                                   range_size))
++            running += range_size
++        vmcore.write(self.note)
++
++    def dump_iterate(self, vmcore):
++        qemu_core = gdb.inferiors()[0]
++        for block in self.guest_phys_blocks:
++            cur  = block["host_addr"]
++            left = block["target_end"] - block["target_start"]
++            print ("dumping range at %016x for length %016x" %
++                   (cur.cast(self.uintptr_t), left))
++            while (left > 0):
++                chunk_size = min(self.TARGET_PAGE_SIZE, left)
++                chunk = qemu_core.read_memory(cur, chunk_size)
++                vmcore.write(chunk)
++                cur  += chunk_size
++                left -= chunk_size
++
++    def create_vmcore(self, filename):
++        vmcore = open(filename, "wb")
++        self.dump_begin(vmcore)
++        self.dump_iterate(vmcore)
++        vmcore.close()
++
++    def invoke(self, args, from_tty):
++        # Unwittingly pressing the Enter key after the command should
++        # not dump the same multi-gig coredump to the same file.
++        self.dont_repeat()
++
++        argv = gdb.string_to_argv(args)
++        if (len(argv) != 1):
++            raise gdb.GdbError("usage: dump-guest-memory FILE")
++
++        self.dump_init()
++        self.create_vmcore(argv[0])
++
++DumpGuestMemory()
+-- 
+1.8.3.1
+

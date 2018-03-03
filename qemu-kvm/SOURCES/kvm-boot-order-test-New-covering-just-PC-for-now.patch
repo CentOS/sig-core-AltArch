@@ -1,0 +1,138 @@
+From 99dd65105a5f7048d231e311b55995ef41f37278 Mon Sep 17 00:00:00 2001
+Message-Id: <99dd65105a5f7048d231e311b55995ef41f37278.1383564115.git.minovotn@redhat.com>
+In-Reply-To: <5575e0aec51f40ebec46e98ec085cda053283aba.1383564115.git.minovotn@redhat.com>
+References: <5575e0aec51f40ebec46e98ec085cda053283aba.1383564115.git.minovotn@redhat.com>
+From: Markus Armbruster <armbru@redhat.com>
+Date: Fri, 27 Sep 2013 13:31:20 +0200
+Subject: [PATCH 10/14] boot-order-test: New; covering just PC for now
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1380288680-26645-11-git-send-email-armbru@redhat.com>
+Patchwork-id: 54563
+O-Subject: [PATCH 7.0 qemu-kvm 10/10] boot-order-test: New; covering just PC for now
+Bugzilla: 997817
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Message-id: 1372254743-15808-3-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit edbd790d20cf19d039dfe431aaf0973a9e0afa8f)
+---
+ tests/Makefile          |  2 ++
+ tests/boot-order-test.c | 73 +++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 75 insertions(+)
+ create mode 100644 tests/boot-order-test.c
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ tests/Makefile          |  2 ++
+ tests/boot-order-test.c | 73 +++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 75 insertions(+)
+ create mode 100644 tests/boot-order-test.c
+
+diff --git a/tests/Makefile b/tests/Makefile
+index c107489..394e029 100644
+--- a/tests/Makefile
++++ b/tests/Makefile
+@@ -54,6 +54,7 @@ gcov-files-i386-y = hw/fdc.c
+ check-qtest-i386-y += tests/ide-test$(EXESUF)
+ check-qtest-i386-y += tests/hd-geo-test$(EXESUF)
+ gcov-files-i386-y += hw/hd-geometry.c
++check-qtest-i386-y += tests/boot-order-test$(EXESUF)
+ check-qtest-i386-y += tests/rtc-test$(EXESUF)
+ check-qtest-i386-y += tests/i440fx-test$(EXESUF)
+ check-qtest-i386-y += tests/fw_cfg-test$(EXESUF)
+@@ -130,6 +131,7 @@ tests/m48t59-test$(EXESUF): tests/m48t59-test.o
+ tests/fdc-test$(EXESUF): tests/fdc-test.o
+ tests/ide-test$(EXESUF): tests/ide-test.o $(libqos-pc-obj-y)
+ tests/hd-geo-test$(EXESUF): tests/hd-geo-test.o
++tests/boot-order-test$(EXESUF): tests/boot-order-test.o
+ tests/tmp105-test$(EXESUF): tests/tmp105-test.o $(libqos-omap-obj-y)
+ tests/i440fx-test$(EXESUF): tests/i440fx-test.o $(libqos-pc-obj-y)
+ tests/fw_cfg-test$(EXESUF): tests/fw_cfg-test.o $(libqos-pc-obj-y)
+diff --git a/tests/boot-order-test.c b/tests/boot-order-test.c
+new file mode 100644
+index 0000000..447be31
+--- /dev/null
++++ b/tests/boot-order-test.c
+@@ -0,0 +1,73 @@
++/*
++ * Boot order test cases.
++ *
++ * Copyright (c) 2013 Red Hat Inc.
++ *
++ * Authors:
++ *  Markus Armbruster <armbru@redhat.com>,
++ *
++ * This work is licensed under the terms of the GNU GPL, version 2 or later.
++ * See the COPYING file in the top-level directory.
++ */
++
++#include <glib.h>
++#include "libqtest.h"
++
++static void test_pc_cmos_byte(int reg, int expected)
++{
++    int actual;
++
++    outb(0x70, reg);
++    actual = inb(0x71);
++    g_assert_cmphex(actual, ==, expected);
++}
++
++static void test_pc_cmos(uint8_t boot1, uint8_t boot2)
++{
++    test_pc_cmos_byte(0x38, boot1);
++    test_pc_cmos_byte(0x3d, boot2);
++}
++
++static void test_pc_with_args(const char *test_args,
++                              uint8_t boot1, uint8_t boot2,
++                              uint8_t reboot1, uint8_t reboot2)
++{
++    char *args = g_strdup_printf("-nodefaults -display none %s", test_args);
++
++    qtest_start(args);
++    test_pc_cmos(boot1, boot2);
++    qmp("{ 'execute': 'system_reset' }");
++    /*
++     * system_reset only requests reset.  We get a RESET event after
++     * the actual reset completes.  Need to wait for that.
++     */
++    qmp("");                    /* HACK: wait for event */
++    test_pc_cmos(reboot1, reboot2);
++    qtest_quit(global_qtest);
++    g_free(args);
++}
++
++static void test_pc_boot_order(void)
++{
++    test_pc_with_args("", 0x30, 0x12, 0x30, 0x12);
++    test_pc_with_args("-no-fd-bootchk", 0x31, 0x12, 0x31, 0x12);
++    test_pc_with_args("-boot c", 0, 0x02, 0, 0x02);
++    test_pc_with_args("-boot nda", 0x10, 0x34, 0x10, 0x34);
++    test_pc_with_args("-boot order=", 0, 0, 0, 0);
++    test_pc_with_args("-boot order= -boot order=c", 0, 0x02, 0, 0x02);
++    test_pc_with_args("-boot once=a", 0, 0x01, 0x30, 0x12);
++    test_pc_with_args("-boot once=a -no-fd-bootchk", 0x01, 0x01, 0x31, 0x12);
++    test_pc_with_args("-boot once=a,order=c", 0, 0x01, 0, 0x02);
++    test_pc_with_args("-boot once=d -boot order=nda", 0, 0x03, 0x10, 0x34);
++    test_pc_with_args("-boot once=a -boot once=b -boot once=c",
++                      0, 0x02, 0x30, 0x12);
++}
++
++int main(int argc, char *argv[])
++{
++    g_test_init(&argc, &argv, NULL);
++
++    qtest_add_func("boot-order/pc", test_pc_boot_order);
++
++    return g_test_run();
++}
+-- 
+1.7.11.7
+

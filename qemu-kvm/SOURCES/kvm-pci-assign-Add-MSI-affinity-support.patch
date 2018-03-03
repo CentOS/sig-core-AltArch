@@ -1,0 +1,72 @@
+From 7596bd04d37a608d06cf7a2f589a67d332a21dfb Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Fri, 1 Nov 2013 19:50:26 +0100
+Subject: [PATCH 01/25] pci-assign: Add MSI affinity support
+
+RH-Author: Alex Williamson <alex.williamson@redhat.com>
+Message-id: <20131101195026.25461.63530.stgit@bling.home>
+Patchwork-id: 55233
+O-Subject: [RHEL7 qemu-kvm PATCH 1/3] pci-assign: Add MSI affinity support
+Bugzilla: 1025877
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+
+Bugzilla: 1025877
+Upstream commit: 3459f01b2d9612070ec23221a4ccb60a41b775ae
+
+To support guest MSI affinity changes update the MSI message any time
+the guest writes to the address or data fields.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+Acked-by: Michael S. Tsirkin <mst@redhat.com>
+Message-id: 20130513201840.5430.86331.stgit@bling.home
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+---
+ hw/i386/kvm/pci-assign.c |   18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/kvm/pci-assign.c |   18 ++++++++++++++++++
+ 1 files changed, 18 insertions(+), 0 deletions(-)
+
+diff --git a/hw/i386/kvm/pci-assign.c b/hw/i386/kvm/pci-assign.c
+index 1684f8c..221a8f7 100644
+--- a/hw/i386/kvm/pci-assign.c
++++ b/hw/i386/kvm/pci-assign.c
+@@ -1026,6 +1026,21 @@ static void assigned_dev_update_msi(PCIDevice *pci_dev)
+     }
+ }
+ 
++static void assigned_dev_update_msi_msg(PCIDevice *pci_dev)
++{
++    AssignedDevice *assigned_dev = DO_UPCAST(AssignedDevice, dev, pci_dev);
++    uint8_t ctrl_byte = pci_get_byte(pci_dev->config + pci_dev->msi_cap +
++                                     PCI_MSI_FLAGS);
++
++    if (assigned_dev->assigned_irq_type != ASSIGNED_IRQ_MSI ||
++        !(ctrl_byte & PCI_MSI_FLAGS_ENABLE)) {
++        return;
++    }
++
++    kvm_irqchip_update_msi_route(kvm_state, assigned_dev->msi_virq[0],
++                                 msi_get_message(pci_dev, 0));
++}
++
+ static bool assigned_dev_msix_masked(MSIXTableEntry *entry)
+ {
+     return (entry->ctrl & cpu_to_le32(0x1)) != 0;
+@@ -1201,6 +1216,9 @@ static void assigned_dev_pci_write_config(PCIDevice *pci_dev, uint32_t address,
+         if (range_covers_byte(address, len,
+                               pci_dev->msi_cap + PCI_MSI_FLAGS)) {
+             assigned_dev_update_msi(pci_dev);
++        } else if (ranges_overlap(address, len, /* 32bit MSI only */
++                                  pci_dev->msi_cap + PCI_MSI_ADDRESS_LO, 6)) {
++            assigned_dev_update_msi_msg(pci_dev);
+         }
+     }
+     if (assigned_dev->cap.available & ASSIGNED_DEVICE_CAP_MSIX) {
+-- 
+1.7.1
+

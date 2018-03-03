@@ -1,0 +1,57 @@
+From ae042c767589da954f1b6c4662371dea189fcf50 Mon Sep 17 00:00:00 2001
+Message-Id: <ae042c767589da954f1b6c4662371dea189fcf50.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:09:08 +0100
+Subject: [PATCH 20/50] block/get_block_status: fix BDRV_BLOCK_ZERO for
+ unallocated blocks
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-23-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56059
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 22/52] block/get_block_status: fix BDRV_BLOCK_ZERO for unallocated blocks
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Peter Lieven <pl@kamp.de>
+
+this patch does 2 things:
+a) only do additional call outs if BDRV_BLOCK_ZERO is not already set.
+b) use the newly introduced bdrv_unallocated_blocks_are_zero()
+   to return the zero state of an unallocated block. the used callout
+   to bdrv_has_zero_init() is only valid right after bdrv_create.
+
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit c3d8688470a33feb0ea78c006b4399d50c13185e)
+---
+ block.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ block.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/block.c b/block.c
+index 2e77763..60484a6 100644
+--- a/block.c
++++ b/block.c
+@@ -3290,8 +3290,8 @@ static int64_t coroutine_fn bdrv_co_get_block_status(BlockDriverState *bs,
+                                      *pnum, pnum);
+     }
+ 
+-    if (!(ret & BDRV_BLOCK_DATA)) {
+-        if (bdrv_has_zero_init(bs)) {
++    if (!(ret & BDRV_BLOCK_DATA) && !(ret & BDRV_BLOCK_ZERO)) {
++        if (bdrv_unallocated_blocks_are_zero(bs)) {
+             ret |= BDRV_BLOCK_ZERO;
+         } else if (bs->backing_hd) {
+             BlockDriverState *bs2 = bs->backing_hd;
+-- 
+1.7.11.7
+

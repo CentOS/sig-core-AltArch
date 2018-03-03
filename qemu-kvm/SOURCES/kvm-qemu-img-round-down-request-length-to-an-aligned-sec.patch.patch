@@ -1,0 +1,107 @@
+From 070f95bad47e0d0f1884b93184369b3c9322cd4c Mon Sep 17 00:00:00 2001
+Message-Id: <070f95bad47e0d0f1884b93184369b3c9322cd4c.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:09:37 +0100
+Subject: [PATCH 49/50] qemu-img: round down request length to an aligned
+ sector
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-52-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56088
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 51/52] qemu-img: round down request length to an aligned sector
+Bugzilla: 1039557
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Peter Lieven <pl@kamp.de>
+
+this patch shortens requests to end at an aligned sector so that
+the next request starts aligned.
+
+[Squashed Peter's fix for bdrv_get_info() failure discussed on the
+mailing list.
+--Stefan]
+
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 24f833cd43dbfb5f8ae99e8a6d3691671622d3ea)
+---
+ qemu-img.c | 32 ++++++++++++++++++++++++--------
+ 1 file changed, 24 insertions(+), 8 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ qemu-img.c | 32 ++++++++++++++++++++++++--------
+ 1 file changed, 24 insertions(+), 8 deletions(-)
+
+diff --git a/qemu-img.c b/qemu-img.c
+index 6890bb1..55bb82c 100644
+--- a/qemu-img.c
++++ b/qemu-img.c
+@@ -1122,8 +1122,7 @@ out3:
+ 
+ static int img_convert(int argc, char **argv)
+ {
+-    int c, n, n1, bs_n, bs_i, compress, cluster_size,
+-        cluster_sectors, skip_create;
++    int c, n, n1, bs_n, bs_i, compress, cluster_sectors, skip_create;
+     int64_t ret = 0;
+     int progress = 0, flags;
+     const char *fmt, *out_fmt, *cache, *out_baseimg, *out_filename;
+@@ -1395,19 +1394,23 @@ static int img_convert(int argc, char **argv)
+         }
+     }
+ 
+-    if (compress) {
+-        ret = bdrv_get_info(out_bs, &bdi);
+-        if (ret < 0) {
++    cluster_sectors = 0;
++    ret = bdrv_get_info(out_bs, &bdi);
++    if (ret < 0) {
++        if (compress) {
+             error_report("could not get block driver info");
+             goto out;
+         }
+-        cluster_size = bdi.cluster_size;
+-        if (cluster_size <= 0 || cluster_size > bufsectors * BDRV_SECTOR_SIZE) {
++    } else {
++        cluster_sectors = bdi.cluster_size / BDRV_SECTOR_SIZE;
++    }
++
++    if (compress) {
++        if (cluster_sectors <= 0 || cluster_sectors > bufsectors) {
+             error_report("invalid cluster size");
+             ret = -1;
+             goto out;
+         }
+-        cluster_sectors = cluster_size >> 9;
+         sector_num = 0;
+ 
+         nb_sectors = total_sectors;
+@@ -1540,6 +1543,19 @@ static int img_convert(int argc, char **argv)
+             }
+ 
+             n = MIN(nb_sectors, bufsectors);
++
++            /* round down request length to an aligned sector, but
++             * do not bother doing this on short requests. They happen
++             * when we found an all-zero area, and the next sector to
++             * write will not be sector_num + n. */
++            if (cluster_sectors > 0 && n >= cluster_sectors) {
++                int64_t next_aligned_sector = (sector_num + n);
++                next_aligned_sector -= next_aligned_sector % cluster_sectors;
++                if (sector_num + n > next_aligned_sector) {
++                    n = next_aligned_sector - sector_num;
++                }
++            }
++
+             n = MIN(n, bs_sectors - (sector_num - bs_offset));
+             n1 = n;
+ 
+-- 
+1.7.11.7
+

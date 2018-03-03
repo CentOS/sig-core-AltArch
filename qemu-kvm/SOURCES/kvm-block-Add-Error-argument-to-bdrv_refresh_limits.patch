@@ -1,0 +1,307 @@
+From 1aac494dfcc4f96e04f3ad8bc14db8f17c48626f Mon Sep 17 00:00:00 2001
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Tue, 17 Mar 2015 13:02:48 +0100
+Subject: [PATCH 13/16] block: Add Error argument to bdrv_refresh_limits()
+
+Message-id: <1424365599-9801-2-git-send-email-stefanha@redhat.com>
+Patchwork-id: 63914
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 1/2] block: Add Error argument to bdrv_refresh_limits()
+Bugzilla: 1184363
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 3baca891391afba154e250f5a108c6bab6c92cf9)
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Conflicts:
+        block.c
+
+bdrv_set_backing_hd() does not exist downstream so there are extra
+bdrv_refresh_limits() occurrences downstream.  They pass a NULL errp
+argument as bdrv_set_backing_hd() would.
+
+        block/iscsi.c
+
+Context conflict, easy to resolve.
+
+        block/raw_bsd.c
+
+Does not exist downstream, apply change to block/raw.c instead.
+---
+ block.c                   | 35 ++++++++++++++++++++++++-----------
+ block/iscsi.c             |  4 +---
+ block/qcow2.c             |  4 +---
+ block/qed.c               |  4 +---
+ block/raw-posix.c         |  4 +---
+ block/raw.c               |  3 +--
+ block/stream.c            |  2 +-
+ block/vmdk.c              |  4 +---
+ include/block/block.h     |  2 +-
+ include/block/block_int.h |  2 +-
+ 10 files changed, 33 insertions(+), 31 deletions(-)
+
+diff --git a/block.c b/block.c
+index 21418a6..89ab829 100644
+--- a/block.c
++++ b/block.c
+@@ -462,19 +462,24 @@ int bdrv_create_file(const char* filename, QEMUOptionParameter *options,
+     return ret;
+ }
+ 
+-int bdrv_refresh_limits(BlockDriverState *bs)
++void bdrv_refresh_limits(BlockDriverState *bs, Error **errp)
+ {
+     BlockDriver *drv = bs->drv;
++    Error *local_err = NULL;
+ 
+     memset(&bs->bl, 0, sizeof(bs->bl));
+ 
+     if (!drv) {
+-        return 0;
++        return;
+     }
+ 
+     /* Take some limits from the children as a default */
+     if (bs->file) {
+-        bdrv_refresh_limits(bs->file);
++        bdrv_refresh_limits(bs->file, &local_err);
++        if (local_err) {
++            error_propagate(errp, local_err);
++            return;
++        }
+         bs->bl.opt_transfer_length = bs->file->bl.opt_transfer_length;
+         bs->bl.opt_mem_alignment = bs->file->bl.opt_mem_alignment;
+     } else {
+@@ -482,7 +487,11 @@ int bdrv_refresh_limits(BlockDriverState *bs)
+     }
+ 
+     if (bs->backing_hd) {
+-        bdrv_refresh_limits(bs->backing_hd);
++        bdrv_refresh_limits(bs->backing_hd, &local_err);
++        if (local_err) {
++            error_propagate(errp, local_err);
++            return;
++        }
+         bs->bl.opt_transfer_length =
+             MAX(bs->bl.opt_transfer_length,
+                 bs->backing_hd->bl.opt_transfer_length);
+@@ -493,10 +502,8 @@ int bdrv_refresh_limits(BlockDriverState *bs)
+ 
+     /* Then let the driver override it */
+     if (drv->bdrv_refresh_limits) {
+-        return drv->bdrv_refresh_limits(bs);
++        drv->bdrv_refresh_limits(bs, errp);
+     }
+-
+-    return 0;
+ }
+ 
+ /*
+@@ -856,7 +863,13 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
+         goto free_and_fail;
+     }
+ 
+-    bdrv_refresh_limits(bs);
++    bdrv_refresh_limits(bs, &local_err);
++    if (local_err) {
++        error_propagate(errp, local_err);
++        ret = -EINVAL;
++        goto free_and_fail;
++    }
++
+     assert(bdrv_opt_mem_align(bs) != 0);
+     assert((bs->request_alignment != 0) || bs->sg);
+ 
+@@ -1048,7 +1061,7 @@ int bdrv_open_backing_file(BlockDriverState *bs, QDict *options, Error **errp)
+     }
+ 
+     /* Recalculate the BlockLimits with the backing file */
+-    bdrv_refresh_limits(bs);
++    bdrv_refresh_limits(bs, NULL);
+ 
+     return 0;
+ }
+@@ -1483,7 +1496,7 @@ void bdrv_reopen_commit(BDRVReopenState *reopen_state)
+                                               BDRV_O_CACHE_WB);
+     reopen_state->bs->read_only = !(reopen_state->flags & BDRV_O_RDWR);
+ 
+-    bdrv_refresh_limits(reopen_state->bs);
++    bdrv_refresh_limits(reopen_state->bs, NULL);
+ }
+ 
+ /*
+@@ -2398,7 +2411,7 @@ int bdrv_drop_intermediate(BlockDriverState *active, BlockDriverState *top,
+     }
+     new_top_bs->backing_hd = base_bs;
+ 
+-    bdrv_refresh_limits(new_top_bs);
++    bdrv_refresh_limits(new_top_bs, NULL);
+ 
+     QSIMPLEQ_FOREACH_SAFE(intermediate_state, &states_to_delete, entry, next) {
+         /* so that bdrv_close() does not recursively close the chain */
+diff --git a/block/iscsi.c b/block/iscsi.c
+index 3d61dd7..2a4ab22 100644
+--- a/block/iscsi.c
++++ b/block/iscsi.c
+@@ -1550,7 +1550,7 @@ static void iscsi_close(BlockDriverState *bs)
+     memset(iscsilun, 0, sizeof(IscsiLun));
+ }
+ 
+-static int iscsi_refresh_limits(BlockDriverState *bs)
++static void iscsi_refresh_limits(BlockDriverState *bs, Error **errp)
+ {
+     IscsiLun *iscsilun = bs->opaque;
+ 
+@@ -1576,8 +1576,6 @@ static int iscsi_refresh_limits(BlockDriverState *bs)
+         bs->bl.opt_transfer_length = sector_lun2qemu(iscsilun->bl.opt_xfer_len,
+                                                      iscsilun);
+     }
+-
+-    return 0;
+ }
+ 
+ /* We have nothing to do for iSCSI reopen, stub just returns
+diff --git a/block/qcow2.c b/block/qcow2.c
+index 43e54d6..005d513 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -848,13 +848,11 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
+     return ret;
+ }
+ 
+-static int qcow2_refresh_limits(BlockDriverState *bs)
++static void qcow2_refresh_limits(BlockDriverState *bs, Error **errp)
+ {
+     BDRVQcowState *s = bs->opaque;
+ 
+     bs->bl.write_zeroes_alignment = s->cluster_sectors;
+-
+-    return 0;
+ }
+ 
+ static int qcow2_set_key(BlockDriverState *bs, const char *key)
+diff --git a/block/qed.c b/block/qed.c
+index d1de0a2..5793fca 100644
+--- a/block/qed.c
++++ b/block/qed.c
+@@ -507,13 +507,11 @@ out:
+     return ret;
+ }
+ 
+-static int bdrv_qed_refresh_limits(BlockDriverState *bs)
++static void bdrv_qed_refresh_limits(BlockDriverState *bs, Error **errp)
+ {
+     BDRVQEDState *s = bs->opaque;
+ 
+     bs->bl.write_zeroes_alignment = s->header.cluster_size >> BDRV_SECTOR_BITS;
+-
+-    return 0;
+ }
+ 
+ /* We have nothing to do for QED reopen, stubs just return
+diff --git a/block/raw-posix.c b/block/raw-posix.c
+index af526ca..46b941b 100644
+--- a/block/raw-posix.c
++++ b/block/raw-posix.c
+@@ -588,14 +588,12 @@ static void raw_reopen_abort(BDRVReopenState *state)
+     state->opaque = NULL;
+ }
+ 
+-static int raw_refresh_limits(BlockDriverState *bs)
++static void raw_refresh_limits(BlockDriverState *bs, Error **errp)
+ {
+     BDRVRawState *s = bs->opaque;
+ 
+     raw_probe_alignment(bs, s->fd, errp);
+     bs->bl.opt_mem_alignment = s->buf_align;
+-
+-    return 0;
+ }
+ 
+ static ssize_t handle_aiocb_ioctl(RawPosixAIOData *aiocb)
+diff --git a/block/raw.c b/block/raw.c
+index eeadba5..a750359 100644
+--- a/block/raw.c
++++ b/block/raw.c
+@@ -58,10 +58,9 @@ static int64_t raw_getlength(BlockDriverState *bs)
+     return bdrv_getlength(bs->file);
+ }
+ 
+-static int raw_refresh_limits(BlockDriverState *bs)
++static void raw_refresh_limits(BlockDriverState *bs, Error **errp)
+ {
+     bs->bl = bs->file->bl;
+-    return 0;
+ }
+ 
+ static int raw_truncate(BlockDriverState *bs, int64_t offset)
+diff --git a/block/stream.c b/block/stream.c
+index 367120d..4e4436c 100644
+--- a/block/stream.c
++++ b/block/stream.c
+@@ -72,7 +72,7 @@ static void close_unused_images(BlockDriverState *top, BlockDriverState *base,
+     }
+     top->backing_hd = base;
+ 
+-    bdrv_refresh_limits(top);
++    bdrv_refresh_limits(top, NULL);
+ }
+ 
+ static void coroutine_fn stream_run(void *opaque)
+diff --git a/block/vmdk.c b/block/vmdk.c
+index cfcaa84..24e9458 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -954,7 +954,7 @@ fail:
+ }
+ 
+ 
+-static int vmdk_refresh_limits(BlockDriverState *bs)
++static void vmdk_refresh_limits(BlockDriverState *bs, Error **errp)
+ {
+     BDRVVmdkState *s = bs->opaque;
+     int i;
+@@ -966,8 +966,6 @@ static int vmdk_refresh_limits(BlockDriverState *bs)
+                     s->extents[i].cluster_sectors);
+         }
+     }
+-
+-    return 0;
+ }
+ 
+ /**
+diff --git a/include/block/block.h b/include/block/block.h
+index c79a1e1..3170cbc 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -254,7 +254,7 @@ int64_t bdrv_nb_sectors(BlockDriverState *bs);
+ int64_t bdrv_getlength(BlockDriverState *bs);
+ int64_t bdrv_get_allocated_file_size(BlockDriverState *bs);
+ void bdrv_get_geometry(BlockDriverState *bs, uint64_t *nb_sectors_ptr);
+-int bdrv_refresh_limits(BlockDriverState *bs);
++void bdrv_refresh_limits(BlockDriverState *bs, Error **errp);
+ int bdrv_commit(BlockDriverState *bs);
+ int bdrv_commit_all(void);
+ int bdrv_change_backing_file(BlockDriverState *bs,
+diff --git a/include/block/block_int.h b/include/block/block_int.h
+index e6874b4..3f86649 100644
+--- a/include/block/block_int.h
++++ b/include/block/block_int.h
+@@ -213,7 +213,7 @@ struct BlockDriver {
+     int (*bdrv_debug_resume)(BlockDriverState *bs, const char *tag);
+     bool (*bdrv_debug_is_suspended)(BlockDriverState *bs, const char *tag);
+ 
+-    int (*bdrv_refresh_limits)(BlockDriverState *bs);
++    void (*bdrv_refresh_limits)(BlockDriverState *bs, Error **errp);
+ 
+     /*
+      * Returns 1 if newly created images are guaranteed to contain only
+-- 
+1.8.3.1
+

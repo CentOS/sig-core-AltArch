@@ -1,0 +1,58 @@
+From 089e31ac09be32fce980da9b76da856ce83fe4ff Mon Sep 17 00:00:00 2001
+From: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+Date: Wed, 15 Jan 2014 19:42:27 +0100
+Subject: [PATCH 01/34] avoid a bogus COMPLETED->CANCELLED transition
+
+RH-Author: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+Message-id: <1389814948-3983-2-git-send-email-dgilbert@redhat.com>
+Patchwork-id: 56730
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 1/2] avoid a bogus COMPLETED->CANCELLED transition
+Bugzilla: 1053699
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: "Zhanghaoyu (A)" <haoyu.zhang@huawei.com>
+
+Avoid a bogus COMPLETED->CANCELLED transition.
+There is a period of time from the timing of setting COMPLETED state to that of migration thread exits, so during which it's problematic in COMPLETED->CANCELLED transition.
+
+Signed-off-by: Zeng Junliang <zengjunliang@huawei.com>
+Signed-off-by: Zhang Haoyu <haoyu.zhang@huawei.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit 6f2b811a61810a7fd9f9a5085de223f66b823342)
+---
+ migration.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ migration.c |    9 ++++++++-
+ 1 files changed, 8 insertions(+), 1 deletions(-)
+
+diff --git a/migration.c b/migration.c
+index ef9a61f..735f7ca 100644
+--- a/migration.c
++++ b/migration.c
+@@ -324,9 +324,16 @@ void migrate_fd_error(MigrationState *s)
+ 
+ static void migrate_fd_cancel(MigrationState *s)
+ {
++    int old_state ;
+     DPRINTF("cancelling migration\n");
+ 
+-    migrate_set_state(s, s->state, MIG_STATE_CANCELLED);
++    do {
++        old_state = s->state;
++        if (old_state != MIG_STATE_SETUP && old_state != MIG_STATE_ACTIVE) {
++            break;
++        }
++        migrate_set_state(s, old_state, MIG_STATE_CANCELLED);
++    } while (s->state != MIG_STATE_CANCELLED);
+ }
+ 
+ void add_migration_state_change_notifier(Notifier *notify)
+-- 
+1.7.1
+

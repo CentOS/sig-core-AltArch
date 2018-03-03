@@ -1,0 +1,112 @@
+From 94787daf53d6eb2936704f7d9089b26cc5803699 Mon Sep 17 00:00:00 2001
+From: John Snow <jsnow@redhat.com>
+Date: Mon, 23 Nov 2015 17:38:22 +0100
+Subject: [PATCH 03/27] qemu-io: Make cvtnum() a wrapper around
+ strtosz_suffix()
+
+RH-Author: John Snow <jsnow@redhat.com>
+Message-id: <1448300320-7772-4-git-send-email-jsnow@redhat.com>
+Patchwork-id: 68432
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 03/21] qemu-io: Make cvtnum() a wrapper around strtosz_suffix()
+Bugzilla: 1272523
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+No reason to implement the same thing multiple times. A nice side effect
+is that fractional numbers like 0.5M can be used in qemu-io now.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit b6e356aa25c81d928e1c463292048d29cf25f04e)
+Signed-off-by: John Snow <jsnow@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ cmd.c     | 37 -------------------------------------
+ cmd.h     |  1 -
+ qemu-io.c |  6 ++++++
+ 3 files changed, 6 insertions(+), 38 deletions(-)
+
+diff --git a/cmd.c b/cmd.c
+index 4e7579b..214c6f7 100644
+--- a/cmd.c
++++ b/cmd.c
+@@ -344,43 +344,6 @@ doneline(
+ #define MEGABYTES(x)	((long long)(x) << 20)
+ #define KILOBYTES(x)	((long long)(x) << 10)
+ 
+-long long
+-cvtnum(
+-	char		*s)
+-{
+-	long long	i;
+-	char		*sp;
+-	int		c;
+-
+-	i = strtoll(s, &sp, 0);
+-	if (i == 0 && sp == s)
+-		return -1LL;
+-	if (*sp == '\0')
+-		return i;
+-
+-	if (sp[1] != '\0')
+-		return -1LL;
+-
+-	c = qemu_tolower(*sp);
+-	switch (c) {
+-	default:
+-		return i;
+-	case 'k':
+-		return KILOBYTES(i);
+-	case 'm':
+-		return MEGABYTES(i);
+-	case 'g':
+-		return GIGABYTES(i);
+-	case 't':
+-		return TERABYTES(i);
+-	case 'p':
+-		return PETABYTES(i);
+-	case 'e':
+-		return  EXABYTES(i);
+-	}
+-	return -1LL;
+-}
+-
+ #define TO_EXABYTES(x)	((x) / EXABYTES(1))
+ #define TO_PETABYTES(x)	((x) / PETABYTES(1))
+ #define TO_TERABYTES(x)	((x) / TERABYTES(1))
+diff --git a/cmd.h b/cmd.h
+index 8e6f753..4dcfe88 100644
+--- a/cmd.h
++++ b/cmd.h
+@@ -58,7 +58,6 @@ char **breakline(char *input, int *count);
+ void doneline(char *input, char **vec);
+ char *fetchline(void);
+ 
+-long long cvtnum(char *s);
+ void cvtstr(double value, char *str, size_t sz);
+ 
+ struct timeval tsub(struct timeval t1, struct timeval t2);
+diff --git a/qemu-io.c b/qemu-io.c
+index 9f66a78..3b5890e 100644
+--- a/qemu-io.c
++++ b/qemu-io.c
+@@ -33,6 +33,12 @@ static BlockDriverState *bs;
+ 
+ static int misalign;
+ 
++static int64_t cvtnum(const char *s)
++{
++    char *end;
++    return strtosz_suffix(s, &end, STRTOSZ_DEFSUFFIX_B);
++}
++
+ /*
+  * Parse the pattern argument to various sub-commands.
+  *
+-- 
+1.8.3.1
+

@@ -1,0 +1,91 @@
+From bb95ce076f174cba655e098fb7924364fd29aa8b Mon Sep 17 00:00:00 2001
+Message-Id: <bb95ce076f174cba655e098fb7924364fd29aa8b.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:09:15 +0100
+Subject: [PATCH 27/50] block: handle ENOTSUP from discard in generic code
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-30-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56066
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 29/52] block: handle ENOTSUP from discard in generic code
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Similar to write_zeroes, let the generic code receive a ENOTSUP for
+discard operations.  Since bdrv_discard has advisory semantics,
+we can just swallow the error.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 7ce21016b69b512bf4777965a4292318f2bc7544)
+---
+ block.c           |  2 +-
+ block/raw-posix.c | 12 ++++++------
+ 2 files changed, 7 insertions(+), 7 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ block.c           |  2 +-
+ block/raw-posix.c | 12 ++++++------
+ 2 files changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/block.c b/block.c
+index fc15370..c9e65b4 100644
+--- a/block.c
++++ b/block.c
+@@ -4545,7 +4545,7 @@ int coroutine_fn bdrv_co_discard(BlockDriverState *bs, int64_t sector_num,
+                 ret = co.ret;
+             }
+         }
+-        if (ret) {
++        if (ret && ret != -ENOTSUP) {
+             return ret;
+         }
+ 
+diff --git a/block/raw-posix.c b/block/raw-posix.c
+index c2b3dfd..7a140b0 100644
+--- a/block/raw-posix.c
++++ b/block/raw-posix.c
+@@ -324,10 +324,10 @@ static int raw_open_common(BlockDriverState *bs, QDict *options,
+     }
+ #endif
+ 
+-    s->has_discard = 1;
++    s->has_discard = true;
+ #ifdef CONFIG_XFS
+     if (platform_test_xfs_fd(s->fd)) {
+-        s->is_xfs = 1;
++        s->is_xfs = true;
+     }
+ #endif
+ 
+@@ -699,8 +699,8 @@ static ssize_t handle_aiocb_discard(RawPosixAIOData *aiocb)
+     int ret = -EOPNOTSUPP;
+     BDRVRawState *s = aiocb->bs->opaque;
+ 
+-    if (s->has_discard == 0) {
+-        return 0;
++    if (!s->has_discard) {
++        return -ENOTSUP;
+     }
+ 
+     if (aiocb->aio_type & QEMU_AIO_BLKDEV) {
+@@ -735,8 +735,8 @@ static ssize_t handle_aiocb_discard(RawPosixAIOData *aiocb)
+ 
+     if (ret == -ENODEV || ret == -ENOSYS || ret == -EOPNOTSUPP ||
+         ret == -ENOTTY) {
+-        s->has_discard = 0;
+-        ret = 0;
++        s->has_discard = false;
++        ret = -ENOTSUP;
+     }
+     return ret;
+ }
+-- 
+1.7.11.7
+

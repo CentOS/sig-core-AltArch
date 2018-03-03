@@ -1,0 +1,345 @@
+From 7cc714c354fc4dbfaeca66156ca331f57bf9653e Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Fri, 7 Nov 2014 17:18:03 +0100
+Subject: [PATCH 16/41] dump: make kdump-compressed format available for
+ 'dump-guest-memory'
+
+Message-id: <1415380693-16593-17-git-send-email-lersek@redhat.com>
+Patchwork-id: 62202
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 16/26] dump: make kdump-compressed format available for 'dump-guest-memory'
+Bugzilla: 1157798
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: dgibson <dgibson@redhat.com>
+
+From: qiaonuohan <qiaonuohan@cn.fujitsu.com>
+
+Make monitor command 'dump-guest-memory' be able to dump in kdump-compressed
+format. The command's usage:
+
+  dump [-p] protocol [begin] [length] [format]
+
+'format' is used to specified the format of vmcore and can be:
+1. 'elf': ELF format, without compression
+2. 'kdump-zlib': kdump-compressed format, with zlib-compressed
+3. 'kdump-lzo': kdump-compressed format, with lzo-compressed
+4. 'kdump-snappy': kdump-compressed format, with snappy-compressed
+Without 'format' being set, it is same as 'elf'. And if non-elf format is
+specified, paging and filter is not allowed.
+
+Note:
+  1. The kdump-compressed format is readable only with the crash utility and
+     makedumpfile, and it can be smaller than the ELF format because of the
+     compression support.
+  2. The kdump-compressed format is the 6th edition.
+
+Signed-off-by: Qiao Nuohan <qiaonuohan@cn.fujitsu.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit b53ccc30c40df52d192e469a86c188a8649c6df3)
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c           | 131 ++++++++++++++++++++++++++++++++++++++++++++++++++++---
+ hmp.c            |   5 ++-
+ qapi-schema.json |  25 ++++++++++-
+ qmp-commands.hx  |   7 ++-
+ 4 files changed, 158 insertions(+), 10 deletions(-)
+
+diff --git a/dump.c b/dump.c
+index fc5530f..c0d5877 100644
+--- a/dump.c
++++ b/dump.c
+@@ -1449,6 +1449,64 @@ out:
+     return ret;
+ }
+ 
++static int create_kdump_vmcore(DumpState *s)
++{
++    int ret;
++
++    /*
++     * the kdump-compressed format is:
++     *                                               File offset
++     *  +------------------------------------------+ 0x0
++     *  |    main header (struct disk_dump_header) |
++     *  |------------------------------------------+ block 1
++     *  |    sub header (struct kdump_sub_header)  |
++     *  |------------------------------------------+ block 2
++     *  |            1st-dump_bitmap               |
++     *  |------------------------------------------+ block 2 + X blocks
++     *  |            2nd-dump_bitmap               | (aligned by block)
++     *  |------------------------------------------+ block 2 + 2 * X blocks
++     *  |  page desc for pfn 0 (struct page_desc)  | (aligned by block)
++     *  |  page desc for pfn 1 (struct page_desc)  |
++     *  |                    :                     |
++     *  |------------------------------------------| (not aligned by block)
++     *  |         page data (pfn 0)                |
++     *  |         page data (pfn 1)                |
++     *  |                    :                     |
++     *  +------------------------------------------+
++     */
++
++    ret = write_start_flat_header(s->fd);
++    if (ret < 0) {
++        dump_error(s, "dump: failed to write start flat header.\n");
++        return -1;
++    }
++
++    ret = write_dump_header(s);
++    if (ret < 0) {
++        return -1;
++    }
++
++    ret = write_dump_bitmap(s);
++    if (ret < 0) {
++        return -1;
++    }
++
++    ret = write_dump_pages(s);
++    if (ret < 0) {
++        return -1;
++    }
++
++    ret = write_end_flat_header(s->fd);
++    if (ret < 0) {
++        dump_error(s, "dump: failed to write end flat header.\n");
++        return -1;
++    }
++
++    dump_completed(s);
++
++    return 0;
++}
++
+ static ram_addr_t get_start_block(DumpState *s)
+ {
+     GuestPhysBlock *block;
+@@ -1485,7 +1543,8 @@ static void get_max_mapnr(DumpState *s)
+     s->max_mapnr = paddr_to_pfn(last_block->target_end, s->page_shift);
+ }
+ 
+-static int dump_init(DumpState *s, int fd, bool paging, bool has_filter,
++static int dump_init(DumpState *s, int fd, bool has_format,
++                     DumpGuestMemoryFormat format, bool paging, bool has_filter,
+                      int64_t begin, int64_t length, Error **errp)
+ {
+     CPUArchState *env;
+@@ -1493,6 +1552,11 @@ static int dump_init(DumpState *s, int fd, bool paging, bool has_filter,
+     Error *err = NULL;
+     int ret;
+ 
++    /* kdump-compressed is conflict with paging and filter */
++    if (has_format && format != DUMP_GUEST_MEMORY_FORMAT_ELF) {
++        assert(!paging && !has_filter);
++    }
++
+     if (runstate_is_running()) {
+         vm_stop(RUN_STATE_SAVE_VM);
+         s->resume = true;
+@@ -1563,6 +1627,28 @@ static int dump_init(DumpState *s, int fd, bool paging, bool has_filter,
+     tmp = DIV_ROUND_UP(DIV_ROUND_UP(s->max_mapnr, CHAR_BIT), s->page_size);
+     s->len_dump_bitmap = tmp * s->page_size;
+ 
++    /* init for kdump-compressed format */
++    if (has_format && format != DUMP_GUEST_MEMORY_FORMAT_ELF) {
++        switch (format) {
++        case DUMP_GUEST_MEMORY_FORMAT_KDUMP_ZLIB:
++            s->flag_compress = DUMP_DH_COMPRESSED_ZLIB;
++            break;
++
++        case DUMP_GUEST_MEMORY_FORMAT_KDUMP_LZO:
++            s->flag_compress = DUMP_DH_COMPRESSED_LZO;
++            break;
++
++        case DUMP_GUEST_MEMORY_FORMAT_KDUMP_SNAPPY:
++            s->flag_compress = DUMP_DH_COMPRESSED_SNAPPY;
++            break;
++
++        default:
++            s->flag_compress = 0;
++        }
++
++        return 0;
++    }
++
+     if (s->has_filter) {
+         memory_mapping_filter(&s->list, s->begin, s->length);
+     }
+@@ -1622,14 +1708,25 @@ cleanup:
+ }
+ 
+ void qmp_dump_guest_memory(bool paging, const char *file, bool has_begin,
+-                           int64_t begin, bool has_length, int64_t length,
+-                           Error **errp)
++                           int64_t begin, bool has_length,
++                           int64_t length, bool has_format,
++                           DumpGuestMemoryFormat format, Error **errp)
+ {
+     const char *p;
+     int fd = -1;
+     DumpState *s;
+     int ret;
+ 
++    /*
++     * kdump-compressed format need the whole memory dumped, so paging or
++     * filter is not supported here.
++     */
++    if ((has_format && format != DUMP_GUEST_MEMORY_FORMAT_ELF) &&
++        (paging || has_begin || has_length)) {
++        error_setg(errp, "kdump-compressed format doesn't support paging or "
++                         "filter");
++        return;
++    }
+     if (has_begin && !has_length) {
+         error_set(errp, QERR_MISSING_PARAMETER, "length");
+         return;
+@@ -1639,6 +1736,21 @@ void qmp_dump_guest_memory(bool paging, const char *file, bool has_begin,
+         return;
+     }
+ 
++    /* check whether lzo/snappy is supported */
++#ifndef CONFIG_LZO
++    if (has_format && format == DUMP_GUEST_MEMORY_FORMAT_KDUMP_LZO) {
++        error_setg(errp, "kdump-lzo is not available now");
++        return;
++    }
++#endif
++
++#ifndef CONFIG_SNAPPY
++    if (has_format && format == DUMP_GUEST_MEMORY_FORMAT_KDUMP_SNAPPY) {
++        error_setg(errp, "kdump-snappy is not available now");
++        return;
++    }
++#endif
++
+ #if !defined(WIN32)
+     if (strstart(file, "fd:", &p)) {
+         fd = monitor_get_fd(cur_mon, p, errp);
+@@ -1663,14 +1775,21 @@ void qmp_dump_guest_memory(bool paging, const char *file, bool has_begin,
+ 
+     s = g_malloc0(sizeof(DumpState));
+ 
+-    ret = dump_init(s, fd, paging, has_begin, begin, length, errp);
++    ret = dump_init(s, fd, has_format, format, paging, has_begin,
++                    begin, length, errp);
+     if (ret < 0) {
+         g_free(s);
+         return;
+     }
+ 
+-    if (create_vmcore(s) < 0 && !error_is_set(s->errp)) {
+-        error_set(errp, QERR_IO_ERROR);
++    if (has_format && format != DUMP_GUEST_MEMORY_FORMAT_ELF) {
++        if (create_kdump_vmcore(s) < 0 && !error_is_set(s->errp)) {
++            error_set(errp, QERR_IO_ERROR);
++        }
++    } else {
++        if (create_vmcore(s) < 0 && !error_is_set(s->errp)) {
++            error_set(errp, QERR_IO_ERROR);
++        }
+     }
+ 
+     g_free(s);
+diff --git a/hmp.c b/hmp.c
+index b723b26..1805926 100644
+--- a/hmp.c
++++ b/hmp.c
+@@ -1195,8 +1195,11 @@ void hmp_dump_guest_memory(Monitor *mon, const QDict *qdict)
+     const char *file = qdict_get_str(qdict, "filename");
+     bool has_begin = qdict_haskey(qdict, "begin");
+     bool has_length = qdict_haskey(qdict, "length");
++    /* kdump-compressed format is not supported for HMP */
++    bool has_format = false;
+     int64_t begin = 0;
+     int64_t length = 0;
++    enum DumpGuestMemoryFormat dump_format = DUMP_GUEST_MEMORY_FORMAT_ELF;
+     char *prot;
+ 
+     if (has_begin) {
+@@ -1209,7 +1212,7 @@ void hmp_dump_guest_memory(Monitor *mon, const QDict *qdict)
+     prot = g_strconcat("file:", file, NULL);
+ 
+     qmp_dump_guest_memory(paging, prot, has_begin, begin, has_length, length,
+-                          &errp);
++                          has_format, dump_format, &errp);
+     hmp_handle_error(mon, &errp);
+     g_free(prot);
+ }
+diff --git a/qapi-schema.json b/qapi-schema.json
+index d3d4e57..8f81c76 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -2578,6 +2578,24 @@
+ { 'command': 'device_del', 'data': {'id': 'str'} }
+ 
+ ##
++# @DumpGuestMemoryFormat:
++#
++# An enumeration of guest-memory-dump's format.
++#
++# @elf: elf format
++#
++# @kdump-zlib: kdump-compressed format with zlib-compressed
++#
++# @kdump-lzo: kdump-compressed format with lzo-compressed
++#
++# @kdump-snappy: kdump-compressed format with snappy-compressed
++#
++# Since: 2.0
++##
++{ 'enum': 'DumpGuestMemoryFormat',
++  'data': [ 'elf', 'kdump-zlib', 'kdump-lzo', 'kdump-snappy' ] }
++
++##
+ # @dump-guest-memory
+ #
+ # Dump guest's memory to vmcore. It is a synchronous operation that can take
+@@ -2613,13 +2631,18 @@
+ #          want to dump all guest's memory, please specify the start @begin
+ #          and @length
+ #
++# @format: #optional if specified, the format of guest memory dump. But non-elf
++#          format is conflict with paging and filter, ie. @paging, @begin and
++#          @length is not allowed to be specified with non-elf @format at the
++#          same time (since 2.0)
++#
+ # Returns: nothing on success
+ #
+ # Since: 1.2
+ ##
+ { 'command': 'dump-guest-memory',
+   'data': { 'paging': 'bool', 'protocol': 'str', '*begin': 'int',
+-            '*length': 'int' } }
++            '*length': 'int', '*format': 'DumpGuestMemoryFormat' } }
+ 
+ ##
+ # @netdev_add:
+diff --git a/qmp-commands.hx b/qmp-commands.hx
+index e164ff8..61aa3bf 100644
+--- a/qmp-commands.hx
++++ b/qmp-commands.hx
+@@ -885,8 +885,8 @@ EQMP
+ 
+     {
+         .name       = "dump-guest-memory",
+-        .args_type  = "paging:b,protocol:s,begin:i?,end:i?",
+-        .params     = "-p protocol [begin] [length]",
++        .args_type  = "paging:b,protocol:s,begin:i?,end:i?,format:s?",
++        .params     = "-p protocol [begin] [length] [format]",
+         .help       = "dump guest memory to file",
+         .user_print = monitor_user_noop,
+         .mhandler.cmd_new = qmp_marshal_input_dump_guest_memory,
+@@ -907,6 +907,9 @@ Arguments:
+            with length together (json-int)
+ - "length": the memory size, in bytes. It's optional, and should be specified
+             with begin together (json-int)
++- "format": the format of guest memory dump. It's optional, and can be
++            elf|kdump-zlib|kdump-lzo|kdump-snappy, but non-elf formats will
++            conflict with paging and filter, ie. begin and length (json-string)
+ 
+ Example:
+ 
+-- 
+1.8.3.1
+

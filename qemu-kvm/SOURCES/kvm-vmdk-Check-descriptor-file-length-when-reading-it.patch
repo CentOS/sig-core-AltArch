@@ -1,0 +1,56 @@
+From 86c71987b64382e1177f86e6bc00bfc19e20082d Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 15 Feb 2016 09:28:18 +0100
+Subject: [PATCH 05/18] vmdk: Check descriptor file length when reading it
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1455528511-9357-6-git-send-email-famz@redhat.com>
+Patchwork-id: 69171
+O-Subject: [RHEL-7.3 qemu-kvm PATCH 05/18] vmdk: Check descriptor file length when reading it
+Bugzilla: 1299250
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+BZ: https://bugzilla.redhat.com/show_bug.cgi?id=1299250
+
+Since a too small file cannot be a valid VMDK image, and also since the
+buffer's first 4 bytes will be unconditionally examined by
+vmdk_open_sparse, let's error out the small file case to be clear.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Don Koch <dkoch@verizon.com>
+Message-id: 1417649314-13704-5-git-send-email-famz@redhat.com
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 03c3359dfc490eaf922f88955d6a8cc51a37ce92)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vmdk.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 3dfbd41..db3cdc0 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -559,6 +559,14 @@ static char *vmdk_read_desc(BlockDriverState *file, uint64_t desc_offset,
+         return NULL;
+     }
+ 
++    if (size < 4) {
++        /* Both descriptor file and sparse image must be much larger than 4
++         * bytes, also callers of vmdk_read_desc want to compare the first 4
++         * bytes with VMDK4_MAGIC, let's error out if less is read. */
++        error_setg(errp, "File is too small, not a valid image");
++        return NULL;
++    }
++
+     size = MIN(size, (1 << 20) - 1);  /* avoid unbounded allocation */
+     buf = g_malloc(size + 1);
+ 
+-- 
+1.8.3.1
+

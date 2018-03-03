@@ -1,0 +1,66 @@
+From 2160ddf46b85b84d271e450383151ff288958622 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Fri, 11 Jul 2014 14:20:41 +0200
+Subject: [PATCH 08/43] usb: parallelize usb3 streams
+
+Message-id: <1405088470-24115-9-git-send-email-kraxel@redhat.com>
+Patchwork-id: 59844
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 08/37] usb: parallelize usb3 streams
+Bugzilla: 1075846
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+usb3 bulk endpoints with streams are implicitly pipelined now,
+so the requests will actually be processed in parallel.  Also
+allow them to complete out-of-order.
+
+Fixes stalls in the uas driver.
+
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit c96c41ed0d38d68a6c8b6f84751afebafeae31be)
+---
+ hw/usb/core.c | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/core.c | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/hw/usb/core.c b/hw/usb/core.c
+index 05948ca..31960c2 100644
+--- a/hw/usb/core.c
++++ b/hw/usb/core.c
+@@ -403,7 +403,7 @@ void usb_handle_packet(USBDevice *dev, USBPacket *p)
+         p->ep->halted = false;
+     }
+ 
+-    if (QTAILQ_EMPTY(&p->ep->queue) || p->ep->pipeline) {
++    if (QTAILQ_EMPTY(&p->ep->queue) || p->ep->pipeline || p->stream) {
+         usb_process_one(p);
+         if (p->status == USB_RET_ASYNC) {
+             /* hcd drivers cannot handle async for isoc */
+@@ -420,7 +420,8 @@ void usb_handle_packet(USBDevice *dev, USBPacket *p)
+              * When pipelining is enabled usb-devices must always return async,
+              * otherwise packets can complete out of order!
+              */
+-            assert(!p->ep->pipeline || QTAILQ_EMPTY(&p->ep->queue));
++            assert(p->stream || !p->ep->pipeline ||
++                   QTAILQ_EMPTY(&p->ep->queue));
+             if (p->status != USB_RET_NAK) {
+                 usb_packet_set_state(p, USB_PACKET_COMPLETE);
+             }
+@@ -434,7 +435,7 @@ void usb_packet_complete_one(USBDevice *dev, USBPacket *p)
+ {
+     USBEndpoint *ep = p->ep;
+ 
+-    assert(QTAILQ_FIRST(&ep->queue) == p);
++    assert(p->stream || QTAILQ_FIRST(&ep->queue) == p);
+     assert(p->status != USB_RET_ASYNC && p->status != USB_RET_NAK);
+ 
+     if (p->status != USB_RET_SUCCESS ||
+-- 
+1.8.3.1
+

@@ -1,0 +1,48 @@
+From c69bcffde2abc36576ff8b9d60f721e1261fec32 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Tue, 14 Mar 2017 08:52:53 +0100
+Subject: [PATCH 20/24] usb: ccid: check ccid apdu length
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1489481576-26911-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 74286
+O-Subject: [RHEL-7.4 qemu-kvm PATCH 1/4] usb: ccid: check ccid apdu length
+Bugzilla: 1419818
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Prasad J Pandit <pjp@fedoraproject.org>
+
+CCID device emulator uses Application Protocol Data Units(APDU)
+to exchange command and responses to and from the host.
+The length in these units couldn't be greater than 65536. Add
+check to ensure the same. It'd also avoid potential integer
+overflow in emulated_apdu_from_guest.
+
+Reported-by: Li Qiang <liqiang6-s@360.cn>
+Signed-off-by: Prasad J Pandit <pjp@fedoraproject.org>
+Message-id: 20170202192228.10847-1-ppandit@redhat.com
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit c7dfbf322595ded4e70b626bf83158a9f3807c6a)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/dev-smartcard-reader.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hw/usb/dev-smartcard-reader.c b/hw/usb/dev-smartcard-reader.c
+index 0e666e1..0e0b363 100644
+--- a/hw/usb/dev-smartcard-reader.c
++++ b/hw/usb/dev-smartcard-reader.c
+@@ -965,7 +965,7 @@ static void ccid_on_apdu_from_guest(USBCCIDState *s, CCID_XferBlock *recv)
+     DPRINTF(s, 1, "%s: seq %d, len %d\n", __func__,
+                 recv->hdr.bSeq, len);
+     ccid_add_pending_answer(s, (CCID_Header *)recv);
+-    if (s->card) {
++    if (s->card && len <= BULK_OUT_DATA_SIZE) {
+         ccid_card_apdu_from_guest(s->card, recv->abData, len);
+     } else {
+         DPRINTF(s, D_WARN, "warning: discarded apdu\n");
+-- 
+1.8.3.1
+

@@ -1,0 +1,64 @@
+From fa1aaeeab2f10d7f107dd45a2c06e40e71bde1c3 Mon Sep 17 00:00:00 2001
+From: "wexu@redhat.com" <wexu@redhat.com>
+Date: Wed, 21 Dec 2016 06:04:24 +0100
+Subject: [PATCH 3/4] net: check packet payload length
+
+RH-Author: wexu@redhat.com
+Message-id: <1482300264-29708-2-git-send-email-wexu@redhat.com>
+Patchwork-id: 73088
+O-Subject: [RHEL-7.4/7.3.z qemu-kvm Patch v2] net: check packet payload length
+Bugzilla: 1398218
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Prasad J Pandit <pjp@fedoraproject.org>
+
+While computing IP checksum, 'net_checksum_calculate' reads
+payload length from the packet. It could exceed the given 'data'
+buffer size. Add a check to avoid it.
+
+This patch is to fix CVE-2016-2857.
+https://access.redhat.com/security/cve/CVE-2016-2857
+
+Reported-by: Liu Ling <liuling-it@360.cn>
+Signed-off-by: Prasad J Pandit <pjp@fedoraproject.org>
+Signed-off-by: Jason Wang <jasowang@redhat.com>
+(cherry picked from commit 362786f14a753d8a5256ef97d7c10ed576d6572b)
+Signed-off-by: Wei Xu <wexu@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ net/checksum.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/net/checksum.c b/net/checksum.c
+index 14c0855..0942437 100644
+--- a/net/checksum.c
++++ b/net/checksum.c
+@@ -59,6 +59,11 @@ void net_checksum_calculate(uint8_t *data, int length)
+     int hlen, plen, proto, csum_offset;
+     uint16_t csum;
+ 
++    /* Ensure data has complete L2 & L3 headers. */
++    if (length < 14 + 20) {
++        return;
++    }
++
+     if ((data[14] & 0xf0) != 0x40)
+ 	return; /* not IPv4 */
+     hlen  = (data[14] & 0x0f) * 4;
+@@ -76,8 +81,9 @@ void net_checksum_calculate(uint8_t *data, int length)
+ 	return;
+     }
+ 
+-    if (plen < csum_offset+2)
+-	return;
++    if (plen < csum_offset + 2 || 14 + hlen + plen > length) {
++        return;
++    }
+ 
+     data[14+hlen+csum_offset]   = 0;
+     data[14+hlen+csum_offset+1] = 0;
+-- 
+1.8.3.1
+

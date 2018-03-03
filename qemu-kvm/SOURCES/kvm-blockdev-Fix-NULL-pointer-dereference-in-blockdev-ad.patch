@@ -1,0 +1,53 @@
+From 55355b00b588e875583e2463beac3d5d1b53ac35 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Thu, 23 Oct 2014 10:10:07 +0200
+Subject: [PATCH 04/19] blockdev: Fix NULL pointer dereference in blockdev-add
+
+Message-id: <1414059011-15516-5-git-send-email-kwolf@redhat.com>
+Patchwork-id: 61838
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v2 4/8] blockdev: Fix NULL pointer dereference in blockdev-add
+Bugzilla: 1088176
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+If aio=native, we check that cache.direct is set as well. If however
+cache wasn't specified at all, qemu just segfaulted.
+
+The old condition didn't make any sense anyway because it effectively
+only checked for the default cache mode case, but not for an explicitly
+set cache.direct=off mode.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit c6e0bd9b7037937aafeb1d34ec17975a7d685bb7)
+
+Trivial bonus bugfix so that the backported test 087 won't fail.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index a2d5f02..1ac8804 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -1810,8 +1810,10 @@ void qmp_blockdev_add(BlockdevOptions *options, Error **errp)
+      *
+      * For now, simply forbidding the combination for all drivers will do. */
+     if (options->has_aio && options->aio == BLOCKDEV_AIO_OPTIONS_NATIVE) {
+-        bool direct = options->cache->has_direct && options->cache->direct;
+-        if (!options->has_cache && !direct) {
++        bool direct = options->has_cache &&
++                      options->cache->has_direct &&
++                      options->cache->direct;
++        if (!direct) {
+             error_setg(errp, "aio=native requires cache.direct=true");
+             goto fail;
+         }
+-- 
+1.8.3.1
+

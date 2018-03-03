@@ -1,0 +1,103 @@
+From 4cdc106eb2e23157acc594b8318a96803df408d0 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 18 Sep 2013 09:31:02 +0200
+Subject: [PATCH 18/29] exec: Fix Xen RAM allocation with unusual options
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1379496669-22778-2-git-send-email-armbru@redhat.com>
+Patchwork-id: 54420
+O-Subject: [PATCH 7.0 qemu-kvm 1/8] exec: Fix Xen RAM allocation with unusual options
+Bugzilla: 1009328
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Issues:
+
+* We try to obey -mem-path even though it can't work with Xen.
+
+* To implement -machine mem-merge, we call
+  memory_try_enable_merging(new_block->host, size).  But with Xen,
+  new_block->host remains null.  Oops.
+
+Fix by separating Xen allocation from normal allocation.
+
+Acked-by: Stefano Stabellini <stefano.stabellini@eu.citrix.com>
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Acked-by: Laszlo Ersek <lersek@redhat.com>
+Message-id: 1375276272-15988-2-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <anthony@codemonkey.ws>
+(cherry picked from commit dfeaf2abc73429171ecc5b0b26ac4e5a24c047fc)
+---
+ exec.c | 20 ++++++++++++--------
+ 1 file changed, 12 insertions(+), 8 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ exec.c |   20 ++++++++++++--------
+ 1 files changed, 12 insertions(+), 8 deletions(-)
+
+diff --git a/exec.c b/exec.c
+index ee22b9b..914d066 100644
+--- a/exec.c
++++ b/exec.c
+@@ -1053,6 +1053,12 @@ ram_addr_t qemu_ram_alloc_from_ptr(ram_addr_t size, void *host,
+     if (host) {
+         new_block->host = host;
+         new_block->flags |= RAM_PREALLOC_MASK;
++    } else if (xen_enabled()) {
++        if (mem_path) {
++            fprintf(stderr, "-mem-path not supported with Xen\n");
++            exit(1);
++        }
++        xen_ram_alloc(new_block->offset, size, mr);
+     } else {
+         if (mem_path) {
+ #if defined (__linux__) && !defined(TARGET_S390X)
+@@ -1066,9 +1072,7 @@ ram_addr_t qemu_ram_alloc_from_ptr(ram_addr_t size, void *host,
+             exit(1);
+ #endif
+         } else {
+-            if (xen_enabled()) {
+-                xen_ram_alloc(new_block->offset, size, mr);
+-            } else if (kvm_enabled()) {
++            if (kvm_enabled()) {
+                 /* some s390/kvm configurations have special constraints */
+                 new_block->host = kvm_ram_alloc(size);
+             } else {
+@@ -1146,6 +1150,8 @@ void qemu_ram_free(ram_addr_t addr)
+             ram_list.version++;
+             if (block->flags & RAM_PREALLOC_MASK) {
+                 ;
++            } else if (xen_enabled()) {
++                xen_invalidate_map_cache_entry(block->host);
+             } else if (mem_path) {
+ #if defined (__linux__) && !defined(TARGET_S390X)
+                 if (block->fd) {
+@@ -1158,11 +1164,7 @@ void qemu_ram_free(ram_addr_t addr)
+                 abort();
+ #endif
+             } else {
+-                if (xen_enabled()) {
+-                    xen_invalidate_map_cache_entry(block->host);
+-                } else {
+-                    qemu_anon_ram_free(block->host, block->length);
+-                }
++                qemu_anon_ram_free(block->host, block->length);
+             }
+             g_free(block);
+             break;
+@@ -1186,6 +1188,8 @@ void qemu_ram_remap(ram_addr_t addr, ram_addr_t length)
+             vaddr = block->host + offset;
+             if (block->flags & RAM_PREALLOC_MASK) {
+                 ;
++            } else if (xen_enabled()) {
++                abort();
+             } else {
+                 flags = MAP_FIXED;
+                 munmap(vaddr, length);
+-- 
+1.7.1
+

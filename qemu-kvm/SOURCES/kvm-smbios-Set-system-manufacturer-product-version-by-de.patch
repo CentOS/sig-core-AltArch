@@ -1,0 +1,149 @@
+From 1123ee2cf18b526b19fc3770f20c91b1ac409cf7 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Sat, 2 Nov 2013 10:01:26 +0100
+Subject: [PATCH 26/29] smbios: Set system manufacturer, product & version by default
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1383386488-29789-10-git-send-email-armbru@redhat.com>
+Patchwork-id: 55245
+O-Subject: [PATCH 7.0 qemu-kvm 09/11] smbios: Set system manufacturer, product & version by default
+Bugzilla: 994490
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Currently, we get SeaBIOS defaults: manufacturer Bochs, product Bochs,
+no version.  Best SeaBIOS can do, but we can provide better defaults:
+manufacturer QEMU, product & version taken from QEMUMachine desc and
+name.
+
+Take care to do this only for new machine types, of course.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+(cherry picked from pending upstream submission)
+
+Conflicts:
+	hw/i386/pc_piix.c
+	hw/i386/pc_q35.c
+---
+ hw/i386/pc_piix.c        |  7 +++++++
+ hw/i386/pc_q35.c         |  7 +++++++
+ hw/i386/smbios.c         | 14 ++++++++++++++
+ include/hw/i386/smbios.h |  2 ++
+ 4 files changed, 30 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/pc_piix.c        |    7 +++++++
+ hw/i386/pc_q35.c         |    7 +++++++
+ hw/i386/smbios.c         |   14 ++++++++++++++
+ include/hw/i386/smbios.h |    2 ++
+ 4 files changed, 30 insertions(+), 0 deletions(-)
+
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index 65f7f3a..e8fe607 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -27,6 +27,7 @@
+ #include "hw/hw.h"
+ #include "hw/i386/pc.h"
+ #include "hw/i386/apic.h"
++#include "hw/i386/smbios.h"
+ #include "hw/pci/pci.h"
+ #include "hw/pci/pci_ids.h"
+ #include "hw/usb.h"
+@@ -57,6 +58,7 @@ static const int ide_iobase2[MAX_IDE_BUS] = { 0x3f6, 0x376 };
+ static const int ide_irq[MAX_IDE_BUS] = { 14, 15 };
+ 
+ static bool has_pvpanic = true;
++static bool smbios_type1_defaults = true;
+ 
+ /* PC hardware initialisation */
+ static void pc_init1(QEMUMachineInitArgs *args,
+@@ -113,6 +115,11 @@ static void pc_init1(QEMUMachineInitArgs *args,
+         rom_memory = system_memory;
+     }
+ 
++    if (smbios_type1_defaults) {
++        smbios_set_type1_defaults("QEMU", args->machine->desc,
++                                  args->machine->name);
++    }
++
+     /* allocate ram and load rom/bios */
+     if (!xen_enabled()) {
+         fw_cfg = pc_memory_init(system_memory,
+diff --git a/hw/i386/pc_q35.c b/hw/i386/pc_q35.c
+index 99d3a10..3ef854a 100644
+--- a/hw/i386/pc_q35.c
++++ b/hw/i386/pc_q35.c
+@@ -38,6 +38,7 @@
+ #include "hw/pci-host/q35.h"
+ #include "exec/address-spaces.h"
+ #include "hw/i386/ich9.h"
++#include "hw/i386/smbios.h"
+ #include "hw/ide/pci.h"
+ #include "hw/ide/ahci.h"
+ #include "hw/usb.h"
+@@ -47,6 +48,7 @@
+ #define MAX_SATA_PORTS     6
+ 
+ static bool has_pvpanic = true;
++static bool smbios_type1_defaults = true;
+ 
+ /* PC hardware initialisation */
+ static void pc_q35_init(QEMUMachineInitArgs *args)
+@@ -99,6 +101,11 @@ static void pc_q35_init(QEMUMachineInitArgs *args)
+         rom_memory = get_system_memory();
+     }
+ 
++    if (smbios_type1_defaults) {
++        smbios_set_type1_defaults("QEMU", args->machine->desc,
++                                  args->machine->name);
++    }
++
+     /* allocate ram and load rom/bios */
+     if (!xen_enabled()) {
+         pc_memory_init(get_system_memory(),
+diff --git a/hw/i386/smbios.c b/hw/i386/smbios.c
+index d3f1ee6..e8f41ad 100644
+--- a/hw/i386/smbios.c
++++ b/hw/i386/smbios.c
+@@ -256,6 +256,20 @@ static void smbios_build_type_1_fields(void)
+     }
+ }
+ 
++void smbios_set_type1_defaults(const char *manufacturer,
++                               const char *product, const char *version)
++{
++    if (!type1.manufacturer) {
++        type1.manufacturer = manufacturer;
++    }
++    if (!type1.product) {
++        type1.product = product;
++    }
++    if (!type1.version) {
++        type1.version = version;
++    }
++}
++
+ uint8_t *smbios_get_table(size_t *length)
+ {
+     if (!smbios_immutable) {
+diff --git a/include/hw/i386/smbios.h b/include/hw/i386/smbios.h
+index b08ec71..18fb970 100644
+--- a/include/hw/i386/smbios.h
++++ b/include/hw/i386/smbios.h
+@@ -16,6 +16,8 @@
+ #include "qemu/option.h"
+ 
+ void smbios_entry_add(QemuOpts *opts);
++void smbios_set_type1_defaults(const char *manufacturer,
++                               const char *product, const char *version);
+ uint8_t *smbios_get_table(size_t *length);
+ 
+ /*
+-- 
+1.7.1
+

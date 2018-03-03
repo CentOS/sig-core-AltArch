@@ -1,0 +1,124 @@
+From 8e79bb0e25c48354f895077b206ded171507ba55 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Fri, 19 Sep 2014 03:18:59 +0200
+Subject: [PATCH 20/20] block: add __com.redhat_change-backing-file qmp command
+
+Message-id: <c7fc7cefc7588dca2d02b0cc0051cdbdadbf20ac.1411096194.git.jcody@redhat.com>
+Patchwork-id: 61313
+O-Subject: [PATCH qemu-kvm-rhev RHEL7.0.z 4/4] block: add __com.redhat_change-backing-file qmp command
+Bugzilla: 1122925
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Eric Blake <eblake@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Upstream, the QAPI command 'change-backing-file' was added in a patch,
+as part of a series that allowed libvirt to specify backing file
+names in block-commit and block-stream.
+
+This standalone QAPI (change-backing-file) is not currently in use by
+libvirt, except as a witness that QEMU has the ability to change backing
+files in block-commit and block-stream.
+
+However, change-backing-file also relies on node-names functionality,
+which is not present in RHEL7.0.  The backport of node-names would also
+be fairly instrusive, especially for a command that is not going to be
+used beyond verifying its presence.
+
+This downstream patch adds __com.redhat_change-backing-file, which
+accepts the same arguments as its upstream namesake.  However, no action
+is performed, and the command always returns QERR_UNSUPPORTED.
+
+This is not placed inside the RHEL/RHEV differentiation commands, as it
+is not a live block operation (upstream or the dummy version), and
+returns synchronously.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev.c       |    8 ++++++++
+ qapi-schema.json |   16 ++++++++++++++++
+ qmp-commands.hx  |   22 ++++++++++++++++++++++
+ 3 files changed, 46 insertions(+), 0 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index 09ef3f7..7d4a53f 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -1782,6 +1782,14 @@ void qmp_block_job_complete(const char *device, Error **errp)
+     block_job_complete(job, errp);
+ }
+ 
++void qmp___com_redhat_change_backing_file(const char *device,
++                                          const char *image_node_name,
++                                          const char *backing_file,
++                                          Error **errp)
++{
++    error_set(errp, QERR_UNSUPPORTED);
++}
++
+ void qmp_blockdev_add(BlockdevOptions *options, Error **errp)
+ {
+     QmpOutputVisitor *ov = qmp_output_visitor_new();
+diff --git a/qapi-schema.json b/qapi-schema.json
+index 40bd2a6..d3d4e57 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -1832,6 +1832,22 @@
+   'data': {'command-line': 'str', '*cpu-index': 'int'},
+   'returns': 'str' }
+ 
++##
++# @__com.redhat_change-backing-file
++#
++# This is a placeholder function, that exists as a witness for libvirt
++# that the ability to specify backing files in block-commit and block-stream
++# exists in this version of QEMU.
++#
++# It has the same argument requirements as the upstream 'change-backing-file',
++# but performs no action.
++#
++# Returns: NotSupported
++##
++{ 'command': '__com.redhat_change-backing-file',
++  'data': { 'device': 'str', 'image-node-name': 'str',
++            'backing-file': 'str' } }
++
+ #_rhev-only CONFIG_LIVE_BLOCK_OPS
+ ##
+ # @block-commit
+diff --git a/qmp-commands.hx b/qmp-commands.hx
+index c07cf8a..e164ff8 100644
+--- a/qmp-commands.hx
++++ b/qmp-commands.hx
+@@ -1241,6 +1241,28 @@ EQMP
+ #endif
+ 
+     {
++        .name       = RFQDN_REDHAT "change-backing-file",
++        .args_type  = "device:s,image-node-name:s,backing-file:s",
++        .mhandler.cmd_new = qmp_marshal_input___com_redhat_change_backing_file,
++    },
++
++SQMP
++@__com.redhat_change-backing-file
++-------------------
++@__com.redhat_change-backing-file
++
++This is a placeholder function, that exists as a witness for libvirt
++that the ability to specify backing files block-commit and block-stream
++exists in this version of QEMU.
++
++It has the same argument requirements as the upstream 'change-backing-file',
++but performs no action.
++
++Returns: NotSupported
++
++EQMP
++
++    {
+         .name       = "balloon",
+         .args_type  = "value:M",
+         .mhandler.cmd_new = qmp_marshal_input_balloon,
+-- 
+1.7.1
+

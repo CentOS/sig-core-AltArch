@@ -1,0 +1,81 @@
+From 4bd5352922b192e3442671b2015633720253a3e4 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 9 Sep 2013 14:28:04 +0200
+Subject: [PATCH 13/38] qapi.py: Avoid code duplication
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1378736903-18489-14-git-send-email-kwolf@redhat.com>
+Patchwork-id: 54200
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 13/32] qapi.py: Avoid code duplication
+Bugzilla: 1005818
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Bugzilla: 1005818
+
+The code that interprets the read JSON expression and appends types to
+the respective global variables was duplicated. We can avoid that by
+splitting off the part that reads from the file.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Michael Roth <mdroth@linux.vnet.ibm.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit bd9927fee4e63b451b4ef67a4c49729070d8b05d)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ scripts/qapi.py | 18 +++++++++---------
+ 1 file changed, 9 insertions(+), 9 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ scripts/qapi.py |   18 +++++++++---------
+ 1 files changed, 9 insertions(+), 9 deletions(-)
+
+diff --git a/scripts/qapi.py b/scripts/qapi.py
+index afc5f32..daedaea 100644
+--- a/scripts/qapi.py
++++ b/scripts/qapi.py
+@@ -72,10 +72,8 @@ def parse(tokens):
+ def evaluate(string):
+     return parse(map(lambda x: x, tokenize(string)))[0]
+ 
+-def parse_schema(fp):
+-    exprs = []
++def get_expr(fp):
+     expr = ''
+-    expr_eval = None
+ 
+     for line in fp:
+         if line.startswith('#') or line == '\n':
+@@ -84,18 +82,20 @@ def parse_schema(fp):
+         if line.startswith(' '):
+             expr += line
+         elif expr:
+-            expr_eval = evaluate(expr)
+-            if expr_eval.has_key('enum'):
+-                add_enum(expr_eval['enum'])
+-            elif expr_eval.has_key('union'):
+-                add_enum('%sKind' % expr_eval['union'])
+-            exprs.append(expr_eval)
++            yield expr
+             expr = line
+         else:
+             expr += line
+ 
+     if expr:
++        yield expr
++
++def parse_schema(fp):
++    exprs = []
++
++    for expr in get_expr(fp):
+         expr_eval = evaluate(expr)
++
+         if expr_eval.has_key('enum'):
+             add_enum(expr_eval['enum'])
+         elif expr_eval.has_key('union'):
+-- 
+1.7.1
+

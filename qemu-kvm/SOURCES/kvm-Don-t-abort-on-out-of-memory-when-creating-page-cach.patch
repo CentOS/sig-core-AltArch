@@ -1,0 +1,97 @@
+From f58c7c6f3574f28df445c67a378aec5a33285374 Mon Sep 17 00:00:00 2001
+From: Orit Wasserman <owasserm@redhat.com>
+Date: Tue, 11 Feb 2014 15:32:36 +0100
+Subject: [PATCH 15/28] Don't abort on out of memory when creating page cache
+
+RH-Author: Orit Wasserman <owasserm@redhat.com>
+Message-id: <1392132757-18587-3-git-send-email-owasserm@redhat.com>
+Patchwork-id: 57210
+O-Subject: [RHEL7 qemu-kvm PATCH 2/3] Don't abort on out of memory when creating page cache
+Bugzilla: 1047448
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Signed-off-by: Orit Wasserman <owasserm@redhat.com>
+Reviewed-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit a17b2fd3580d1da96e806c8b58e61255e8c57577)
+---
+ arch_init.c  | 18 ++++++++++++++++--
+ page_cache.c | 18 ++++++++++++++----
+ 2 files changed, 30 insertions(+), 6 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ arch_init.c  |   18 ++++++++++++++++--
+ page_cache.c |   18 ++++++++++++++----
+ 2 files changed, 30 insertions(+), 6 deletions(-)
+
+diff --git a/arch_init.c b/arch_init.c
+index c3207bf..fc0f569 100644
+--- a/arch_init.c
++++ b/arch_init.c
+@@ -659,8 +659,22 @@ static int ram_save_setup(QEMUFile *f, void *opaque)
+             DPRINTF("Error creating cache\n");
+             return -1;
+         }
+-        XBZRLE.encoded_buf = g_malloc0(TARGET_PAGE_SIZE);
+-        XBZRLE.current_buf = g_malloc(TARGET_PAGE_SIZE);
++
++        /* We prefer not to abort if there is no memory */
++        XBZRLE.encoded_buf = g_try_malloc0(TARGET_PAGE_SIZE);
++        if (!XBZRLE.encoded_buf) {
++            DPRINTF("Error allocating encoded_buf\n");
++            return -1;
++        }
++
++        XBZRLE.current_buf = g_try_malloc(TARGET_PAGE_SIZE);
++        if (!XBZRLE.current_buf) {
++            DPRINTF("Error allocating current_buf\n");
++            g_free(XBZRLE.encoded_buf);
++            XBZRLE.encoded_buf = NULL;
++            return -1;
++        }
++
+         acct_clear();
+     }
+ 
+diff --git a/page_cache.c b/page_cache.c
+index 938a79c..2920123 100644
+--- a/page_cache.c
++++ b/page_cache.c
+@@ -61,8 +61,12 @@ PageCache *cache_init(int64_t num_pages, unsigned int page_size)
+         return NULL;
+     }
+ 
+-    cache = g_malloc(sizeof(*cache));
+-
++    /* We prefer not to abort if there is no memory */
++    cache = g_try_malloc(sizeof(*cache));
++    if (!cache) {
++        DPRINTF("Failed to allocate cache\n");
++        return NULL;
++    }
+     /* round down to the nearest power of 2 */
+     if (!is_power_of_2(num_pages)) {
+         num_pages = pow2floor(num_pages);
+@@ -75,8 +79,14 @@ PageCache *cache_init(int64_t num_pages, unsigned int page_size)
+ 
+     DPRINTF("Setting cache buckets to %" PRId64 "\n", cache->max_num_items);
+ 
+-    cache->page_cache = g_malloc((cache->max_num_items) *
+-                                 sizeof(*cache->page_cache));
++    /* We prefer not to abort if there is no memory */
++    cache->page_cache = g_try_malloc((cache->max_num_items) *
++                                     sizeof(*cache->page_cache));
++    if (!cache->page_cache) {
++        DPRINTF("Failed to allocate cache->page_cache\n");
++        g_free(cache);
++        return NULL;
++    }
+ 
+     for (i = 0; i < cache->max_num_items; i++) {
+         cache->page_cache[i].it_data = NULL;
+-- 
+1.7.1
+

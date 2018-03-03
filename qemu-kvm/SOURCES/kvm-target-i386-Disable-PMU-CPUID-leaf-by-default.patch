@@ -1,0 +1,122 @@
+From 99ce2407227bd5474e69c93ab0f061f2a3438eac Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Fri, 2 Aug 2013 14:08:52 +0200
+Subject: target-i386: Disable PMU CPUID leaf by default
+
+RH-Author: Eduardo Habkost <ehabkost@redhat.com>
+Message-id: <1375452533-12507-3-git-send-email-ehabkost@redhat.com>
+Patchwork-id: 52933
+O-Subject: [RHEL-7 PATCH 2/3] target-i386: Disable PMU CPUID leaf by default
+Bugzilla: 853101
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Gleb Natapov <gleb@redhat.com>
+
+Bugzilla: 853101
+
+Bug description: QEMU currently gets all bits from GET_SUPPORTED_CPUID
+for CPUID leaf 0xA and passes them directly to the guest. This makes
+the guest ABI depend on host kernel and host CPU capabilities, and
+breaks live migration if we migrate between hosts with different
+capabilities (e.g., different number of PMU counters).
+
+Add a "pmu" property to X86CPU, and set it to true only on "-cpu host",
+or on pc-*-1.5 and older machine-types.
+
+For now, setting pmu=on will enable the current passthrough mode that
+doesn't have any ABI stability guarantees, but in the future we may
+implement a mode where the PMU CPUID bits are stable and configurable.
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit 9337e3b6e1d779215423d9b419d42200506deaab)
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+
+Conflicts:
+	include/hw/i386/pc.h
+	target-i386/cpu.c
+
+diff --git a/include/hw/i386/pc.h b/include/hw/i386/pc.h
+index 6692728..45487ba 100644
+--- a/include/hw/i386/pc.h
++++ b/include/hw/i386/pc.h
+@@ -211,6 +211,10 @@ int e820_add_entry(uint64_t, uint64_t, uint32_t);
+             .driver   = "Nehalem-" TYPE_X86_CPU,\
+             .property = "level",\
+             .value    = stringify(2),\
++        },{\
++            .driver = TYPE_X86_CPU,\
++            .property = "pmu",\
++            .value = "on",\
+         }
+ 
+ #define PC_COMPAT_1_4 \
+diff --git a/target-i386/cpu-qom.h b/target-i386/cpu-qom.h
+index 849cedf..5231005 100644
+--- a/target-i386/cpu-qom.h
++++ b/target-i386/cpu-qom.h
+@@ -68,6 +68,13 @@ typedef struct X86CPU {
+ 
+     /* Features that were filtered out because of missing host capabilities */
+     uint32_t filtered_features[FEATURE_WORDS];
++
++    /* Enable PMU CPUID bits. This can't be enabled by default yet because
++     * it doesn't have ABI stability guarantees, as it passes all PMU CPUID
++     * bits returned by GET_SUPPORTED_CPUID (that depend on host CPU and kernel
++     * capabilities) directly to the guest.
++     */
++    bool enable_pmu;
+ } X86CPU;
+ 
+ static inline X86CPU *x86_env_get_cpu(CPUX86State *env)
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index 0c9a99a..2bcc21e 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -1479,6 +1479,7 @@ static int cpu_x86_find_by_name(X86CPU *cpu, x86_def_t *x86_cpu_def,
+                                 const char *name)
+ {
+     x86_def_t *def;
++    Error *err = NULL;
+     int i;
+ 
+     if (name == NULL) {
+@@ -1486,6 +1487,8 @@ static int cpu_x86_find_by_name(X86CPU *cpu, x86_def_t *x86_cpu_def,
+     }
+     if (kvm_enabled() && strcmp(name, "host") == 0) {
+         kvm_cpu_fill_host(x86_cpu_def);
++        object_property_set_bool(OBJECT(cpu), true, "pmu", &err);
++        assert_no_error(err);
+         return 0;
+     }
+ 
+@@ -2017,7 +2020,7 @@ void cpu_x86_cpuid(CPUX86State *env, uint32_t index, uint32_t count,
+         break;
+     case 0xA:
+         /* Architectural Performance Monitoring Leaf */
+-        if (kvm_enabled()) {
++        if (kvm_enabled() && cpu->enable_pmu) {
+             KVMState *s = cs->kvm_state;
+ 
+             *eax = kvm_arch_get_supported_cpuid(s, 0xA, count, R_EAX);
+@@ -2506,6 +2509,11 @@ static int64_t x86_cpu_get_arch_id(CPUState *cs)
+     return env->cpuid_apic_id;
+ }
+ 
++static Property x86_cpu_properties[] = {
++    DEFINE_PROP_BOOL("pmu", X86CPU, enable_pmu, false),
++    DEFINE_PROP_END_OF_LIST()
++};
++
+ static void x86_cpu_common_class_init(ObjectClass *oc, void *data)
+ {
+     X86CPUClass *xcc = X86_CPU_CLASS(oc);
+@@ -2515,6 +2523,7 @@ static void x86_cpu_common_class_init(ObjectClass *oc, void *data)
+     xcc->parent_realize = dc->realize;
+     dc->realize = x86_cpu_realizefn;
+     dc->bus_type = TYPE_ICC_BUS;
++    dc->props = x86_cpu_properties;
+ 
+     xcc->parent_reset = cc->reset;
+     cc->reset = x86_cpu_reset;

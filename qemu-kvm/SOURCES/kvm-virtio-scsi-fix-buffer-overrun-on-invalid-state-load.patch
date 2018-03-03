@@ -1,0 +1,88 @@
+From 9dc2684d2d9c9f9e62b5e4260fcd0c254f58bb6d Mon Sep 17 00:00:00 2001
+From: Michael S. Tsirkin <mst@redhat.com>
+Date: Wed, 14 May 2014 08:32:12 +0200
+Subject: [PATCH 14/31] virtio-scsi: fix buffer overrun on invalid state load
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1400056285-6688-11-git-send-email-mst@redhat.com>
+Patchwork-id: 58860
+O-Subject: [PATCH qemu-kvm RHEL7.1] virtio-scsi: fix buffer overrun on invalid state load
+Bugzilla: 1095742
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Xiao Wang <jasowang@redhat.com>
+RH-Acked-by: Amos Kong <akong@redhat.com>
+
+CVE-2013-4542
+
+hw/scsi/scsi-bus.c invokes load_request.
+
+ virtio_scsi_load_request does:
+    qemu_get_buffer(f, (unsigned char *)&req->elem, sizeof(req->elem));
+
+this probably can make elem invalid, for example,
+make in_num or out_num huge, then:
+
+    virtio_scsi_parse_req(s, vs->cmd_vqs[n], req);
+
+will do:
+
+    if (req->elem.out_num > 1) {
+        qemu_sgl_init_external(req, &req->elem.out_sg[1],
+                               &req->elem.out_addr[1],
+                               req->elem.out_num - 1);
+    } else {
+        qemu_sgl_init_external(req, &req->elem.in_sg[1],
+                               &req->elem.in_addr[1],
+                               req->elem.in_num - 1);
+    }
+
+and this will access out of array bounds.
+
+Note: this adds security checks within assert calls since
+SCSIBusInfo's load_request cannot fail.
+For now simply disable builds with NDEBUG - there seems
+to be little value in supporting these.
+
+Cc: Andreas Färber <afaerber@suse.de>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit 3c3ce981423e0d6c18af82ee62f1850c2cda5976)
+
+Tested: lightly on developer's box
+Brew build: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7452039
+Bugzilla:1095742
+---
+ hw/scsi/virtio-scsi.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/scsi/virtio-scsi.c |    9 +++++++++
+ 1 files changed, 9 insertions(+), 0 deletions(-)
+
+diff --git a/hw/scsi/virtio-scsi.c b/hw/scsi/virtio-scsi.c
+index 57541b4..7cf3e4b 100644
+--- a/hw/scsi/virtio-scsi.c
++++ b/hw/scsi/virtio-scsi.c
+@@ -145,6 +145,15 @@ static void *virtio_scsi_load_request(QEMUFile *f, SCSIRequest *sreq)
+     qemu_get_be32s(f, &n);
+     assert(n < vs->conf.num_queues);
+     qemu_get_buffer(f, (unsigned char *)&req->elem, sizeof(req->elem));
++    /* TODO: add a way for SCSIBusInfo's load_request to fail,
++     * and fail migration instead of asserting here.
++     * When we do, we might be able to re-enable NDEBUG below.
++     */
++#ifdef NDEBUG
++#error building with NDEBUG is not supported
++#endif
++    assert(req->elem.in_num <= ARRAY_SIZE(req->elem.in_sg));
++    assert(req->elem.out_num <= ARRAY_SIZE(req->elem.out_sg));
+     virtio_scsi_parse_req(s, vs->cmd_vqs[n], req);
+ 
+     scsi_req_ref(sreq);
+-- 
+1.7.1
+

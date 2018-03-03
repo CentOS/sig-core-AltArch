@@ -1,0 +1,61 @@
+From e53520a7e7f2cf2f78786c6c1ae906e70c26fd7e Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Tue, 6 Aug 2013 13:17:00 +0200
+Subject: [PATCH 07/28] qemu-option: Fix qemu_opts_find() for null id arguments
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1375795025-28674-2-git-send-email-armbru@redhat.com>
+Patchwork-id: 52992
+O-Subject: [PATCH 7.0 qemu-kvm 1/6] qemu-option: Fix qemu_opts_find() for null id arguments
+Bugzilla: 980782
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michal Novotny <minovotn@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+
+Crashes when the first list member has an ID.  Admittedly nonsensical
+reproducer:
+
+$ qemu-system-x86_64 -nodefaults -machine id=foo -machine ""
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Peter Maydell <peter.maydell@linaro.org>
+Message-id: 1372943363-24081-2-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit 96bc97ebf350ec480b69082819cedb8850f46a0f)
+---
+ util/qemu-option.c | 12 ++++--------
+ 1 file changed, 4 insertions(+), 8 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ util/qemu-option.c |   12 ++++--------
+ 1 files changed, 4 insertions(+), 8 deletions(-)
+
+diff --git a/util/qemu-option.c b/util/qemu-option.c
+index 8b74bf1..b6d2ac0 100644
+--- a/util/qemu-option.c
++++ b/util/qemu-option.c
+@@ -736,16 +736,12 @@ QemuOpts *qemu_opts_find(QemuOptsList *list, const char *id)
+     QemuOpts *opts;
+ 
+     QTAILQ_FOREACH(opts, &list->head, next) {
+-        if (!opts->id) {
+-            if (!id) {
+-                return opts;
+-            }
+-            continue;
++        if (!opts->id && !id) {
++            return opts;
+         }
+-        if (strcmp(opts->id, id) != 0) {
+-            continue;
++        if (opts->id && id && !strcmp(opts->id, id)) {
++            return opts;
+         }
+-        return opts;
+     }
+     return NULL;
+ }
+-- 
+1.7.1
+

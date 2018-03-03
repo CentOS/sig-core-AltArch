@@ -1,0 +1,72 @@
+From b888e19c99ff56e39a1e7364d66077a4dbfa512b Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Fri, 18 Oct 2013 08:14:34 +0200
+Subject: [PATCH 09/81] block: Fix compiler warning (-Werror=uninitialized)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1382084091-16636-10-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 54991
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 09/26] block: Fix compiler warning (-Werror=uninitialized)
+Bugzilla: 989646
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+From: Stefan Weil <sw@weilnetz.de>
+
+The patch fixes a warning from gcc (Debian 4.6.3-14+rpi1) 4.6.3:
+
+block/stream.c:141:22: error:
+‘copy’ may be used uninitialized in this function [-Werror=uninitialized]
+
+This is not a real bug - a better compiler would not complain.
+
+Now 'copy' has always a defined value, so the check for ret >= 0
+can be removed.
+
+Signed-off-by: Stefan Weil <sw@weilnetz.de>
+Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit c3e4f43a99549daa6e9b87350922e8339341c2ab)
+---
+ block/stream.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/stream.c |    5 +++--
+ 1 files changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/block/stream.c b/block/stream.c
+index 995b97b..276487c 100644
+--- a/block/stream.c
++++ b/block/stream.c
+@@ -115,11 +115,12 @@ wait:
+             break;
+         }
+ 
++        copy = false;
++
+         ret = bdrv_is_allocated(bs, sector_num,
+                                 STREAM_BUFFER_SIZE / BDRV_SECTOR_SIZE, &n);
+         if (ret == 1) {
+             /* Allocated in the top, no need to copy.  */
+-            copy = false;
+         } else if (ret >= 0) {
+             /* Copy if allocated in the intermediate images.  Limit to the
+              * known-unallocated area [sector_num, sector_num+n).  */
+@@ -134,7 +135,7 @@ wait:
+             copy = (ret == 1);
+         }
+         trace_stream_one_iteration(s, sector_num, n, ret);
+-        if (ret >= 0 && copy) {
++        if (copy) {
+             if (s->common.speed) {
+                 delay_ns = ratelimit_calculate_delay(&s->limit, n);
+                 if (delay_ns > 0) {
+-- 
+1.7.1
+

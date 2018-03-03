@@ -1,0 +1,113 @@
+From 3a4932455a7f7926b673089170f55de437eec5fa Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Sat, 2 Nov 2013 10:01:22 +0100
+Subject: [PATCH 22/29] smbios: Improve diagnostics for conflicting entries
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1383386488-29789-6-git-send-email-armbru@redhat.com>
+Patchwork-id: 55243
+O-Subject: [PATCH 7.0 qemu-kvm 05/11] smbios: Improve diagnostics for conflicting entries
+Bugzilla: 994490
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+We allow either tables or fields for the same type.  Makes sense,
+because SeaBIOS uses fields only when no tables are present.
+
+We do this by searching the SMBIOS blob for a previously added table
+or field.  Error messages look like this:
+
+    qemu-system-x86_64: -smbios type=1,serial=42: SMBIOS type 1 table already defined, cannot add field
+
+User needs to know that "table" is defined by -smbios file=..., and
+"field" by -smbios type=...
+
+Instead of searching the blob, record additions of interest, and check
+that.  Simpler, and makes better error messages possible:
+
+    qemu-system-x86_64: -smbios file=smbios_type_1.bin: Can't mix file= and type= for same type
+    qemu-system-x86_64: -smbios type=1,serial=42,serial=99: This is the conflicting setting
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit ec2df8c10a4585ba4641ae482cf2f5f13daa810e)
+---
+ hw/i386/smbios.c | 43 +++++++++++++++++--------------------------
+ 1 file changed, 17 insertions(+), 26 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/smbios.c |   43 +++++++++++++++++--------------------------
+ 1 files changed, 17 insertions(+), 26 deletions(-)
+
+diff --git a/hw/i386/smbios.c b/hw/i386/smbios.c
+index abfd6f7..4263551 100644
+--- a/hw/i386/smbios.c
++++ b/hw/i386/smbios.c
+@@ -48,6 +48,12 @@ static uint8_t *smbios_entries;
+ static size_t smbios_entries_len;
+ static int smbios_type4_count = 0;
+ 
++static struct {
++    bool seen;
++    int headertype;
++    Location loc;
++} first_opt[2];
++
+ static QemuOptsList qemu_smbios_opts = {
+     .name = "smbios",
+     .head = QTAILQ_HEAD_INITIALIZER(qemu_smbios_opts.head),
+@@ -159,35 +165,20 @@ uint8_t *smbios_get_table(size_t *length)
+  */
+ static void smbios_check_collision(int type, int entry)
+ {
+-    uint16_t *num_entries = (uint16_t *)smbios_entries;
+-    struct smbios_header *header;
+-    char *p;
+-    int i;
+-
+-    if (!num_entries)
+-        return;
+-
+-    p = (char *)(num_entries + 1);
+-
+-    for (i = 0; i < *num_entries; i++) {
+-        header = (struct smbios_header *)p;
+-        if (entry == SMBIOS_TABLE_ENTRY && header->type == SMBIOS_FIELD_ENTRY) {
+-            struct smbios_field *field = (void *)header;
+-            if (type == field->type) {
+-                error_report("SMBIOS type %d field already defined, "
+-                             "cannot add table", type);
+-                exit(1);
+-            }
+-        } else if (entry == SMBIOS_FIELD_ENTRY &&
+-                   header->type == SMBIOS_TABLE_ENTRY) {
+-            struct smbios_structure_header *table = (void *)(header + 1);
+-            if (type == table->type) {
+-                error_report("SMBIOS type %d table already defined, "
+-                             "cannot add field", type);
++    if (type < ARRAY_SIZE(first_opt)) {
++        if (first_opt[type].seen) {
++            if (first_opt[type].headertype != entry) {
++                error_report("Can't mix file= and type= for same type");
++                loc_push_restore(&first_opt[type].loc);
++                error_report("This is the conflicting setting");
++                loc_pop(&first_opt[type].loc);
+                 exit(1);
+             }
++        } else {
++            first_opt[type].seen = true;
++            first_opt[type].headertype = entry;
++            loc_save(&first_opt[type].loc);
+         }
+-        p += le16_to_cpu(header->length);
+     }
+ }
+ 
+-- 
+1.7.1
+

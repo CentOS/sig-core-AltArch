@@ -1,0 +1,217 @@
+From 9769e7ac9ff2005316a655365c72c12a40579195 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Wed, 6 Nov 2013 16:53:39 +0100
+Subject: [PATCH 82/87] qemu-iotests: Additional info from qemu-img info
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383756824-6921-17-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55571
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 16/21] qemu-iotests: Additional info from qemu-img info
+Bugzilla: 980771
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+BZ: 980771
+
+Add a test for the additional information now provided by qemu-img info
+when used on qcow2 images. It also tests the qemu QMP output from the
+query-block command when running qemu with different runtime options
+than specified in the image (ImageInfoSpecific should always refer to
+the image).
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 3677e6f6252542cbab85674d97d051d95e91693b)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ tests/qemu-iotests/065        | 125 ++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/065.out    |   5 ++
+ tests/qemu-iotests/group      |   1 +
+ tests/qemu-iotests/iotests.py |   4 ++
+ 4 files changed, 135 insertions(+)
+ create mode 100755 tests/qemu-iotests/065
+ create mode 100644 tests/qemu-iotests/065.out
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/065        |  125 +++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/065.out    |    5 ++
+ tests/qemu-iotests/group      |    1 +
+ tests/qemu-iotests/iotests.py |    4 +
+ 4 files changed, 135 insertions(+), 0 deletions(-)
+ create mode 100755 tests/qemu-iotests/065
+ create mode 100644 tests/qemu-iotests/065.out
+
+diff --git a/tests/qemu-iotests/065 b/tests/qemu-iotests/065
+new file mode 100755
+index 0000000..ab5445f
+--- /dev/null
++++ b/tests/qemu-iotests/065
+@@ -0,0 +1,125 @@
++#!/usr/bin/env python2
++#
++# Test for additional information emitted by qemu-img info on qcow2
++# images
++#
++# Copyright (C) 2013 Red Hat, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++
++import os
++import re
++import json
++import iotests
++from iotests import qemu_img, qemu_img_pipe
++import unittest
++
++test_img = os.path.join(iotests.test_dir, 'test.img')
++
++class TestImageInfoSpecific(iotests.QMPTestCase):
++    '''Abstract base class for ImageInfoSpecific tests'''
++
++    def setUp(self):
++        if self.img_options is None:
++            self.skipTest('Skipping abstract test class')
++        qemu_img('create', '-f', iotests.imgfmt, '-o', self.img_options,
++                 test_img, '128K')
++
++    def tearDown(self):
++        os.remove(test_img)
++
++class TestQemuImgInfo(TestImageInfoSpecific):
++    '''Abstract base class for qemu-img info tests'''
++
++    img_options = None
++    json_compare = None
++    human_compare = None
++
++    def test_json(self):
++        data = json.loads(qemu_img_pipe('info', '--output=json', test_img))
++        data = data['format-specific']
++        self.assertEqual(data['type'], iotests.imgfmt)
++        self.assertEqual(data['data'], self.json_compare)
++
++    def test_human(self):
++        data = qemu_img_pipe('info', '--output=human', test_img).split('\n')
++        data = data[(data.index('Format specific information:') + 1)
++                    :data.index('')]
++        for field in data:
++            self.assertTrue(re.match('^ {4}[^ ]', field) is not None)
++        data = map(lambda line: line.strip(), data)
++        self.assertEqual(data, self.human_compare)
++
++class TestQMP(TestImageInfoSpecific):
++    '''Abstract base class for qemu QMP tests'''
++
++    img_options = None
++    qemu_options = ''
++    TestImageInfoSpecific = TestImageInfoSpecific
++
++    def setUp(self):
++        self.TestImageInfoSpecific.setUp(self)
++        self.vm = iotests.VM().add_drive(test_img, self.qemu_options)
++        self.vm.launch()
++
++    def tearDown(self):
++        self.vm.shutdown()
++        self.TestImageInfoSpecific.tearDown(self)
++
++    def test_qmp(self):
++        result = self.vm.qmp('query-block')['return']
++        drive = filter(lambda drive: drive['device'] == 'drive0', result)[0]
++        data = drive['inserted']['image']['format-specific']
++        self.assertEqual(data['type'], iotests.imgfmt)
++        self.assertEqual(data['data'], self.compare)
++
++class TestQCow2(TestQemuImgInfo):
++    '''Testing a qcow2 version 2 image'''
++    img_options = 'compat=0.10'
++    json_compare = { 'compat': '0.10' }
++    human_compare = [ 'compat: 0.10' ]
++
++class TestQCow3NotLazy(TestQemuImgInfo):
++    '''Testing a qcow2 version 3 image with lazy refcounts disabled'''
++    img_options = 'compat=1.1,lazy_refcounts=off'
++    json_compare = { 'compat': '1.1', 'lazy-refcounts': False }
++    human_compare = [ 'compat: 1.1', 'lazy refcounts: false' ]
++
++class TestQCow3Lazy(TestQemuImgInfo):
++    '''Testing a qcow2 version 3 image with lazy refcounts enabled'''
++    img_options = 'compat=1.1,lazy_refcounts=on'
++    json_compare = { 'compat': '1.1', 'lazy-refcounts': True }
++    human_compare = [ 'compat: 1.1', 'lazy refcounts: true' ]
++
++class TestQCow3NotLazyQMP(TestQMP):
++    '''Testing a qcow2 version 3 image with lazy refcounts disabled, opening
++       with lazy refcounts enabled'''
++    img_options = 'compat=1.1,lazy_refcounts=off'
++    qemu_options = 'lazy-refcounts=on'
++    compare = { 'compat': '1.1', 'lazy-refcounts': False }
++
++class TestQCow3LazyQMP(TestQMP):
++    '''Testing a qcow2 version 3 image with lazy refcounts enabled, opening
++       with lazy refcounts disabled'''
++    img_options = 'compat=1.1,lazy_refcounts=on'
++    qemu_options = 'lazy-refcounts=off'
++    compare = { 'compat': '1.1', 'lazy-refcounts': True }
++
++TestImageInfoSpecific = None
++TestQemuImgInfo = None
++TestQMP = None
++
++if __name__ == '__main__':
++    iotests.main(supported_fmts=['qcow2'])
+diff --git a/tests/qemu-iotests/065.out b/tests/qemu-iotests/065.out
+new file mode 100644
+index 0000000..594c16f
+--- /dev/null
++++ b/tests/qemu-iotests/065.out
+@@ -0,0 +1,5 @@
++........
++----------------------------------------------------------------------
++Ran 8 tests
++
++OK
+diff --git a/tests/qemu-iotests/group b/tests/qemu-iotests/group
+index d02ee96..68c056b 100644
+--- a/tests/qemu-iotests/group
++++ b/tests/qemu-iotests/group
+@@ -64,5 +64,6 @@
+ 059 rw auto
+ 060 rw auto
+ 063 rw auto
++065 rw auto
+ 067 rw auto
+ 068 rw auto
+diff --git a/tests/qemu-iotests/iotests.py b/tests/qemu-iotests/iotests.py
+index 569ca3d..5cbac82 100644
+--- a/tests/qemu-iotests/iotests.py
++++ b/tests/qemu-iotests/iotests.py
+@@ -46,6 +46,10 @@ def qemu_img_verbose(*args):
+     '''Run qemu-img without suppressing its output and return the exit code'''
+     return subprocess.call(qemu_img_args + list(args))
+ 
++def qemu_img_pipe(*args):
++    '''Run qemu-img and return its output'''
++    return subprocess.Popen(qemu_img_args + list(args), stdout=subprocess.PIPE).communicate()[0]
++
+ def qemu_io(*args):
+     '''Run qemu-io and return the stdout data'''
+     args = qemu_io_args + list(args)
+-- 
+1.7.1
+

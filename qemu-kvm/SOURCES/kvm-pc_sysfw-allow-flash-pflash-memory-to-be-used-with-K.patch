@@ -1,0 +1,111 @@
+From 18238ae670fb38f5ca7002bc8da7b7aa9d612f68 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Sat, 11 Jan 2014 17:59:58 +0100
+Subject: [PATCH 08/22] pc_sysfw: allow flash (-pflash) memory to be used with KVM
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1389463208-6278-9-git-send-email-lersek@redhat.com>
+Patchwork-id: 56621
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 08/18] pc_sysfw: allow flash (-pflash) memory to be used with KVM
+Bugzilla: 1032346
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Andrew Jones <drjones@redhat.com>
+
+From: Jordan Justen <jordan.l.justen@intel.com>
+
+When pc-sysfw.rom_only == 0, flash memory will be
+usable with kvm. In order to enable flash memory mode,
+a pflash device must be created. (For example, by
+using the -pflash command line parameter.)
+
+Usage of a flash memory device with kvm requires
+KVM_CAP_READONLY_MEM, and kvm will abort if
+a flash device is used with an older kvm which does
+not support this capability.
+
+If a flash device is not used, then qemu/kvm will
+operate in the original rom-mode.
+
+Signed-off-by: Jordan Justen <jordan.l.justen@intel.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: 1369816047-16384-5-git-send-email-jordan.l.justen@intel.com
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit dafb82e0fc89b631d25f8def649fbfd14fec3db2)
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+---
+ hw/block/pc_sysfw.c | 50 +++++++++++++++++++++++++++++++-------------------
+ 1 file changed, 31 insertions(+), 19 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/block/pc_sysfw.c |   50 +++++++++++++++++++++++++++++++-------------------
+ 1 files changed, 31 insertions(+), 19 deletions(-)
+
+diff --git a/hw/block/pc_sysfw.c b/hw/block/pc_sysfw.c
+index 4d82c70..76932fc 100644
+--- a/hw/block/pc_sysfw.c
++++ b/hw/block/pc_sysfw.c
+@@ -217,28 +217,40 @@ void pc_system_firmware_init(MemoryRegion *rom_memory)
+ 
+     qdev_init_nofail(DEVICE(sysfw_dev));
+ 
+-    if (sysfw_dev->rom_only) {
+-        old_pc_system_rom_init(rom_memory, sysfw_dev->isapc_ram_fw);
+-        return;
+-    }
+-
+     pflash_drv = drive_get(IF_PFLASH, 0, 0);
+ 
+-    /* Currently KVM cannot execute from device memory.
+-       Use old rom based firmware initialization for KVM. */
+-    /*
+-     * This is a Bad Idea, because it makes enabling/disabling KVM
+-     * guest-visible.  Let's fix it for real in QEMU 1.6.
+-     */
+-    if (kvm_enabled()) {
+-        if (pflash_drv != NULL) {
+-            fprintf(stderr, "qemu: pflash cannot be used with kvm enabled\n");
+-            exit(1);
+-        } else {
+-            sysfw_dev->rom_only = 1;
+-            old_pc_system_rom_init(rom_memory, sysfw_dev->isapc_ram_fw);
+-            return;
++    if (pc_sysfw_flash_vs_rom_bug_compatible) {
++        /*
++         * This is a Bad Idea, because it makes enabling/disabling KVM
++         * guest-visible.  Do it only in bug-compatibility mode.
++         */
++        if (kvm_enabled()) {
++            if (pflash_drv != NULL) {
++                fprintf(stderr, "qemu: pflash cannot be used with kvm enabled\n");
++                exit(1);
++            } else {
++                /* In old pc_sysfw_flash_vs_rom_bug_compatible mode, we assume
++                 * that KVM cannot execute from device memory. In this case, we
++                 * use old rom based firmware initialization for KVM. But, since
++                 * this is different from non-kvm mode, this behavior is
++                 * undesirable */
++                sysfw_dev->rom_only = 1;
++            }
+         }
++    } else if (pflash_drv == NULL) {
++        /* When a pflash drive is not found, use rom-mode */
++        sysfw_dev->rom_only = 1;
++    } else if (kvm_enabled() && !kvm_readonly_mem_enabled()) {
++        /* Older KVM cannot execute from device memory. So, flash memory
++         * cannot be used unless the readonly memory kvm capability is present. */
++        fprintf(stderr, "qemu: pflash with kvm requires KVM readonly memory support\n");
++        exit(1);
++    }
++
++    /* If rom-mode is active, use the old pc system rom initialization. */
++    if (sysfw_dev->rom_only) {
++        old_pc_system_rom_init(rom_memory, sysfw_dev->isapc_ram_fw);
++        return;
+     }
+ 
+     /* If a pflash drive is not found, then create one using
+-- 
+1.7.1
+

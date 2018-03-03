@@ -1,0 +1,377 @@
+From 9e46b4be497106cff27fd67c5c3cc79023e21762 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Fri, 4 Apr 2014 05:55:57 +0200
+Subject: [PATCH 02/12] iscsi: correctly propagate errors in iscsi_open
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1396590962-25815-3-git-send-email-famz@redhat.com>
+Patchwork-id: 58339
+O-Subject: [RHEL-7 0day qemu-kvm PATCH 2/7] iscsi: correctly propagate errors in iscsi_open
+Bugzilla: 1083413
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+Before:
+    $ ./qemu-io-old
+    qemu-io-old> open -r -o file.driver=iscsi,file.filename=foo
+    Failed to parse URL : foo
+    qemu-io-old: can't open device (null): Could not open 'foo': Invalid argument
+
+After:
+    $ ./qemu-io
+    qemu-io> open -r -o file.driver=iscsi,file.filename=foo
+    qemu-io: can't open device (null): Failed to parse URL : foo
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit f2917853f715b0ef55df29eb2ffea29dc69ce814)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+
+Conflicts:
+	block/iscsi.c
+        Because 84d18f065fb041a1c0d78d20320d740ae0673c8a (Use
+        error_is_set() only when necessary) is not backpored, which
+        converted "if (error_is_set(&local_err))" to "if (local_err)".
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ block/iscsi.c | 105 ++++++++++++++++++++++++++++++----------------------------
+ 1 file changed, 54 insertions(+), 51 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/iscsi.c |  105 +++++++++++++++++++++++++++++---------------------------
+ 1 files changed, 54 insertions(+), 51 deletions(-)
+
+diff --git a/block/iscsi.c b/block/iscsi.c
+index 082956c..537d2cb 100644
+--- a/block/iscsi.c
++++ b/block/iscsi.c
+@@ -1036,7 +1036,8 @@ retry:
+ 
+ #endif /* SCSI_SENSE_ASCQ_CAPACITY_DATA_HAS_CHANGED */
+ 
+-static int parse_chap(struct iscsi_context *iscsi, const char *target)
++static void parse_chap(struct iscsi_context *iscsi, const char *target,
++                       Error **errp)
+ {
+     QemuOptsList *list;
+     QemuOpts *opts;
+@@ -1045,37 +1046,35 @@ static int parse_chap(struct iscsi_context *iscsi, const char *target)
+ 
+     list = qemu_find_opts("iscsi");
+     if (!list) {
+-        return 0;
++        return;
+     }
+ 
+     opts = qemu_opts_find(list, target);
+     if (opts == NULL) {
+         opts = QTAILQ_FIRST(&list->head);
+         if (!opts) {
+-            return 0;
++            return;
+         }
+     }
+ 
+     user = qemu_opt_get(opts, "user");
+     if (!user) {
+-        return 0;
++        return;
+     }
+ 
+     password = qemu_opt_get(opts, "password");
+     if (!password) {
+-        error_report("CHAP username specified but no password was given");
+-        return -1;
++        error_setg(errp, "CHAP username specified but no password was given");
++        return;
+     }
+ 
+     if (iscsi_set_initiator_username_pwd(iscsi, user, password)) {
+-        error_report("Failed to set initiator username and password");
+-        return -1;
++        error_setg(errp, "Failed to set initiator username and password");
+     }
+-
+-    return 0;
+ }
+ 
+-static void parse_header_digest(struct iscsi_context *iscsi, const char *target)
++static void parse_header_digest(struct iscsi_context *iscsi, const char *target,
++                                Error **errp)
+ {
+     QemuOptsList *list;
+     QemuOpts *opts;
+@@ -1108,7 +1107,7 @@ static void parse_header_digest(struct iscsi_context *iscsi, const char *target)
+     } else if (!strcmp(digest, "NONE-CRC32C")) {
+         iscsi_set_header_digest(iscsi, ISCSI_HEADER_DIGEST_NONE_CRC32C);
+     } else {
+-        error_report("Invalid header-digest setting : %s", digest);
++        error_setg(errp, "Invalid header-digest setting : %s", digest);
+     }
+ }
+ 
+@@ -1166,12 +1165,11 @@ static void iscsi_nop_timed_event(void *opaque)
+ }
+ #endif
+ 
+-static int iscsi_readcapacity_sync(IscsiLun *iscsilun)
++static void iscsi_readcapacity_sync(IscsiLun *iscsilun, Error **errp)
+ {
+     struct scsi_task *task = NULL;
+     struct scsi_readcapacity10 *rc10 = NULL;
+     struct scsi_readcapacity16 *rc16 = NULL;
+-    int ret = 0;
+     int retries = ISCSI_CMD_RETRIES; 
+ 
+     do {
+@@ -1186,8 +1184,7 @@ static int iscsi_readcapacity_sync(IscsiLun *iscsilun)
+             if (task != NULL && task->status == SCSI_STATUS_GOOD) {
+                 rc16 = scsi_datain_unmarshall(task);
+                 if (rc16 == NULL) {
+-                    error_report("iSCSI: Failed to unmarshall readcapacity16 data.");
+-                    ret = -EINVAL;
++                    error_setg(errp, "iSCSI: Failed to unmarshall readcapacity16 data.");
+                 } else {
+                     iscsilun->block_size = rc16->block_length;
+                     iscsilun->num_blocks = rc16->returned_lba + 1;
+@@ -1201,8 +1198,7 @@ static int iscsi_readcapacity_sync(IscsiLun *iscsilun)
+             if (task != NULL && task->status == SCSI_STATUS_GOOD) {
+                 rc10 = scsi_datain_unmarshall(task);
+                 if (rc10 == NULL) {
+-                    error_report("iSCSI: Failed to unmarshall readcapacity10 data.");
+-                    ret = -EINVAL;
++                    error_setg(errp, "iSCSI: Failed to unmarshall readcapacity10 data.");
+                 } else {
+                     iscsilun->block_size = rc10->block_size;
+                     if (rc10->lba == 0) {
+@@ -1215,20 +1211,18 @@ static int iscsi_readcapacity_sync(IscsiLun *iscsilun)
+             }
+             break;
+         default:
+-            return 0;
++            return;
+         }
+     } while (task != NULL && task->status == SCSI_STATUS_CHECK_CONDITION
+              && task->sense.key == SCSI_SENSE_UNIT_ATTENTION
+              && retries-- > 0);
+ 
+     if (task == NULL || task->status != SCSI_STATUS_GOOD) {
+-        error_report("iSCSI: failed to send readcapacity10 command.");
+-        ret = -EINVAL;
++        error_setg(errp, "iSCSI: failed to send readcapacity10 command.");
+     }
+     if (task) {
+         scsi_free_scsi_task(task);
+     }
+-    return ret;
+ }
+ 
+ /* TODO Convert to fine grained options */
+@@ -1246,7 +1240,7 @@ static QemuOptsList runtime_opts = {
+ };
+ 
+ static struct scsi_task *iscsi_do_inquiry(struct iscsi_context *iscsi, int lun,
+-                                          int evpd, int pc)
++                                          int evpd, int pc, Error **errp)
+ {
+     int full_size;
+     struct scsi_task *task = NULL;
+@@ -1268,8 +1262,8 @@ static struct scsi_task *iscsi_do_inquiry(struct iscsi_context *iscsi, int lun,
+     return task;
+ 
+ fail:
+-    error_report("iSCSI: Inquiry command failed : %s",
+-                 iscsi_get_error(iscsi));
++    error_setg(errp, "iSCSI: Inquiry command failed : %s",
++               iscsi_get_error(iscsi));
+     if (task) {
+         scsi_free_scsi_task(task);
+         return NULL;
+@@ -1296,27 +1290,25 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
+     int ret;
+ 
+     if ((BDRV_SECTOR_SIZE % 512) != 0) {
+-        error_report("iSCSI: Invalid BDRV_SECTOR_SIZE. "
+-                     "BDRV_SECTOR_SIZE(%lld) is not a multiple "
+-                     "of 512", BDRV_SECTOR_SIZE);
++        error_setg(errp, "iSCSI: Invalid BDRV_SECTOR_SIZE. "
++                   "BDRV_SECTOR_SIZE(%lld) is not a multiple "
++                   "of 512", BDRV_SECTOR_SIZE);
+         return -EINVAL;
+     }
+ 
+     opts = qemu_opts_create_nofail(&runtime_opts);
+     qemu_opts_absorb_qdict(opts, options, &local_err);
+-    if (error_is_set(&local_err)) {
+-        qerror_report_err(local_err);
+-        error_free(local_err);
++    if (local_err) {
++        error_propagate(errp, local_err);
+         ret = -EINVAL;
+         goto out;
+     }
+ 
+     filename = qemu_opt_get(opts, "filename");
+ 
+-
+     iscsi_url = iscsi_parse_full_url(iscsi, filename);
+     if (iscsi_url == NULL) {
+-        error_report("Failed to parse URL : %s", filename);
++        error_setg(errp, "Failed to parse URL : %s", filename);
+         ret = -EINVAL;
+         goto out;
+     }
+@@ -1327,13 +1319,13 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
+ 
+     iscsi = iscsi_create_context(initiator_name);
+     if (iscsi == NULL) {
+-        error_report("iSCSI: Failed to create iSCSI context.");
++        error_setg(errp, "iSCSI: Failed to create iSCSI context.");
+         ret = -ENOMEM;
+         goto out;
+     }
+ 
+     if (iscsi_set_targetname(iscsi, iscsi_url->target)) {
+-        error_report("iSCSI: Failed to set target name.");
++        error_setg(errp, "iSCSI: Failed to set target name.");
+         ret = -EINVAL;
+         goto out;
+     }
+@@ -1342,21 +1334,22 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
+         ret = iscsi_set_initiator_username_pwd(iscsi, iscsi_url->user,
+                                               iscsi_url->passwd);
+         if (ret != 0) {
+-            error_report("Failed to set initiator username and password");
++            error_setg(errp, "Failed to set initiator username and password");
+             ret = -EINVAL;
+             goto out;
+         }
+     }
+ 
+     /* check if we got CHAP username/password via the options */
+-    if (parse_chap(iscsi, iscsi_url->target) != 0) {
+-        error_report("iSCSI: Failed to set CHAP user/password");
++    parse_chap(iscsi, iscsi_url->target, &local_err);
++    if (local_err != NULL) {
++        error_propagate(errp, local_err);
+         ret = -EINVAL;
+         goto out;
+     }
+ 
+     if (iscsi_set_session_type(iscsi, ISCSI_SESSION_NORMAL) != 0) {
+-        error_report("iSCSI: Failed to set session type to normal.");
++        error_setg(errp, "iSCSI: Failed to set session type to normal.");
+         ret = -EINVAL;
+         goto out;
+     }
+@@ -1364,10 +1357,15 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
+     iscsi_set_header_digest(iscsi, ISCSI_HEADER_DIGEST_NONE_CRC32C);
+ 
+     /* check if we got HEADER_DIGEST via the options */
+-    parse_header_digest(iscsi, iscsi_url->target);
++    parse_header_digest(iscsi, iscsi_url->target, &local_err);
++    if (local_err != NULL) {
++        error_propagate(errp, local_err);
++        ret = -EINVAL;
++        goto out;
++    }
+ 
+     if (iscsi_full_connect_sync(iscsi, iscsi_url->portal, iscsi_url->lun) != 0) {
+-        error_report("iSCSI: Failed to connect to LUN : %s",
++        error_setg(errp, "iSCSI: Failed to connect to LUN : %s",
+             iscsi_get_error(iscsi));
+         ret = -EINVAL;
+         goto out;
+@@ -1379,14 +1377,14 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
+     task = iscsi_inquiry_sync(iscsi, iscsilun->lun, 0, 0, 36);
+ 
+     if (task == NULL || task->status != SCSI_STATUS_GOOD) {
+-        error_report("iSCSI: failed to send inquiry command.");
++        error_setg(errp, "iSCSI: failed to send inquiry command.");
+         ret = -EINVAL;
+         goto out;
+     }
+ 
+     inq = scsi_datain_unmarshall(task);
+     if (inq == NULL) {
+-        error_report("iSCSI: Failed to unmarshall inquiry data.");
++        error_setg(errp, "iSCSI: Failed to unmarshall inquiry data.");
+         ret = -EINVAL;
+         goto out;
+     }
+@@ -1394,7 +1392,9 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
+     iscsilun->type = inq->periperal_device_type;
+     iscsilun->has_write_same = true;
+ 
+-    if ((ret = iscsi_readcapacity_sync(iscsilun)) != 0) {
++    iscsi_readcapacity_sync(iscsilun, &local_err);
++    if (local_err != NULL) {
++        error_propagate(errp, local_err);
+         goto out;
+     }
+     bs->total_sectors = sector_lun2qemu(iscsilun->num_blocks, iscsilun);
+@@ -1411,14 +1411,15 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
+     if (iscsilun->lbpme) {
+         struct scsi_inquiry_logical_block_provisioning *inq_lbp;
+         task = iscsi_do_inquiry(iscsilun->iscsi, iscsilun->lun, 1,
+-                                SCSI_INQUIRY_PAGECODE_LOGICAL_BLOCK_PROVISIONING);
++                                SCSI_INQUIRY_PAGECODE_LOGICAL_BLOCK_PROVISIONING,
++                                errp);
+         if (task == NULL) {
+             ret = -EINVAL;
+             goto out;
+         }
+         inq_lbp = scsi_datain_unmarshall(task);
+         if (inq_lbp == NULL) {
+-            error_report("iSCSI: failed to unmarshall inquiry datain blob");
++            error_setg(errp, "iSCSI: failed to unmarshall inquiry datain blob");
+             ret = -EINVAL;
+             goto out;
+         }
+@@ -1431,14 +1432,14 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
+     if (iscsilun->lbp.lbpu || iscsilun->lbp.lbpws) {
+         struct scsi_inquiry_block_limits *inq_bl;
+         task = iscsi_do_inquiry(iscsilun->iscsi, iscsilun->lun, 1,
+-                                SCSI_INQUIRY_PAGECODE_BLOCK_LIMITS);
++                                SCSI_INQUIRY_PAGECODE_BLOCK_LIMITS, errp);
+         if (task == NULL) {
+             ret = -EINVAL;
+             goto out;
+         }
+         inq_bl = scsi_datain_unmarshall(task);
+         if (inq_bl == NULL) {
+-            error_report("iSCSI: failed to unmarshall inquiry datain blob");
++            error_setg(errp, "iSCSI: failed to unmarshall inquiry datain blob");
+             ret = -EINVAL;
+             goto out;
+         }
+@@ -1529,14 +1530,16 @@ static int iscsi_reopen_prepare(BDRVReopenState *state,
+ static int iscsi_truncate(BlockDriverState *bs, int64_t offset)
+ {
+     IscsiLun *iscsilun = bs->opaque;
+-    int ret = 0;
++    Error *local_err = NULL;
+ 
+     if (iscsilun->type != TYPE_DISK) {
+         return -ENOTSUP;
+     }
+ 
+-    if ((ret = iscsi_readcapacity_sync(iscsilun)) != 0) {
+-        return ret;
++    iscsi_readcapacity_sync(iscsilun, &local_err);
++    if (local_err != NULL) {
++        error_free(local_err);
++        return -EIO;
+     }
+ 
+     if (offset > iscsi_getlength(bs)) {
+-- 
+1.7.1
+

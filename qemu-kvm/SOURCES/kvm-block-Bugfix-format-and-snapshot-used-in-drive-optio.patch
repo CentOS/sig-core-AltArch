@@ -1,0 +1,89 @@
+From 3cae2bf94bf3ef300facbd31214dbeae7b2ad7b7 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 4 Nov 2013 22:31:57 +0100
+Subject: [PATCH 04/87] block: Bugfix 'format' and 'snapshot' used in drive option
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-7-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55306
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 06/43] block: Bugfix 'format' and 'snapshot' used in drive option
+Bugzilla: 1026524
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Mike Qiu <qiudayu@linux.vnet.ibm.com>
+
+BZ: 1026524
+
+When use -drive file='xxx',format=qcow2,snapshot=on the error
+message "Can't use snapshot=on with driver-specific options"
+can be show, and fail to start the qemu.
+
+This should not be happened, and there is no file.driver option
+in qemu command line.
+
+It is because the commit 74fe54f2a1b5c4f4498a8fe521e1dfc936656cd4,
+it puts 'driver' option if the command line use 'format' option.
+
+This patch is to solve this bug.
+
+Signed-off-by: Mike Qiu <qiudayu@linux.vnet.ibm.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 6db5f5d68e2ffc430ba0511e23fc36c7363510f1)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ blockdev.c | 12 +++++++++---
+ 1 file changed, 9 insertions(+), 3 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev.c |   12 +++++++++---
+ 1 files changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index 6710f61..a6563fa 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -342,6 +342,7 @@ static DriveInfo *blockdev_init(QemuOpts *all_opts,
+     QDict *bs_opts;
+     const char *id;
+     bool has_driver_specific_opts;
++    BlockDriver *drv = NULL;
+ 
+     translation = BIOS_ATA_TRANSLATION_AUTO;
+     media = MEDIA_DISK;
+@@ -487,7 +488,11 @@ static DriveInfo *blockdev_init(QemuOpts *all_opts,
+             return NULL;
+         }
+ 
+-        qdict_put(bs_opts, "driver", qstring_from_str(buf));
++        drv = bdrv_find_whitelisted_format(buf, ro);
++        if (!drv) {
++            error_report("'%s' invalid format", buf);
++            return NULL;
++        }
+     }
+ 
+     /* disk I/O throttling */
+@@ -702,12 +707,13 @@ static DriveInfo *blockdev_init(QemuOpts *all_opts,
+     }
+ 
+     QINCREF(bs_opts);
+-    ret = bdrv_open(dinfo->bdrv, file, bs_opts, bdrv_flags, NULL);
++    ret = bdrv_open(dinfo->bdrv, file, bs_opts, bdrv_flags, drv);
+ 
+     if (ret < 0) {
+         if (ret == -EMEDIUMTYPE) {
+             error_report("could not open disk image %s: not in %s format",
+-                         file ?: dinfo->id, qdict_get_str(bs_opts, "driver"));
++                         file ?: dinfo->id, drv ? drv->format_name :
++                         qdict_get_str(bs_opts, "driver"));
+         } else {
+             error_report("could not open disk image %s: %s",
+                          file ?: dinfo->id, strerror(-ret));
+-- 
+1.7.1
+

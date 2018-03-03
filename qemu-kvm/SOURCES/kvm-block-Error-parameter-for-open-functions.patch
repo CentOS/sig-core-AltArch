@@ -1,0 +1,940 @@
+From 8d4ddeff8f248b561affa518acc19739b76e2f08 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 4 Nov 2013 22:32:11 +0100
+Subject: [PATCH 18/87] block: Error parameter for open functions
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-21-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55320
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 20/43] block: Error parameter for open functions
+Bugzilla: 1026524
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1026524
+
+Add an Error ** parameter to bdrv_open, bdrv_file_open and associated
+functions to allow more specific error messages.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit 34b5d2c68eb4082c288e70fb99c61af8f7b96fde)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+
+Conflicts:
+	block/blkverify.c
+	block/vmdk.c
+	block/vvfat.c
+	blockdev.c
+	hw/block/xen_disk.c
+	qemu-io.c
+
+All files conflict because the series "Implement reference count for
+BlockDriverState" has not yet been backported which "replaces"
+bdrv_delete by bdrv_unref.
+
+blockdev.c conflicts because the series "block: drive-backup live backup
+command command" has not yet been backported.
+
+qemu-io.c conflicts because the series "Make qemu-io commands available
+in the monitor" has not yet been backported (esp. commit 734c3b85c).
+---
+ block.c               | 100 ++++++++++++++++++++++++++++++++------------------
+ block/blkdebug.c      |   4 +-
+ block/blkverify.c     |   8 +++-
+ block/cow.c           |   5 ++-
+ block/mirror.c        |   5 ++-
+ block/qcow.c          |   5 ++-
+ block/qcow2.c         |   4 +-
+ block/qed.c           |   6 ++-
+ block/sheepdog.c      |  10 ++++-
+ block/vmdk.c          |  11 +++++-
+ block/vvfat.c         |   6 ++-
+ blockdev.c            |  26 ++++++-------
+ hw/block/xen_disk.c   |   7 +++-
+ include/block/block.h |   6 +--
+ qemu-img.c            |  21 +++++++----
+ qemu-io.c             |  14 +++++--
+ qemu-nbd.c            |   6 ++-
+ 17 files changed, 161 insertions(+), 83 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c               |  100 +++++++++++++++++++++++++++++++-----------------
+ block/blkdebug.c      |    4 +-
+ block/blkverify.c     |    8 +++-
+ block/cow.c           |    5 ++-
+ block/mirror.c        |    5 +-
+ block/qcow.c          |    5 ++-
+ block/qcow2.c         |    4 +-
+ block/qed.c           |    6 ++-
+ block/sheepdog.c      |   10 ++++-
+ block/vmdk.c          |   11 ++++-
+ block/vvfat.c         |    6 ++-
+ blockdev.c            |   26 +++++-------
+ hw/block/xen_disk.c   |    7 +++-
+ include/block/block.h |    6 +-
+ qemu-img.c            |   21 +++++++---
+ qemu-io.c             |   14 +++++--
+ qemu-nbd.c            |    6 ++-
+ 17 files changed, 161 insertions(+), 83 deletions(-)
+
+diff --git a/block.c b/block.c
+index 0cb5ac9..cb99faf 100644
+--- a/block.c
++++ b/block.c
+@@ -524,7 +524,7 @@ BlockDriver *bdrv_find_protocol(const char *filename,
+ }
+ 
+ static int find_image_format(BlockDriverState *bs, const char *filename,
+-                             BlockDriver **pdrv)
++                             BlockDriver **pdrv, Error **errp)
+ {
+     int score, score_max;
+     BlockDriver *drv1, *drv;
+@@ -535,6 +535,7 @@ static int find_image_format(BlockDriverState *bs, const char *filename,
+     if (bs->sg || !bdrv_is_inserted(bs) || bdrv_getlength(bs) == 0) {
+         drv = bdrv_find_format("raw");
+         if (!drv) {
++            error_setg(errp, "Could not find raw image format");
+             ret = -ENOENT;
+         }
+         *pdrv = drv;
+@@ -543,6 +544,8 @@ static int find_image_format(BlockDriverState *bs, const char *filename,
+ 
+     ret = bdrv_pread(bs, 0, buf, sizeof(buf));
+     if (ret < 0) {
++        error_setg_errno(errp, -ret, "Could not read image for determining its "
++                         "format");
+         *pdrv = NULL;
+         return ret;
+     }
+@@ -559,6 +562,8 @@ static int find_image_format(BlockDriverState *bs, const char *filename,
+         }
+     }
+     if (!drv) {
++        error_setg(errp, "Could not determine image format: No compatible "
++                   "driver found");
+         ret = -ENOENT;
+     }
+     *pdrv = drv;
+@@ -678,10 +683,11 @@ static int bdrv_open_flags(BlockDriverState *bs, int flags)
+  * Removes all processed options from *options.
+  */
+ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
+-    QDict *options, int flags, BlockDriver *drv)
++    QDict *options, int flags, BlockDriver *drv, Error **errp)
+ {
+     int ret, open_flags;
+     const char *filename;
++    Error *local_err = NULL;
+ 
+     assert(drv != NULL);
+     assert(bs->file == NULL);
+@@ -710,6 +716,7 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
+     bs->read_only = !(open_flags & BDRV_O_RDWR);
+ 
+     if (use_bdrv_whitelist && !bdrv_is_whitelisted(drv, bs->read_only)) {
++        error_setg(errp, "Driver '%s' is not whitelisted", drv->format_name);
+         return -ENOTSUP;
+     }
+ 
+@@ -733,26 +740,33 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
+     if (drv->bdrv_file_open) {
+         assert(file == NULL);
+         assert(drv->bdrv_parse_filename || filename != NULL);
+-        ret = drv->bdrv_file_open(bs, options, open_flags, NULL);
++        ret = drv->bdrv_file_open(bs, options, open_flags, &local_err);
+     } else {
+         if (file == NULL) {
+-            qerror_report(ERROR_CLASS_GENERIC_ERROR, "Can't use '%s' as a "
+-                          "block driver for the protocol level",
+-                          drv->format_name);
++            error_setg(errp, "Can't use '%s' as a block driver for the "
++                       "protocol level", drv->format_name);
+             ret = -EINVAL;
+             goto free_and_fail;
+         }
+         assert(file != NULL);
+         bs->file = file;
+-        ret = drv->bdrv_open(bs, options, open_flags, NULL);
++        ret = drv->bdrv_open(bs, options, open_flags, &local_err);
+     }
+ 
+     if (ret < 0) {
++        if (error_is_set(&local_err)) {
++            error_propagate(errp, local_err);
++        } else if (filename) {
++            error_setg_errno(errp, -ret, "Could not open '%s'", filename);
++        } else {
++            error_setg_errno(errp, -ret, "Could not open image");
++        }
+         goto free_and_fail;
+     }
+ 
+     ret = refresh_total_sectors(bs, bs->total_sectors);
+     if (ret < 0) {
++        error_setg_errno(errp, -ret, "Could not refresh total sector count");
+         goto free_and_fail;
+     }
+ 
+@@ -781,12 +795,13 @@ free_and_fail:
+  * dictionary, it needs to use QINCREF() before calling bdrv_file_open.
+  */
+ int bdrv_file_open(BlockDriverState **pbs, const char *filename,
+-                   QDict *options, int flags)
++                   QDict *options, int flags, Error **errp)
+ {
+     BlockDriverState *bs;
+     BlockDriver *drv;
+     const char *drvname;
+     bool allow_protocol_prefix = false;
++    Error *local_err = NULL;
+     int ret;
+ 
+     /* NULL means an empty set of options */
+@@ -805,8 +820,8 @@ int bdrv_file_open(BlockDriverState **pbs, const char *filename,
+         qdict_put(options, "filename", qstring_from_str(filename));
+         allow_protocol_prefix = true;
+     } else {
+-        qerror_report(ERROR_CLASS_GENERIC_ERROR, "Can't specify 'file' and "
+-                      "'filename' options at the same time");
++        error_setg(errp, "Can't specify 'file' and 'filename' options at the "
++                   "same time");
+         ret = -EINVAL;
+         goto fail;
+     }
+@@ -815,53 +830,53 @@ int bdrv_file_open(BlockDriverState **pbs, const char *filename,
+     drvname = qdict_get_try_str(options, "driver");
+     if (drvname) {
+         drv = bdrv_find_whitelisted_format(drvname, !(flags & BDRV_O_RDWR));
++        if (!drv) {
++            error_setg(errp, "Unknown driver '%s'", drvname);
++        }
+         qdict_del(options, "driver");
+     } else if (filename) {
+         drv = bdrv_find_protocol(filename, allow_protocol_prefix);
+         if (!drv) {
+-            qerror_report(ERROR_CLASS_GENERIC_ERROR, "Unknown protocol");
++            error_setg(errp, "Unknown protocol");
+         }
+     } else {
+-        qerror_report(ERROR_CLASS_GENERIC_ERROR,
+-                      "Must specify either driver or file");
++        error_setg(errp, "Must specify either driver or file");
+         drv = NULL;
+     }
+ 
+     if (!drv) {
++        /* errp has been set already */
+         ret = -ENOENT;
+         goto fail;
+     }
+ 
+     /* Parse the filename and open it */
+     if (drv->bdrv_parse_filename && filename) {
+-        Error *local_err = NULL;
+         drv->bdrv_parse_filename(filename, options, &local_err);
+         if (error_is_set(&local_err)) {
+-            qerror_report_err(local_err);
+-            error_free(local_err);
++            error_propagate(errp, local_err);
+             ret = -EINVAL;
+             goto fail;
+         }
+         qdict_del(options, "filename");
+     } else if (!drv->bdrv_parse_filename && !filename) {
+-        qerror_report(ERROR_CLASS_GENERIC_ERROR,
+-                      "The '%s' block driver requires a file name",
+-                      drv->format_name);
++        error_setg(errp, "The '%s' block driver requires a file name",
++                   drv->format_name);
+         ret = -EINVAL;
+         goto fail;
+     }
+ 
+-    ret = bdrv_open_common(bs, NULL, options, flags, drv);
++    ret = bdrv_open_common(bs, NULL, options, flags, drv, &local_err);
+     if (ret < 0) {
++        error_propagate(errp, local_err);
+         goto fail;
+     }
+ 
+     /* Check if any unknown options were used */
+     if (qdict_size(options) != 0) {
+         const QDictEntry *entry = qdict_first(options);
+-        qerror_report(ERROR_CLASS_GENERIC_ERROR, "Block protocol '%s' doesn't "
+-                      "support the option '%s'",
+-                      drv->format_name, entry->key);
++        error_setg(errp, "Block protocol '%s' doesn't support the option '%s'",
++                   drv->format_name, entry->key);
+         ret = -EINVAL;
+         goto fail;
+     }
+@@ -888,11 +903,12 @@ fail:
+  * function (even on failure), so if the caller intends to reuse the dictionary,
+  * it needs to use QINCREF() before calling bdrv_file_open.
+  */
+-int bdrv_open_backing_file(BlockDriverState *bs, QDict *options)
++int bdrv_open_backing_file(BlockDriverState *bs, QDict *options, Error **errp)
+ {
+     char backing_filename[PATH_MAX];
+     int back_flags, ret;
+     BlockDriver *back_drv = NULL;
++    Error *local_err = NULL;
+ 
+     if (bs->backing_hd != NULL) {
+         QDECREF(options);
+@@ -925,11 +941,12 @@ int bdrv_open_backing_file(BlockDriverState *bs, QDict *options)
+ 
+     ret = bdrv_open(bs->backing_hd,
+                     *backing_filename ? backing_filename : NULL, options,
+-                    back_flags, back_drv);
++                    back_flags, back_drv, &local_err);
+     if (ret < 0) {
+         bdrv_delete(bs->backing_hd);
+         bs->backing_hd = NULL;
+         bs->open_flags |= BDRV_O_NO_BACKING;
++        error_propagate(errp, local_err);
+         return ret;
+     }
+     return 0;
+@@ -963,7 +980,7 @@ static void extract_subqdict(QDict *src, QDict **dst, const char *start)
+  * dictionary, it needs to use QINCREF() before calling bdrv_open.
+  */
+ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+-              int flags, BlockDriver *drv)
++              int flags, BlockDriver *drv, Error **errp)
+ {
+     int ret;
+     /* TODO: extra byte is a hack to ensure MAX_PATH space on Windows. */
+@@ -971,6 +988,7 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+     BlockDriverState *file = NULL;
+     QDict *file_options = NULL;
+     const char *drvname;
++    Error *local_err = NULL;
+ 
+     /* NULL means an empty set of options */
+     if (options == NULL) {
+@@ -989,7 +1007,7 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+         char backing_filename[PATH_MAX];
+ 
+         if (qdict_size(options) != 0) {
+-            error_report("Can't use snapshot=on with driver-specific options");
++            error_setg(errp, "Can't use snapshot=on with driver-specific options");
+             ret = -EINVAL;
+             goto fail;
+         }
+@@ -1000,7 +1018,7 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+ 
+         /* if there is a backing file, use it */
+         bs1 = bdrv_new("");
+-        ret = bdrv_open(bs1, filename, NULL, 0, drv);
++        ret = bdrv_open(bs1, filename, NULL, 0, drv, &local_err);
+         if (ret < 0) {
+             bdrv_delete(bs1);
+             goto fail;
+@@ -1011,6 +1029,7 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+ 
+         ret = get_tmp_filename(tmp_filename, sizeof(tmp_filename));
+         if (ret < 0) {
++            error_setg_errno(errp, -ret, "Could not get temporary filename");
+             goto fail;
+         }
+ 
+@@ -1019,6 +1038,7 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+             snprintf(backing_filename, sizeof(backing_filename),
+                      "%s", filename);
+         } else if (!realpath(filename, backing_filename)) {
++            error_setg_errno(errp, errno, "Could not resolve path '%s'", filename);
+             ret = -errno;
+             goto fail;
+         }
+@@ -1038,6 +1058,8 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+         ret = bdrv_create(bdrv_qcow2, tmp_filename, create_options);
+         free_option_parameters(create_options);
+         if (ret < 0) {
++            error_setg_errno(errp, -ret, "Could not create temporary overlay "
++                             "'%s'", tmp_filename);
+             goto fail;
+         }
+ 
+@@ -1054,7 +1076,7 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+     extract_subqdict(options, &file_options, "file.");
+ 
+     ret = bdrv_file_open(&file, filename, file_options,
+-                         bdrv_open_flags(bs, flags | BDRV_O_UNMAP));
++                         bdrv_open_flags(bs, flags | BDRV_O_UNMAP), &local_err);
+     if (ret < 0) {
+         goto fail;
+     }
+@@ -1067,7 +1089,7 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+     }
+ 
+     if (!drv) {
+-        ret = find_image_format(file, filename, &drv);
++        ret = find_image_format(file, filename, &drv, &local_err);
+     }
+ 
+     if (!drv) {
+@@ -1075,7 +1097,7 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+     }
+ 
+     /* Open the image */
+-    ret = bdrv_open_common(bs, file, options, flags, drv);
++    ret = bdrv_open_common(bs, file, options, flags, drv, &local_err);
+     if (ret < 0) {
+         goto unlink_and_fail;
+     }
+@@ -1090,7 +1112,7 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+         QDict *backing_options;
+ 
+         extract_subqdict(options, &backing_options, "backing.");
+-        ret = bdrv_open_backing_file(bs, backing_options);
++        ret = bdrv_open_backing_file(bs, backing_options, &local_err);
+         if (ret < 0) {
+             goto close_and_fail;
+         }
+@@ -1099,9 +1121,9 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+     /* Check if any unknown options were used */
+     if (qdict_size(options) != 0) {
+         const QDictEntry *entry = qdict_first(options);
+-        qerror_report(ERROR_CLASS_GENERIC_ERROR, "Block format '%s' used by "
+-            "device '%s' doesn't support the option '%s'",
+-            drv->format_name, bs->device_name, entry->key);
++        error_setg(errp, "Block format '%s' used by device '%s' doesn't "
++                   "support the option '%s'", drv->format_name, bs->device_name,
++                   entry->key);
+ 
+         ret = -EINVAL;
+         goto close_and_fail;
+@@ -1130,11 +1152,17 @@ fail:
+     QDECREF(bs->options);
+     QDECREF(options);
+     bs->options = NULL;
++    if (error_is_set(&local_err)) {
++        error_propagate(errp, local_err);
++    }
+     return ret;
+ 
+ close_and_fail:
+     bdrv_close(bs);
+     QDECREF(options);
++    if (error_is_set(&local_err)) {
++        error_propagate(errp, local_err);
++    }
+     return ret;
+ }
+ 
+@@ -4813,7 +4841,7 @@ void bdrv_img_create(const char *filename, const char *fmt,
+             bs = bdrv_new("");
+ 
+             ret = bdrv_open(bs, backing_file->value.s, NULL, back_flags,
+-                            backing_drv);
++                            backing_drv, NULL);
+             if (ret < 0) {
+                 error_setg_errno(errp, -ret, "Could not open '%s'",
+                                  backing_file->value.s);
+diff --git a/block/blkdebug.c b/block/blkdebug.c
+index 114c4c9..eda2810 100644
+--- a/block/blkdebug.c
++++ b/block/blkdebug.c
+@@ -384,8 +384,10 @@ static int blkdebug_open(BlockDriverState *bs, QDict *options, int flags,
+         goto fail;
+     }
+ 
+-    ret = bdrv_file_open(&bs->file, filename, NULL, flags);
++    ret = bdrv_file_open(&bs->file, filename, NULL, flags, &local_err);
+     if (ret < 0) {
++        qerror_report_err(local_err);
++        error_free(local_err);
+         goto fail;
+     }
+ 
+diff --git a/block/blkverify.c b/block/blkverify.c
+index 5d716bb..cceb88f 100644
+--- a/block/blkverify.c
++++ b/block/blkverify.c
+@@ -141,8 +141,10 @@ static int blkverify_open(BlockDriverState *bs, QDict *options, int flags,
+         goto fail;
+     }
+ 
+-    ret = bdrv_file_open(&bs->file, raw, NULL, flags);
++    ret = bdrv_file_open(&bs->file, raw, NULL, flags, &local_err);
+     if (ret < 0) {
++        qerror_report_err(local_err);
++        error_free(local_err);
+         goto fail;
+     }
+ 
+@@ -154,8 +156,10 @@ static int blkverify_open(BlockDriverState *bs, QDict *options, int flags,
+     }
+ 
+     s->test_file = bdrv_new("");
+-    ret = bdrv_open(s->test_file, filename, NULL, flags, NULL);
++    ret = bdrv_open(s->test_file, filename, NULL, flags, NULL, &local_err);
+     if (ret < 0) {
++        qerror_report_err(local_err);
++        error_free(local_err);
+         bdrv_delete(s->test_file);
+         s->test_file = NULL;
+         goto fail;
+diff --git a/block/cow.c b/block/cow.c
+index c1d2dc8..8e00f8f 100644
+--- a/block/cow.c
++++ b/block/cow.c
+@@ -302,6 +302,7 @@ static int cow_create(const char *filename, QEMUOptionParameter *options,
+     struct stat st;
+     int64_t image_sectors = 0;
+     const char *image_filename = NULL;
++    Error *local_err = NULL;
+     int ret;
+     BlockDriverState *cow_bs;
+ 
+@@ -320,8 +321,10 @@ static int cow_create(const char *filename, QEMUOptionParameter *options,
+         return ret;
+     }
+ 
+-    ret = bdrv_file_open(&cow_bs, filename, NULL, BDRV_O_RDWR);
++    ret = bdrv_file_open(&cow_bs, filename, NULL, BDRV_O_RDWR, &local_err);
+     if (ret < 0) {
++        qerror_report_err(local_err);
++        error_free(local_err);
+         return ret;
+     }
+ 
+diff --git a/block/mirror.c b/block/mirror.c
+index dad1e3e..6fa733e 100644
+--- a/block/mirror.c
++++ b/block/mirror.c
+@@ -505,14 +505,15 @@ static void mirror_iostatus_reset(BlockJob *job)
+ static void mirror_complete(BlockJob *job, Error **errp)
+ {
+     MirrorBlockJob *s = container_of(job, MirrorBlockJob, common);
++    Error *local_err = NULL;
+     int ret;
+ 
+-    ret = bdrv_open_backing_file(s->target, NULL);
++    ret = bdrv_open_backing_file(s->target, NULL, &local_err);
+     if (ret < 0) {
+         char backing_filename[PATH_MAX];
+         bdrv_get_full_backing_filename(s->target, backing_filename,
+                                        sizeof(backing_filename));
+-        error_setg_file_open(errp, -ret, backing_filename);
++        error_propagate(errp, local_err);
+         return;
+     }
+     if (!s->synced) {
+diff --git a/block/qcow.c b/block/qcow.c
+index 1a6926f..41a578c 100644
+--- a/block/qcow.c
++++ b/block/qcow.c
+@@ -668,6 +668,7 @@ static int qcow_create(const char *filename, QEMUOptionParameter *options,
+     int64_t total_size = 0;
+     const char *backing_file = NULL;
+     int flags = 0;
++    Error *local_err = NULL;
+     int ret;
+     BlockDriverState *qcow_bs;
+ 
+@@ -688,8 +689,10 @@ static int qcow_create(const char *filename, QEMUOptionParameter *options,
+         return ret;
+     }
+ 
+-    ret = bdrv_file_open(&qcow_bs, filename, NULL, BDRV_O_RDWR);
++    ret = bdrv_file_open(&qcow_bs, filename, NULL, BDRV_O_RDWR, &local_err);
+     if (ret < 0) {
++        qerror_report_err(local_err);
++        error_free(local_err);
+         return ret;
+     }
+ 
+diff --git a/block/qcow2.c b/block/qcow2.c
+index b6e50af..a2fca7a 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -1369,7 +1369,7 @@ static int qcow2_create2(const char *filename, int64_t total_size,
+         return ret;
+     }
+ 
+-    ret = bdrv_file_open(&bs, filename, NULL, BDRV_O_RDWR);
++    ret = bdrv_file_open(&bs, filename, NULL, BDRV_O_RDWR, NULL);
+     if (ret < 0) {
+         return ret;
+     }
+@@ -1422,7 +1422,7 @@ static int qcow2_create2(const char *filename, int64_t total_size,
+     BlockDriver* drv = bdrv_find_format("qcow2");
+     assert(drv != NULL);
+     ret = bdrv_open(bs, filename, NULL,
+-        BDRV_O_RDWR | BDRV_O_CACHE_WB | BDRV_O_NO_FLUSH, drv);
++        BDRV_O_RDWR | BDRV_O_CACHE_WB | BDRV_O_NO_FLUSH, drv, NULL);
+     if (ret < 0) {
+         goto out;
+     }
+diff --git a/block/qed.c b/block/qed.c
+index c56b5e2..fa35fe2 100644
+--- a/block/qed.c
++++ b/block/qed.c
+@@ -551,6 +551,7 @@ static int qed_create(const char *filename, uint32_t cluster_size,
+     QEDHeader le_header;
+     uint8_t *l1_table = NULL;
+     size_t l1_size = header.cluster_size * header.table_size;
++    Error *local_err = NULL;
+     int ret = 0;
+     BlockDriverState *bs = NULL;
+ 
+@@ -559,8 +560,11 @@ static int qed_create(const char *filename, uint32_t cluster_size,
+         return ret;
+     }
+ 
+-    ret = bdrv_file_open(&bs, filename, NULL, BDRV_O_RDWR | BDRV_O_CACHE_WB);
++    ret = bdrv_file_open(&bs, filename, NULL, BDRV_O_RDWR | BDRV_O_CACHE_WB,
++                         &local_err);
+     if (ret < 0) {
++        qerror_report_err(local_err);
++        error_free(local_err);
+         return ret;
+     }
+ 
+diff --git a/block/sheepdog.c b/block/sheepdog.c
+index 952d703..e7c4448 100644
+--- a/block/sheepdog.c
++++ b/block/sheepdog.c
+@@ -1418,10 +1418,13 @@ static int sd_prealloc(const char *filename)
+     uint32_t idx, max_idx;
+     int64_t vdi_size;
+     void *buf = g_malloc0(SD_DATA_OBJ_SIZE);
++    Error *local_err = NULL;
+     int ret;
+ 
+-    ret = bdrv_file_open(&bs, filename, NULL, BDRV_O_RDWR);
++    ret = bdrv_file_open(&bs, filename, NULL, BDRV_O_RDWR, &local_err);
+     if (ret < 0) {
++        qerror_report_err(local_err);
++        error_free(local_err);
+         goto out;
+     }
+ 
+@@ -1466,6 +1469,7 @@ static int sd_create(const char *filename, QEMUOptionParameter *options,
+     char vdi[SD_MAX_VDI_LEN], tag[SD_MAX_VDI_TAG_LEN];
+     uint32_t snapid;
+     bool prealloc = false;
++    Error *local_err = NULL;
+ 
+     s = g_malloc0(sizeof(BDRVSheepdogState));
+ 
+@@ -1519,8 +1523,10 @@ static int sd_create(const char *filename, QEMUOptionParameter *options,
+             goto out;
+         }
+ 
+-        ret = bdrv_file_open(&bs, backing_file, NULL, 0);
++        ret = bdrv_file_open(&bs, backing_file, NULL, 0, &local_err);
+         if (ret < 0) {
++            qerror_report_err(local_err);
++            error_free(local_err);
+             goto out;
+         }
+ 
+diff --git a/block/vmdk.c b/block/vmdk.c
+index fa64f05..213901f 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -697,6 +697,7 @@ static int vmdk_parse_extents(const char *desc, BlockDriverState *bs,
+     int64_t flat_offset;
+     char extent_path[PATH_MAX];
+     BlockDriverState *extent_file;
++    Error *local_err = NULL;
+ 
+     while (*p) {
+         /* parse extent line:
+@@ -726,8 +727,11 @@ static int vmdk_parse_extents(const char *desc, BlockDriverState *bs,
+ 
+         path_combine(extent_path, sizeof(extent_path),
+                 desc_file_path, fname);
+-        ret = bdrv_file_open(&extent_file, extent_path, NULL, bs->open_flags);
++        ret = bdrv_file_open(&extent_file, extent_path, NULL, bs->open_flags,
++                             &local_err);
+         if (ret) {
++            qerror_report_err(local_err);
++            error_free(local_err);
+             return ret;
+         }
+ 
+@@ -1591,6 +1595,7 @@ static int vmdk_create(const char *filename, QEMUOptionParameter *options,
+         "ddb.geometry.heads = \"%d\"\n"
+         "ddb.geometry.sectors = \"63\"\n"
+         "ddb.adapterType = \"%s\"\n";
++    Error *local_err = NULL;
+ 
+     if (filename_decompose(filename, path, prefix, postfix, PATH_MAX)) {
+         return -EINVAL;
+@@ -1653,8 +1658,10 @@ static int vmdk_create(const char *filename, QEMUOptionParameter *options,
+     }
+     if (backing_file) {
+         BlockDriverState *bs = bdrv_new("");
+-        ret = bdrv_open(bs, backing_file, NULL, 0, NULL);
++        ret = bdrv_open(bs, backing_file, NULL, 0, NULL, &local_err);
+         if (ret != 0) {
++            qerror_report_err(local_err);
++            error_free(local_err);
+             bdrv_delete(bs);
+             return ret;
+         }
+diff --git a/block/vvfat.c b/block/vvfat.c
+index bb3b0b6..a385b6f 100644
+--- a/block/vvfat.c
++++ b/block/vvfat.c
+@@ -2910,6 +2910,7 @@ static int enable_write_target(BDRVVVFATState *s)
+ {
+     BlockDriver *bdrv_qcow;
+     QEMUOptionParameter *options;
++    Error *local_err = NULL;
+     int ret;
+     int size = sector2cluster(s, s->sector_count);
+     s->used_clusters = calloc(size, 1);
+@@ -2935,8 +2936,11 @@ static int enable_write_target(BDRVVVFATState *s)
+     s->qcow = bdrv_new("");
+ 
+     ret = bdrv_open(s->qcow, s->qcow_filename, NULL,
+-            BDRV_O_RDWR | BDRV_O_CACHE_WB | BDRV_O_NO_FLUSH, bdrv_qcow);
++            BDRV_O_RDWR | BDRV_O_CACHE_WB | BDRV_O_NO_FLUSH, bdrv_qcow,
++            &local_err);
+     if (ret < 0) {
++        qerror_report_err(local_err);
++        error_free(local_err);
+         bdrv_delete(s->qcow);
+         goto err;
+     }
+diff --git a/blockdev.c b/blockdev.c
+index a6563fa..2fb6d83 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -707,17 +707,11 @@ static DriveInfo *blockdev_init(QemuOpts *all_opts,
+     }
+ 
+     QINCREF(bs_opts);
+-    ret = bdrv_open(dinfo->bdrv, file, bs_opts, bdrv_flags, drv);
++    ret = bdrv_open(dinfo->bdrv, file, bs_opts, bdrv_flags, drv, &error);
+ 
+     if (ret < 0) {
+-        if (ret == -EMEDIUMTYPE) {
+-            error_report("could not open disk image %s: not in %s format",
+-                         file ?: dinfo->id, drv ? drv->format_name :
+-                         qdict_get_str(bs_opts, "driver"));
+-        } else {
+-            error_report("could not open disk image %s: %s",
+-                         file ?: dinfo->id, strerror(-ret));
+-        }
++        error_report("could not open disk image %s: %s",
++                     file ?: dinfo->id, error_get_pretty(error));
+         goto err;
+     }
+ 
+@@ -958,9 +952,9 @@ static void external_snapshot_prepare(BlkTransactionStates *common,
+     /* TODO Inherit bs->options or only take explicit options with an
+      * extended QMP command? */
+     ret = bdrv_open(states->new_bs, new_image_file, NULL,
+-                    flags | BDRV_O_NO_BACKING, drv);
++                    flags | BDRV_O_NO_BACKING, drv, &local_err);
+     if (ret != 0) {
+-        error_setg_file_open(errp, -ret, new_image_file);
++        error_propagate(errp, local_err);
+     }
+ }
+ 
+@@ -1124,11 +1118,12 @@ static void qmp_bdrv_open_encrypted(BlockDriverState *bs, const char *filename,
+                                     int bdrv_flags, BlockDriver *drv,
+                                     const char *password, Error **errp)
+ {
++    Error *local_err = NULL;
+     int ret;
+ 
+-    ret = bdrv_open(bs, filename, NULL, bdrv_flags, drv);
++    ret = bdrv_open(bs, filename, NULL, bdrv_flags, drv, &local_err);
+     if (ret < 0) {
+-        error_setg_file_open(errp, -ret, filename);
++        error_propagate(errp, local_err);
+         return;
+     }
+ 
+@@ -1538,10 +1533,11 @@ void qmp_drive_mirror(const char *device, const char *target,
+      * file.
+      */
+     target_bs = bdrv_new("");
+-    ret = bdrv_open(target_bs, target, NULL, flags | BDRV_O_NO_BACKING, drv);
++    ret = bdrv_open(target_bs, target, NULL, flags | BDRV_O_NO_BACKING, drv,
++                    &local_err);
+     if (ret < 0) {
+         bdrv_delete(target_bs);
+-        error_setg_file_open(errp, -ret, target);
++        error_propagate(errp, local_err);
+         return;
+     }
+ 
+diff --git a/hw/block/xen_disk.c b/hw/block/xen_disk.c
+index 247f32f..2d4d263 100644
+--- a/hw/block/xen_disk.c
++++ b/hw/block/xen_disk.c
+@@ -797,10 +797,15 @@ static int blk_connect(struct XenDevice *xendev)
+         xen_be_printf(&blkdev->xendev, 2, "create new bdrv (xenbus setup)\n");
+         blkdev->bs = bdrv_new(blkdev->dev);
+         if (blkdev->bs) {
++            Error *local_err = NULL;
+             BlockDriver *drv = bdrv_find_whitelisted_format(blkdev->fileproto,
+                                                            readonly);
+             if (bdrv_open(blkdev->bs,
+-                          blkdev->filename, NULL, qflags, drv) != 0) {
++                          blkdev->filename, NULL, qflags, drv, &local_err) != 0)
++            {
++                xen_be_printf(&blkdev->xendev, 0, "error: %s\n",
++                              error_get_pretty(local_err));
++                error_free(local_err);
+                 bdrv_delete(blkdev->bs);
+                 blkdev->bs = NULL;
+             }
+diff --git a/include/block/block.h b/include/block/block.h
+index 39770a3..168d8a8 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -162,10 +162,10 @@ void bdrv_delete(BlockDriverState *bs);
+ int bdrv_parse_cache_flags(const char *mode, int *flags);
+ int bdrv_parse_discard_flags(const char *mode, int *flags);
+ int bdrv_file_open(BlockDriverState **pbs, const char *filename,
+-                   QDict *options, int flags);
+-int bdrv_open_backing_file(BlockDriverState *bs, QDict *options);
++                   QDict *options, int flags, Error **errp);
++int bdrv_open_backing_file(BlockDriverState *bs, QDict *options, Error **errp);
+ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+-              int flags, BlockDriver *drv);
++              int flags, BlockDriver *drv, Error **errp);
+ BlockReopenQueue *bdrv_reopen_queue(BlockReopenQueue *bs_queue,
+                                     BlockDriverState *bs, int flags);
+ int bdrv_reopen_multiple(BlockReopenQueue *bs_queue, Error **errp);
+diff --git a/qemu-img.c b/qemu-img.c
+index 8fcea44..d7d1244 100644
+--- a/qemu-img.c
++++ b/qemu-img.c
+@@ -264,6 +264,7 @@ static BlockDriverState *bdrv_new_open(const char *filename,
+     BlockDriverState *bs;
+     BlockDriver *drv;
+     char password[256];
++    Error *local_err = NULL;
+     int ret;
+ 
+     bs = bdrv_new("image");
+@@ -278,9 +279,11 @@ static BlockDriverState *bdrv_new_open(const char *filename,
+         drv = NULL;
+     }
+ 
+-    ret = bdrv_open(bs, filename, NULL, flags, drv);
++    ret = bdrv_open(bs, filename, NULL, flags, drv, &local_err);
+     if (ret < 0) {
+-        error_report("Could not open '%s': %s", filename, strerror(-ret));
++        error_report("Could not open '%s': %s", filename,
++                     error_get_pretty(local_err));
++        error_free(local_err);
+         goto fail;
+     }
+ 
+@@ -2266,6 +2269,7 @@ static int img_rebase(int argc, char **argv)
+     int unsafe = 0;
+     int progress = 0;
+     bool quiet = false;
++    Error *local_err = NULL;
+ 
+     /* Parse commandline parameters */
+     fmt = NULL;
+@@ -2369,18 +2373,21 @@ static int img_rebase(int argc, char **argv)
+         bs_old_backing = bdrv_new("old_backing");
+         bdrv_get_backing_filename(bs, backing_name, sizeof(backing_name));
+         ret = bdrv_open(bs_old_backing, backing_name, NULL, BDRV_O_FLAGS,
+-                        old_backing_drv);
++                        old_backing_drv, &local_err);
+         if (ret) {
+-            error_report("Could not open old backing file '%s'", backing_name);
++            error_report("Could not open old backing file '%s': %s",
++                         backing_name, error_get_pretty(local_err));
++            error_free(local_err);
+             goto out;
+         }
+         if (out_baseimg[0]) {
+             bs_new_backing = bdrv_new("new_backing");
+             ret = bdrv_open(bs_new_backing, out_baseimg, NULL, BDRV_O_FLAGS,
+-                        new_backing_drv);
++                        new_backing_drv, &local_err);
+             if (ret) {
+-                error_report("Could not open new backing file '%s'",
+-                             out_baseimg);
++                error_report("Could not open new backing file '%s': %s",
++                             out_baseimg, error_get_pretty(local_err));
++                error_free(local_err);
+                 goto out;
+             }
+         }
+diff --git a/qemu-io.c b/qemu-io.c
+index bdcce7f..116bb1b 100644
+--- a/qemu-io.c
++++ b/qemu-io.c
+@@ -1764,21 +1764,27 @@ static const cmdinfo_t close_cmd = {
+ 
+ static int openfile(char *name, int flags, int growable)
+ {
++    Error *local_err = NULL;
++
+     if (bs) {
+         fprintf(stderr, "file open already, try 'help close'\n");
+         return 1;
+     }
+ 
+     if (growable) {
+-        if (bdrv_file_open(&bs, name, NULL, flags)) {
+-            fprintf(stderr, "%s: can't open device %s\n", progname, name);
++        if (bdrv_file_open(&bs, name, NULL, flags, &local_err)) {
++            fprintf(stderr, "%s: can't open device %s: %s\n", progname, name,
++                    error_get_pretty(local_err));
++            error_free(local_err);
+             return 1;
+         }
+     } else {
+         bs = bdrv_new("hda");
+ 
+-        if (bdrv_open(bs, name, NULL, flags, NULL) < 0) {
+-            fprintf(stderr, "%s: can't open device %s\n", progname, name);
++        if (bdrv_open(bs, name, NULL, flags, NULL, &local_err) < 0) {
++            fprintf(stderr, "%s: can't open device %s: %s\n", progname, name,
++                    error_get_pretty(local_err));
++            error_free(local_err);
+             bdrv_delete(bs);
+             bs = NULL;
+             return 1;
+diff --git a/qemu-nbd.c b/qemu-nbd.c
+index 9c31d45..c1b395d 100644
+--- a/qemu-nbd.c
++++ b/qemu-nbd.c
+@@ -354,6 +354,7 @@ int main(int argc, char **argv)
+ #endif
+     pthread_t client_thread;
+     const char *fmt = NULL;
++    Error *local_err = NULL;
+ 
+     /* The client thread uses SIGTERM to interrupt the server.  A signal
+      * handler ensures that "qemu-nbd -v -c" exits with a nice status code.
+@@ -572,10 +573,11 @@ int main(int argc, char **argv)
+ 
+     bs = bdrv_new("hda");
+     srcpath = argv[optind];
+-    ret = bdrv_open(bs, srcpath, NULL, flags, drv);
++    ret = bdrv_open(bs, srcpath, NULL, flags, drv, &local_err);
+     if (ret < 0) {
+         errno = -ret;
+-        err(EXIT_FAILURE, "Failed to bdrv_open '%s'", argv[optind]);
++        err(EXIT_FAILURE, "Failed to bdrv_open '%s': %s", argv[optind],
++            error_get_pretty(local_err));
+     }
+ 
+     fd_size = bdrv_getlength(bs);
+-- 
+1.7.1
+

@@ -1,0 +1,358 @@
+From cf0bb22a1d897cc225f14489eaad0dd02ec4a6e3 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Wed, 16 Jul 2014 02:20:25 -0500
+Subject: [CHANGE 25/29] util: Split out exec_dir from os_find_datadir
+To: rhvirt-patches@redhat.com,
+    jen@redhat.com
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1405477228-11490-2-git-send-email-famz@redhat.com>
+Patchwork-id: 59920
+O-Subject: [RHEL-7 qemu-kvm PATCH 1/4] util: Split out exec_dir from os_find_datadir
+Bugzilla: 1017685
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Miroslav Rezanina <mrezanin@redhat.com>
+
+Upstream: 10f5bff622cad71645e22c027b77ac31e51008ef
+
+With this change, main() calls qemu_init_exec_dir and uses argv[0] to
+init exec_dir. The saved value can be retrieved with
+qemu_get_exec_dir later. It will be reused by module loading.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+
+This is manual backport. Following change is handling -Werror=strict-prototypes
+error (function declaration isn't a prototype):
+
+Upstream: char *os_find_datadir();
+RHEL:     char *os_find_datadir(void);
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ include/qemu-common.h |  2 +-
+ include/qemu/osdep.h  |  9 +++++++++
+ os-posix.c            | 42 +++++++--------------------------------
+ os-win32.c            | 21 ++------------------
+ qemu-img.c            |  1 +
+ qemu-io.c             |  1 +
+ qemu-nbd.c            |  1 +
+ util/oslib-posix.c    | 54 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ util/oslib-win32.c    | 30 ++++++++++++++++++++++++++++
+ vl.c                  |  3 ++-
+ 10 files changed, 108 insertions(+), 56 deletions(-)
+
+Signed-off-by: jen <jen@redhat.com>
+---
+ include/qemu-common.h |  2 +-
+ include/qemu/osdep.h  |  9 +++++++++
+ os-posix.c            | 42 +++++++--------------------------------
+ os-win32.c            | 21 ++------------------
+ qemu-img.c            |  1 +
+ qemu-io.c             |  1 +
+ qemu-nbd.c            |  1 +
+ util/oslib-posix.c    | 54 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ util/oslib-win32.c    | 30 ++++++++++++++++++++++++++++
+ vl.c                  |  3 ++-
+ 10 files changed, 108 insertions(+), 56 deletions(-)
+
+diff --git a/include/qemu-common.h b/include/qemu-common.h
+index 73c6419..aee85e3 100644
+--- a/include/qemu-common.h
++++ b/include/qemu-common.h
+@@ -360,7 +360,7 @@ char *qemu_find_file(int type, const char *name);
+ 
+ /* OS specific functions */
+ void os_setup_early_signal_handling(void);
+-char *os_find_datadir(const char *argv0);
++char *os_find_datadir(void);
+ void os_parse_cmd_args(int index, const char *optarg);
+ void os_pidfile_error(void);
+ 
+diff --git a/include/qemu/osdep.h b/include/qemu/osdep.h
+index 26136f1..7a5ae28 100644
+--- a/include/qemu/osdep.h
++++ b/include/qemu/osdep.h
+@@ -215,4 +215,13 @@ bool fips_get_state(void);
+  */
+ char *qemu_get_local_state_pathname(const char *relative_pathname);
+ 
++/* Find program directory, and save it for later usage with
++ * qemu_get_exec_dir().
++ * Try OS specific API first, if not working, parse from argv0. */
++void qemu_init_exec_dir(const char *argv0);
++
++/* Get the saved exec dir.
++ * Caller needs to release the returned string by g_free() */
++char *qemu_get_exec_dir(void);
++
+ #endif
+diff --git a/os-posix.c b/os-posix.c
+index 3a4678a..7cfca4b 100644
+--- a/os-posix.c
++++ b/os-posix.c
+@@ -84,46 +84,17 @@ void os_setup_signal_handling(void)
+    running from the build tree this will be "$bindir/../pc-bios".  */
+ #define SHARE_SUFFIX "/share/qemu-kvm"
+ #define BUILD_SUFFIX "/pc-bios"
+-char *os_find_datadir(const char *argv0)
++char *os_find_datadir(void)
+ {
+-    char *dir;
+-    char *p = NULL;
++    char *dir, *exec_dir;
+     char *res;
+-    char buf[PATH_MAX];
+     size_t max_len;
+ 
+-#if defined(__linux__)
+-    {
+-        int len;
+-        len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+-        if (len > 0) {
+-            buf[len] = 0;
+-            p = buf;
+-        }
++    exec_dir = qemu_get_exec_dir();
++    if (exec_dir == NULL) {
++        return NULL;
+     }
+-#elif defined(__FreeBSD__)
+-    {
+-        static int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1};
+-        size_t len = sizeof(buf) - 1;
+-
+-        *buf = '\0';
+-        if (!sysctl(mib, ARRAY_SIZE(mib), buf, &len, NULL, 0) &&
+-            *buf) {
+-            buf[sizeof(buf) - 1] = '\0';
+-            p = buf;
+-        }
+-    }
+-#endif
+-    /* If we don't have any way of figuring out the actual executable
+-       location then try argv[0].  */
+-    if (!p) {
+-        p = realpath(argv0, buf);
+-        if (!p) {
+-            return NULL;
+-        }
+-    }
+-    dir = dirname(p);
+-    dir = dirname(dir);
++    dir = dirname(exec_dir);
+ 
+     max_len = strlen(dir) +
+         MAX(strlen(SHARE_SUFFIX), strlen(BUILD_SUFFIX)) + 1;
+@@ -137,6 +108,7 @@ char *os_find_datadir(const char *argv0)
+         }
+     }
+ 
++    g_free(exec_dir);
+     return res;
+ }
+ #undef SHARE_SUFFIX
+diff --git a/os-win32.c b/os-win32.c
+index 50b7f6f..5f95caa 100644
+--- a/os-win32.c
++++ b/os-win32.c
+@@ -84,26 +84,9 @@ void os_setup_early_signal_handling(void)
+ }
+ 
+ /* Look for support files in the same directory as the executable.  */
+-char *os_find_datadir(const char *argv0)
++char *os_find_datadir(void)
+ {
+-    char *p;
+-    char buf[MAX_PATH];
+-    DWORD len;
+-
+-    len = GetModuleFileName(NULL, buf, sizeof(buf) - 1);
+-    if (len == 0) {
+-        return NULL;
+-    }
+-
+-    buf[len] = 0;
+-    p = buf + len - 1;
+-    while (p != buf && *p != '\\')
+-        p--;
+-    *p = 0;
+-    if (access(buf, R_OK) == 0) {
+-        return g_strdup(buf);
+-    }
+-    return NULL;
++    return qemu_get_exec_dir();
+ }
+ 
+ void os_set_line_buffering(void)
+diff --git a/qemu-img.c b/qemu-img.c
+index dcce380..ed1799c 100644
+--- a/qemu-img.c
++++ b/qemu-img.c
+@@ -2726,6 +2726,7 @@ int main(int argc, char **argv)
+ #endif
+ 
+     error_set_progname(argv[0]);
++    qemu_init_exec_dir(argv[0]);
+ 
+     qemu_init_main_loop();
+     bdrv_init();
+diff --git a/qemu-io.c b/qemu-io.c
+index 0959178..bbe2518 100644
+--- a/qemu-io.c
++++ b/qemu-io.c
+@@ -2008,6 +2008,7 @@ int main(int argc, char **argv)
+ #endif
+ 
+     progname = basename(argv[0]);
++    qemu_init_exec_dir(argv[0]);
+ 
+     while ((c = getopt_long(argc, argv, sopt, lopt, &opt_index)) != -1) {
+         switch (c) {
+diff --git a/qemu-nbd.c b/qemu-nbd.c
+index c1b395d..207a610 100644
+--- a/qemu-nbd.c
++++ b/qemu-nbd.c
+@@ -363,6 +363,7 @@ int main(int argc, char **argv)
+     memset(&sa_sigterm, 0, sizeof(sa_sigterm));
+     sa_sigterm.sa_handler = termsig_handler;
+     sigaction(SIGTERM, &sa_sigterm, NULL);
++    qemu_init_exec_dir(argv[0]);
+ 
+     while ((ch = getopt_long(argc, argv, sopt, lopt, &opt_ind)) != -1) {
+         switch (ch) {
+diff --git a/util/oslib-posix.c b/util/oslib-posix.c
+index 2c756c7..fef840a 100644
+--- a/util/oslib-posix.c
++++ b/util/oslib-posix.c
+@@ -54,6 +54,7 @@ extern int daemon(int, int);
+ #include "trace.h"
+ #include "qemu/sockets.h"
+ #include <sys/mman.h>
++#include <libgen.h>
+ 
+ #ifdef CONFIG_LINUX
+ #include <sys/syscall.h>
+@@ -244,3 +245,56 @@ qemu_get_local_state_pathname(const char *relative_pathname)
+     return g_strdup_printf("%s/%s", CONFIG_QEMU_LOCALSTATEDIR,
+                            relative_pathname);
+ }
++
++static char exec_dir[PATH_MAX];
++
++void qemu_init_exec_dir(const char *argv0)
++{
++    char *dir;
++    char *p = NULL;
++    char buf[PATH_MAX];
++
++    assert(!exec_dir[0]);
++
++#if defined(__linux__)
++    {
++        int len;
++        len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
++        if (len > 0) {
++            buf[len] = 0;
++            p = buf;
++        }
++    }
++#elif defined(__FreeBSD__)
++    {
++        static int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1};
++        size_t len = sizeof(buf) - 1;
++
++        *buf = '\0';
++        if (!sysctl(mib, ARRAY_SIZE(mib), buf, &len, NULL, 0) &&
++            *buf) {
++            buf[sizeof(buf) - 1] = '\0';
++            p = buf;
++        }
++    }
++#endif
++    /* If we don't have any way of figuring out the actual executable
++       location then try argv[0].  */
++    if (!p) {
++        if (!argv0) {
++            return;
++        }
++        p = realpath(argv0, buf);
++        if (!p) {
++            return;
++        }
++    }
++    dir = dirname(p);
++
++    pstrcpy(exec_dir, sizeof(exec_dir), dir);
++}
++
++char *qemu_get_exec_dir(void)
++{
++    return g_strdup(exec_dir);
++}
+diff --git a/util/oslib-win32.c b/util/oslib-win32.c
+index 983b7a2..332e743 100644
+--- a/util/oslib-win32.c
++++ b/util/oslib-win32.c
+@@ -179,3 +179,33 @@ qemu_get_local_state_pathname(const char *relative_pathname)
+     return g_strdup_printf("%s" G_DIR_SEPARATOR_S "%s", base_path,
+                            relative_pathname);
+ }
++
++static char exec_dir[PATH_MAX];
++
++void qemu_init_exec_dir(const char *argv0)
++{
++
++    char *p;
++    char buf[MAX_PATH];
++    DWORD len;
++
++    len = GetModuleFileName(NULL, buf, sizeof(buf) - 1);
++    if (len == 0) {
++        return;
++    }
++
++    buf[len] = 0;
++    p = buf + len - 1;
++    while (p != buf && *p != '\\') {
++        p--;
++    }
++    *p = 0;
++    if (access(buf, R_OK) == 0) {
++        pstrcpy(exec_dir, sizeof(exec_dir), buf);
++    }
++}
++
++char *qemu_get_exec_dir(void)
++{
++    return g_strdup(exec_dir);
++}
+diff --git a/vl.c b/vl.c
+index ca3d498..ead90ba 100644
+--- a/vl.c
++++ b/vl.c
+@@ -2842,6 +2842,7 @@ int main(int argc, char **argv, char **envp)
+ 
+     atexit(qemu_run_exit_notifiers);
+     error_set_progname(argv[0]);
++    qemu_init_exec_dir(argv[0]);
+ 
+     g_mem_set_vtable(&mem_trace);
+     if (!g_thread_supported()) {
+@@ -3880,7 +3881,7 @@ int main(int argc, char **argv, char **envp)
+     /* If no data_dir is specified then try to find it relative to the
+        executable path.  */
+     if (data_dir_idx < ARRAY_SIZE(data_dir)) {
+-        data_dir[data_dir_idx] = os_find_datadir(argv[0]);
++        data_dir[data_dir_idx] = os_find_datadir();
+         if (data_dir[data_dir_idx] != NULL) {
+             data_dir_idx++;
+         }
+-- 
+1.9.3
+

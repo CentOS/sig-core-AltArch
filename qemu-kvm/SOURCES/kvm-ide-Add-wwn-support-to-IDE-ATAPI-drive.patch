@@ -1,0 +1,67 @@
+From e67d424de7c9f4ab359757195e8d3319c03b70a0 Mon Sep 17 00:00:00 2001
+From: John Snow <jsnow@redhat.com>
+Date: Mon, 8 Sep 2014 22:34:25 +0200
+Subject: [PATCH 01/20] ide: Add wwn support to IDE-ATAPI drive
+
+Message-id: <1410215665-27240-2-git-send-email-jsnow@redhat.com>
+Patchwork-id: 60913
+O-Subject: [RHEL7.1 qemu-kvm PATCH] ide: Add wwn support to IDE-ATAPI drive
+Bugzilla: 1131316
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Although it is possible to specify the wwn
+property for cdrom devices on the command line,
+the underlying driver fails to relay this information
+to the guest operating system via IDENTIFY.
+
+This is a simple patch to correct that.
+
+See ATA8-ACS, Table 22 parts 5, 6, and 9.
+
+Signed-off-by: John Snow <jsnow@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit c5fe97e359bf03db9a005433092f25d27d57398f)
+Signed-off-by: John Snow <jsnow@redhat.com>
+---
+ hw/ide/core.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/ide/core.c |   14 ++++++++++++++
+ 1 files changed, 14 insertions(+), 0 deletions(-)
+
+diff --git a/hw/ide/core.c b/hw/ide/core.c
+index a2947a9..98128fb 100644
+--- a/hw/ide/core.c
++++ b/hw/ide/core.c
+@@ -230,9 +230,23 @@ static void ide_atapi_identify(IDEState *s)
+     }
+ 
+     put_le16(p + 80, 0x1e); /* support up to ATA/ATAPI-4 */
++    if (s->wwn) {
++        put_le16(p + 84, (1 << 8)); /* supports WWN for words 108-111 */
++        put_le16(p + 87, (1 << 8)); /* WWN enabled */
++    }
++
+ #ifdef USE_DMA_CDROM
+     put_le16(p + 88, 0x3f | (1 << 13)); /* udma5 set and supported */
+ #endif
++
++    if (s->wwn) {
++        /* LE 16-bit words 111-108 contain 64-bit World Wide Name */
++        put_le16(p + 108, s->wwn >> 48);
++        put_le16(p + 109, s->wwn >> 32);
++        put_le16(p + 110, s->wwn >> 16);
++        put_le16(p + 111, s->wwn);
++    }
++
+     memcpy(s->identify_data, p, sizeof(s->identify_data));
+     s->identify_set = 1;
+ }
+-- 
+1.7.1
+

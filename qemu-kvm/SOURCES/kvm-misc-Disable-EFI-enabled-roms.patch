@@ -1,0 +1,115 @@
+From caebed054838182932ee76d0dda6a8478ccf3760 Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Thu, 1 Aug 2013 10:02:33 +0200
+Subject: Disable EFI-enabled roms
+
+RH-Author: Miroslav Rezanina <mrezanin@redhat.com>
+Message-id: <e0915684c360a3df82f9205bc4858f81fdc74088.1375351149.git.mrezanin@redhat.com>
+Patchwork-id: 52889
+O-Subject: [RHEL7 qemu-kvm PATCH v2] Disable EFI-enabled roms
+Bugzilla: 962563
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Michal Novotny <minovotn@redhat.com>
+
+Bugzilla: 962563
+Brew:     http://brewweb.devel.redhat.com/brew/taskinfo?taskID=6115956
+
+We do not ship OVMF and cannot support them therefor ipxe do not include UEFI
+driver. Remove usage of EFI-enabled roms
+
+Note: Compatibility code is not reverted to allow cleaner backports in future.
+
+v2:
+ - rebased to 1.5.2-2
+ - removing compat_props
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index 23002ce..e1bedec 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -812,18 +812,6 @@ static QEMUMachine pc_machine_rhel700 = {
+         /* DEV_NVECTORS_UNSPECIFIED as a uint32_t string */\
+         .value    = stringify(0xFFFFFFFF),\
+     },{\
+-        .driver   = "e1000",\
+-        .property = "romfile",\
+-        .value    = "pxe-e1000.rom",\
+-    },{\
+-        .driver   = "rtl8139",\
+-        .property = "romfile",\
+-        .value    = "pxe-rtl8139.rom",\
+-    },{\
+-        .driver   = "virtio-net-pci",\
+-        .property = "romfile",\
+-        .value    = "pxe-virtio.rom",\
+-    },{\
+         .driver   = "486-" TYPE_X86_CPU,\
+         .property = "model",\
+         .value    = stringify(0),\
+diff --git a/hw/net/e1000.c b/hw/net/e1000.c
+index 661b461..76df2f3 100644
+--- a/hw/net/e1000.c
++++ b/hw/net/e1000.c
+@@ -1388,7 +1388,7 @@ static void e1000_class_init(ObjectClass *klass, void *data)
+ 
+     k->init = pci_e1000_init;
+     k->exit = pci_e1000_uninit;
+-    k->romfile = "efi-e1000.rom";
++    k->romfile = "pxe-e1000.rom";
+     k->vendor_id = PCI_VENDOR_ID_INTEL;
+     k->device_id = E1000_DEVID;
+     k->revision = 0x03;
+diff --git a/hw/net/ne2000.c b/hw/net/ne2000.c
+index 33ee03e..94d6110 100644
+--- a/hw/net/ne2000.c
++++ b/hw/net/ne2000.c
+@@ -766,7 +766,7 @@ static void ne2000_class_init(ObjectClass *klass, void *data)
+ 
+     k->init = pci_ne2000_init;
+     k->exit = pci_ne2000_exit;
+-    k->romfile = "efi-ne2k_pci.rom",
++    k->romfile = "pxe-ne2k_pci.rom",
+     k->vendor_id = PCI_VENDOR_ID_REALTEK;
+     k->device_id = PCI_DEVICE_ID_REALTEK_8029;
+     k->class_id = PCI_CLASS_NETWORK_ETHERNET;
+diff --git a/hw/net/pcnet-pci.c b/hw/net/pcnet-pci.c
+index 9df2b87..e07f388 100644
+--- a/hw/net/pcnet-pci.c
++++ b/hw/net/pcnet-pci.c
+@@ -351,7 +351,7 @@ static void pcnet_class_init(ObjectClass *klass, void *data)
+ 
+     k->init = pci_pcnet_init;
+     k->exit = pci_pcnet_uninit;
+-    k->romfile = "efi-pcnet.rom",
++    k->romfile = "pxe-pcnet.rom",
+     k->vendor_id = PCI_VENDOR_ID_AMD;
+     k->device_id = PCI_DEVICE_ID_AMD_LANCE;
+     k->revision = 0x10;
+diff --git a/hw/net/rtl8139.c b/hw/net/rtl8139.c
+index 7993f9f..1e5a679 100644
+--- a/hw/net/rtl8139.c
++++ b/hw/net/rtl8139.c
+@@ -3533,7 +3533,7 @@ static void rtl8139_class_init(ObjectClass *klass, void *data)
+ 
+     k->init = pci_rtl8139_init;
+     k->exit = pci_rtl8139_uninit;
+-    k->romfile = "efi-rtl8139.rom";
++    k->romfile = "pxe-rtl8139.rom";
+     k->vendor_id = PCI_VENDOR_ID_REALTEK;
+     k->device_id = PCI_DEVICE_ID_REALTEK_8139;
+     k->revision = RTL8139_PCI_REVID; /* >=0x20 is for 8139C+ */
+diff --git a/hw/virtio/virtio-pci.c b/hw/virtio/virtio-pci.c
+index 161ade3..d82f6ff 100644
+--- a/hw/virtio/virtio-pci.c
++++ b/hw/virtio/virtio-pci.c
+@@ -1418,7 +1418,7 @@ static void virtio_net_pci_class_init(ObjectClass *klass, void *data)
+     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
+     VirtioPCIClass *vpciklass = VIRTIO_PCI_CLASS(klass);
+ 
+-    k->romfile = "efi-virtio.rom";
++    k->romfile = "pxe-virtio.rom";
+     k->vendor_id = PCI_VENDOR_ID_REDHAT_QUMRANET;
+     k->device_id = PCI_DEVICE_ID_VIRTIO_NET;
+     k->revision = VIRTIO_PCI_ABI_VERSION;

@@ -1,0 +1,72 @@
+From 9813363c031fd56a536dfafd64dcc9bc430f9bb1 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Thu, 23 Jan 2014 14:03:38 +0100
+Subject: [PATCH 11/14] virtio-balloon: switch exit callback to VirtioDeviceClass
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1390485820-7585-9-git-send-email-armbru@redhat.com>
+Patchwork-id: 56930
+O-Subject: [PATCH 7.0 qemu-kvm 08/10] virtio-balloon: switch exit callback to VirtioDeviceClass
+Bugzilla: 983344
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+This ensures hot-unplug is handled properly by the proxy, and avoids
+leaking bus_name which is freed by virtio_device_exit.
+
+Cc: qemu-stable@nongnu.org
+Acked-by: Andreas Faerber <afaerber@suse.de>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit baa61b9870dd7e0bb07e0ae61c6ec805db13f699)
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+---
+ hw/virtio/virtio-balloon.c | 10 ++++------
+ 1 file changed, 4 insertions(+), 6 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/virtio/virtio-balloon.c |   10 ++++------
+ 1 files changed, 4 insertions(+), 6 deletions(-)
+
+diff --git a/hw/virtio/virtio-balloon.c b/hw/virtio/virtio-balloon.c
+index 85661f6..76c607f 100644
+--- a/hw/virtio/virtio-balloon.c
++++ b/hw/virtio/virtio-balloon.c
+@@ -369,16 +369,14 @@ static int virtio_balloon_device_init(VirtIODevice *vdev)
+     return 0;
+ }
+ 
+-static int virtio_balloon_device_exit(DeviceState *qdev)
++static void virtio_balloon_device_exit(VirtIODevice *vdev)
+ {
+-    VirtIOBalloon *s = VIRTIO_BALLOON(qdev);
+-    VirtIODevice *vdev = VIRTIO_DEVICE(qdev);
++    VirtIOBalloon *s = VIRTIO_BALLOON(vdev);
+ 
+     balloon_stats_destroy_timer(s);
+     qemu_remove_balloon_handler(s);
+-    unregister_savevm(qdev, "virtio-balloon", s);
++    unregister_savevm(DEVICE(vdev), "virtio-balloon", s);
+     virtio_cleanup(vdev);
+-    return 0;
+ }
+ 
+ static Property virtio_balloon_properties[] = {
+@@ -389,10 +387,10 @@ static void virtio_balloon_class_init(ObjectClass *klass, void *data)
+ {
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     VirtioDeviceClass *vdc = VIRTIO_DEVICE_CLASS(klass);
+-    dc->exit = virtio_balloon_device_exit;
+     dc->props = virtio_balloon_properties;
+     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
+     vdc->init = virtio_balloon_device_init;
++    vdc->exit = virtio_balloon_device_exit;
+     vdc->get_config = virtio_balloon_get_config;
+     vdc->set_config = virtio_balloon_set_config;
+     vdc->get_features = virtio_balloon_get_features;
+-- 
+1.7.1
+

@@ -1,0 +1,138 @@
+From 6f81b4847eb68ebdf54a8f1a771e19d112d74152 Mon Sep 17 00:00:00 2001
+Message-Id: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 4 Dec 2014 00:04:55 -0600
+Subject: [CHANGE 01/31] qemu-iotests: Test case for backing file deletion
+To: rhvirt-patches@redhat.com,
+    jen@redhat.com
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1417651524-18041-2-git-send-email-famz@redhat.com>
+Patchwork-id: 62674
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v5 01/30] qemu-iotests: Test case for backing file deletion
+Bugzilla: 1002493
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Max Reitz <mreitz@redhat.com>
+
+Add a test case for trying to open an image file where it is impossible
+to open its backing file (in this case, because it was deleted). When
+doing this, qemu (or qemu-io in this case) should not crash but rather
+print an appropriate error message.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 321fd7d2b88defe11528e4d5a9f686c89ebee1ee)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Jeff E. Nelson <jen@redhat.com>
+
+Conflicts:
+	tests/qemu-iotests/group
+Trivial context conflict.
+
+Signed-off-by: Jeff E. Nelson <jen@redhat.com>
+---
+ tests/qemu-iotests/069     | 59 ++++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/069.out |  8 +++++++
+ tests/qemu-iotests/group   |  1 +
+ 3 files changed, 68 insertions(+)
+ create mode 100755 tests/qemu-iotests/069
+ create mode 100644 tests/qemu-iotests/069.out
+
+diff --git a/tests/qemu-iotests/069 b/tests/qemu-iotests/069
+new file mode 100755
+index 0000000..3042803
+--- /dev/null
++++ b/tests/qemu-iotests/069
+@@ -0,0 +1,59 @@
++#!/bin/bash
++#
++# Test case for deleting a backing file
++#
++# Copyright (C) 2013 Red Hat, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++
++# creator
++owner=mreitz@redhat.com
++
++seq="$(basename $0)"
++echo "QA output created by $seq"
++
++here="$PWD"
++tmp=/tmp/$$
++status=1	# failure is the default!
++
++_cleanup()
++{
++	_cleanup_test_img
++}
++trap "_cleanup; exit \$status" 0 1 2 3 15
++
++# get standard environment, filters and checks
++. ./common.rc
++. ./common.filter
++
++_supported_fmt cow qed qcow qcow2 vmdk
++_supported_proto generic
++_supported_os Linux
++
++IMG_SIZE=128K
++
++echo
++echo "=== Creating an image with a backing file and deleting that file ==="
++echo
++TEST_IMG="$TEST_IMG.base" _make_test_img $IMG_SIZE
++_make_test_img -b "$TEST_IMG.base" $IMG_SIZE
++rm -f "$TEST_IMG.base"
++# Just open the image and close it right again (this should print an error message)
++$QEMU_IO -c quit "$TEST_IMG" 2>&1 | _filter_testdir | _filter_imgfmt
++
++# success, all done
++echo "*** done"
++rm -f $seq.full
++status=0
+diff --git a/tests/qemu-iotests/069.out b/tests/qemu-iotests/069.out
+new file mode 100644
+index 0000000..3648814
+--- /dev/null
++++ b/tests/qemu-iotests/069.out
+@@ -0,0 +1,8 @@
++QA output created by 069
++
++=== Creating an image with a backing file and deleting that file ===
++
++Formatting 'TEST_DIR/t.IMGFMT.base', fmt=IMGFMT size=131072 
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=131072 backing_file='TEST_DIR/t.IMGFMT.base' 
++qemu-io: can't open device TEST_DIR/t.IMGFMT: Could not open file: No such file or directory
++*** done
+diff --git a/tests/qemu-iotests/group b/tests/qemu-iotests/group
+index 3fad61d..572438e 100644
+--- a/tests/qemu-iotests/group
++++ b/tests/qemu-iotests/group
+@@ -71,6 +71,7 @@
+ 066 rw auto
+ 067 rw auto
+ 068 rw auto
++069 rw auto
+ 070 rw auto
+ 075 rw auto
+ 076 auto
+-- 
+2.1.0
+

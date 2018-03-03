@@ -1,0 +1,144 @@
+From 5b321366d742d4efe826036108b06796563ea0ed Mon Sep 17 00:00:00 2001
+Message-Id: <5b321366d742d4efe826036108b06796563ea0ed.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:17:53 +0100
+Subject: [PATCH 25/56] qom: add pointer to int property helpers
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-26-git-send-email-mst@redhat.com>
+Patchwork-id: 56331
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 25/57] qom: add pointer to int property helpers
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Make it easy to add read-only helpers for simple
+integer properties in memory.
+
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Gerd Hoffmann <kraxel@redhat.com>
+Tested-by: Gerd Hoffmann <kraxel@redhat.com>
+Reviewed-by: Igor Mammedov <imammedo@redhat.com>
+Tested-by: Igor Mammedov <imammedo@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit e732ea638705da35445a42dee32691fbe813d3e0)
+---
+ include/qom/object.h | 21 ++++++++++++++++++
+ qom/object.c         | 60 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 81 insertions(+)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ include/qom/object.h | 21 ++++++++++++++++++
+ qom/object.c         | 60 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 81 insertions(+)
+
+diff --git a/include/qom/object.h b/include/qom/object.h
+index dbe1413..193bfeb 100644
+--- a/include/qom/object.h
++++ b/include/qom/object.h
+@@ -790,6 +790,27 @@ void object_property_add(Object *obj, const char *name, const char *type,
+ void object_property_del(Object *obj, const char *name, Error **errp);
+ 
+ /**
++ * object_property_add_uint8_ptr:
++ * object_property_add_uint16_ptr:
++ * object_property_add_uint32_ptr:
++ * object_property_add_uint64_ptr:
++ * @obj: the object to add a property to
++ * @name: the name of the property
++ * @v: pointer to value
++ *
++ * Add an integer property in memory.  This function will add a
++ * property of the appropriate type.
++ */
++void object_property_add_uint8_ptr(Object *obj, const char *name,
++                                   const uint8_t *v, Error **errp);
++void object_property_add_uint16_ptr(Object *obj, const char *name,
++                                    const uint16_t *v, Error **errp);
++void object_property_add_uint32_ptr(Object *obj, const char *name,
++                                    const uint32_t *v, Error **errp);
++void object_property_add_uint64_ptr(Object *obj, const char *name,
++                                    const uint64_t *v, Error **Errp);
++
++/**
+  * object_property_find:
+  * @obj: the object
+  * @name: the name of the property
+diff --git a/qom/object.c b/qom/object.c
+index 05e2636..d04a96b 100644
+--- a/qom/object.c
++++ b/qom/object.c
+@@ -1331,6 +1331,66 @@ static char *qdev_get_type(Object *obj, Error **errp)
+     return g_strdup(object_get_typename(obj));
+ }
+ 
++static void property_get_uint8_ptr(Object *obj, Visitor *v,
++                                   void *opaque, const char *name,
++                                   Error **errp)
++{
++    uint8_t value = *(uint8_t *)opaque;
++    visit_type_uint8(v, &value, name, errp);
++}
++
++static void property_get_uint16_ptr(Object *obj, Visitor *v,
++                                   void *opaque, const char *name,
++                                   Error **errp)
++{
++    uint16_t value = *(uint16_t *)opaque;
++    visit_type_uint16(v, &value, name, errp);
++}
++
++static void property_get_uint32_ptr(Object *obj, Visitor *v,
++                                   void *opaque, const char *name,
++                                   Error **errp)
++{
++    uint32_t value = *(uint32_t *)opaque;
++    visit_type_uint32(v, &value, name, errp);
++}
++
++static void property_get_uint64_ptr(Object *obj, Visitor *v,
++                                   void *opaque, const char *name,
++                                   Error **errp)
++{
++    uint64_t value = *(uint64_t *)opaque;
++    visit_type_uint64(v, &value, name, errp);
++}
++
++void object_property_add_uint8_ptr(Object *obj, const char *name,
++                                   const uint8_t *v, Error **errp)
++{
++    object_property_add(obj, name, "uint8", property_get_uint8_ptr,
++                        NULL, NULL, (void *)v, errp);
++}
++
++void object_property_add_uint16_ptr(Object *obj, const char *name,
++                                    const uint16_t *v, Error **errp)
++{
++    object_property_add(obj, name, "uint16", property_get_uint16_ptr,
++                        NULL, NULL, (void *)v, errp);
++}
++
++void object_property_add_uint32_ptr(Object *obj, const char *name,
++                                    const uint32_t *v, Error **errp)
++{
++    object_property_add(obj, name, "uint32", property_get_uint32_ptr,
++                        NULL, NULL, (void *)v, errp);
++}
++
++void object_property_add_uint64_ptr(Object *obj, const char *name,
++                                    const uint64_t *v, Error **errp)
++{
++    object_property_add(obj, name, "uint64", property_get_uint64_ptr,
++                        NULL, NULL, (void *)v, errp);
++}
++
+ static void object_instance_init(Object *obj)
+ {
+     object_property_add_str(obj, "type", qdev_get_type, NULL, NULL);
+-- 
+1.7.11.7
+

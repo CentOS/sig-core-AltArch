@@ -1,0 +1,69 @@
+From 0e7b328d0802c970f632f50d6daab0ea6d226b29 Mon Sep 17 00:00:00 2001
+From: Eric Blake <eblake@redhat.com>
+Date: Wed, 20 Aug 2014 16:40:10 +0200
+Subject: [PATCH 07/11] mirror: Go through ready -> complete process for 0 len image
+
+Message-id: <1408552814-23031-4-git-send-email-eblake@redhat.com>
+Patchwork-id: 60645
+O-Subject: [qemu-kvm-rhev 7.0.z PATCH 3/7] mirror: Go through ready -> complete process for 0 len image
+Bugzilla: 1130603
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Fam Zheng <famz@redhat.com>
+
+When mirroring or active committing a zero length image, BLOCK_JOB_READY
+is not reported now, instead the job completes because we short circuit
+the mirror job loop.
+
+This is inconsistent with non-zero length images, and only confuses
+management software.
+
+Let's do the same thing when seeing a 0-length image: report ready
+immediately; wait for block-job-cancel or block-job-complete; clear the
+cancel flag as existing non-zero image synced case (cancelled after
+ready); then jump to the exit.
+
+Reported-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 9e48b025400b2d284e17860862b0a4aa02c6032d)
+
+Conflicts:
+	block/mirror.c - no backport of qapi events
+
+Signed-off-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/mirror.c |   11 ++++++++++-
+ 1 files changed, 10 insertions(+), 1 deletions(-)
+
+diff --git a/block/mirror.c b/block/mirror.c
+index 9b3e229..cdc0268 100644
+--- a/block/mirror.c
++++ b/block/mirror.c
+@@ -306,9 +306,18 @@ static void coroutine_fn mirror_run(void *opaque)
+     }
+ 
+     s->common.len = bdrv_getlength(bs);
+-    if (s->common.len <= 0) {
++    if (s->common.len < 0) {
+         ret = s->common.len;
+         goto immediate_exit;
++    } else if (s->common.len == 0) {
++        /* Report BLOCK_JOB_READY and wait for complete. */
++        block_job_ready(&s->common);
++        s->synced = true;
++        while (!block_job_is_cancelled(&s->common) && !s->should_complete) {
++            block_job_yield(&s->common);
++        }
++        s->common.cancelled = false;
++        goto immediate_exit;
+     }
+ 
+     length = (bdrv_getlength(bs) + s->granularity - 1) / s->granularity;
+-- 
+1.7.1
+

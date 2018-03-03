@@ -1,0 +1,70 @@
+From 2db24b5a4b5a760a0cf014e7285b0f07f0a63762 Mon Sep 17 00:00:00 2001
+Message-Id: <2db24b5a4b5a760a0cf014e7285b0f07f0a63762.1418766606.git.jen@redhat.com>
+In-Reply-To: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+References: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 4 Dec 2014 00:05:20 -0600
+Subject: [CHANGE 26/31] vmdk: Handle failure for potentially large allocations
+To: rhvirt-patches@redhat.com,
+    jen@redhat.com
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1417651524-18041-27-git-send-email-famz@redhat.com>
+Patchwork-id: 62699
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v5 26/30] vmdk: Handle failure for potentially large allocations
+Bugzilla: 1002493
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+Some code in the block layer makes potentially huge allocations. Failure
+is not completely unexpected there, so avoid aborting qemu and handle
+out-of-memory situations gracefully.
+
+This patch addresses the allocations in the vmdk block driver.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+(cherry picked from commit d6e5993197990ff55c660714526681fa7028299e)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Jeff E. Nelson <jen@redhat.com>
+---
+ block/vmdk.c | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 70b616a..560dd43 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -456,7 +456,11 @@ static int vmdk_init_tables(BlockDriverState *bs, VmdkExtent *extent,
+ 
+     /* read the L1 table */
+     l1_size = extent->l1_size * sizeof(uint32_t);
+-    extent->l1_table = g_malloc(l1_size);
++    extent->l1_table = g_try_malloc(l1_size);
++    if (l1_size && extent->l1_table == NULL) {
++        return -ENOMEM;
++    }
++
+     ret = bdrv_pread(extent->file,
+                      extent->l1_table_offset,
+                      extent->l1_table,
+@@ -472,7 +476,11 @@ static int vmdk_init_tables(BlockDriverState *bs, VmdkExtent *extent,
+     }
+ 
+     if (extent->l1_backup_table_offset) {
+-        extent->l1_backup_table = g_malloc(l1_size);
++        extent->l1_backup_table = g_try_malloc(l1_size);
++        if (l1_size && extent->l1_backup_table == NULL) {
++            ret = -ENOMEM;
++            goto fail_l1;
++        }
+         ret = bdrv_pread(extent->file,
+                          extent->l1_backup_table_offset,
+                          extent->l1_backup_table,
+-- 
+2.1.0
+

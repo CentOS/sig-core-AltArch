@@ -1,0 +1,646 @@
+From 8eab8301249fa8f5b3f68a91a87edac676ff7f0f Mon Sep 17 00:00:00 2001
+From: Amos Kong <akong@redhat.com>
+Date: Fri, 8 Nov 2013 06:13:59 +0100
+Subject: [PATCH 4/4] net: add support of mac-programming over macvtap in QEMU side
+
+RH-Author: Amos Kong <akong@redhat.com>
+Message-id: <1383891239-29531-5-git-send-email-akong@redhat.com>
+Patchwork-id: 55611
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 4/4] net: add support of mac-programming over macvtap in QEMU side
+Bugzilla: 848203
+RH-Acked-by: Vlad Yasevich <vyasevic@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Currently macvtap based macvlan device is working in promiscuous
+mode, we want to implement mac-programming over macvtap through
+Libvirt for better performance.
+
+Design:
+ QEMU notifies Libvirt when rx-filter config is changed in guest,
+ then Libvirt query the rx-filter information by a monitor command,
+ and sync the change to macvtap device. Related rx-filter config
+ of the nic contains main mac, rx-mode items and vlan table.
+
+This patch adds a QMP event to notify management of rx-filter change,
+and adds a monitor command for management to query rx-filter
+information.
+
+Test:
+ If we repeatedly add/remove vlan, and change macaddr of vlan
+ interfaces in guest by a loop script.
+
+Result:
+ The events will flood the QMP client(management), management takes
+ too much resource to process the events.
+
+ Event_throttle API (set rate to 1 ms) can avoid the events to flood
+ QMP client, but it could cause an unexpected delay (~1ms), guests
+ guests normally expect rx-filter updates immediately.
+
+ So we use a flag for each nic to avoid events flooding, the event
+ is emitted once until the query command is executed. The flag
+ implementation could not introduce unexpected delay.
+
+There maybe exist an uncontrollable delay if we let Libvirt do the
+real change, guests normally expect rx-filter updates immediately.
+But it's another separate issue, we can investigate it when the
+work in Libvirt side is done.
+
+Michael S. Tsirkin: tweaked to enable events on start
+Michael S. Tsirkin: fixed not to crash when no id
+Michael S. Tsirkin: fold in patch:
+   "additional fixes for mac-programming feature"
+Amos Kong: always notify QMP client if mactable is changed
+Amos Kong: return NULL list if no net client supports rx-filter query
+
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Amos Kong <akong@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit b1be42803b31a913bab65bab563a8760ad2e7f7f)
+---
+ QMP/qmp-events.txt        |   17 ++++++
+ hw/net/virtio-net.c       |  133 +++++++++++++++++++++++++++++++++++++++++++--
+ include/monitor/monitor.h |    1 +
+ include/net/net.h         |    3 +
+ monitor.c                 |    1 +
+ net/net.c                 |   48 ++++++++++++++++
+ qapi-schema.json          |   77 ++++++++++++++++++++++++++-
+ qmp-commands.hx           |   64 ++++++++++++++++++++++
+ 8 files changed, 337 insertions(+), 7 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ QMP/qmp-events.txt        |   17 ++++++
+ hw/net/virtio-net.c       |  133 +++++++++++++++++++++++++++++++++++++++++++--
+ include/monitor/monitor.h |    1 +
+ include/net/net.h         |    3 +
+ monitor.c                 |    1 +
+ net/net.c                 |   48 ++++++++++++++++
+ qapi-schema.json          |   77 ++++++++++++++++++++++++++-
+ qmp-commands.hx           |   64 ++++++++++++++++++++++
+ 8 files changed, 337 insertions(+), 7 deletions(-)
+
+diff --git a/QMP/qmp-events.txt b/QMP/qmp-events.txt
+index e185030..79fb1c9 100644
+--- a/QMP/qmp-events.txt
++++ b/QMP/qmp-events.txt
+@@ -194,6 +194,23 @@ Data:
+   },
+   "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
+ 
++NIC_RX_FILTER_CHANGED
++-----------------
++
++The event is emitted once until the query command is executed,
++the first event will always be emitted.
++
++Data:
++
++- "name": net client name (json-string)
++- "path": device path (json-string)
++
++{ "event": "NIC_RX_FILTER_CHANGED",
++  "data": { "name": "vnet0",
++            "path": "/machine/peripheral/vnet0/virtio-backend" },
++  "timestamp": { "seconds": 1368697518, "microseconds": 326866 } }
++}
++
+ RESET
+ -----
+ 
+diff --git a/hw/net/virtio-net.c b/hw/net/virtio-net.c
+index 3290013..19c5030 100644
+--- a/hw/net/virtio-net.c
++++ b/hw/net/virtio-net.c
+@@ -21,6 +21,8 @@
+ #include "hw/virtio/virtio-net.h"
+ #include "net/vhost_net.h"
+ #include "hw/virtio/virtio-bus.h"
++#include "qapi/qmp/qjson.h"
++#include "monitor/monitor.h"
+ 
+ #define VIRTIO_NET_VM_VERSION    11
+ 
+@@ -192,6 +194,105 @@ static void virtio_net_set_link_status(NetClientState *nc)
+     virtio_net_set_status(vdev, vdev->status);
+ }
+ 
++static void rxfilter_notify(NetClientState *nc)
++{
++    QObject *event_data;
++    VirtIONet *n = qemu_get_nic_opaque(nc);
++
++    if (nc->rxfilter_notify_enabled) {
++        if (n->netclient_name) {
++            event_data = qobject_from_jsonf("{ 'name': %s, 'path': %s }",
++                                    n->netclient_name,
++                                    object_get_canonical_path(OBJECT(n->qdev)));
++        } else {
++            event_data = qobject_from_jsonf("{ 'path': %s }",
++                                    object_get_canonical_path(OBJECT(n->qdev)));
++        }
++        monitor_protocol_event(QEVENT_NIC_RX_FILTER_CHANGED, event_data);
++        qobject_decref(event_data);
++
++        /* disable event notification to avoid events flooding */
++        nc->rxfilter_notify_enabled = 0;
++    }
++}
++
++static char *mac_strdup_printf(const uint8_t *mac)
++{
++    return g_strdup_printf("%.2x:%.2x:%.2x:%.2x:%.2x:%.2x", mac[0],
++                            mac[1], mac[2], mac[3], mac[4], mac[5]);
++}
++
++static RxFilterInfo *virtio_net_query_rxfilter(NetClientState *nc)
++{
++    VirtIONet *n = qemu_get_nic_opaque(nc);
++    RxFilterInfo *info;
++    strList *str_list, *entry;
++    intList *int_list, *int_entry;
++    int i, j;
++
++    info = g_malloc0(sizeof(*info));
++    info->name = g_strdup(nc->name);
++    info->promiscuous = n->promisc;
++
++    if (n->nouni) {
++        info->unicast = RX_STATE_NONE;
++    } else if (n->alluni) {
++        info->unicast = RX_STATE_ALL;
++    } else {
++        info->unicast = RX_STATE_NORMAL;
++    }
++
++    if (n->nomulti) {
++        info->multicast = RX_STATE_NONE;
++    } else if (n->allmulti) {
++        info->multicast = RX_STATE_ALL;
++    } else {
++        info->multicast = RX_STATE_NORMAL;
++    }
++
++    info->broadcast_allowed = n->nobcast;
++    info->multicast_overflow = n->mac_table.multi_overflow;
++    info->unicast_overflow = n->mac_table.uni_overflow;
++
++    info->main_mac = mac_strdup_printf(n->mac);
++
++    str_list = NULL;
++    for (i = 0; i < n->mac_table.first_multi; i++) {
++        entry = g_malloc0(sizeof(*entry));
++        entry->value = mac_strdup_printf(n->mac_table.macs + i * ETH_ALEN);
++        entry->next = str_list;
++        str_list = entry;
++    }
++    info->unicast_table = str_list;
++
++    str_list = NULL;
++    for (i = n->mac_table.first_multi; i < n->mac_table.in_use; i++) {
++        entry = g_malloc0(sizeof(*entry));
++        entry->value = mac_strdup_printf(n->mac_table.macs + i * ETH_ALEN);
++        entry->next = str_list;
++        str_list = entry;
++    }
++    info->multicast_table = str_list;
++
++    int_list = NULL;
++    for (i = 0; i < MAX_VLAN >> 5; i++) {
++        for (j = 0; n->vlans[i] && j < 0x1f; j++) {
++            if (n->vlans[i] & (1U << j)) {
++                int_entry = g_malloc0(sizeof(*int_entry));
++                int_entry->value = (i << 5) + j;
++                int_entry->next = int_list;
++                int_list = int_entry;
++            }
++        }
++    }
++    info->vlan_table = int_list;
++
++    /* enable event notification after query */
++    nc->rxfilter_notify_enabled = 1;
++
++    return info;
++}
++
+ static void virtio_net_reset(VirtIODevice *vdev)
+ {
+     VirtIONet *n = VIRTIO_NET(vdev);
+@@ -396,6 +497,7 @@ static int virtio_net_handle_rx_mode(VirtIONet *n, uint8_t cmd,
+ {
+     uint8_t on;
+     size_t s;
++    NetClientState *nc = qemu_get_queue(n->nic);
+ 
+     s = iov_to_buf(iov, iov_cnt, 0, &on, sizeof(on));
+     if (s != sizeof(on)) {
+@@ -418,6 +520,8 @@ static int virtio_net_handle_rx_mode(VirtIONet *n, uint8_t cmd,
+         return VIRTIO_NET_ERR;
+     }
+ 
++    rxfilter_notify(nc);
++
+     return VIRTIO_NET_OK;
+ }
+ 
+@@ -426,6 +530,7 @@ static int virtio_net_handle_mac(VirtIONet *n, uint8_t cmd,
+ {
+     struct virtio_net_ctrl_mac mac_data;
+     size_t s;
++    NetClientState *nc = qemu_get_queue(n->nic);
+ 
+     if (cmd == VIRTIO_NET_CTRL_MAC_ADDR_SET) {
+         if (iov_size(iov, iov_cnt) != sizeof(n->mac)) {
+@@ -434,6 +539,8 @@ static int virtio_net_handle_mac(VirtIONet *n, uint8_t cmd,
+         s = iov_to_buf(iov, iov_cnt, 0, &n->mac, sizeof(n->mac));
+         assert(s == sizeof(n->mac));
+         qemu_format_nic_info_str(qemu_get_queue(n->nic), n->mac);
++        rxfilter_notify(nc);
++
+         return VIRTIO_NET_OK;
+     }
+ 
+@@ -451,19 +558,19 @@ static int virtio_net_handle_mac(VirtIONet *n, uint8_t cmd,
+                    sizeof(mac_data.entries));
+     mac_data.entries = ldl_p(&mac_data.entries);
+     if (s != sizeof(mac_data.entries)) {
+-        return VIRTIO_NET_ERR;
++        goto error;
+     }
+     iov_discard_front(&iov, &iov_cnt, s);
+ 
+     if (mac_data.entries * ETH_ALEN > iov_size(iov, iov_cnt)) {
+-        return VIRTIO_NET_ERR;
++        goto error;
+     }
+ 
+     if (mac_data.entries <= MAC_TABLE_ENTRIES) {
+         s = iov_to_buf(iov, iov_cnt, 0, n->mac_table.macs,
+                        mac_data.entries * ETH_ALEN);
+         if (s != mac_data.entries * ETH_ALEN) {
+-            return VIRTIO_NET_ERR;
++            goto error;
+         }
+         n->mac_table.in_use += mac_data.entries;
+     } else {
+@@ -478,27 +585,33 @@ static int virtio_net_handle_mac(VirtIONet *n, uint8_t cmd,
+                    sizeof(mac_data.entries));
+     mac_data.entries = ldl_p(&mac_data.entries);
+     if (s != sizeof(mac_data.entries)) {
+-        return VIRTIO_NET_ERR;
++        goto error;
+     }
+ 
+     iov_discard_front(&iov, &iov_cnt, s);
+ 
+     if (mac_data.entries * ETH_ALEN != iov_size(iov, iov_cnt)) {
+-        return VIRTIO_NET_ERR;
++        goto error;
+     }
+ 
+     if (n->mac_table.in_use + mac_data.entries <= MAC_TABLE_ENTRIES) {
+         s = iov_to_buf(iov, iov_cnt, 0, n->mac_table.macs,
+                        mac_data.entries * ETH_ALEN);
+         if (s != mac_data.entries * ETH_ALEN) {
+-            return VIRTIO_NET_ERR;
++            goto error;
+         }
+         n->mac_table.in_use += mac_data.entries;
+     } else {
+         n->mac_table.multi_overflow = 1;
+     }
+ 
++    rxfilter_notify(nc);
++
+     return VIRTIO_NET_OK;
++
++error:
++    rxfilter_notify(nc);
++    return VIRTIO_NET_ERR;
+ }
+ 
+ static int virtio_net_handle_vlan_table(VirtIONet *n, uint8_t cmd,
+@@ -506,6 +619,7 @@ static int virtio_net_handle_vlan_table(VirtIONet *n, uint8_t cmd,
+ {
+     uint16_t vid;
+     size_t s;
++    NetClientState *nc = qemu_get_queue(n->nic);
+ 
+     s = iov_to_buf(iov, iov_cnt, 0, &vid, sizeof(vid));
+     vid = lduw_p(&vid);
+@@ -523,6 +637,8 @@ static int virtio_net_handle_vlan_table(VirtIONet *n, uint8_t cmd,
+     else
+         return VIRTIO_NET_ERR;
+ 
++    rxfilter_notify(nc);
++
+     return VIRTIO_NET_OK;
+ }
+ 
+@@ -1244,6 +1360,7 @@ static NetClientInfo net_virtio_info = {
+     .receive = virtio_net_receive,
+         .cleanup = virtio_net_cleanup,
+     .link_status_changed = virtio_net_set_link_status,
++    .query_rx_filter = virtio_net_query_rxfilter,
+ };
+ 
+ static bool virtio_net_guest_notifier_pending(VirtIODevice *vdev, int idx)
+@@ -1305,6 +1422,7 @@ static int virtio_net_device_init(VirtIODevice *vdev)
+ 
+     DeviceState *qdev = DEVICE(vdev);
+     VirtIONet *n = VIRTIO_NET(vdev);
++    NetClientState *nc;
+ 
+     virtio_init(VIRTIO_DEVICE(n), "virtio-net", VIRTIO_ID_NET,
+                                   n->config_size);
+@@ -1371,6 +1489,9 @@ static int virtio_net_device_init(VirtIODevice *vdev)
+ 
+     n->vlans = g_malloc0(MAX_VLAN >> 3);
+ 
++    nc = qemu_get_queue(n->nic);
++    nc->rxfilter_notify_enabled = 1;
++
+     n->qdev = qdev;
+     register_savevm(qdev, "virtio-net", -1, VIRTIO_NET_VM_VERSION,
+                     virtio_net_save, virtio_net_load, n);
+diff --git a/include/monitor/monitor.h b/include/monitor/monitor.h
+index 07b41a6..10fa0e3 100644
+--- a/include/monitor/monitor.h
++++ b/include/monitor/monitor.h
+@@ -41,6 +41,7 @@ typedef enum MonitorEvent {
+     QEVENT_BLOCK_JOB_READY,
+     QEVENT_DEVICE_DELETED,
+     QEVENT_DEVICE_TRAY_MOVED,
++    QEVENT_NIC_RX_FILTER_CHANGED,
+     QEVENT_SUSPEND,
+     QEVENT_SUSPEND_DISK,
+     QEVENT_WAKEUP,
+diff --git a/include/net/net.h b/include/net/net.h
+index 43d85a1..30e4b04 100644
+--- a/include/net/net.h
++++ b/include/net/net.h
+@@ -49,6 +49,7 @@ typedef ssize_t (NetReceiveIOV)(NetClientState *, const struct iovec *, int);
+ typedef void (NetCleanup) (NetClientState *);
+ typedef void (LinkStatusChanged)(NetClientState *);
+ typedef void (NetClientDestructor)(NetClientState *);
++typedef RxFilterInfo *(QueryRxFilter)(NetClientState *);
+ 
+ typedef struct NetClientInfo {
+     NetClientOptionsKind type;
+@@ -59,6 +60,7 @@ typedef struct NetClientInfo {
+     NetCanReceive *can_receive;
+     NetCleanup *cleanup;
+     LinkStatusChanged *link_status_changed;
++    QueryRxFilter *query_rx_filter;
+     NetPoll *poll;
+ } NetClientInfo;
+ 
+@@ -74,6 +76,7 @@ struct NetClientState {
+     unsigned receive_disabled : 1;
+     NetClientDestructor *destructor;
+     unsigned int queue_index;
++    unsigned rxfilter_notify_enabled:1;
+ };
+ 
+ typedef struct NICState {
+diff --git a/monitor.c b/monitor.c
+index c226acf..8f36f91 100644
+--- a/monitor.c
++++ b/monitor.c
+@@ -498,6 +498,7 @@ static const char *monitor_event_names[] = {
+     [QEVENT_BLOCK_JOB_READY] = "BLOCK_JOB_READY",
+     [QEVENT_DEVICE_DELETED] = "DEVICE_DELETED",
+     [QEVENT_DEVICE_TRAY_MOVED] = "DEVICE_TRAY_MOVED",
++    [QEVENT_NIC_RX_FILTER_CHANGED] = "NIC_RX_FILTER_CHANGED",
+     [QEVENT_SUSPEND] = "SUSPEND",
+     [QEVENT_SUSPEND_DISK] = "SUSPEND_DISK",
+     [QEVENT_WAKEUP] = "WAKEUP",
+diff --git a/net/net.c b/net/net.c
+index 43a74e4..c0d61bf 100644
+--- a/net/net.c
++++ b/net/net.c
+@@ -961,6 +961,54 @@ void print_net_client(Monitor *mon, NetClientState *nc)
+                    nc->info_str);
+ }
+ 
++RxFilterInfoList *qmp_query_rx_filter(bool has_name, const char *name,
++                                      Error **errp)
++{
++    NetClientState *nc;
++    RxFilterInfoList *filter_list = NULL, *last_entry = NULL;
++
++    QTAILQ_FOREACH(nc, &net_clients, next) {
++        RxFilterInfoList *entry;
++        RxFilterInfo *info;
++
++        if (has_name && strcmp(nc->name, name) != 0) {
++            continue;
++        }
++
++        /* only query rx-filter information of NIC */
++        if (nc->info->type != NET_CLIENT_OPTIONS_KIND_NIC) {
++            if (has_name) {
++                error_setg(errp, "net client(%s) isn't a NIC", name);
++                break;
++            }
++            continue;
++        }
++
++        if (nc->info->query_rx_filter) {
++            info = nc->info->query_rx_filter(nc);
++            entry = g_malloc0(sizeof(*entry));
++            entry->value = info;
++
++            if (!filter_list) {
++                filter_list = entry;
++            } else {
++                last_entry->next = entry;
++            }
++            last_entry = entry;
++        } else if (has_name) {
++            error_setg(errp, "net client(%s) doesn't support"
++                       " rx-filter querying", name);
++            break;
++        }
++    }
++
++    if (filter_list == NULL && !error_is_set(errp) && has_name) {
++        error_setg(errp, "invalid net client name: %s", name);
++    }
++
++    return filter_list;
++}
++
+ void do_info_network(Monitor *mon, const QDict *qdict)
+ {
+     NetClientState *nc, *peer;
+diff --git a/qapi-schema.json b/qapi-schema.json
+index 64696a9..92fcd54 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -3737,7 +3737,6 @@
+             'cpuid-register': 'X86CPURegister32',
+             'features': 'int' } }
+ 
+-
+ ##
+ # @BlockdevDiscardOptions
+ #
+@@ -3972,3 +3971,79 @@
+ # Since: 1.7
+ ##
+ { 'command': 'blockdev-add', 'data': { 'options': 'BlockdevOptions' } }
++
++##
++# @RxState:
++#
++# Packets receiving state
++#
++# @normal: filter assigned packets according to the mac-table
++#
++# @none: don't receive any assigned packet
++#
++# @all: receive all assigned packets
++#
++# Since: 1.6
++##
++{ 'enum': 'RxState', 'data': [ 'normal', 'none', 'all' ] }
++
++##
++# @RxFilterInfo:
++#
++# Rx-filter information for a NIC.
++#
++# @name: net client name
++#
++# @promiscuous: whether promiscuous mode is enabled
++#
++# @multicast: multicast receive state
++#
++# @unicast: unicast receive state
++#
++# @broadcast-allowed: whether to receive broadcast
++#
++# @multicast-overflow: multicast table is overflowed or not
++#
++# @unicast-overflow: unicast table is overflowed or not
++#
++# @main-mac: the main macaddr string
++#
++# @vlan-table: a list of active vlan id
++#
++# @unicast-table: a list of unicast macaddr string
++#
++# @multicast-table: a list of multicast macaddr string
++#
++# Since 1.6
++##
++
++{ 'type': 'RxFilterInfo',
++  'data': {
++    'name':               'str',
++    'promiscuous':        'bool',
++    'multicast':          'RxState',
++    'unicast':            'RxState',
++    'broadcast-allowed':  'bool',
++    'multicast-overflow': 'bool',
++    'unicast-overflow':   'bool',
++    'main-mac':           'str',
++    'vlan-table':         ['int'],
++    'unicast-table':      ['str'],
++    'multicast-table':    ['str'] }}
++
++##
++# @query-rx-filter:
++#
++# Return rx-filter information for all NICs (or for the given NIC).
++#
++# @name: #optional net client name
++#
++# Returns: list of @RxFilterInfo for all NICs (or for the given NIC).
++#          Returns an error if the given @name doesn't exist, or given
++#          NIC doesn't support rx-filter querying, or given net client
++#          isn't a NIC.
++#
++# Since: 1.6
++##
++{ 'command': 'query-rx-filter', 'data': { '*name': 'str' },
++  'returns': ['RxFilterInfo'] }
+diff --git a/qmp-commands.hx b/qmp-commands.hx
+index f71c34e..4942590 100644
+--- a/qmp-commands.hx
++++ b/qmp-commands.hx
+@@ -3061,3 +3061,67 @@ Example (2):
+ <- { "return": {} }
+ 
+ EQMP
++
++    {
++        .name       = "query-rx-filter",
++        .args_type  = "name:s?",
++        .mhandler.cmd_new = qmp_marshal_input_query_rx_filter,
++    },
++
++SQMP
++query-rx-filter
++---------------
++
++Show rx-filter information.
++
++Returns a json-array of rx-filter information for all NICs (or for the
++given NIC), returning an error if the given NIC doesn't exist, or
++given NIC doesn't support rx-filter querying, or given net client
++isn't a NIC.
++
++The query will clear the event notification flag of each NIC, then qemu
++will start to emit event to QMP monitor.
++
++Each array entry contains the following:
++
++- "name": net client name (json-string)
++- "promiscuous": promiscuous mode is enabled (json-bool)
++- "multicast": multicast receive state (one of 'normal', 'none', 'all')
++- "unicast": unicast receive state  (one of 'normal', 'none', 'all')
++- "broadcast-allowed": allow to receive broadcast (json-bool)
++- "multicast-overflow": multicast table is overflowed (json-bool)
++- "unicast-overflow": unicast table is overflowed (json-bool)
++- "main-mac": main macaddr string (json-string)
++- "vlan-table": a json-array of active vlan id
++- "unicast-table": a json-array of unicast macaddr string
++- "multicast-table": a json-array of multicast macaddr string
++
++Example:
++
++-> { "execute": "query-rx-filter", "arguments": { "name": "vnet0" } }
++<- { "return": [
++        {
++            "promiscuous": true,
++            "name": "vnet0",
++            "main-mac": "52:54:00:12:34:56",
++            "unicast": "normal",
++            "vlan-table": [
++                4,
++                0
++            ],
++            "unicast-table": [
++            ],
++            "multicast": "normal",
++            "multicast-overflow": false,
++            "unicast-overflow": false,
++            "multicast-table": [
++                "01:00:5e:00:00:01",
++                "33:33:00:00:00:01",
++                "33:33:ff:12:34:56"
++            ],
++            "broadcast-allowed": false
++        }
++      ]
++   }
++
++EQMP
+-- 
+1.7.1
+

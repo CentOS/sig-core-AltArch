@@ -1,0 +1,72 @@
+From 8bb562cbc4c70ea2d338db0e86d99b0578a73955 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Fri, 4 Apr 2014 05:55:59 +0200
+Subject: [PATCH 04/12] block/iscsi: fix segfault if writesame fails
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1396590962-25815-5-git-send-email-famz@redhat.com>
+Patchwork-id: 58341
+O-Subject: [RHEL-7 0day qemu-kvm PATCH 4/7] block/iscsi: fix segfault if writesame fails
+Bugzilla: 1083413
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+From: Peter Lieven <pl@kamp.de>
+
+commit fa6252b0 introduced a segfault because it tries
+to read iTask.task->sense after iTask.task has been
+freed.
+
+Signed-off-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit d9738fd2463f71530d8d92fbb52ebdd1d78074fc)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ block/iscsi.c | 17 +++++++++--------
+ 1 file changed, 9 insertions(+), 8 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/iscsi.c |   17 +++++++++--------
+ 1 files changed, 9 insertions(+), 8 deletions(-)
+
+diff --git a/block/iscsi.c b/block/iscsi.c
+index d3c8802..4a535e3 100644
+--- a/block/iscsi.c
++++ b/block/iscsi.c
+@@ -1010,6 +1010,15 @@ retry:
+         qemu_coroutine_yield();
+     }
+ 
++    if (iTask.status == SCSI_STATUS_CHECK_CONDITION &&
++        iTask.task->sense.key == SCSI_SENSE_ILLEGAL_REQUEST &&
++        iTask.task->sense.ascq == SCSI_SENSE_ASCQ_INVALID_OPERATION_CODE) {
++        /* WRITE SAME is not supported by the target */
++        iscsilun->has_write_same = false;
++        scsi_free_scsi_task(iTask.task);
++        return -ENOTSUP;
++    }
++
+     if (iTask.task != NULL) {
+         scsi_free_scsi_task(iTask.task);
+         iTask.task = NULL;
+@@ -1020,14 +1029,6 @@ retry:
+     }
+ 
+     if (iTask.status != SCSI_STATUS_GOOD) {
+-        if (iTask.status == SCSI_STATUS_CHECK_CONDITION &&
+-            iTask.task->sense.key == SCSI_SENSE_ILLEGAL_REQUEST &&
+-            iTask.task->sense.ascq == SCSI_SENSE_ASCQ_INVALID_OPERATION_CODE) {
+-            /* WRITE SAME is not supported by the target */
+-            iscsilun->has_write_same = false;
+-            return -ENOTSUP;
+-        }
+-
+         return -EIO;
+     }
+ 
+-- 
+1.7.1
+

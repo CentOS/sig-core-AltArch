@@ -1,0 +1,422 @@
+From 0404a8f41dd2d4b7a76bdf07dac6b267adf694cb Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 5 Nov 2013 14:09:01 +0100
+Subject: [PATCH 48/87] blockdev: 'blockdev-add' QMP command
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383660558-32096-8-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55386
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 07/24] blockdev: 'blockdev-add' QMP command
+Bugzilla: 978402
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+For examples see the changes to qmp-commands.hx.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit d26c9a15738147a8dccc451c6f6d1ddc2305713d)
+
+Conflicts:
+	qapi-schema.json
+	qmp-commands.hx
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ blockdev.c       |  57 ++++++++++++++
+ qapi-schema.json | 236 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ qmp-commands.hx  |  55 +++++++++++++
+ 3 files changed, 348 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev.c       |   57 +++++++++++++
+ qapi-schema.json |  236 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ qmp-commands.hx  |   55 +++++++++++++
+ 3 files changed, 348 insertions(+), 0 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index e379a91..d4f66db 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -38,6 +38,8 @@
+ #include "qemu/option.h"
+ #include "qemu/config-file.h"
+ #include "qapi/qmp/types.h"
++#include "qapi-visit.h"
++#include "qapi/qmp-output-visitor.h"
+ #include "sysemu/sysemu.h"
+ #include "block/block_int.h"
+ #include "qmp-commands.h"
+@@ -1656,6 +1658,61 @@ void qmp_block_job_complete(const char *device, Error **errp)
+     block_job_complete(job, errp);
+ }
+ 
++void qmp_blockdev_add(BlockdevOptions *options, Error **errp)
++{
++    QmpOutputVisitor *ov = qmp_output_visitor_new();
++    QObject *obj;
++    QDict *qdict;
++    DriveInfo *dinfo;
++    Error *local_err = NULL;
++
++    /* Require an ID in the top level */
++    if (!options->has_id) {
++        error_setg(errp, "Block device needs an ID");
++        goto fail;
++    }
++
++    /* TODO Sort it out in raw-posix and drive_init: Reject aio=native with
++     * cache.direct=false instead of silently switching to aio=threads, except
++     * if called from drive_init.
++     *
++     * For now, simply forbidding the combination for all drivers will do. */
++    if (options->has_aio && options->aio == BLOCKDEV_AIO_OPTIONS_NATIVE) {
++        bool direct = options->cache->has_direct && options->cache->direct;
++        if (!options->has_cache && !direct) {
++            error_setg(errp, "aio=native requires cache.direct=true");
++            goto fail;
++        }
++    }
++
++    visit_type_BlockdevOptions(qmp_output_get_visitor(ov),
++                               &options, NULL, &local_err);
++    if (error_is_set(&local_err)) {
++        error_propagate(errp, local_err);
++        goto fail;
++    }
++
++    obj = qmp_output_get_qobject(ov);
++    qdict = qobject_to_qdict(obj);
++
++    qdict_flatten(qdict);
++
++    QemuOpts *opts = qemu_opts_from_qdict(&qemu_drive_opts, qdict, &local_err);
++    if (error_is_set(&local_err)) {
++        error_propagate(errp, local_err);
++        goto fail;
++    }
++
++    dinfo = blockdev_init(opts, IF_NONE);
++    if (!dinfo) {
++        error_setg(errp, "Could not open image");
++        goto fail;
++    }
++
++fail:
++    qmp_output_visitor_cleanup(ov);
++}
++
+ static void do_qmp_query_block_jobs_one(void *opaque, BlockDriverState *bs)
+ {
+     BlockJobInfoList **prev = opaque;
+diff --git a/qapi-schema.json b/qapi-schema.json
+index 12a360a..32b41b0 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -3674,3 +3674,239 @@
+             '*cpuid-input-ecx': 'int',
+             'cpuid-register': 'X86CPURegister32',
+             'features': 'int' } }
++
++
++##
++# @BlockdevDiscardOptions
++#
++# Determines how to handle discard requests.
++#
++# @ignore:      Ignore the request
++# @unmap:       Forward as an unmap request
++#
++# Since: 1.7
++##
++{ 'enum': 'BlockdevDiscardOptions',
++  'data': [ 'ignore', 'unmap' ] }
++
++##
++# @BlockdevAioOptions
++#
++# Selects the AIO backend to handle I/O requests
++#
++# @threads:     Use qemu's thread pool
++# @native:      Use native AIO backend (only Linux and Windows)
++#
++# Since: 1.7
++##
++{ 'enum': 'BlockdevAioOptions',
++  'data': [ 'threads', 'native' ] }
++
++##
++# @BlockdevCacheOptions
++#
++# Includes cache-related options for block devices
++#
++# @writeback:   #optional enables writeback mode for any caches (default: true)
++# @direct:      #optional enables use of O_DIRECT (bypass the host page cache;
++#               default: false)
++# @no-flush:    #optional ignore any flush requests for the device (default:
++#               false)
++#
++# Since: 1.7
++##
++{ 'type': 'BlockdevCacheOptions',
++  'data': { '*writeback': 'bool',
++            '*direct': 'bool',
++            '*no-flush': 'bool' } }
++
++##
++# @BlockdevOptionsBase
++#
++# Options that are available for all block devices, independent of the block
++# driver.
++#
++# @driver:      block driver name
++# @id:          #optional id by which the new block device can be referred to.
++#               This is a required option on the top level of blockdev-add, and
++#               currently not allowed on any other level.
++# @discard:     #optional discard-related options (default: ignore)
++# @cache:       #optional cache-related options
++# @aio:         #optional AIO backend (default: threads)
++# @rerror:      #optional how to handle read errors on the device
++#               (default: report)
++# @werror:      #optional how to handle write errors on the device
++#               (default: enospc)
++# @read-only:   #optional whether the block device should be read-only
++#               (default: false)
++#
++# Since: 1.7
++##
++{ 'type': 'BlockdevOptionsBase',
++  'data': { 'driver': 'str',
++            '*id': 'str',
++            '*discard': 'BlockdevDiscardOptions',
++            '*cache': 'BlockdevCacheOptions',
++            '*aio': 'BlockdevAioOptions',
++            '*rerror': 'BlockdevOnError',
++            '*werror': 'BlockdevOnError',
++            '*read-only': 'bool' } }
++
++##
++# @BlockdevOptionsFile
++#
++# Driver specific block device options for the file backend and similar
++# protocols.
++#
++# @filename:    path to the image file
++#
++# Since: 1.7
++##
++{ 'type': 'BlockdevOptionsFile',
++  'data': { 'filename': 'str' } }
++
++##
++# @BlockdevOptionsVVFAT
++#
++# Driver specific block device options for the vvfat protocol.
++#
++# @dir:         directory to be exported as FAT image
++# @fat-type:    #optional FAT type: 12, 16 or 32
++# @floppy:      #optional whether to export a floppy image (true) or
++#               partitioned hard disk (false; default)
++# @rw:          #optional whether to allow write operations (default: false)
++#
++# Since: 1.7
++##
++{ 'type': 'BlockdevOptionsVVFAT',
++  'data': { 'dir': 'str', '*fat-type': 'int', '*floppy': 'bool',
++            '*rw': 'bool' } }
++
++##
++# @BlockdevOptionsGenericFormat
++#
++# Driver specific block device options for image format that have no option
++# besides their data source.
++#
++# @file:        reference to or definition of the data source block device
++#
++# Since: 1.7
++##
++{ 'type': 'BlockdevOptionsGenericFormat',
++  'data': { 'file': 'BlockdevRef' } }
++
++##
++# @BlockdevOptionsGenericCOWFormat
++#
++# Driver specific block device options for image format that have no option
++# besides their data source and an optional backing file.
++#
++# @backing:     #optional reference to or definition of the backing file block
++#               device (if missing, taken from the image file content). It is
++#               allowed to pass an empty string here in order to disable the
++#               default backing file.
++#
++# Since: 1.7
++##
++{ 'type': 'BlockdevOptionsGenericCOWFormat',
++  'base': 'BlockdevOptionsGenericFormat',
++  'data': { '*backing': 'BlockdevRef' } }
++
++##
++# @BlockdevOptionsQcow2
++#
++# Driver specific block device options for qcow2.
++#
++# @lazy-refcounts:        #optional whether to enable the lazy refcounts
++#                         feature (default is taken from the image file)
++#
++# @pass-discard-request:  #optional whether discard requests to the qcow2
++#                         device should be forwarded to the data source
++#
++# @pass-discard-snapshot: #optional whether discard requests for the data source
++#                         should be issued when a snapshot operation (e.g.
++#                         deleting a snapshot) frees clusters in the qcow2 file
++#
++# @pass-discard-other:    #optional whether discard requests for the data source
++#                         should be issued on other occasions where a cluster
++#                         gets freed
++#
++# Since: 1.7
++##
++{ 'type': 'BlockdevOptionsQcow2',
++  'base': 'BlockdevOptionsGenericCOWFormat',
++  'data': { '*lazy-refcounts': 'bool',
++            '*pass-discard-request': 'bool',
++            '*pass-discard-snapshot': 'bool',
++            '*pass-discard-other': 'bool' } }
++
++##
++# @BlockdevOptions
++#
++# Options for creating a block device.
++#
++# Since: 1.7
++##
++{ 'union': 'BlockdevOptions',
++  'base': 'BlockdevOptionsBase',
++  'discriminator': 'driver',
++  'data': {
++      'file':       'BlockdevOptionsFile',
++      'http':       'BlockdevOptionsFile',
++      'https':      'BlockdevOptionsFile',
++      'ftp':        'BlockdevOptionsFile',
++      'ftps':       'BlockdevOptionsFile',
++      'tftp':       'BlockdevOptionsFile',
++# TODO gluster: Wait for structured options
++# TODO iscsi: Wait for structured options
++# TODO nbd: Should take InetSocketAddress for 'host'?
++# TODO rbd: Wait for structured options
++# TODO sheepdog: Wait for structured options
++# TODO ssh: Should take InetSocketAddress for 'host'?
++      'vvfat':      'BlockdevOptionsVVFAT',
++
++# TODO blkdebug: Wait for structured options
++# TODO blkverify: Wait for structured options
++
++      'bochs':      'BlockdevOptionsGenericFormat',
++      'cloop':      'BlockdevOptionsGenericFormat',
++      'cow':        'BlockdevOptionsGenericCOWFormat',
++      'dmg':        'BlockdevOptionsGenericFormat',
++      'parallels':  'BlockdevOptionsGenericFormat',
++      'qcow':       'BlockdevOptionsGenericCOWFormat',
++      'qcow2':      'BlockdevOptionsQcow2',
++      'qed':        'BlockdevOptionsGenericCOWFormat',
++      'raw':        'BlockdevOptionsGenericFormat',
++      'vdi':        'BlockdevOptionsGenericFormat',
++      'vhdx':       'BlockdevOptionsGenericFormat',
++      'vmdk':       'BlockdevOptionsGenericCOWFormat',
++      'vpc':        'BlockdevOptionsGenericFormat'
++  } }
++
++##
++# @BlockdevRef
++#
++# Reference to a block device.
++#
++# @definition:      defines a new block device inline
++# @reference:       references the ID of an existing block device. An
++#                   empty string means that no block device should be
++#                   referenced.
++#
++# Since: 1.7
++##
++{ 'union': 'BlockdevRef',
++  'discriminator': {},
++  'data': { 'definition': 'BlockdevOptions',
++            'reference': 'str' } }
++
++##
++# @blockdev-add:
++#
++# Creates a new block device.
++#
++# @options: block device options for the new device
++#
++# Since: 1.7
++##
++{ 'command': 'blockdev-add', 'data': { 'options': 'BlockdevOptions' } }
+diff --git a/qmp-commands.hx b/qmp-commands.hx
+index e40d54d..d1f6f8b 100644
+--- a/qmp-commands.hx
++++ b/qmp-commands.hx
+@@ -2941,3 +2941,58 @@ Example:
+ <- { "return": {} }
+ 
+ EQMP
++
++    {
++        .name       = "blockdev-add",
++        .args_type  = "options:q",
++        .mhandler.cmd_new = qmp_marshal_input_blockdev_add,
++    },
++
++SQMP
++blockdev-add
++------------
++
++Add a block device.
++
++Arguments:
++
++- "options": block driver options
++
++Example (1):
++
++-> { "execute": "blockdev-add",
++    "arguments": { "options" : { "driver": "qcow2",
++                                 "file": { "driver": "file",
++                                           "filename": "test.qcow2" } } } }
++<- { "return": {} }
++
++Example (2):
++
++-> { "execute": "blockdev-add",
++     "arguments": {
++         "options": {
++           "driver": "qcow2",
++           "id": "my_disk",
++           "discard": "unmap",
++           "cache": {
++               "direct": true,
++               "writeback": true
++           },
++           "file": {
++               "driver": "file",
++               "filename": "/tmp/test.qcow2"
++           },
++           "backing": {
++               "driver": "raw",
++               "file": {
++                   "driver": "file",
++                   "filename": "/dev/fdset/4"
++               }
++           }
++         }
++       }
++     }
++
++<- { "return": {} }
++
++EQMP
+-- 
+1.7.1
+

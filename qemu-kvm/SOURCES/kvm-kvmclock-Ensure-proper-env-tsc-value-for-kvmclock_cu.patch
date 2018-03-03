@@ -1,0 +1,69 @@
+From da4fe791cecafbec05395041c52cb545308b1b61 Mon Sep 17 00:00:00 2001
+From: Marcelo Tosatti <mtosatti@redhat.com>
+Date: Thu, 26 Jun 2014 15:06:15 +0200
+Subject: [PATCH 13/13] kvmclock: Ensure proper env->tsc value for kvmclock_current_nsec calculation
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marcelo Tosatti <mtosatti@redhat.com>
+Message-id: <20140626150716.639538444@amt.cnet>
+Patchwork-id: 59386
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 2/2] kvmclock: Ensure proper env->tsc value for kvmclock_current_nsec calculation
+Bugzilla: 1098602
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Andrew Jones <drjones@redhat.com>
+
+commit 9b1786829aefb83f37a8f3135e3ea91c56001b56 upstream
+
+Ensure proper env->tsc value for kvmclock_current_nsec calculation.
+
+Reported-by: Marcin Gibuła <m.gibula@beyond.pl>
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Marcelo Tosatti <mtosatti@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+
+BZ: 1098602
+
+---
+ hw/i386/kvm/clock.c |    4 ++++
+ 1 file changed, 4 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/kvm/clock.c |    4 ++++
+ 1 files changed, 4 insertions(+), 0 deletions(-)
+
+diff --git a/hw/i386/kvm/clock.c b/hw/i386/kvm/clock.c
+index 1f2a26e..d52c2ea 100644
+--- a/hw/i386/kvm/clock.c
++++ b/hw/i386/kvm/clock.c
+@@ -17,6 +17,7 @@
+ #include "qemu/host-utils.h"
+ #include "sysemu/sysemu.h"
+ #include "sysemu/kvm.h"
++#include "sysemu/cpus.h"
+ #include "hw/sysbus.h"
+ #include "hw/kvm/clock.h"
+ 
+@@ -60,6 +61,7 @@ static uint64_t kvmclock_current_nsec(KVMClockState *s)
+ 
+     cpu_physical_memory_read(kvmclock_struct_pa, &time, sizeof(time));
+ 
++    assert(time.tsc_timestamp <= migration_tsc);
+     delta = migration_tsc - time.tsc_timestamp;
+     if (time.tsc_shift < 0) {
+         delta >>= -time.tsc_shift;
+@@ -118,6 +120,8 @@ static void kvmclock_vm_state_change(void *opaque, int running,
+         if (s->clock_valid) {
+             return;
+         }
++
++        cpu_synchronize_all_states();
+         ret = kvm_vm_ioctl(kvm_state, KVM_GET_CLOCK, &data);
+         if (ret < 0) {
+             fprintf(stderr, "KVM_GET_CLOCK failed: %s\n", strerror(ret));
+-- 
+1.7.1
+

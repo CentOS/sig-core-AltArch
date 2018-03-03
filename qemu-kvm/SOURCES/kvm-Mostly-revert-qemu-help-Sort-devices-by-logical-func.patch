@@ -1,0 +1,177 @@
+From c028066b7a4a68d52a33f6856bb8fe907def2b6b Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Wed, 6 Nov 2013 14:41:10 +0100
+Subject: [PATCH 34/81] Mostly revert "qemu-help: Sort devices by logical functionality"
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383748882-22831-6-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55531
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 05/17] Mostly revert "qemu-help: Sort devices by logical functionality"
+Bugzilla: 1001216
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+This reverts most of commit 3d1237fb2ab4edb926c717767bb5e31d6053a7c5.
+
+The commit claims to sort the output of "-device help" "by
+functionality rather than alphabetical".  Issues:
+
+* The output was unsorted before, not alphabetically sorted.
+  Misleading, but harmless enough.
+
+* The commit doesn't just sort the output of "-device help" as it
+  claims, it adds categories to each line of "-device help", and it
+  prints devices once per category.  In particular, devices without a
+  category aren't shown anymore.  Maybe such devices should not exist,
+  but they do.  Regression.
+
+* Categories are also added to the output of "info qdm".  Silent
+  change, not nice.  Output remains unsorted, unlike "-device help".
+
+I'm going to reimplement the feature we actually want, without the
+warts.  Reverting the flawed commit first should make it easier to
+review.  However, I can't revert it completely, since DeviceClass
+member categories has been put to use.  So leave that part in.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Marcel Apfelbaum <marcel.a@redhat.com>
+Message-id: 1381410021-1538-2-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@amazon.com>
+(cherry picked from commit 1fc224b4b6d195fb7802d5ba1a0846a4e7a1e2af)
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ include/hw/qdev-core.h | 16 ----------------
+ qdev-monitor.c         | 48 +++++++++---------------------------------------
+ 2 files changed, 9 insertions(+), 55 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ include/hw/qdev-core.h |   16 ----------------
+ qdev-monitor.c         |   48 +++++++++---------------------------------------
+ 2 files changed, 9 insertions(+), 55 deletions(-)
+
+diff --git a/include/hw/qdev-core.h b/include/hw/qdev-core.h
+index 18596e9..a8618db 100644
+--- a/include/hw/qdev-core.h
++++ b/include/hw/qdev-core.h
+@@ -30,22 +30,6 @@ typedef enum DeviceCategory {
+     DEVICE_CATEGORY_MAX
+ } DeviceCategory;
+ 
+-static inline const char *qdev_category_get_name(DeviceCategory category)
+-{
+-    static const char *category_names[DEVICE_CATEGORY_MAX] = {
+-        [DEVICE_CATEGORY_BRIDGE]  = "Controller/Bridge/Hub",
+-        [DEVICE_CATEGORY_USB]     = "USB",
+-        [DEVICE_CATEGORY_STORAGE] = "Storage",
+-        [DEVICE_CATEGORY_NETWORK] = "Network",
+-        [DEVICE_CATEGORY_INPUT]   = "Input",
+-        [DEVICE_CATEGORY_DISPLAY] = "Display",
+-        [DEVICE_CATEGORY_SOUND]   = "Sound",
+-        [DEVICE_CATEGORY_MISC]    = "Misc",
+-    };
+-
+-    return category_names[category];
+-};
+-
+ typedef int (*qdev_initfn)(DeviceState *dev);
+ typedef int (*qdev_event)(DeviceState *dev);
+ typedef void (*qdev_resetfn)(DeviceState *dev);
+diff --git a/qdev-monitor.c b/qdev-monitor.c
+index 230a8df..e54dbc2 100644
+--- a/qdev-monitor.c
++++ b/qdev-monitor.c
+@@ -75,27 +75,24 @@ static bool qdev_class_has_alias(DeviceClass *dc)
+     return (qdev_class_get_alias(dc) != NULL);
+ }
+ 
+-static void qdev_print_class_devinfo(DeviceClass *dc)
++static void qdev_print_devinfo(ObjectClass *klass, void *opaque)
+ {
+-    DeviceCategory category;
++    DeviceClass *dc;
++    bool *show_no_user = opaque;
++
++    dc = (DeviceClass *)object_class_dynamic_cast(klass, TYPE_DEVICE);
+ 
+-    if (!dc) {
++    if (!dc || (show_no_user && !*show_no_user && dc->no_user)) {
+         return;
+     }
+ 
+-    error_printf("name \"%s\"", object_class_get_name(OBJECT_CLASS(dc)));
++    error_printf("name \"%s\"", object_class_get_name(klass));
+     if (dc->bus_type) {
+         error_printf(", bus %s", dc->bus_type);
+     }
+     if (qdev_class_has_alias(dc)) {
+         error_printf(", alias \"%s\"", qdev_class_get_alias(dc));
+     }
+-    error_printf(", categories");
+-    for (category = 0; category < DEVICE_CATEGORY_MAX; ++category) {
+-        if (test_bit(category, dc->categories)) {
+-            error_printf(" \"%s\"", qdev_category_get_name(category));
+-        }
+-    }
+     if (dc->desc) {
+         error_printf(", desc \"%s\"", dc->desc);
+     }
+@@ -105,15 +102,6 @@ static void qdev_print_class_devinfo(DeviceClass *dc)
+     error_printf("\n");
+ }
+ 
+-static void qdev_print_devinfo(ObjectClass *klass, void *opaque)
+-{
+-    DeviceClass *dc;
+-
+-    dc = (DeviceClass *)object_class_dynamic_cast(klass, TYPE_DEVICE);
+-
+-    qdev_print_class_devinfo(dc);
+-}
+-
+ static int set_property(const char *name, const char *value, void *opaque)
+ {
+     DeviceState *dev = opaque;
+@@ -151,21 +139,6 @@ static const char *find_typename_by_alias(const char *alias)
+     return NULL;
+ }
+ 
+-static void qdev_print_category_devices(DeviceCategory category)
+-{
+-    DeviceClass *dc;
+-    GSList *list, *curr;
+-
+-    list = object_class_get_list(TYPE_DEVICE, false);
+-    for (curr = list; curr; curr = g_slist_next(curr)) {
+-        dc = (DeviceClass *)object_class_dynamic_cast(curr->data, TYPE_DEVICE);
+-        if (!dc->no_user && test_bit(category, dc->categories)) {
+-            qdev_print_class_devinfo(dc);
+-        }
+-    }
+-    g_slist_free(list);
+-}
+-
+ int qdev_device_help(QemuOpts *opts)
+ {
+     const char *driver;
+@@ -174,11 +147,8 @@ int qdev_device_help(QemuOpts *opts)
+ 
+     driver = qemu_opt_get(opts, "driver");
+     if (driver && is_help_option(driver)) {
+-        DeviceCategory category;
+-        for (category = 0; category < DEVICE_CATEGORY_MAX; ++category) {
+-            qdev_print_category_devices(category);
+-        }
+-
++        bool show_no_user = false;
++        object_class_foreach(qdev_print_devinfo, TYPE_DEVICE, false, &show_no_user);
+         return 1;
+     }
+ 
+-- 
+1.7.1
+

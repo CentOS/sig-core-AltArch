@@ -1,0 +1,60 @@
+From 0cdb7038a7027cbb63c820e60bb34abd191ac85f Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 15 Feb 2016 09:28:31 +0100
+Subject: [PATCH 18/18] vmdk: Fix calculation of block status's offset
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1455528511-9357-19-git-send-email-famz@redhat.com>
+Patchwork-id: 69184
+O-Subject: [RHEL-7.3 qemu-kvm PATCH 18/18] vmdk: Fix calculation of block status's offset
+Bugzilla: 1299116
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+"offset" is the offset of cluster and sector_num doesn't necessarily
+refer to the start of it, it should add index_in_cluster.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Message-id: 1453780743-16806-12-git-send-email-famz@redhat.com
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit d0a18f10251f515c86dcaec5bdf979a4e07fafc5)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vmdk.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index b0c312b..b4f0d44 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -1275,6 +1275,7 @@ static int64_t coroutine_fn vmdk_co_get_block_status(BlockDriverState *bs,
+                              0, 0);
+     qemu_co_mutex_unlock(&s->lock);
+ 
++    index_in_cluster = vmdk_find_index_in_cluster(extent, sector_num);
+     switch (ret) {
+     case VMDK_ERROR:
+         ret = -EIO;
+@@ -1288,13 +1289,14 @@ static int64_t coroutine_fn vmdk_co_get_block_status(BlockDriverState *bs,
+     case VMDK_OK:
+         ret = BDRV_BLOCK_DATA;
+         if (extent->file == bs->file && !extent->compressed) {
+-            ret |= BDRV_BLOCK_OFFSET_VALID | offset;
++            ret |= BDRV_BLOCK_OFFSET_VALID;
++            ret |= (offset + (index_in_cluster << BDRV_SECTOR_BITS))
++                    & BDRV_BLOCK_OFFSET_MASK;
+         }
+ 
+         break;
+     }
+ 
+-    index_in_cluster = vmdk_find_index_in_cluster(extent, sector_num);
+     n = extent->cluster_sectors - index_in_cluster;
+     if (n > nb_sectors) {
+         n = nb_sectors;
+-- 
+1.8.3.1
+

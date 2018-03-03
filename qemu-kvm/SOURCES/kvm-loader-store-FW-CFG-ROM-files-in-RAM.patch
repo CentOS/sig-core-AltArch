@@ -1,0 +1,221 @@
+From 4fb30d2478b2d030262bcd1699a683973e481cfd Mon Sep 17 00:00:00 2001
+Message-Id: <4fb30d2478b2d030262bcd1699a683973e481cfd.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:17:19 +0100
+Subject: [PATCH 12/56] loader: store FW CFG ROM files in RAM
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-13-git-send-email-mst@redhat.com>
+Patchwork-id: 56317
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 12/57] loader: store FW CFG ROM files in RAM
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+ROM files that are put in FW CFG are copied to guest ram, by BIOS, but
+they are not backed by RAM so they don't get migrated.
+
+Each time we change two bytes in such a ROM this breaks cross-version
+migration: since we can migrate after BIOS has read the first byte but
+before it has read the second one, getting an inconsistent state.
+
+Future-proof this by creating, for each such ROM,
+an MR serving as the backing store.
+This MR is never mapped into guest memory, but it's registered
+as RAM so it's migrated with the guest.
+
+Naturally, this only helps for -M 1.7 and up, older machine types
+will still have the cross-version migration bug.
+Luckily the race window for the problem to trigger is very small,
+which is also likely why we didn't notice the cross-version
+migration bug in testing yet.
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+(cherry picked from commit 04920fc0faa4760f9c4fc0e73b992b768099be70)
+
+Conflicts:
+	hw/i386/pc_piix.c
+	hw/i386/pc_q35.c
+---
+ include/hw/loader.h |  1 +
+ hw/core/loader.c    | 49 ++++++++++++++++++++++++++++++++++++++++++++++---
+ hw/i386/pc_piix.c   |  2 ++
+ hw/i386/pc_q35.c    |  1 +
+ 4 files changed, 50 insertions(+), 3 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/core/loader.c    | 49 ++++++++++++++++++++++++++++++++++++++++++++++---
+ hw/i386/pc_piix.c   |  2 ++
+ hw/i386/pc_q35.c    |  1 +
+ include/hw/loader.h |  1 +
+ 4 files changed, 50 insertions(+), 3 deletions(-)
+
+diff --git a/hw/core/loader.c b/hw/core/loader.c
+index 7d61537..6bdbd15 100644
+--- a/hw/core/loader.c
++++ b/hw/core/loader.c
+@@ -54,6 +54,8 @@
+ 
+ #include <zlib.h>
+ 
++bool rom_file_in_ram = true;
++
+ static int roms_loaded;
+ 
+ /* return the size or -1 if error */
+@@ -542,6 +544,7 @@ struct Rom {
+     size_t datasize;
+ 
+     uint8_t *data;
++    MemoryRegion *mr;
+     int isrom;
+     char *fw_dir;
+     char *fw_file;
+@@ -571,6 +574,21 @@ static void rom_insert(Rom *rom)
+     QTAILQ_INSERT_TAIL(&roms, rom, next);
+ }
+ 
++static void *rom_set_mr(Rom *rom, const char *name)
++{
++    void *data;
++
++    rom->mr = g_malloc(sizeof(*rom->mr));
++    memory_region_init_ram(rom->mr, name, rom->datasize);
++    memory_region_set_readonly(rom->mr, true);
++    vmstate_register_ram_global(rom->mr);
++
++    data = memory_region_get_ram_ptr(rom->mr);
++    memcpy(data, rom->data, rom->datasize);
++
++    return data;
++}
++
+ int rom_add_file(const char *file, const char *fw_dir,
+                  hwaddr addr, int32_t bootindex)
+ {
+@@ -612,6 +630,7 @@ int rom_add_file(const char *file, const char *fw_dir,
+     if (rom->fw_file && fw_cfg) {
+         const char *basename;
+         char fw_file_name[56];
++        void *data;
+ 
+         basename = strrchr(rom->fw_file, '/');
+         if (basename) {
+@@ -621,8 +640,15 @@ int rom_add_file(const char *file, const char *fw_dir,
+         }
+         snprintf(fw_file_name, sizeof(fw_file_name), "%s/%s", rom->fw_dir,
+                  basename);
+-        fw_cfg_add_file(fw_cfg, fw_file_name, rom->data, rom->romsize);
+         snprintf(devpath, sizeof(devpath), "/rom@%s", fw_file_name);
++
++        if (rom_file_in_ram) {
++            data = rom_set_mr(rom, devpath);
++        } else {
++            data = rom->data;
++        }
++
++        fw_cfg_add_file(fw_cfg, fw_file_name, data, rom->romsize);
+     } else {
+         snprintf(devpath, sizeof(devpath), "/rom@" TARGET_FMT_plx, addr);
+     }
+@@ -697,7 +723,12 @@ static void rom_reset(void *unused)
+         if (rom->data == NULL) {
+             continue;
+         }
+-        cpu_physical_memory_write_rom(rom->addr, rom->data, rom->datasize);
++        if (rom->mr) {
++            void *host = memory_region_get_ram_ptr(rom->mr);
++            memcpy(host, rom->data, rom->datasize);
++        } else {
++            cpu_physical_memory_write_rom(rom->addr, rom->data, rom->datasize);
++        }
+         if (rom->isrom) {
+             /* rom needs to be written only once */
+             g_free(rom->data);
+@@ -746,6 +777,9 @@ static Rom *find_rom(hwaddr addr)
+         if (rom->fw_file) {
+             continue;
+         }
++        if (rom->mr) {
++            continue;
++        }
+         if (rom->addr > addr) {
+             continue;
+         }
+@@ -773,6 +807,9 @@ int rom_copy(uint8_t *dest, hwaddr addr, size_t size)
+         if (rom->fw_file) {
+             continue;
+         }
++        if (rom->mr) {
++            continue;
++        }
+         if (rom->addr + rom->romsize < addr) {
+             continue;
+         }
+@@ -831,7 +868,13 @@ void do_info_roms(Monitor *mon, const QDict *qdict)
+     Rom *rom;
+ 
+     QTAILQ_FOREACH(rom, &roms, next) {
+-        if (!rom->fw_file) {
++        if (rom->mr) {
++            monitor_printf(mon, "%s"
++                           " size=0x%06zx name=\"%s\"\n",
++                           rom->mr->name,
++                           rom->romsize,
++                           rom->name);
++        } else if (!rom->fw_file) {
+             monitor_printf(mon, "addr=" TARGET_FMT_plx
+                            " size=0x%06zx mem=%s name=\"%s\"\n",
+                            rom->addr, rom->romsize,
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index b6f9288..07848c1 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -25,6 +25,7 @@
+ #include <glib.h>
+ 
+ #include "hw/hw.h"
++#include "hw/loader.h"
+ #include "hw/i386/pc.h"
+ #include "hw/i386/apic.h"
+ #include "hw/i386/smbios.h"
+@@ -883,6 +884,7 @@ static void pc_init_rhel650(QEMUMachineInitArgs *args)
+     x86_cpu_compat_set_features("Opteron_G3", FEAT_8000_0001_EDX,
+                                 0, CPUID_EXT2_RDTSCP);
+ 
++    rom_file_in_ram = false; 
+     pc_init_rhel700(args);
+ }
+ 
+diff --git a/hw/i386/pc_q35.c b/hw/i386/pc_q35.c
+index f308098..8fa6793 100644
+--- a/hw/i386/pc_q35.c
++++ b/hw/i386/pc_q35.c
+@@ -28,6 +28,7 @@
+  * THE SOFTWARE.
+  */
+ #include "hw/hw.h"
++#include "hw/loader.h"
+ #include "sysemu/arch_init.h"
+ #include "hw/i2c/smbus.h"
+ #include "hw/boards.h"
+diff --git a/include/hw/loader.h b/include/hw/loader.h
+index 15d4cc9..19e11ea 100644
+--- a/include/hw/loader.h
++++ b/include/hw/loader.h
+@@ -23,6 +23,7 @@ void pstrcpy_targphys(const char *name,
+                       hwaddr dest, int buf_size,
+                       const char *source);
+ 
++extern bool rom_file_in_ram;
+ 
+ int rom_add_file(const char *file, const char *fw_dir,
+                  hwaddr addr, int32_t bootindex);
+-- 
+1.7.11.7
+

@@ -1,0 +1,75 @@
+From 524a3586abb4a10aa87f1b36518f6645caf586c8 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 4 Feb 2014 11:54:13 +0100
+Subject: [PATCH 03/37] raw: Fix BlockLimits passthrough
+
+Message-id: <1392117622-28812-4-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57168
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 03/37] raw: Fix BlockLimits passthrough
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+raw copies over the BlockLimits of bs->file during bdrv_open().
+However, since commit d34682cd it is immediately overwritten during
+bdrv_refresh_limits(). This caused all fields except for
+opt_transfer_length and opt_mem_alignment (which happen to be correctly
+inherited in generic code) to be zeroed.
+
+Move the BlockLimit assignment to a .bdrv_refresh_limits() callback to
+make it work again for all fields.
+
+Reported-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+
+Conflicts:
+	block/raw_bsd.c
+
+Conflicts because RHEL 7 still has the old raw driver.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block/raw.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+---
+ block/raw.c |    8 +++++++-
+ 1 files changed, 7 insertions(+), 1 deletions(-)
+
+diff --git a/block/raw.c b/block/raw.c
+index c853258..eeadba5 100644
+--- a/block/raw.c
++++ b/block/raw.c
+@@ -7,7 +7,6 @@ static int raw_open(BlockDriverState *bs, QDict *options, int flags,
+                     Error **errp)
+ {
+     bs->sg = bs->file->sg;
+-    bs->bl = bs->file->bl;
+     return 0;
+ }
+ 
+@@ -59,6 +58,12 @@ static int64_t raw_getlength(BlockDriverState *bs)
+     return bdrv_getlength(bs->file);
+ }
+ 
++static int raw_refresh_limits(BlockDriverState *bs)
++{
++    bs->bl = bs->file->bl;
++    return 0;
++}
++
+ static int raw_truncate(BlockDriverState *bs, int64_t offset)
+ {
+     return bdrv_truncate(bs->file, offset);
+@@ -154,6 +159,7 @@ static BlockDriver bdrv_raw = {
+     .bdrv_probe         = raw_probe,
+     .bdrv_getlength     = raw_getlength,
+     .has_variable_length = true,
++    .bdrv_refresh_limits = raw_refresh_limits,
+     .bdrv_truncate      = raw_truncate,
+ 
+     .bdrv_is_inserted   = raw_is_inserted,
+-- 
+1.7.1
+

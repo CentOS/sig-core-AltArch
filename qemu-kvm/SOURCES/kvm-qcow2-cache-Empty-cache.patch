@@ -1,0 +1,80 @@
+From 3a454be93c4750bad515dc3dacc83a3feff5e02c Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Tue, 7 Jan 2014 21:57:10 +0100
+Subject: [PATCH 05/14] qcow2-cache: Empty cache
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1389131839-12920-6-git-send-email-mreitz@redhat.com>
+Patchwork-id: 56541
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 05/14] qcow2-cache: Empty cache
+Bugzilla: 1033490
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1033490
+
+Add a function for emptying a cache, i.e., flushing it and marking all
+elements invalid.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit e7108feaace8e02b3a4bf010448fc2744f753381)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2-cache.c | 18 ++++++++++++++++++
+ block/qcow2.h       |  2 ++
+ 2 files changed, 20 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-cache.c |   18 ++++++++++++++++++
+ block/qcow2.h       |    2 ++
+ 2 files changed, 20 insertions(+), 0 deletions(-)
+
+diff --git a/block/qcow2-cache.c b/block/qcow2-cache.c
+index eb1d69b..8ecbb5b 100644
+--- a/block/qcow2-cache.c
++++ b/block/qcow2-cache.c
+@@ -200,6 +200,24 @@ void qcow2_cache_depends_on_flush(Qcow2Cache *c)
+     c->depends_on_flush = true;
+ }
+ 
++int qcow2_cache_empty(BlockDriverState *bs, Qcow2Cache *c)
++{
++    int ret, i;
++
++    ret = qcow2_cache_flush(bs, c);
++    if (ret < 0) {
++        return ret;
++    }
++
++    for (i = 0; i < c->size; i++) {
++        assert(c->entries[i].ref == 0);
++        c->entries[i].offset = 0;
++        c->entries[i].cache_hits = 0;
++    }
++
++    return 0;
++}
++
+ static int qcow2_cache_find_entry_to_replace(Qcow2Cache *c)
+ {
+     int i;
+diff --git a/block/qcow2.h b/block/qcow2.h
+index e4c140c..5ca6b78 100644
+--- a/block/qcow2.h
++++ b/block/qcow2.h
+@@ -489,6 +489,8 @@ int qcow2_cache_set_dependency(BlockDriverState *bs, Qcow2Cache *c,
+     Qcow2Cache *dependency);
+ void qcow2_cache_depends_on_flush(Qcow2Cache *c);
+ 
++int qcow2_cache_empty(BlockDriverState *bs, Qcow2Cache *c);
++
+ int qcow2_cache_get(BlockDriverState *bs, Qcow2Cache *c, uint64_t offset,
+     void **table);
+ int qcow2_cache_get_empty(BlockDriverState *bs, Qcow2Cache *c, uint64_t offset,
+-- 
+1.7.1
+

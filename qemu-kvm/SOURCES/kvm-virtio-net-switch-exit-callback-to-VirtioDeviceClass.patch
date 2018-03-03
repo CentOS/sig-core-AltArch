@@ -1,0 +1,81 @@
+From fed60f16a54ee6689b6c03025bbe4704a8e4b251 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Thu, 23 Jan 2014 14:03:36 +0100
+Subject: [PATCH 09/14] virtio-net: switch exit callback to VirtioDeviceClass
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1390485820-7585-7-git-send-email-armbru@redhat.com>
+Patchwork-id: 56926
+O-Subject: [PATCH 7.0 qemu-kvm 06/10] virtio-net: switch exit callback to VirtioDeviceClass
+Bugzilla: 983344
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+This ensures hot-unplug is handled properly by the proxy, and avoids
+leaking bus_name which is freed by virtio_device_exit.
+
+Cc: qemu-stable@nongnu.org
+Acked-by: Andreas Faerber <afaerber@suse.de>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 3786cff5eb384d058395a2729af627fa3253d056)
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+---
+ hw/net/virtio-net.c | 11 ++++-------
+ 1 file changed, 4 insertions(+), 7 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/net/virtio-net.c |   11 ++++-------
+ 1 files changed, 4 insertions(+), 7 deletions(-)
+
+diff --git a/hw/net/virtio-net.c b/hw/net/virtio-net.c
+index 21b126f..06c53fe 100644
+--- a/hw/net/virtio-net.c
++++ b/hw/net/virtio-net.c
+@@ -1506,16 +1506,15 @@ static int virtio_net_device_init(VirtIODevice *vdev)
+     return 0;
+ }
+ 
+-static int virtio_net_device_exit(DeviceState *qdev)
++static void virtio_net_device_exit(VirtIODevice *vdev)
+ {
+-    VirtIONet *n = VIRTIO_NET(qdev);
+-    VirtIODevice *vdev = VIRTIO_DEVICE(qdev);
++    VirtIONet *n = VIRTIO_NET(vdev);
+     int i;
+ 
+     /* This will stop vhost backend if appropriate. */
+     virtio_net_set_status(vdev, 0);
+ 
+-    unregister_savevm(qdev, "virtio-net", n);
++    unregister_savevm(DEVICE(vdev), "virtio-net", n);
+ 
+     if (n->netclient_name) {
+         g_free(n->netclient_name);
+@@ -1546,8 +1545,6 @@ static int virtio_net_device_exit(DeviceState *qdev)
+     g_free(n->vqs);
+     qemu_del_nic(n->nic);
+     virtio_cleanup(vdev);
+-
+-    return 0;
+ }
+ 
+ static void virtio_net_instance_init(Object *obj)
+@@ -1574,10 +1571,10 @@ static void virtio_net_class_init(ObjectClass *klass, void *data)
+ {
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     VirtioDeviceClass *vdc = VIRTIO_DEVICE_CLASS(klass);
+-    dc->exit = virtio_net_device_exit;
+     dc->props = virtio_net_properties;
+     set_bit(DEVICE_CATEGORY_NETWORK, dc->categories);
+     vdc->init = virtio_net_device_init;
++    vdc->exit = virtio_net_device_exit;
+     vdc->get_config = virtio_net_get_config;
+     vdc->set_config = virtio_net_set_config;
+     vdc->get_features = virtio_net_get_features;
+-- 
+1.7.1
+

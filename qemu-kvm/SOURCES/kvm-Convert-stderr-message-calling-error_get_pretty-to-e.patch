@@ -1,0 +1,219 @@
+From a52fe59a941e8cfa7b94ecc743ffcfcf0e1bcda7 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Wed, 28 Aug 2013 15:50:45 +0200
+Subject: [PATCH 28/28] Convert stderr message calling error_get_pretty() to error_report()
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1377705045-1054-3-git-send-email-lersek@redhat.com>
+Patchwork-id: 53887
+O-Subject: [RHEL-7 qemu-kvm PATCH v3 2/2] Convert stderr message calling error_get_pretty() to error_report()
+Bugzilla: 906937
+RH-Acked-by: Michal Novotny <minovotn@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Convert stderr messages calling error_get_pretty()
+to error_report().
+
+Timestamp is prepended by -msg timstamp option with it.
+
+Per Markus's comment below, A conversion from fprintf() to
+error_report() is always an improvement, regardless of
+error_get_pretty().
+
+http://marc.info/?l=qemu-devel&m=137513283408601&w=2
+
+But, it is not reasonable to convert them at one time
+because fprintf() is used everwhere in qemu.
+
+So, it should be done step by step with avoiding regression.
+
+Signed-off-by: Seiji Aguchi <seiji.aguchi@hds.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit 4a44d85e28bd282f53ccf0fa933dd71b8744a229)
+
+Conflicts:
+
+	hw/char/serial.c
+
+RHEL-7 notes:
+
+- I dropped the "hw/char/serial.c" hunks because they depend on
+  upstream commit db895a1e ("isa: Use realizefn for ISADevice"):
+
+  -    serial_init_core(s);
+  +    serial_realize_core(s, &err);
+
+  Upstream commit db895a1e was first tagged in v1.6.0-rc0 and we don't
+  have it.
+
+  Instead, I replaced the fprintf(stderr, ...) call in serial_init_core()
+  with a matching error_report() call, following Stefan's review of v2
+  2/2.
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+---
+ arch_init.c                 |    4 ++--
+ hw/char/serial.c            |    3 ++-
+ hw/i386/pc.c                |    6 +++---
+ qemu-char.c                 |    2 +-
+ target-i386/cpu.c           |    2 +-
+ target-ppc/translate_init.c |    3 ++-
+ vl.c                        |    9 +++++----
+ 7 files changed, 16 insertions(+), 13 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ arch_init.c                 |    4 ++--
+ hw/char/serial.c            |    3 ++-
+ hw/i386/pc.c                |    6 +++---
+ qemu-char.c                 |    2 +-
+ target-i386/cpu.c           |    2 +-
+ target-ppc/translate_init.c |    3 ++-
+ vl.c                        |    9 +++++----
+ 7 files changed, 16 insertions(+), 13 deletions(-)
+
+diff --git a/arch_init.c b/arch_init.c
+index 30edd5f..cd2bb5a 100644
+--- a/arch_init.c
++++ b/arch_init.c
+@@ -1069,8 +1069,8 @@ void do_acpitable_option(const QemuOpts *opts)
+ 
+     acpi_table_add(opts, &err);
+     if (err) {
+-        fprintf(stderr, "Wrong acpi table provided: %s\n",
+-                error_get_pretty(err));
++        error_report("Wrong acpi table provided: %s",
++                     error_get_pretty(err));
+         error_free(err);
+         exit(1);
+     }
+diff --git a/hw/char/serial.c b/hw/char/serial.c
+index 66b6348..0c472e2 100644
+--- a/hw/char/serial.c
++++ b/hw/char/serial.c
+@@ -27,6 +27,7 @@
+ #include "sysemu/char.h"
+ #include "qemu/timer.h"
+ #include "exec/address-spaces.h"
++#include "qemu/error-report.h"
+ 
+ //#define DEBUG_SERIAL
+ 
+@@ -673,7 +674,7 @@ static void serial_reset(void *opaque)
+ void serial_init_core(SerialState *s)
+ {
+     if (!s->chr) {
+-        fprintf(stderr, "Can't create serial device, empty char device\n");
++        error_report("Can't create serial device, empty char device");
+ 	exit(1);
+     }
+ 
+diff --git a/hw/i386/pc.c b/hw/i386/pc.c
+index a7ecfb0..71b7a26 100644
+--- a/hw/i386/pc.c
++++ b/hw/i386/pc.c
+@@ -968,7 +968,7 @@ void pc_cpus_init(const char *cpu_model, DeviceState *icc_bridge)
+         cpu = pc_new_cpu(cpu_model, x86_cpu_apic_id_from_index(i),
+                          icc_bridge, &error);
+         if (error) {
+-            fprintf(stderr, "%s\n", error_get_pretty(error));
++            error_report("%s", error_get_pretty(error));
+             error_free(error);
+             exit(1);
+         }
+@@ -1007,8 +1007,8 @@ void pc_acpi_init(const char *default_dsdt)
+ 
+         acpi_table_add(opts, &err);
+         if (err) {
+-            fprintf(stderr, "WARNING: failed to load %s: %s\n", filename,
+-                    error_get_pretty(err));
++            error_report("WARNING: failed to load %s: %s", filename,
++                         error_get_pretty(err));
+             error_free(err);
+         }
+         g_free(arg);
+diff --git a/qemu-char.c b/qemu-char.c
+index ccc9912..566267a 100644
+--- a/qemu-char.c
++++ b/qemu-char.c
+@@ -3334,7 +3334,7 @@ CharDriverState *qemu_chr_new(const char *label, const char *filename, void (*in
+ 
+     chr = qemu_chr_new_from_opts(opts, init, &err);
+     if (error_is_set(&err)) {
+-        fprintf(stderr, "%s\n", error_get_pretty(err));
++        error_report("%s", error_get_pretty(err));
+         error_free(err);
+     }
+     if (chr && qemu_opt_get_bool(opts, "mux", 0)) {
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index 0ad8259..355375b 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -1847,7 +1847,7 @@ X86CPU *cpu_x86_init(const char *cpu_model)
+ 
+ out:
+     if (error) {
+-        fprintf(stderr, "%s\n", error_get_pretty(error));
++        error_report("%s", error_get_pretty(error));
+         error_free(error);
+         if (cpu != NULL) {
+             object_unref(OBJECT(cpu));
+diff --git a/target-ppc/translate_init.c b/target-ppc/translate_init.c
+index 2e2bffa..5a12c0e 100644
+--- a/target-ppc/translate_init.c
++++ b/target-ppc/translate_init.c
+@@ -27,6 +27,7 @@
+ #include "cpu-models.h"
+ #include "mmu-hash32.h"
+ #include "mmu-hash64.h"
++#include "qemu/error-report.h"
+ 
+ //#define PPC_DUMP_CPU
+ //#define PPC_DEBUG_SPR
+@@ -8027,7 +8028,7 @@ PowerPCCPU *cpu_ppc_init(const char *cpu_model)
+ 
+     object_property_set_bool(OBJECT(cpu), true, "realized", &err);
+     if (err != NULL) {
+-        fprintf(stderr, "%s\n", error_get_pretty(err));
++        error_report("%s", error_get_pretty(err));
+         error_free(err);
+         object_unref(OBJECT(cpu));
+         return NULL;
+diff --git a/vl.c b/vl.c
+index 0ce554d..51c04e7 100644
+--- a/vl.c
++++ b/vl.c
+@@ -2363,7 +2363,7 @@ static int chardev_init_func(QemuOpts *opts, void *opaque)
+ 
+     qemu_chr_new_from_opts(opts, NULL, &local_err);
+     if (error_is_set(&local_err)) {
+-        fprintf(stderr, "%s\n", error_get_pretty(local_err));
++        error_report("%s", error_get_pretty(local_err));
+         error_free(local_err);
+         return -1;
+     }
+@@ -4393,8 +4393,8 @@ int main(int argc, char **argv, char **envp)
+         vnc_display_init(ds);
+         vnc_display_open(ds, vnc_display, &local_err);
+         if (local_err != NULL) {
+-            fprintf(stderr, "Failed to start VNC server on `%s': %s\n",
+-                    vnc_display, error_get_pretty(local_err));
++            error_report("Failed to start VNC server on `%s': %s",
++                         vnc_display, error_get_pretty(local_err));
+             error_free(local_err);
+             exit(1);
+         }
+@@ -4437,7 +4437,8 @@ int main(int argc, char **argv, char **envp)
+         Error *local_err = NULL;
+         qemu_start_incoming_migration(incoming, &local_err);
+         if (local_err) {
+-            fprintf(stderr, "-incoming %s: %s\n", incoming, error_get_pretty(local_err));
++            error_report("-incoming %s: %s", incoming,
++                         error_get_pretty(local_err));
+             error_free(local_err);
+             exit(1);
+         }
+-- 
+1.7.1
+

@@ -1,0 +1,143 @@
+From b853920b298d19a1905d106c7d965bda29b7a26c Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Mon, 2 Sep 2013 13:26:15 +0200
+Subject: [PATCH 09/29] usb: add serial bus property
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1378128376-25930-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 53989
+O-Subject: [RHEL-7 qemu-kvm PATCH 1/2] usb: add serial bus property
+Bugzilla: 953304
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Hans de Goede <hdegoede@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+This patch adds a serial property for all usb devices, which can be
+used to set the serial number of a usb device (as listed by lsusb -v)
+to a specific value.  Applies to emulated devices only.
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 71938a09d2b9fd4007515fec6c395916cb08f868)
+---
+ hw/usb/bus.c         |  1 +
+ hw/usb/desc.c        |  6 ++++++
+ hw/usb/dev-hid.c     |  3 +++
+ hw/usb/dev-storage.c | 13 +++----------
+ include/hw/usb.h     |  1 +
+ 5 files changed, 14 insertions(+), 10 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/bus.c         |    1 +
+ hw/usb/desc.c        |    6 ++++++
+ hw/usb/dev-hid.c     |    3 +++
+ hw/usb/dev-storage.c |   13 +++----------
+ include/hw/usb.h     |    1 +
+ 5 files changed, 14 insertions(+), 10 deletions(-)
+
+diff --git a/hw/usb/bus.c b/hw/usb/bus.c
+index d1827be..f83d1de 100644
+--- a/hw/usb/bus.c
++++ b/hw/usb/bus.c
+@@ -13,6 +13,7 @@ static int usb_qdev_exit(DeviceState *qdev);
+ 
+ static Property usb_props[] = {
+     DEFINE_PROP_STRING("port", USBDevice, port_path),
++    DEFINE_PROP_STRING("serial", USBDevice, serial),
+     DEFINE_PROP_BIT("full-path", USBDevice, flags,
+                     USB_DEV_FLAG_FULL_PATH, true),
+     DEFINE_PROP_END_OF_LIST()
+diff --git a/hw/usb/desc.c b/hw/usb/desc.c
+index fce303e..bf6c522 100644
+--- a/hw/usb/desc.c
++++ b/hw/usb/desc.c
+@@ -566,6 +566,12 @@ void usb_desc_create_serial(USBDevice *dev)
+     char *path;
+     int dst;
+ 
++    if (dev->serial) {
++        /* 'serial' usb bus property has priority if present */
++        usb_desc_set_string(dev, index, dev->serial);
++        return;
++    }
++
+     assert(index != 0 && desc->str[index] != NULL);
+     dst = snprintf(serial, sizeof(serial), "%s", desc->str[index]);
+     path = qdev_get_dev_path(hcd);
+diff --git a/hw/usb/dev-hid.c b/hw/usb/dev-hid.c
+index b48899d..31f3cde 100644
+--- a/hw/usb/dev-hid.c
++++ b/hw/usb/dev-hid.c
+@@ -560,6 +560,9 @@ static int usb_hid_initfn(USBDevice *dev, int kind)
+ {
+     USBHIDState *us = DO_UPCAST(USBHIDState, dev, dev);
+ 
++    if (dev->serial) {
++        usb_desc_set_string(dev, STR_SERIALNUMBER, dev->serial);
++    }
+     usb_desc_init(dev);
+     us->intr = usb_ep_get(dev, USB_TOKEN_IN, 1);
+     hid_init(&us->hid, kind, usb_hid_changed);
+diff --git a/hw/usb/dev-storage.c b/hw/usb/dev-storage.c
+index 1073901..fe914ab 100644
+--- a/hw/usb/dev-storage.c
++++ b/hw/usb/dev-storage.c
+@@ -58,7 +58,6 @@ typedef struct {
+     USBPacket *packet;
+     /* usb-storage only */
+     BlockConf conf;
+-    char *serial;
+     uint32_t removable;
+ } MSDState;
+ 
+@@ -602,7 +601,7 @@ static int usb_msd_initfn_storage(USBDevice *dev)
+         return -1;
+     }
+ 
+-    blkconf_serial(&s->conf, &s->serial);
++    blkconf_serial(&s->conf, &dev->serial);
+ 
+     /*
+      * Hack alert: this pretends to be a block device, but it's really
+@@ -616,16 +615,11 @@ static int usb_msd_initfn_storage(USBDevice *dev)
+     bdrv_detach_dev(bs, &s->dev.qdev);
+     s->conf.bs = NULL;
+ 
+-    if (s->serial) {
+-        usb_desc_set_string(dev, STR_SERIALNUMBER, s->serial);
+-    } else {
+-        usb_desc_create_serial(dev);
+-    }
+-
++    usb_desc_create_serial(dev);
+     usb_desc_init(dev);
+     scsi_bus_new(&s->bus, &s->dev.qdev, &usb_msd_scsi_info_storage, NULL);
+     scsi_dev = scsi_bus_legacy_add_drive(&s->bus, bs, 0, !!s->removable,
+-                                            s->conf.bootindex, s->serial);
++                                            s->conf.bootindex, dev->serial);
+     if (!scsi_dev) {
+         return -1;
+     }
+@@ -734,7 +728,6 @@ static const VMStateDescription vmstate_usb_msd = {
+ 
+ static Property msd_properties[] = {
+     DEFINE_BLOCK_PROPERTIES(MSDState, conf),
+-    DEFINE_PROP_STRING("serial", MSDState, serial),
+     DEFINE_PROP_BIT("removable", MSDState, removable, 0, false),
+     DEFINE_PROP_END_OF_LIST(),
+ };
+diff --git a/include/hw/usb.h b/include/hw/usb.h
+index 4d9d05e..901b0da 100644
+--- a/include/hw/usb.h
++++ b/include/hw/usb.h
+@@ -205,6 +205,7 @@ struct USBDevice {
+     DeviceState qdev;
+     USBPort *port;
+     char *port_path;
++    char *serial;
+     void *opaque;
+     uint32_t flags;
+ 
+-- 
+1.7.1
+

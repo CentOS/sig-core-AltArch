@@ -1,0 +1,143 @@
+From ddaa3bc746bdf8974337f176e3841b7c27d7253e Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 3 Dec 2013 16:34:41 +0100
+Subject: [PATCH 24/37] block: Align requests in bdrv_co_do_pwritev()
+
+Message-id: <1392117622-28812-25-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57189
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 24/37] block: Align requests in bdrv_co_do_pwritev()
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+This patch changes bdrv_co_do_pwritev() to actually be what its name
+promises. If requests aren't properly aligned, it performs a RMW.
+
+Requests touching the same block are serialised against the RMW request.
+Further optimisation of this is possible by differentiating types of
+requests (concurrent reads should actually be okay here).
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+(cherry picked from commit 3b8242e0ea2a2c201ef3d1bd24080490dae33080)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c | 86 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 85 insertions(+), 1 deletion(-)
+---
+ block.c |   86 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 files changed, 85 insertions(+), 1 deletions(-)
+
+diff --git a/block.c b/block.c
+index fd37037..3ec3949 100644
+--- a/block.c
++++ b/block.c
+@@ -3078,6 +3078,12 @@ static int coroutine_fn bdrv_co_do_pwritev(BlockDriverState *bs,
+     BdrvRequestFlags flags)
+ {
+     BdrvTrackedRequest req;
++    /* TODO Lift BDRV_SECTOR_SIZE restriction in BlockDriver interface */
++    uint64_t align = MAX(BDRV_SECTOR_SIZE, bs->request_alignment);
++    uint8_t *head_buf = NULL;
++    uint8_t *tail_buf = NULL;
++    QEMUIOVector local_qiov;
++    bool use_local_qiov = false;
+     int ret;
+ 
+     if (!bs->drv) {
+@@ -3096,10 +3102,88 @@ static int coroutine_fn bdrv_co_do_pwritev(BlockDriverState *bs,
+         bdrv_io_limits_intercept(bs, true, bytes >> BDRV_SECTOR_BITS);
+     }
+ 
++    /*
++     * Align write if necessary by performing a read-modify-write cycle.
++     * Pad qiov with the read parts and be sure to have a tracked request not
++     * only for bdrv_aligned_pwritev, but also for the reads of the RMW cycle.
++     */
+     tracked_request_begin(&req, bs, offset, bytes, true);
+-    ret = bdrv_aligned_pwritev(bs, &req, offset, bytes, qiov, flags);
++
++    if (offset & (align - 1)) {
++        QEMUIOVector head_qiov;
++        struct iovec head_iov;
++
++        mark_request_serialising(&req, align);
++        wait_serialising_requests(&req);
++
++        head_buf = qemu_blockalign(bs, align);
++        head_iov = (struct iovec) {
++            .iov_base   = head_buf,
++            .iov_len    = align,
++        };
++        qemu_iovec_init_external(&head_qiov, &head_iov, 1);
++
++        ret = bdrv_aligned_preadv(bs, &req, offset & ~(align - 1), align,
++                                  align, &head_qiov, 0);
++        if (ret < 0) {
++            goto fail;
++        }
++
++        qemu_iovec_init(&local_qiov, qiov->niov + 2);
++        qemu_iovec_add(&local_qiov, head_buf, offset & (align - 1));
++        qemu_iovec_concat(&local_qiov, qiov, 0, qiov->size);
++        use_local_qiov = true;
++
++        bytes += offset & (align - 1);
++        offset = offset & ~(align - 1);
++    }
++
++    if ((offset + bytes) & (align - 1)) {
++        QEMUIOVector tail_qiov;
++        struct iovec tail_iov;
++        size_t tail_bytes;
++
++        mark_request_serialising(&req, align);
++        wait_serialising_requests(&req);
++
++        tail_buf = qemu_blockalign(bs, align);
++        tail_iov = (struct iovec) {
++            .iov_base   = tail_buf,
++            .iov_len    = align,
++        };
++        qemu_iovec_init_external(&tail_qiov, &tail_iov, 1);
++
++        ret = bdrv_aligned_preadv(bs, &req, (offset + bytes) & ~(align - 1), align,
++                                  align, &tail_qiov, 0);
++        if (ret < 0) {
++            goto fail;
++        }
++
++        if (!use_local_qiov) {
++            qemu_iovec_init(&local_qiov, qiov->niov + 1);
++            qemu_iovec_concat(&local_qiov, qiov, 0, qiov->size);
++            use_local_qiov = true;
++        }
++
++        tail_bytes = (offset + bytes) & (align - 1);
++        qemu_iovec_add(&local_qiov, tail_buf + tail_bytes, align - tail_bytes);
++
++        bytes = ROUND_UP(bytes, align);
++    }
++
++    ret = bdrv_aligned_pwritev(bs, &req, offset, bytes,
++                               use_local_qiov ? &local_qiov : qiov,
++                               flags);
++
++fail:
+     tracked_request_end(&req);
+ 
++    if (use_local_qiov) {
++        qemu_iovec_destroy(&local_qiov);
++        qemu_vfree(head_buf);
++        qemu_vfree(tail_buf);
++    }
++
+     return ret;
+ }
+ 
+-- 
+1.7.1
+

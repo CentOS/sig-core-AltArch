@@ -1,0 +1,380 @@
+From 8f07e694eb932e0f3d50ad1083155b314e0162ca Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 4 Nov 2013 22:32:12 +0100
+Subject: [PATCH 19/87] block: Error parameter for create functions
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-22-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55321
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 21/43] block: Error parameter for create functions
+Bugzilla: 1026524
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1026524
+
+Add an Error ** parameter to bdrv_create and its associated functions to
+allow more specific error messages.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit cc84d90ff54c025190dbe49ec5fea1268217c5f2)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+
+Conflicts:
+	block/raw.c
+	block/raw_bsd.c
+
+Conflicts because raw_bsd.c does not exist downstream; instead, there is
+raw.c.
+---
+ block.c               | 80 +++++++++++++++++++++++++++++++++++----------------
+ block/cow.c           |  4 ++-
+ block/qcow.c          |  4 ++-
+ block/qcow2.c         |  2 +-
+ block/qed.c           |  4 ++-
+ block/raw.c           | 10 ++++++-
+ block/vvfat.c         |  4 ++-
+ include/block/block.h |  5 ++--
+ qemu-img.c            | 16 ++++-------
+ 9 files changed, 86 insertions(+), 43 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c               |   80 ++++++++++++++++++++++++++++++++++--------------
+ block/cow.c           |    4 ++-
+ block/qcow.c          |    4 ++-
+ block/qcow2.c         |    2 +-
+ block/qed.c           |    4 ++-
+ block/raw.c           |   10 +++++-
+ block/vvfat.c         |    4 ++-
+ include/block/block.h |    5 ++-
+ qemu-img.c            |   16 +++-------
+ 9 files changed, 86 insertions(+), 43 deletions(-)
+
+diff --git a/block.c b/block.c
+index cb99faf..c2b6930 100644
+--- a/block.c
++++ b/block.c
+@@ -366,18 +366,26 @@ typedef struct CreateCo {
+     char *filename;
+     QEMUOptionParameter *options;
+     int ret;
++    Error *err;
+ } CreateCo;
+ 
+ static void coroutine_fn bdrv_create_co_entry(void *opaque)
+ {
++    Error *local_err = NULL;
++    int ret;
++
+     CreateCo *cco = opaque;
+     assert(cco->drv);
+ 
+-    cco->ret = cco->drv->bdrv_create(cco->filename, cco->options, NULL);
++    ret = cco->drv->bdrv_create(cco->filename, cco->options, &local_err);
++    if (error_is_set(&local_err)) {
++        error_propagate(&cco->err, local_err);
++    }
++    cco->ret = ret;
+ }
+ 
+ int bdrv_create(BlockDriver *drv, const char* filename,
+-    QEMUOptionParameter *options)
++    QEMUOptionParameter *options, Error **errp)
+ {
+     int ret;
+ 
+@@ -387,9 +395,11 @@ int bdrv_create(BlockDriver *drv, const char* filename,
+         .filename = g_strdup(filename),
+         .options = options,
+         .ret = NOT_DONE,
++        .err = NULL,
+     };
+ 
+     if (!drv->bdrv_create) {
++        error_setg(errp, "Driver '%s' does not support image creation", drv->format_name);
+         ret = -ENOTSUP;
+         goto out;
+     }
+@@ -406,22 +416,37 @@ int bdrv_create(BlockDriver *drv, const char* filename,
+     }
+ 
+     ret = cco.ret;
++    if (ret < 0) {
++        if (error_is_set(&cco.err)) {
++            error_propagate(errp, cco.err);
++        } else {
++            error_setg_errno(errp, -ret, "Could not create image");
++        }
++    }
+ 
+ out:
+     g_free(cco.filename);
+     return ret;
+ }
+ 
+-int bdrv_create_file(const char* filename, QEMUOptionParameter *options)
++int bdrv_create_file(const char* filename, QEMUOptionParameter *options,
++                     Error **errp)
+ {
+     BlockDriver *drv;
++    Error *local_err = NULL;
++    int ret;
+ 
+     drv = bdrv_find_protocol(filename, true);
+     if (drv == NULL) {
++        error_setg(errp, "Could not find protocol for file '%s'", filename);
+         return -ENOENT;
+     }
+ 
+-    return bdrv_create(drv, filename, options);
++    ret = bdrv_create(drv, filename, options, &local_err);
++    if (error_is_set(&local_err)) {
++        error_propagate(errp, local_err);
++    }
++    return ret;
+ }
+ 
+ /*
+@@ -1055,11 +1080,14 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+                 drv->format_name);
+         }
+ 
+-        ret = bdrv_create(bdrv_qcow2, tmp_filename, create_options);
++        ret = bdrv_create(bdrv_qcow2, tmp_filename, create_options, &local_err);
+         free_option_parameters(create_options);
+         if (ret < 0) {
+             error_setg_errno(errp, -ret, "Could not create temporary overlay "
+-                             "'%s'", tmp_filename);
++                             "'%s': %s", tmp_filename,
++                             error_get_pretty(local_err));
++            error_free(local_err);
++            local_err = NULL;
+             goto fail;
+         }
+ 
+@@ -4755,6 +4783,7 @@ void bdrv_img_create(const char *filename, const char *fmt,
+     BlockDriverState *bs = NULL;
+     BlockDriver *drv, *proto_drv;
+     BlockDriver *backing_drv = NULL;
++    Error *local_err = NULL;
+     int ret = 0;
+ 
+     /* Find driver and parse its options */
+@@ -4841,10 +4870,13 @@ void bdrv_img_create(const char *filename, const char *fmt,
+             bs = bdrv_new("");
+ 
+             ret = bdrv_open(bs, backing_file->value.s, NULL, back_flags,
+-                            backing_drv, NULL);
++                            backing_drv, &local_err);
+             if (ret < 0) {
+-                error_setg_errno(errp, -ret, "Could not open '%s'",
+-                                 backing_file->value.s);
++                error_setg_errno(errp, -ret, "Could not open '%s': %s",
++                                 backing_file->value.s,
++                                 error_get_pretty(local_err));
++                error_free(local_err);
++                local_err = NULL;
+                 goto out;
+             }
+             bdrv_get_geometry(bs, &size);
+@@ -4863,22 +4895,19 @@ void bdrv_img_create(const char *filename, const char *fmt,
+         print_option_parameters(param);
+         puts("");
+     }
+-    ret = bdrv_create(drv, filename, param);
+-    if (ret < 0) {
+-        if (ret == -ENOTSUP) {
+-            error_setg(errp,"Formatting or formatting option not supported for "
+-                            "file format '%s'", fmt);
+-        } else if (ret == -EFBIG) {
+-            const char *cluster_size_hint = "";
+-            if (get_option_parameter(create_options, BLOCK_OPT_CLUSTER_SIZE)) {
+-                cluster_size_hint = " (try using a larger cluster size)";
+-            }
+-            error_setg(errp, "The image size is too large for file format '%s'%s",
+-                       fmt, cluster_size_hint);
+-        } else {
+-            error_setg(errp, "%s: error while creating %s: %s", filename, fmt,
+-                       strerror(-ret));
++    ret = bdrv_create(drv, filename, param, &local_err);
++    if (ret == -EFBIG) {
++        /* This is generally a better message than whatever the driver would
++         * deliver (especially because of the cluster_size_hint), since that
++         * is most probably not much different from "image too large". */
++        const char *cluster_size_hint = "";
++        if (get_option_parameter(create_options, BLOCK_OPT_CLUSTER_SIZE)) {
++            cluster_size_hint = " (try using a larger cluster size)";
+         }
++        error_setg(errp, "The image size is too large for file format '%s'"
++                   "%s", fmt, cluster_size_hint);
++        error_free(local_err);
++        local_err = NULL;
+     }
+ 
+ out:
+@@ -4888,6 +4917,9 @@ out:
+     if (bs) {
+         bdrv_delete(bs);
+     }
++    if (error_is_set(&local_err)) {
++        error_propagate(errp, local_err);
++    }
+ }
+ 
+ AioContext *bdrv_get_aio_context(BlockDriverState *bs)
+diff --git a/block/cow.c b/block/cow.c
+index 8e00f8f..cd78129 100644
+--- a/block/cow.c
++++ b/block/cow.c
+@@ -316,8 +316,10 @@ static int cow_create(const char *filename, QEMUOptionParameter *options,
+         options++;
+     }
+ 
+-    ret = bdrv_create_file(filename, options);
++    ret = bdrv_create_file(filename, options, &local_err);
+     if (ret < 0) {
++        qerror_report_err(local_err);
++        error_free(local_err);
+         return ret;
+     }
+ 
+diff --git a/block/qcow.c b/block/qcow.c
+index 41a578c..6d029cc 100644
+--- a/block/qcow.c
++++ b/block/qcow.c
+@@ -684,8 +684,10 @@ static int qcow_create(const char *filename, QEMUOptionParameter *options,
+         options++;
+     }
+ 
+-    ret = bdrv_create_file(filename, options);
++    ret = bdrv_create_file(filename, options, &local_err);
+     if (ret < 0) {
++        qerror_report_err(local_err);
++        error_free(local_err);
+         return ret;
+     }
+ 
+diff --git a/block/qcow2.c b/block/qcow2.c
+index a2fca7a..027d210 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -1364,7 +1364,7 @@ static int qcow2_create2(const char *filename, int64_t total_size,
+     uint8_t* refcount_table;
+     int ret;
+ 
+-    ret = bdrv_create_file(filename, options);
++    ret = bdrv_create_file(filename, options, NULL);
+     if (ret < 0) {
+         return ret;
+     }
+diff --git a/block/qed.c b/block/qed.c
+index fa35fe2..7b13bb5 100644
+--- a/block/qed.c
++++ b/block/qed.c
+@@ -555,8 +555,10 @@ static int qed_create(const char *filename, uint32_t cluster_size,
+     int ret = 0;
+     BlockDriverState *bs = NULL;
+ 
+-    ret = bdrv_create_file(filename, NULL);
++    ret = bdrv_create_file(filename, NULL, &local_err);
+     if (ret < 0) {
++        qerror_report_err(local_err);
++        error_free(local_err);
+         return ret;
+     }
+ 
+diff --git a/block/raw.c b/block/raw.c
+index f92c04e..50073b6 100644
+--- a/block/raw.c
++++ b/block/raw.c
+@@ -108,7 +108,15 @@ static BlockDriverAIOCB *raw_aio_ioctl(BlockDriverState *bs,
+ static int raw_create(const char *filename, QEMUOptionParameter *options,
+                       Error **errp)
+ {
+-    return bdrv_create_file(filename, options);
++    Error *local_err = NULL;
++    int ret;
++
++    ret = bdrv_create_file(filename, options, &local_err);
++    if (error_is_set(&local_err)) {
++        qerror_report_err(local_err);
++        error_free(local_err);
++    }
++    return ret;
+ }
+ 
+ static QEMUOptionParameter raw_create_options[] = {
+diff --git a/block/vvfat.c b/block/vvfat.c
+index a385b6f..cb45687 100644
+--- a/block/vvfat.c
++++ b/block/vvfat.c
+@@ -2928,8 +2928,10 @@ static int enable_write_target(BDRVVVFATState *s)
+     set_option_parameter_int(options, BLOCK_OPT_SIZE, s->sector_count * 512);
+     set_option_parameter(options, BLOCK_OPT_BACKING_FILE, "fat:");
+ 
+-    ret = bdrv_create(bdrv_qcow, s->qcow_filename, options);
++    ret = bdrv_create(bdrv_qcow, s->qcow_filename, options, &local_err);
+     if (ret < 0) {
++        qerror_report_err(local_err);
++        error_free(local_err);
+         goto err;
+     }
+ 
+diff --git a/include/block/block.h b/include/block/block.h
+index 168d8a8..fac1282 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -152,8 +152,9 @@ BlockDriver *bdrv_find_format(const char *format_name);
+ BlockDriver *bdrv_find_whitelisted_format(const char *format_name,
+                                           bool readonly);
+ int bdrv_create(BlockDriver *drv, const char* filename,
+-    QEMUOptionParameter *options);
+-int bdrv_create_file(const char* filename, QEMUOptionParameter *options);
++    QEMUOptionParameter *options, Error **errp);
++int bdrv_create_file(const char* filename, QEMUOptionParameter *options,
++                     Error **errp);
+ BlockDriverState *bdrv_new(const char *device_name);
+ void bdrv_make_anon(BlockDriverState *bs);
+ void bdrv_swap(BlockDriverState *bs_new, BlockDriverState *bs_old);
+diff --git a/qemu-img.c b/qemu-img.c
+index d7d1244..9fda8cf 100644
+--- a/qemu-img.c
++++ b/qemu-img.c
+@@ -1136,6 +1136,7 @@ static int img_convert(int argc, char **argv)
+     float local_progress = 0;
+     int min_sparse = 8; /* Need at least 4k of zeros for sparse detection */
+     bool quiet = false;
++    Error *local_err = NULL;
+ 
+     fmt = NULL;
+     out_fmt = "raw";
+@@ -1338,18 +1339,11 @@ static int img_convert(int argc, char **argv)
+ 
+     if (!skip_create) {
+         /* Create the new image */
+-        ret = bdrv_create(drv, out_filename, param);
++        ret = bdrv_create(drv, out_filename, param, &local_err);
+         if (ret < 0) {
+-            if (ret == -ENOTSUP) {
+-                error_report("Formatting not supported for file format '%s'",
+-                             out_fmt);
+-            } else if (ret == -EFBIG) {
+-                error_report("The image size is too large for file format '%s'",
+-                             out_fmt);
+-            } else {
+-                error_report("%s: error while converting %s: %s",
+-                             out_filename, out_fmt, strerror(-ret));
+-            }
++            error_report("%s: error while converting %s: %s",
++                         out_filename, out_fmt, error_get_pretty(local_err));
++            error_free(local_err);
+             goto out;
+         }
+     }
+-- 
+1.7.1
+

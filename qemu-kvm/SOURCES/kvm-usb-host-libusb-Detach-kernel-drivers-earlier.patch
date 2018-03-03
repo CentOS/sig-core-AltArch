@@ -1,0 +1,70 @@
+From 13b8b9eda753aa5bc1758627f9148e4fff91f90f Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Wed, 6 Nov 2013 12:17:00 +0100
+Subject: [PATCH 65/81] usb-host-libusb: Detach kernel drivers earlier
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1383740220-2049-4-git-send-email-kraxel@redhat.com>
+Patchwork-id: 55515
+O-Subject: [RHEL-7 qemu-kvm PATCH 3/3] usb-host-libusb: Detach kernel drivers earlier
+Bugzilla: 980383
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+
+From: Hans de Goede <hdegoede@redhat.com>
+
+If we detach the kernel drivers on the first set_config, then they will
+be still attached when the device gets its initial reset. Causing the drivers
+to re-initialize the device after the reset, dirtying the device state.
+
+Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit f34d5c750897abb3853910ce73f63d88d74dc827)
+---
+ hw/usb/host-libusb.c | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/host-libusb.c |    7 +++++--
+ 1 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/hw/usb/host-libusb.c b/hw/usb/host-libusb.c
+index 9b226e4..8510902 100644
+--- a/hw/usb/host-libusb.c
++++ b/hw/usb/host-libusb.c
+@@ -137,6 +137,7 @@ static QTAILQ_HEAD(, USBHostDevice) hostdevs =
+ static void usb_host_auto_check(void *unused);
+ static void usb_host_release_interfaces(USBHostDevice *s);
+ static void usb_host_nodev(USBHostDevice *s);
++static void usb_host_detach_kernel(USBHostDevice *s);
+ static void usb_host_attach_kernel(USBHostDevice *s);
+ 
+ /* ------------------------------------------------------------------------ */
+@@ -787,10 +788,13 @@ static int usb_host_open(USBHostDevice *s, libusb_device *dev)
+         goto fail;
+     }
+ 
+-    libusb_get_device_descriptor(dev, &s->ddesc);
+     s->dev     = dev;
+     s->bus_num = bus_num;
+     s->addr    = addr;
++
++    usb_host_detach_kernel(s);
++
++    libusb_get_device_descriptor(dev, &s->ddesc);
+     usb_host_get_port(s->dev, s->port, sizeof(s->port));
+ 
+     usb_ep_init(udev);
+@@ -1051,7 +1055,6 @@ static void usb_host_set_config(USBHostDevice *s, int config, USBPacket *p)
+     trace_usb_host_set_config(s->bus_num, s->addr, config);
+ 
+     usb_host_release_interfaces(s);
+-    usb_host_detach_kernel(s);
+     rc = libusb_set_configuration(s->dh, config);
+     if (rc != 0) {
+         usb_host_libusb_error("libusb_set_configuration", rc);
+-- 
+1.7.1
+

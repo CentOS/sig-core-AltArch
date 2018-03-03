@@ -1,0 +1,65 @@
+From b72998772910dbd04c86a2332b1c69ac1afc7a9e Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 15 Feb 2016 09:28:30 +0100
+Subject: [PATCH 17/18] vmdk: Fix converting to streamOptimized
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1455528511-9357-18-git-send-email-famz@redhat.com>
+Patchwork-id: 69183
+O-Subject: [RHEL-7.3 qemu-kvm PATCH 17/18] vmdk: Fix converting to streamOptimized
+Bugzilla: 1299116
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+BZ: https://bugzilla.redhat.com/show_bug.cgi?id=1299116
+
+Commit d62d9dc4b8 lifted streamOptimized images's version to 3, but we
+now refuse to open version 3 images read-write.  We need to make
+streamOptimized an exception to allow converting to it. This fixes the
+accidentally broken iotests case 059 for the same reason.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit 3db1d98a20262228373bb973ca62b1ab64b29af4)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vmdk.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 7b3e397..b0c312b 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -592,6 +592,7 @@ static int vmdk_open_vmdk4(BlockDriverState *bs,
+     VmdkExtent *extent;
+     BDRVVmdkState *s = bs->opaque;
+     int64_t l1_backup_offset = 0;
++    bool compressed;
+ 
+     ret = bdrv_pread(file, sizeof(magic), &header, sizeof(header));
+     if (ret < 0) {
+@@ -666,6 +667,8 @@ static int vmdk_open_vmdk4(BlockDriverState *bs,
+         header = footer.header;
+     }
+ 
++    compressed =
++        le16_to_cpu(header.compressAlgorithm) == VMDK4_COMPRESSION_DEFLATE;
+     if (le32_to_cpu(header.version) > 3) {
+         char buf[64];
+         snprintf(buf, sizeof(buf), "VMDK version %" PRId32,
+@@ -673,7 +676,8 @@ static int vmdk_open_vmdk4(BlockDriverState *bs,
+         error_set(errp, QERR_UNKNOWN_BLOCK_FORMAT_FEATURE,
+                   bs->device_name, "vmdk", buf);
+         return -ENOTSUP;
+-    } else if (le32_to_cpu(header.version) == 3 && (flags & BDRV_O_RDWR)) {
++    } else if (le32_to_cpu(header.version) == 3 && (flags & BDRV_O_RDWR) &&
++               !compressed) {
+         /* VMware KB 2064959 explains that version 3 added support for
+          * persistent changed block tracking (CBT), and backup software can
+          * read it as version=1 if it doesn't care about the changed area
+-- 
+1.8.3.1
+

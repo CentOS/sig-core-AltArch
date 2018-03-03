@@ -1,0 +1,71 @@
+From 3e97a22728afed3c77140486ec3863eba941535b Mon Sep 17 00:00:00 2001
+From: Michael S. Tsirkin <mst@redhat.com>
+Date: Mon, 13 Jan 2014 13:45:57 +0100
+Subject: [PATCH 11/16] qdev-monitor: Fix crash when device_add is called with abstract driver
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1389620557-30050-1-git-send-email-mst@redhat.com>
+Patchwork-id: 56642
+O-Subject: [PATCH qemu-kvm RHEL7.0] qdev-monitor: Fix crash when device_add is called with abstract driver
+Bugzilla: 1026712
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+
+From: Igor Mammedov <imammedo@redhat.com>
+
+User is able to crash running QEMU when following monitor
+command is called:
+
+ device_add intel-hda-generic
+
+Crash is caused by assertion in object_initialize_with_type()
+when type is abstract.
+
+Checking if type is abstract before instance is created in
+qdev_device_add() allows to prevent crash on incorrect user input.
+
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Igor Mammedov <imammedo@redhat.com>
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit 2fa4e56d88aa0039062bbc7f9a88e9f90c77ed94)
+
+Conflicts:
+	qdev-monitor.c
+
+Brew build: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=6859928
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1046007
+
+---
+ qdev-monitor.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qdev-monitor.c |    6 ++++++
+ 1 files changed, 6 insertions(+), 0 deletions(-)
+
+diff --git a/qdev-monitor.c b/qdev-monitor.c
+index f78ff64..979502e 100644
+--- a/qdev-monitor.c
++++ b/qdev-monitor.c
+@@ -477,6 +477,12 @@ DeviceState *qdev_device_add(QemuOpts *opts)
+         }
+     }
+ 
++    if (object_class_is_abstract(obj)) {
++        qerror_report(QERR_INVALID_PARAMETER_VALUE, "driver",
++                      "non-abstract device type");
++        return NULL;
++    }
++
+     k = DEVICE_CLASS(obj);
+ 
+     if (!k || k->cannot_instantiate_with_device_add_yet) {
+-- 
+1.7.1
+

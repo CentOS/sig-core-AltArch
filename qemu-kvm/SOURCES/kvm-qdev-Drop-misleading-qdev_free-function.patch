@@ -1,0 +1,339 @@
+From c2d17bffc7268369f912357d7061db65e398432f Mon Sep 17 00:00:00 2001
+Message-Id: <c2d17bffc7268369f912357d7061db65e398432f.1387288155.git.minovotn@redhat.com>
+In-Reply-To: <527da6c2ce2c09d0183aa8595fc95f136f61b6df.1387288155.git.minovotn@redhat.com>
+References: <527da6c2ce2c09d0183aa8595fc95f136f61b6df.1387288155.git.minovotn@redhat.com>
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Thu, 12 Dec 2013 16:21:22 +0100
+Subject: [PATCH 2/8] qdev: Drop misleading qdev_free() function
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Stefan Hajnoczi <stefanha@redhat.com>
+Message-id: <1386865288-1575-3-git-send-email-stefanha@redhat.com>
+Patchwork-id: 56256
+O-Subject: [RHEL7 qemu-kvm PATCH 2/8] qdev: Drop misleading qdev_free() function
+Bugzilla: 1003773
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+The qdev_free() function name is misleading since all the function does
+is unlink the device from its parent.  The device is not necessarily
+freed.
+
+The device will be freed when its QObject refcount reaches zero.  It is
+usual for the parent (bus) to hold the final reference but there are
+cases where something else holds a reference so "free" is a misleading
+name.
+
+Call object_unparent(obj) directly instead of having a qdev wrapper
+function.
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit 02a5c4c97422b40034f31265e0f139f7846172a8)
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Conflicts:
+	hw/scsi/scsi-bus.c
+	hw/xen/xen_platform.c
+
+The conflicts are straightforward.
+---
+ hw/acpi/piix4.c        |  2 +-
+ hw/core/qdev.c         | 12 +++---------
+ hw/pci/pci-hotplug.c   |  2 +-
+ hw/pci/pci_bridge.c    |  2 +-
+ hw/pci/pcie.c          |  2 +-
+ hw/pci/shpc.c          |  2 +-
+ hw/s390x/virtio-ccw.c  |  2 +-
+ hw/scsi/scsi-bus.c     |  4 ++--
+ hw/usb/bus.c           |  7 ++++---
+ hw/usb/dev-storage.c   |  2 +-
+ hw/usb/host-legacy.c   |  2 +-
+ hw/virtio/virtio-bus.c |  4 +---
+ hw/xen/xen_platform.c  |  2 +-
+ include/hw/qdev-core.h |  1 -
+ qdev-monitor.c         |  2 +-
+ 15 files changed, 20 insertions(+), 28 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/acpi/piix4.c        |  2 +-
+ hw/core/qdev.c         | 12 +++---------
+ hw/pci/pci-hotplug.c   |  2 +-
+ hw/pci/pci_bridge.c    |  2 +-
+ hw/pci/pcie.c          |  2 +-
+ hw/pci/shpc.c          |  2 +-
+ hw/s390x/virtio-ccw.c  |  2 +-
+ hw/scsi/scsi-bus.c     |  4 ++--
+ hw/usb/bus.c           |  7 ++++---
+ hw/usb/dev-storage.c   |  2 +-
+ hw/usb/host-legacy.c   |  2 +-
+ hw/virtio/virtio-bus.c |  4 +---
+ hw/xen/xen_platform.c  |  2 +-
+ include/hw/qdev-core.h |  1 -
+ qdev-monitor.c         |  2 +-
+ 15 files changed, 20 insertions(+), 28 deletions(-)
+
+diff --git a/hw/acpi/piix4.c b/hw/acpi/piix4.c
+index d79a7b0..8af97cf 100644
+--- a/hw/acpi/piix4.c
++++ b/hw/acpi/piix4.c
+@@ -315,7 +315,7 @@ static void acpi_piix_eject_slot(PIIX4PMState *s, unsigned slots)
+             if (pc->no_hotplug) {
+                 slot_free = false;
+             } else {
+-                qdev_free(qdev);
++                object_unparent(OBJECT(qdev));
+             }
+         }
+     }
+diff --git a/hw/core/qdev.c b/hw/core/qdev.c
+index 9190a7e..70a0dee 100644
+--- a/hw/core/qdev.c
++++ b/hw/core/qdev.c
+@@ -164,7 +164,7 @@ int qdev_init(DeviceState *dev)
+     if (local_err != NULL) {
+         qerror_report_err(local_err);
+         error_free(local_err);
+-        qdev_free(dev);
++        object_unparent(OBJECT(dev));
+         return -1;
+     }
+     return 0;
+@@ -258,7 +258,7 @@ void qbus_reset_all_fn(void *opaque)
+ int qdev_simple_unplug_cb(DeviceState *dev)
+ {
+     /* just zap it */
+-    qdev_free(dev);
++    object_unparent(OBJECT(dev));
+     return 0;
+ }
+ 
+@@ -280,12 +280,6 @@ void qdev_init_nofail(DeviceState *dev)
+     }
+ }
+ 
+-/* Unlink device from bus and free the structure.  */
+-void qdev_free(DeviceState *dev)
+-{
+-    object_unparent(OBJECT(dev));
+-}
+-
+ void qdev_machine_creation_done(void)
+ {
+     /*
+@@ -458,7 +452,7 @@ static void bus_unparent(Object *obj)
+ 
+     while ((kid = QTAILQ_FIRST(&bus->children)) != NULL) {
+         DeviceState *dev = kid->child;
+-        qdev_free(dev);
++        object_unparent(OBJECT(dev));
+     }
+     if (bus->parent) {
+         QLIST_REMOVE(bus, sibling);
+diff --git a/hw/pci/pci-hotplug.c b/hw/pci/pci-hotplug.c
+index c708752..667e40c 100644
+--- a/hw/pci/pci-hotplug.c
++++ b/hw/pci/pci-hotplug.c
+@@ -224,7 +224,7 @@ static PCIDevice *qemu_pci_hot_add_storage(Monitor *mon,
+         }
+         dev = pci_create(bus, devfn, "virtio-blk-pci");
+         if (qdev_prop_set_drive(&dev->qdev, "drive", dinfo->bdrv) < 0) {
+-            qdev_free(&dev->qdev);
++            object_unparent(OBJECT(dev));
+             dev = NULL;
+             break;
+         }
+diff --git a/hw/pci/pci_bridge.c b/hw/pci/pci_bridge.c
+index 3897bd8..a786f26 100644
+--- a/hw/pci/pci_bridge.c
++++ b/hw/pci/pci_bridge.c
+@@ -386,7 +386,7 @@ void pci_bridge_exitfn(PCIDevice *pci_dev)
+     pci_bridge_region_cleanup(s, s->windows);
+     memory_region_destroy(&s->address_space_mem);
+     memory_region_destroy(&s->address_space_io);
+-    /* qbus_free() is called automatically by qdev_free() */
++    /* qbus_free() is called automatically during device deletion */
+ }
+ 
+ /*
+diff --git a/hw/pci/pcie.c b/hw/pci/pcie.c
+index 62bd0b8..4b84443 100644
+--- a/hw/pci/pcie.c
++++ b/hw/pci/pcie.c
+@@ -251,7 +251,7 @@ static int pcie_cap_slot_hotplug(DeviceState *qdev,
+                                    PCI_EXP_SLTSTA_PDS);
+         pcie_cap_slot_event(d, PCI_EXP_HP_EV_PDC);
+     } else {
+-        qdev_free(&pci_dev->qdev);
++        object_unparent(OBJECT(pci_dev));
+         pci_word_test_and_clear_mask(exp_cap + PCI_EXP_SLTSTA,
+                                      PCI_EXP_SLTSTA_PDS);
+         pcie_cap_slot_event(d, PCI_EXP_HP_EV_PDC);
+diff --git a/hw/pci/shpc.c b/hw/pci/shpc.c
+index d35c2ee..1e57952 100644
+--- a/hw/pci/shpc.c
++++ b/hw/pci/shpc.c
+@@ -254,7 +254,7 @@ static void shpc_free_devices_in_slot(SHPCDevice *shpc, int slot)
+          ++devfn) {
+         PCIDevice *affected_dev = shpc->sec_bus->devices[devfn];
+         if (affected_dev) {
+-            qdev_free(&affected_dev->qdev);
++            object_unparent(OBJECT(affected_dev));
+         }
+     }
+ }
+diff --git a/hw/s390x/virtio-ccw.c b/hw/s390x/virtio-ccw.c
+index d981101..7ba1376 100644
+--- a/hw/s390x/virtio-ccw.c
++++ b/hw/s390x/virtio-ccw.c
+@@ -1036,7 +1036,7 @@ static int virtio_ccw_busdev_unplug(DeviceState *dev)
+ 
+     css_generate_sch_crws(sch->cssid, sch->ssid, sch->schid, 1, 0);
+ 
+-    qdev_free(dev);
++    object_unparent(OBJECT(dev));
+     return 0;
+ }
+ 
+diff --git a/hw/scsi/scsi-bus.c b/hw/scsi/scsi-bus.c
+index 9082ea7..6733c1a 100644
+--- a/hw/scsi/scsi-bus.c
++++ b/hw/scsi/scsi-bus.c
+@@ -178,7 +178,7 @@ static int scsi_qdev_init(DeviceState *qdev)
+         d = scsi_device_find(bus, dev->channel, dev->id, dev->lun);
+         assert(d);
+         if (d->lun == dev->lun && dev != d) {
+-            qdev_free(&d->qdev);
++            object_unparent(OBJECT(d));
+         }
+     }
+ 
+@@ -229,7 +229,7 @@ SCSIDevice *scsi_bus_legacy_add_drive(SCSIBus *bus, BlockDriverState *bdrv,
+         qdev_prop_set_string(dev, "serial", serial);
+     }
+     if (qdev_prop_set_drive(dev, "drive", bdrv) < 0) {
+-        qdev_free(dev);
++        object_unparent(OBJECT(dev));
+         return NULL;
+     }
+     if (qdev_init(dev) < 0)
+diff --git a/hw/usb/bus.c b/hw/usb/bus.c
+index f83d1de..ade9abc 100644
+--- a/hw/usb/bus.c
++++ b/hw/usb/bus.c
+@@ -351,8 +351,9 @@ void usb_port_location(USBPort *downstream, USBPort *upstream, int portnr)
+ 
+ void usb_unregister_port(USBBus *bus, USBPort *port)
+ {
+-    if (port->dev)
+-        qdev_free(&port->dev->qdev);
++    if (port->dev) {
++        object_unparent(OBJECT(port->dev));
++    }
+     QTAILQ_REMOVE(&bus->free, port, next);
+     bus->nfree--;
+ }
+@@ -500,7 +501,7 @@ int usb_device_delete_addr(int busnr, int addr)
+         return -1;
+     dev = port->dev;
+ 
+-    qdev_free(&dev->qdev);
++    object_unparent(OBJECT(dev));
+     return 0;
+ }
+ 
+diff --git a/hw/usb/dev-storage.c b/hw/usb/dev-storage.c
+index 44a0e34..f60b048 100644
+--- a/hw/usb/dev-storage.c
++++ b/hw/usb/dev-storage.c
+@@ -699,7 +699,7 @@ static USBDevice *usb_msd_init(USBBus *bus, const char *filename)
+         return NULL;
+     }
+     if (qdev_prop_set_drive(&dev->qdev, "drive", dinfo->bdrv) < 0) {
+-        qdev_free(&dev->qdev);
++        object_unparent(OBJECT(dev));
+         return NULL;
+     }
+     if (qdev_init(&dev->qdev) < 0)
+diff --git a/hw/usb/host-legacy.c b/hw/usb/host-legacy.c
+index 3a5f705..3cc9c42 100644
+--- a/hw/usb/host-legacy.c
++++ b/hw/usb/host-legacy.c
+@@ -132,7 +132,7 @@ USBDevice *usb_host_device_open(USBBus *bus, const char *devname)
+     return dev;
+ 
+ fail:
+-    qdev_free(&dev->qdev);
++    object_unparent(OBJECT(dev));
+     return NULL;
+ }
+ 
+diff --git a/hw/virtio/virtio-bus.c b/hw/virtio/virtio-bus.c
+index 6849a01..e6b103c 100644
+--- a/hw/virtio/virtio-bus.c
++++ b/hw/virtio/virtio-bus.c
+@@ -67,7 +67,6 @@ void virtio_bus_reset(VirtioBusState *bus)
+ /* Destroy the VirtIODevice */
+ void virtio_bus_destroy_device(VirtioBusState *bus)
+ {
+-    DeviceState *qdev;
+     BusState *qbus = BUS(bus);
+     VirtioBusClass *klass = VIRTIO_BUS_GET_CLASS(bus);
+     DPRINTF("%s: remove device.\n", qbus->name);
+@@ -76,8 +75,7 @@ void virtio_bus_destroy_device(VirtioBusState *bus)
+         if (klass->device_unplug != NULL) {
+             klass->device_unplug(qbus->parent);
+         }
+-        qdev = DEVICE(bus->vdev);
+-        qdev_free(qdev);
++        object_unparent(OBJECT(bus->vdev));
+         bus->vdev = NULL;
+     }
+ }
+diff --git a/hw/xen/xen_platform.c b/hw/xen/xen_platform.c
+index bb9d0cd..98fe405 100644
+--- a/hw/xen/xen_platform.c
++++ b/hw/xen/xen_platform.c
+@@ -88,7 +88,7 @@ static void unplug_nic(PCIBus *b, PCIDevice *d, void *o)
+     if (pci_get_word(d->config + PCI_CLASS_DEVICE) ==
+             PCI_CLASS_NETWORK_ETHERNET
+             && strcmp(d->name, "xen-pci-passthrough") != 0) {
+-        qdev_free(&d->qdev);
++        object_unparent(OBJECT(d));
+     }
+ }
+ 
+diff --git a/include/hw/qdev-core.h b/include/hw/qdev-core.h
+index 44feb54..ad39ea9 100644
+--- a/include/hw/qdev-core.h
++++ b/include/hw/qdev-core.h
+@@ -232,7 +232,6 @@ void qdev_init_nofail(DeviceState *dev);
+ void qdev_set_legacy_instance_id(DeviceState *dev, int alias_id,
+                                  int required_for_version);
+ void qdev_unplug(DeviceState *dev, Error **errp);
+-void qdev_free(DeviceState *dev);
+ int qdev_simple_unplug_cb(DeviceState *dev);
+ void qdev_machine_creation_done(void);
+ bool qdev_machine_modified(void);
+diff --git a/qdev-monitor.c b/qdev-monitor.c
+index 9d4f61d..f78ff64 100644
+--- a/qdev-monitor.c
++++ b/qdev-monitor.c
+@@ -521,7 +521,7 @@ DeviceState *qdev_device_add(QemuOpts *opts)
+         qdev->id = id;
+     }
+     if (qemu_opt_foreach(opts, set_property, qdev, 1) != 0) {
+-        qdev_free(qdev);
++        object_unparent(OBJECT(qdev));
+         object_unref(OBJECT(qdev));
+         return NULL;
+     }
+-- 
+1.7.11.7
+

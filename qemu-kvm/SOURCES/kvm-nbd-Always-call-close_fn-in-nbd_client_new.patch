@@ -1,0 +1,112 @@
+From 2efca7904a7a71d44bdf715208899e3bb29711df Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 10 Mar 2016 04:00:51 +0100
+Subject: [PATCH 2/5] nbd: Always call "close_fn" in nbd_client_new
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1457582453-13835-2-git-send-email-famz@redhat.com>
+Patchwork-id: 69757
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 1/3] nbd: Always call "close_fn" in nbd_client_new
+Bugzilla: 1285453
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+
+Rename the parameter "close" to "close_fn" to disambiguous with
+close(2).
+
+This unifies error handling paths of NBDClient allocation:
+nbd_client_new will shutdown the socket and call the "close_fn" callback
+if negotiation failed, so the caller don't need a different path than
+the normal close.
+
+The returned pointer is never used, make it void in preparation for the
+next patch.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Message-Id: <1452760863-25350-2-git-send-email-famz@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit ee7d7aabdaea4484e069cb99c9fc54e8cb24b56f)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+    include/block/nbd.h
+    nbd.c
+    qemu-nbd.c
+* nbd_update_server_fd_handler not in downstream;
+* Context around the changed line is different.
+---
+ include/block/nbd.h |  3 +--
+ nbd.c               | 11 +++++------
+ qemu-nbd.c          |  4 ++--
+ 3 files changed, 8 insertions(+), 10 deletions(-)
+
+diff --git a/include/block/nbd.h b/include/block/nbd.h
+index c90f5e4..92e360e 100644
+--- a/include/block/nbd.h
++++ b/include/block/nbd.h
+@@ -92,8 +92,7 @@ NBDExport *nbd_export_find(const char *name);
+ void nbd_export_set_name(NBDExport *exp, const char *name);
+ void nbd_export_close_all(void);
+ 
+-NBDClient *nbd_client_new(NBDExport *exp, int csock,
+-                          void (*close)(NBDClient *));
++void nbd_client_new(NBDExport *exp, int csock, void (*close_fn)(NBDClient *));
+ void nbd_client_close(NBDClient *client);
+ void nbd_client_get(NBDClient *client);
+ void nbd_client_put(NBDClient *client);
+diff --git a/nbd.c b/nbd.c
+index f258cdd..ba97270 100644
+--- a/nbd.c
++++ b/nbd.c
+@@ -1232,8 +1232,7 @@ static void nbd_restart_write(void *opaque)
+     qemu_coroutine_enter(client->send_coroutine, NULL);
+ }
+ 
+-NBDClient *nbd_client_new(NBDExport *exp, int csock,
+-                          void (*close)(NBDClient *))
++void nbd_client_new(NBDExport *exp, int csock, void (*close_fn)(NBDClient *))
+ {
+     NBDClient *client;
+     client = g_malloc0(sizeof(NBDClient));
+@@ -1241,10 +1240,11 @@ NBDClient *nbd_client_new(NBDExport *exp, int csock,
+     client->exp = exp;
+     client->sock = csock;
+     if (nbd_send_negotiate(client) < 0) {
+-        g_free(client);
+-        return NULL;
++        shutdown(client->sock, 2);
++        close_fn(client);
++        return;
+     }
+-    client->close = close;
++    client->close = close_fn;
+     qemu_co_mutex_init(&client->send_lock);
+     qemu_set_fd_handler2(csock, nbd_can_read, nbd_read, NULL, client);
+ 
+@@ -1252,5 +1252,4 @@ NBDClient *nbd_client_new(NBDExport *exp, int csock,
+         QTAILQ_INSERT_TAIL(&exp->clients, client, next);
+         nbd_export_get(exp);
+     }
+-    return client;
+ }
+diff --git a/qemu-nbd.c b/qemu-nbd.c
+index ff792ef..047dd49 100644
+--- a/qemu-nbd.c
++++ b/qemu-nbd.c
+@@ -297,9 +297,9 @@ static void nbd_accept(void *opaque)
+         close(fd);
+         return;
+     }
+-
+-    if (fd >= 0 && nbd_client_new(exp, fd, nbd_client_closed)) {
++    if (fd >= 0) {
+         nb_fds++;
++        nbd_client_new(exp, fd, nbd_client_closed);
+     }
+ }
+ 
+-- 
+1.8.3.1
+

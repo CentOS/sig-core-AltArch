@@ -1,0 +1,62 @@
+From 1d59e428d7754c0fc331092d265254a0b3473546 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Wed, 11 Dec 2013 10:04:22 +0100
+Subject: [PATCH 1/5] xhci: add support for suspend/resume
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1386756262-29763-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 56161
+O-Subject: [RHEL-7 qemu-kvm PATCH 1/1] xhci: add support for suspend/resume
+Bugzilla: 1012365
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+The OS can ask the xhci controller to save and restore its
+internal state, which is used by the OS when the system is
+suspended and resumed.
+
+This patch handles writes to the save + restore bits in the
+command register.  Only thing it does is updating the
+restore error bit in the status register to signal an error
+on restore.  The guest OS should do a full reinitialization
+after resume then.
+
+This is the minimal patch which gets S3 going with xhci.
+Implementing full save/restore support is TBD.
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1012365
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit f1f8bc218a422081f36f0b325b3de5e6a5078b74)
+---
+ hw/usb/hcd-xhci.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/hcd-xhci.c |    8 ++++++++
+ 1 files changed, 8 insertions(+), 0 deletions(-)
+
+diff --git a/hw/usb/hcd-xhci.c b/hw/usb/hcd-xhci.c
+index 9d7315f..87ba7af 100644
+--- a/hw/usb/hcd-xhci.c
++++ b/hw/usb/hcd-xhci.c
+@@ -2976,6 +2976,14 @@ static void xhci_oper_write(void *ptr, hwaddr reg,
+         } else if (!(val & USBCMD_RS) && (xhci->usbcmd & USBCMD_RS)) {
+             xhci_stop(xhci);
+         }
++        if (val & USBCMD_CSS) {
++            /* save state */
++            xhci->usbsts &= ~USBSTS_SRE;
++        }
++        if (val & USBCMD_CRS) {
++            /* restore state */
++            xhci->usbsts |= USBSTS_SRE;
++        }
+         xhci->usbcmd = val & 0xc0f;
+         xhci_mfwrap_update(xhci);
+         if (val & USBCMD_HCRST) {
+-- 
+1.7.1
+

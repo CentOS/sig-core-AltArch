@@ -1,0 +1,103 @@
+From 32c34876557574575cec036f09f7c826ccb4368a Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Mon, 27 Jan 2014 16:07:43 +0100
+Subject: [PATCH 21/22] pc: Disable RDTSCP on AMD CPU models
+
+RH-Author: Eduardo Habkost <ehabkost@redhat.com>
+Message-id: <1390838863-11030-3-git-send-email-ehabkost@redhat.com>
+Patchwork-id: 56961
+O-Subject: [RHEL7 qemu-kvm PATCH v2 2/2] pc: Disable RDTSCP on AMD CPU models
+Bugzilla: 1056428
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Bugzilla: 874400
+Upstream status: not applicable (see notes below)
+Brew scratch build: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=6953316
+
+KVM can't expose RDTSCP to guests on AMD CPUs, so there's no point in
+having RDTSCP enabled on AMD CPU models.
+
+About upstream status and rationale for making it RHEL-specific:
+
+This is another case where independently from the upstream decision, we
+will want to add RHEL-specific code to fiddle with the CPU definitions.
+
+TCG does support RDTSCP, so it makes sense for upstream to keep RDTSCP
+enabled on those CPU models. We, on the other hand, care about KVM and
+know libvirt doesn't use enforce mode yet (but should eventually use
+it), so it makes sense to disable RDTSCP on AMD models in RHEL.
+
+(This will eventually be a problem for libvirt upstream, when it starts
+using or emulating "enforce" mode. I have added notes at:
+http://wiki.qemu.org/Features/CPUModels#Disabling_features_that_were_always_disabled_on_KVM )
+
+Changes v1 -> v2:
+ * Fix typo: "phenon" -> "phenom"
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+---
+ hw/i386/pc_piix.c | 14 ++++++++++++++
+ hw/i386/pc_q35.c  | 14 ++++++++++++++
+ 2 files changed, 28 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/pc_piix.c |   14 ++++++++++++++
+ hw/i386/pc_q35.c  |   14 ++++++++++++++
+ 2 files changed, 28 insertions(+), 0 deletions(-)
+
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index b918f69..aac920a 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -760,6 +760,20 @@ static void pc_compat_rhel700(QEMUMachineInitArgs *args)
+     x86_cpu_compat_set_features("Opteron_G3", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+     x86_cpu_compat_set_features("Opteron_G4", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+     x86_cpu_compat_set_features("Opteron_G5", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++
++    /* KVM can't expose RDTSCP on AMD CPUs, so there's no point in enabling it
++     * on AMD CPU models.
++     */
++    x86_cpu_compat_set_features("phenom", FEAT_8000_0001_EDX, 0,
++                                CPUID_EXT2_RDTSCP);
++    x86_cpu_compat_set_features("Opteron_G2", FEAT_8000_0001_EDX, 0,
++                                CPUID_EXT2_RDTSCP);
++    x86_cpu_compat_set_features("Opteron_G3", FEAT_8000_0001_EDX, 0,
++                                CPUID_EXT2_RDTSCP);
++    x86_cpu_compat_set_features("Opteron_G4", FEAT_8000_0001_EDX, 0,
++                                CPUID_EXT2_RDTSCP);
++    x86_cpu_compat_set_features("Opteron_G5", FEAT_8000_0001_EDX, 0,
++                                CPUID_EXT2_RDTSCP);
+ }
+ 
+ static void pc_init_rhel700(QEMUMachineInitArgs *args)
+diff --git a/hw/i386/pc_q35.c b/hw/i386/pc_q35.c
+index 1ac46be..1aa8bde 100644
+--- a/hw/i386/pc_q35.c
++++ b/hw/i386/pc_q35.c
+@@ -283,6 +283,20 @@ static void pc_q35_compat_rhel700(QEMUMachineInitArgs *args)
+     x86_cpu_compat_set_features("Opteron_G3", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+     x86_cpu_compat_set_features("Opteron_G4", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+     x86_cpu_compat_set_features("Opteron_G5", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++
++    /* KVM can't expose RDTSCP on AMD CPUs, so there's no point in enabling it
++     * on AMD CPU models.
++     */
++    x86_cpu_compat_set_features("phenom", FEAT_8000_0001_EDX, 0,
++                                CPUID_EXT2_RDTSCP);
++    x86_cpu_compat_set_features("Opteron_G2", FEAT_8000_0001_EDX, 0,
++                                CPUID_EXT2_RDTSCP);
++    x86_cpu_compat_set_features("Opteron_G3", FEAT_8000_0001_EDX, 0,
++                                CPUID_EXT2_RDTSCP);
++    x86_cpu_compat_set_features("Opteron_G4", FEAT_8000_0001_EDX, 0,
++                                CPUID_EXT2_RDTSCP);
++    x86_cpu_compat_set_features("Opteron_G5", FEAT_8000_0001_EDX, 0,
++                                CPUID_EXT2_RDTSCP);
+ }
+ 
+ static void pc_q35_init_rhel700(QEMUMachineInitArgs *args)
+-- 
+1.7.1
+

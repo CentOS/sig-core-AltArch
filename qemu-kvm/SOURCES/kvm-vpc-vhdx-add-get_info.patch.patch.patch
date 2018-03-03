@@ -1,0 +1,98 @@
+From ecaad218fdda71c1f64f557b3dff6a09a425b084 Mon Sep 17 00:00:00 2001
+Message-Id: <ecaad218fdda71c1f64f557b3dff6a09a425b084.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:09:17 +0100
+Subject: [PATCH 29/50] vpc, vhdx: add get_info
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-32-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56068
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 31/52] vpc, vhdx: add get_info
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 97b00e285119e611f500686f32f9bccffbb9126a)
+
+Conflicts:
+	block/vhdx.c [BlockDriver members]
+	block/vpc.c [VHDFooter vs. struct vhd_footer, BlockDriver members]
+---
+ block/vhdx.c | 10 ++++++++++
+ block/vpc.c  | 13 +++++++++++++
+ 2 files changed, 23 insertions(+)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ block/vhdx.c | 10 ++++++++++
+ block/vpc.c  | 13 +++++++++++++
+ 2 files changed, 23 insertions(+)
+
+diff --git a/block/vhdx.c b/block/vhdx.c
+index 6cb0412..7285b95 100644
+--- a/block/vhdx.c
++++ b/block/vhdx.c
+@@ -878,6 +878,15 @@ static void vhdx_block_translate(BDRVVHDXState *s, int64_t sector_num,
+ }
+ 
+ 
++static int vhdx_get_info(BlockDriverState *bs, BlockDriverInfo *bdi)
++{
++    BDRVVHDXState *s = bs->opaque;
++
++    bdi->cluster_size = s->block_size;
++
++    return 0;
++}
++
+ 
+ static coroutine_fn int vhdx_co_readv(BlockDriverState *bs, int64_t sector_num,
+                                       int nb_sectors, QEMUIOVector *qiov)
+@@ -973,6 +982,7 @@ static BlockDriver bdrv_vhdx = {
+     .bdrv_reopen_prepare    = vhdx_reopen_prepare,
+     .bdrv_co_readv          = vhdx_co_readv,
+     .bdrv_co_writev         = vhdx_co_writev,
++    .bdrv_get_info          = vhdx_get_info,
+ };
+ 
+ static void bdrv_vhdx_init(void)
+diff --git a/block/vpc.c b/block/vpc.c
+index 5d65756..49520c1 100644
+--- a/block/vpc.c
++++ b/block/vpc.c
+@@ -439,6 +439,18 @@ fail:
+     return -1;
+ }
+ 
++static int vpc_get_info(BlockDriverState *bs, BlockDriverInfo *bdi)
++{
++    BDRVVPCState *s = (BDRVVPCState *)bs->opaque;
++    struct vhd_footer *footer = (struct vhd_footer *) s->footer_buf;
++
++    if (cpu_to_be32(footer->type) != VHD_FIXED) {
++        bdi->cluster_size = s->block_size;
++    }
++
++    return 0;
++}
++
+ static int vpc_read(BlockDriverState *bs, int64_t sector_num,
+                     uint8_t *buf, int nb_sectors)
+ {
+@@ -830,6 +842,7 @@ static BlockDriver bdrv_vpc = {
+     .bdrv_write             = vpc_co_write,
+ 
+     .create_options = vpc_create_options,
++    .bdrv_get_info  = vpc_get_info,
+ };
+ 
+ static void bdrv_vpc_init(void)
+-- 
+1.7.11.7
+

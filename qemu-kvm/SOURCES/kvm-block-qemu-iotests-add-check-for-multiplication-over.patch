@@ -1,0 +1,121 @@
+From 119ce531952beab96a8b807721e2180d99382073 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Wed, 29 Jul 2015 16:59:55 +0200
+Subject: [PATCH 04/13] block: qemu-iotests - add check for multiplication
+ overflow in vpc
+
+Message-id: <9e859f3912d1852e48fb7e25a3679bd74500c36d.1438188988.git.jcody@redhat.com>
+Patchwork-id: 67198
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 3/3] block: qemu-iotests - add check for multiplication overflow in vpc
+Bugzilla: 1217349
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+This checks that VPC is able to successfully fail (without segfault)
+on an image file with a max_table_entries that exceeds 0x40000000.
+
+This table entry is within the valid range for VPC (although too large
+for this sample image).
+
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 77c102c26ead946fe7589d4bddcdfa5cb431ebfe)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	tests/qemu-iotests/group
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+---
+ tests/qemu-iotests/135     | 54 ++++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/135.out |  5 +++++
+ tests/qemu-iotests/group   |  1 +
+ 3 files changed, 60 insertions(+)
+ create mode 100755 tests/qemu-iotests/135
+ create mode 100644 tests/qemu-iotests/135.out
+
+diff --git a/tests/qemu-iotests/135 b/tests/qemu-iotests/135
+new file mode 100755
+index 0000000..16bf736
+--- /dev/null
++++ b/tests/qemu-iotests/135
+@@ -0,0 +1,54 @@
++#!/bin/bash
++#
++# Test VPC open of image with large Max Table Entries value.
++#
++# Copyright (C) 2015 Red Hat, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++
++# creator
++owner=jcody@redhat.com
++
++seq=`basename $0`
++echo "QA output created by $seq"
++
++here=`pwd`
++tmp=/tmp/$$
++status=1	# failure is the default!
++
++_cleanup()
++{
++    _cleanup_test_img
++}
++trap "_cleanup; exit \$status" 0 1 2 3 15
++
++# get standard environment, filters and checks
++. ./common.rc
++. ./common.filter
++
++_supported_fmt vpc
++_supported_proto generic
++_supported_os Linux
++
++_use_sample_img afl5.img.bz2
++
++echo
++echo "=== Verify image open and failure ===="
++$QEMU_IMG info "$TEST_IMG" 2>&1| _filter_testdir
++
++# success, all done
++echo "*** done"
++rm -f $seq.full
++status=0
+diff --git a/tests/qemu-iotests/135.out b/tests/qemu-iotests/135.out
+new file mode 100644
+index 0000000..793898b
+--- /dev/null
++++ b/tests/qemu-iotests/135.out
+@@ -0,0 +1,5 @@
++QA output created by 135
++
++=== Verify image open and failure ====
++qemu-img: Could not open 'TEST_DIR/afl5.img': Max Table Entries too large (1073741825)
++*** done
+diff --git a/tests/qemu-iotests/group b/tests/qemu-iotests/group
+index 0644c42..58b3d05 100644
+--- a/tests/qemu-iotests/group
++++ b/tests/qemu-iotests/group
+@@ -92,3 +92,4 @@
+ 114 rw auto quick
+ 121 rw auto
+ 130 rw auto quick
++135 rw auto
+-- 
+1.8.3.1
+

@@ -1,0 +1,109 @@
+From d2bfd3e4bb4a6115dc40b56e885a68887df30f94 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Sat, 2 Nov 2013 10:01:20 +0100
+Subject: [PATCH 20/29] smbios: Normalize smbios_entry_add()'s error handling to exit(1)
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1383386488-29789-4-git-send-email-armbru@redhat.com>
+Patchwork-id: 55241
+O-Subject: [PATCH 7.0 qemu-kvm 03/11] smbios: Normalize smbios_entry_add()'s error handling to exit(1)
+Bugzilla: 994490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+It exits on all error conditions but one, where it returns -1.
+Normalize, and return void.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 351a6a73ca7a9123f0dfd6c6f85fd01e82fe3741)
+---
+ arch_init.c              |  4 +---
+ hw/i386/smbios.c         | 10 +++++-----
+ include/hw/i386/smbios.h |  2 +-
+ 3 files changed, 7 insertions(+), 9 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ arch_init.c              |    4 +---
+ hw/i386/smbios.c         |   10 +++++-----
+ include/hw/i386/smbios.h |    2 +-
+ 3 files changed, 7 insertions(+), 9 deletions(-)
+
+diff --git a/arch_init.c b/arch_init.c
+index cd2bb5a..7834d36 100644
+--- a/arch_init.c
++++ b/arch_init.c
+@@ -1080,9 +1080,7 @@ void do_acpitable_option(const QemuOpts *opts)
+ void do_smbios_option(const char *optarg)
+ {
+ #ifdef TARGET_I386
+-    if (smbios_entry_add(optarg) < 0) {
+-        exit(1);
+-    }
++    smbios_entry_add(optarg);
+ #endif
+ }
+ 
+diff --git a/hw/i386/smbios.c b/hw/i386/smbios.c
+index e708cb8..0608aee 100644
+--- a/hw/i386/smbios.c
++++ b/hw/i386/smbios.c
+@@ -183,7 +183,7 @@ static void smbios_build_type_1_fields(const char *t)
+                          buf, strlen(buf) + 1);
+ }
+ 
+-int smbios_entry_add(const char *t)
++void smbios_entry_add(const char *t)
+ {
+     char buf[1024];
+ 
+@@ -222,7 +222,7 @@ int smbios_entry_add(const char *t)
+         smbios_entries_len += sizeof(*table) + size;
+         (*(uint16_t *)smbios_entries) =
+                 cpu_to_le16(le16_to_cpu(*(uint16_t *)smbios_entries) + 1);
+-        return 0;
++        return;
+     }
+ 
+     if (get_param_value(buf, sizeof(buf), "type", t)) {
+@@ -230,10 +230,10 @@ int smbios_entry_add(const char *t)
+         switch (type) {
+         case 0:
+             smbios_build_type_0_fields(t);
+-            return 0;
++            return;
+         case 1:
+             smbios_build_type_1_fields(t);
+-            return 0;
++            return;
+         default:
+             error_report("Don't know how to build fields for SMBIOS type %ld",
+                          type);
+@@ -242,5 +242,5 @@ int smbios_entry_add(const char *t)
+     }
+ 
+     error_report("Must specify type= or file=");
+-    return -1;
++    exit(1);
+ }
+diff --git a/include/hw/i386/smbios.h b/include/hw/i386/smbios.h
+index 9babeaf..56c6108 100644
+--- a/include/hw/i386/smbios.h
++++ b/include/hw/i386/smbios.h
+@@ -13,7 +13,7 @@
+  *
+  */
+ 
+-int smbios_entry_add(const char *t);
++void smbios_entry_add(const char *t);
+ void smbios_add_field(int type, int offset, const void *data, size_t len);
+ uint8_t *smbios_get_table(size_t *length);
+ 
+-- 
+1.7.1
+

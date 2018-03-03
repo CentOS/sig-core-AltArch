@@ -1,0 +1,90 @@
+From 0d32273cd7f5daa7431b5e2068537154dea101fb Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 4 Nov 2013 22:32:30 +0100
+Subject: [PATCH 37/87] qcow2: Make overlap check mask variable
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-40-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55339
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 39/43] qcow2: Make overlap check mask variable
+Bugzilla: 1004347
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1004347
+
+Replace the QCOW2_OL_DEFAULT macro by a variable overlap_check in
+BDRVQcowState.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 3e3553905cfc814d59de6d1a634c3a991b2a9257)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2-refcount.c | 2 +-
+ block/qcow2.c          | 2 ++
+ block/qcow2.h          | 5 ++---
+ 3 files changed, 5 insertions(+), 4 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-refcount.c |    2 +-
+ block/qcow2.c          |    2 ++
+ block/qcow2.h          |    5 ++---
+ 3 files changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/block/qcow2-refcount.c b/block/qcow2-refcount.c
+index 91c446b..3787314 100644
+--- a/block/qcow2-refcount.c
++++ b/block/qcow2-refcount.c
+@@ -1629,7 +1629,7 @@ int qcow2_check_metadata_overlap(BlockDriverState *bs, int ign, int64_t offset,
+                                  int64_t size)
+ {
+     BDRVQcowState *s = bs->opaque;
+-    int chk = QCOW2_OL_DEFAULT & ~ign;
++    int chk = s->overlap_check & ~ign;
+     int i, j;
+ 
+     if (!size) {
+diff --git a/block/qcow2.c b/block/qcow2.c
+index ac5ed47..157361f 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -630,6 +630,8 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
+     s->discard_passthrough[QCOW2_DISCARD_OTHER] =
+         qemu_opt_get_bool(opts, QCOW2_OPT_DISCARD_OTHER, false);
+ 
++    s->overlap_check = QCOW2_OL_CACHED;
++
+     qemu_opts_del(opts);
+ 
+     if (s->use_lazy_refcounts && s->qcow_version < 3) {
+diff --git a/block/qcow2.h b/block/qcow2.h
+index 64ad43c..d1fd91b 100644
+--- a/block/qcow2.h
++++ b/block/qcow2.h
+@@ -202,6 +202,8 @@ typedef struct BDRVQcowState {
+ 
+     bool discard_passthrough[QCOW2_DISCARD_MAX];
+ 
++    int overlap_check; /* bitmask of Qcow2MetadataOverlap values */
++
+     uint64_t incompatible_features;
+     uint64_t compatible_features;
+     uint64_t autoclear_features;
+@@ -320,9 +322,6 @@ typedef enum QCow2MetadataOverlap {
+      QCOW2_OL_REFCOUNT_TABLE | QCOW2_OL_REFCOUNT_BLOCK | \
+      QCOW2_OL_SNAPSHOT_TABLE | QCOW2_OL_INACTIVE_L1)
+ 
+-/* The default checks to perform */
+-#define QCOW2_OL_DEFAULT QCOW2_OL_CACHED
+-
+ #define L1E_OFFSET_MASK 0x00ffffffffffff00ULL
+ #define L2E_OFFSET_MASK 0x00ffffffffffff00ULL
+ #define L2E_COMPRESSED_OFFSET_SIZE_MASK 0x3fffffffffffffffULL
+-- 
+1.7.1
+

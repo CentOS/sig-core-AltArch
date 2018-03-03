@@ -1,0 +1,80 @@
+From 82cd74f8a796d59fb527bea82b0557bfe558d2cc Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Wed, 11 Jun 2014 06:39:28 -0500
+Subject: [CHANGE 01/29] vl.c: Output error on invalid machine type
+To: rhvirt-patches@redhat.com,
+    jen@redhat.com
+
+RH-Author: Miroslav Rezanina <mrezanin@redhat.com>
+Message-id: <1402468768-15574-1-git-send-email-mrezanin@redhat.com>
+Patchwork-id: 59190
+O-Subject: [RHEL7 qemu-kvm PATCH] vl.c: Output error on invalid machine type
+Bugzilla: 990724
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Miroslav Rezanina <mrezanin@redhat.com>
+
+BZ: https://bugzilla.redhat.com/show_bug.cgi?id=990724
+Brew: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7564904
+
+Output error message using qemu's error_report() function when user
+provides the invalid machine type on the command line. This also saves
+time to find what issue is when you downgrade from one version of qemu
+to another that doesn't support required machine type yet (the version
+user downgraded to have to have this patch applied too, of course).
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+[Replace printf with error_printf, suggested by Markus Armbruster. - Paolo]
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Signed-off-by: jen <jen@redhat.com>
+
+Conflicts:
+	vl.c - missing commit 261747f176f6f2d88f8268aaebfdd1a1afe887e2
+           (vl: Use MachineClass instead of global QEMUMachine list)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+(cherry-picked from commit 025172d56e11ba3d86d0937933a23aab3b8606b1)
+---
+ vl.c | 17 +++++++++++------
+ 1 file changed, 11 insertions(+), 6 deletions(-)
+
+Signed-off-by: jen <jen@redhat.com>
+---
+ vl.c | 17 +++++++++++------
+ 1 file changed, 11 insertions(+), 6 deletions(-)
+
+diff --git a/vl.c b/vl.c
+index 6ff06cc..a0099f6 100644
+--- a/vl.c
++++ b/vl.c
+@@ -2578,13 +2578,18 @@ static QEMUMachine *machine_parse(const char *name)
+     if (machine) {
+         return machine;
+     }
+-    printf("Supported machines are:\n");
+-    for (m = first_machine; m != NULL; m = m->next) {
+-        if (m->alias) {
+-            printf("%-20s %s (alias of %s)\n", m->alias, m->desc, m->name);
++    if (name && !is_help_option(name)) {
++        error_report("Unsupported machine type");
++        error_printf("Use -machine help to list supported machines!\n");
++    } else {
++        printf("Supported machines are:\n");
++        for (m = first_machine; m != NULL; m = m->next) {
++            if (m->alias) {
++                printf("%-20s %s (alias of %s)\n", m->alias, m->desc, m->name);
++            }
++            printf("%-20s %s%s\n", m->name, m->desc,
++                   m->is_default ? " (default)" : "");
+         }
+-        printf("%-20s %s%s\n", m->name, m->desc,
+-               m->is_default ? " (default)" : "");
+     }
+     exit(!name || !is_help_option(name));
+ }
+-- 
+1.9.3
+

@@ -1,0 +1,170 @@
+From 0de3b24dc9428a37330f9065bc3626a3a07a9200 Mon Sep 17 00:00:00 2001
+Message-Id: <0de3b24dc9428a37330f9065bc3626a3a07a9200.1387382496.git.minovotn@redhat.com>
+In-Reply-To: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+References: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+From: Marcelo Tosatti <mtosatti@redhat.com>
+Date: Thu, 12 Dec 2013 01:36:44 +0100
+Subject: [PATCH 46/46] mempath: prefault pages manually (v4)
+
+RH-Author: Marcelo Tosatti <mtosatti@redhat.com>
+Message-id: <20131212013644.GA8646@amt.cnet>
+Patchwork-id: 56243
+O-Subject: [RHEL7 qemu-kvm PATCH] mempath: prefault pages manually (v4)
+Bugzilla: 1026554
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Andrew Jones <drjones@redhat.com>
+
+commit ef36fa1492e9105f3fa607b56edc63df513d7da1 upstream
+
+v4: s/fail/failed/  (Peter Maydell)
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Marcelo Tosatti <mtosatti@redhat.com>
+BZ: 1026554
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ exec.c          | 59 +++++++++++++++++++++++++++++++++++++++++++++------------
+ qemu-options.hx |  2 --
+ vl.c            |  4 ----
+ 3 files changed, 47 insertions(+), 18 deletions(-)
+
+diff --git a/exec.c b/exec.c
+index 64af205..571cea4 100644
+--- a/exec.c
++++ b/exec.c
+@@ -865,6 +865,13 @@ static long gethugepagesize(const char *path)
+     return fs.f_bsize;
+ }
+ 
++static sigjmp_buf sigjump;
++
++static void sigbus_handler(int signal)
++{
++    siglongjmp(sigjump, 1);
++}
++
+ static void *file_ram_alloc(RAMBlock *block,
+                             ram_addr_t memory,
+                             const char *path)
+@@ -874,9 +881,6 @@ static void *file_ram_alloc(RAMBlock *block,
+     char *c;
+     void *area;
+     int fd;
+-#ifdef MAP_POPULATE
+-    int flags;
+-#endif
+     unsigned long hpagesize;
+ 
+     hpagesize = gethugepagesize(path);
+@@ -924,21 +928,52 @@ static void *file_ram_alloc(RAMBlock *block,
+     if (ftruncate(fd, memory))
+         perror("ftruncate");
+ 
+-#ifdef MAP_POPULATE
+-    /* NB: MAP_POPULATE won't exhaustively alloc all phys pages in the case
+-     * MAP_PRIVATE is requested.  For mem_prealloc we mmap as MAP_SHARED
+-     * to sidestep this quirk.
+-     */
+-    flags = mem_prealloc ? MAP_POPULATE | MAP_SHARED : MAP_PRIVATE;
+-    area = mmap(0, memory, PROT_READ | PROT_WRITE, flags, fd, 0);
+-#else
+     area = mmap(0, memory, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+-#endif
+     if (area == MAP_FAILED) {
+         perror("file_ram_alloc: can't mmap RAM pages");
+         close(fd);
+         return (NULL);
+     }
++
++    if (mem_prealloc) {
++        int ret, i;
++        struct sigaction act, oldact;
++        sigset_t set, oldset;
++
++        memset(&act, 0, sizeof(act));
++        act.sa_handler = &sigbus_handler;
++        act.sa_flags = 0;
++
++        ret = sigaction(SIGBUS, &act, &oldact);
++        if (ret) {
++            perror("file_ram_alloc: failed to install signal handler");
++            exit(1);
++        }
++
++        /* unblock SIGBUS */
++        sigemptyset(&set);
++        sigaddset(&set, SIGBUS);
++        pthread_sigmask(SIG_UNBLOCK, &set, &oldset);
++
++        if (sigsetjmp(sigjump, 1)) {
++            fprintf(stderr, "file_ram_alloc: failed to preallocate pages\n");
++            exit(1);
++        }
++
++        /* MAP_POPULATE silently ignores failures */
++        for (i = 0; i < (memory/hpagesize)-1; i++) {
++            memset(area + (hpagesize*i), 0, 1);
++        }
++
++        ret = sigaction(SIGBUS, &oldact, NULL);
++        if (ret) {
++            perror("file_ram_alloc: failed to reinstall signal handler");
++            exit(1);
++        }
++
++        pthread_sigmask(SIG_SETMASK, &oldset, NULL);
++    }
++
+     block->fd = fd;
+     return area;
+ }
+diff --git a/qemu-options.hx b/qemu-options.hx
+index e3c5d67..d9320b5 100644
+--- a/qemu-options.hx
++++ b/qemu-options.hx
+@@ -228,7 +228,6 @@ STEXI
+ Allocate guest RAM from a temporarily created file in @var{path}.
+ ETEXI
+ 
+-#ifdef MAP_POPULATE
+ DEF("mem-prealloc", 0, QEMU_OPTION_mem_prealloc,
+     "-mem-prealloc   preallocate guest memory (use with -mem-path)\n",
+     QEMU_ARCH_ALL)
+@@ -237,7 +236,6 @@ STEXI
+ @findex -mem-prealloc
+ Preallocate memory when using -mem-path.
+ ETEXI
+-#endif
+ 
+ DEF("k", HAS_ARG, QEMU_OPTION_k,
+     "-k language     use keyboard layout (for example 'fr' for French)\n",
+diff --git a/vl.c b/vl.c
+index 0cbbdf0..da12b90 100644
+--- a/vl.c
++++ b/vl.c
+@@ -188,9 +188,7 @@ static int display_remote;
+ const char* keyboard_layout = NULL;
+ ram_addr_t ram_size;
+ const char *mem_path = NULL;
+-#ifdef MAP_POPULATE
+ int mem_prealloc = 0; /* force preallocation of physical target memory */
+-#endif
+ int nb_nics;
+ NICInfo nd_table[MAX_NICS];
+ int autostart;
+@@ -3174,11 +3172,9 @@ int main(int argc, char **argv, char **envp)
+             case QEMU_OPTION_mempath:
+                 mem_path = optarg;
+                 break;
+-#ifdef MAP_POPULATE
+             case QEMU_OPTION_mem_prealloc:
+                 mem_prealloc = 1;
+                 break;
+-#endif
+             case QEMU_OPTION_d:
+                 log_mask = optarg;
+                 break;
+-- 
+1.7.11.7
+

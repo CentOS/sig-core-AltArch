@@ -1,0 +1,51 @@
+From 0dbbdb969ae54cf3042ec60f740e9c4773726013 Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Fri, 18 Oct 2013 08:14:31 +0200
+Subject: [PATCH 06/81] block: do not use ->total_sectors in bdrv_co_is_allocated
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1382084091-16636-7-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 54989
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 06/26] block: do not use ->total_sectors in bdrv_co_is_allocated
+Bugzilla: 989646
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+This is more robust when the device has removable media.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 617ccb466e1937a5c99332ce77a47ebd29861ae4)
+---
+ block.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c |    8 +++++++-
+ 1 files changed, 7 insertions(+), 1 deletions(-)
+
+diff --git a/block.c b/block.c
+index 0607cc6..9ea8221 100644
+--- a/block.c
++++ b/block.c
+@@ -3031,9 +3031,15 @@ static int coroutine_fn bdrv_co_is_allocated(BlockDriverState *bs,
+                                              int64_t sector_num,
+                                              int nb_sectors, int *pnum)
+ {
++    int64_t length;
+     int64_t n;
+ 
+-    if (sector_num >= bs->total_sectors) {
++    length = bdrv_getlength(bs);
++    if (length < 0) {
++        return length;
++    }
++
++    if (sector_num >= (length >> BDRV_SECTOR_BITS)) {
+         *pnum = 0;
+         return 0;
+     }
+-- 
+1.7.1
+

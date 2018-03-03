@@ -1,0 +1,57 @@
+From b05eb2cc7decc07ed044484861587b3490144d02 Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Wed, 8 Jun 2016 13:04:21 +0200
+Subject: [PATCH 2/3] target-i386: fix pcmpxstrx equal-ordered (strstr) mode
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1465391061-17748-1-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 70570
+O-Subject: [RHEL7.3/7.2.z qemu-kvm PATCH] target-i386: fix pcmpxstrx equal-ordered (strstr) mode
+Bugzilla: 1340971
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+
+Kindly requested by the Openstack folks, who sometimes uses TCG
+instead of nested virt.
+
+In this mode, referring an invalid element of the source forces the
+result to false (table 4-7, last column) but referring an invalid
+element of the destination forces the result to true, so the outer
+loop should still be run even if some elements of the destination
+will be invalid.  They will be avoided in the inner loop, which
+correctly bounds "i" to validd, but they will still contribute to a
+positive outcome of the search.
+
+This fixes tst_strstr in glibc 2.17.
+
+Reported-by: Florian Weimer <fweimer@redhat.com>
+Cc: Richard Henderson <rth@twiddle.net>
+Cc: Eduardo Habkost <ehabkost@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 54c54f8b56047d3c2420e1ae06a6a8890c220ac4)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/ops_sse.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/target-i386/ops_sse.h b/target-i386/ops_sse.h
+index eb24b5f..5145d9e 100644
+--- a/target-i386/ops_sse.h
++++ b/target-i386/ops_sse.h
+@@ -2034,10 +2034,10 @@ static inline unsigned pcmpxstrx(CPUX86State *env, Reg *d, Reg *s,
+         }
+         break;
+     case 3:
+-        for (j = valids - validd; j >= 0; j--) {
++        for (j = valids; j >= 0; j--) {
+             res <<= 1;
+             v = 1;
+-            for (i = MIN(upper - j, validd); i >= 0; i--) {
++            for (i = MIN(valids - j, validd); i >= 0; i--) {
+                 v &= (pcmp_val(s, ctrl, i + j) == pcmp_val(d, ctrl, i));
+             }
+             res |= v;
+-- 
+1.8.3.1
+

@@ -1,0 +1,71 @@
+From ac19619fcd0eb051d57e5519a9fe8983b9e02fc0 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 15 Feb 2014 16:03:48 +0100
+Subject: [PATCH 3/5] qcow2: fix offset overflow in qcow2_alloc_clusters_at()
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1392480230-24011-3-git-send-email-mreitz@redhat.com>
+Patchwork-id: 57293
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 2/4] qcow2: fix offset overflow in qcow2_alloc_clusters_at()
+Bugzilla: 1049176
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+From: Hu Tao <hutao@cn.fujitsu.com>
+
+BZ: 1049176
+BZ: 1055848
+
+When cluster size is big enough it can lead to an offset overflow
+in qcow2_alloc_clusters_at(). This patch fixes it.
+
+The allocation is stopped each time at L2 table boundary
+(see handle_alloc()), so the possible maximum bytes could be
+
+  2^(cluster_bits - 3 + cluster_bits)
+
+cluster_bits - 3 is used to compute the number of entry by L2
+and the additional cluster_bits is to take into account each
+clusters referenced by the L2 entries.
+
+so int is safe for cluster_bits<=17, unsafe otherwise.
+
+Signed-off-by: Hu Tao <hutao@cn.fujitsu.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 33304ec9fa484e765c6249673e09e1b7d49c5b85)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2-refcount.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-refcount.c |    8 +++++++-
+ 1 files changed, 7 insertions(+), 1 deletions(-)
+
+diff --git a/block/qcow2-refcount.c b/block/qcow2-refcount.c
+index 389a837..09c638f 100644
+--- a/block/qcow2-refcount.c
++++ b/block/qcow2-refcount.c
+@@ -676,7 +676,13 @@ int qcow2_alloc_clusters_at(BlockDriverState *bs, uint64_t offset,
+     BDRVQcowState *s = bs->opaque;
+     uint64_t cluster_index;
+     uint64_t old_free_cluster_index;
+-    int i, refcount, ret;
++    uint64_t i;
++    int refcount, ret;
++
++    assert(nb_clusters >= 0);
++    if (nb_clusters == 0) {
++        return 0;
++    }
+ 
+     /* Check how many clusters there are free */
+     cluster_index = offset >> s->cluster_bits;
+-- 
+1.7.1
+

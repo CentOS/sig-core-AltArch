@@ -1,0 +1,80 @@
+From 068000dc97228f85b878634e3d49d3354f5cbafe Mon Sep 17 00:00:00 2001
+From: John Snow <jsnow@redhat.com>
+Date: Fri, 11 Jul 2014 19:07:24 -0500
+Subject: [CHANGE 20/29] aio: fix qemu_bh_schedule() bh->ctx race condition
+To: rhvirt-patches@redhat.com,
+    jen@redhat.com
+
+RH-Author: John Snow <jsnow@redhat.com>
+Message-id: <1405105644-21039-1-git-send-email-jsnow@redhat.com>
+Patchwork-id: 59866
+O-Subject: [RHEL-7.1 qemu-kvm PATCH] aio: fix qemu_bh_schedule() bh->ctx race condition
+Bugzilla: 1116728
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+From: Stefan Hajnoczi <stefanha@redhat.com>
+
+bz: https://bugzilla.redhat.com/show_bug.cgi?id=1116728
+brew: https://brewweb.devel.redhat.com/taskinfo?taskID=7690195
+upstream: 924fe1293c3e7a3c787bbdfb351e7f168caee3e9
+
+qemu_bh_schedule() is supposed to be thread-safe at least the first time
+it is called.  Unfortunately this is not quite true:
+
+  bh->scheduled = 1;
+  aio_notify(bh->ctx);
+
+Since another thread may run the BH callback once it has been scheduled,
+there is a race condition if the callback frees the BH before
+aio_notify(bh->ctx) has a chance to run.
+
+Reported-by: Stefan Priebe <s.priebe@profihost.ag>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Tested-by: Stefan Priebe <s.priebe@profihost.ag>
+(cherry picked from commit 924fe1293c3e7a3c787bbdfb351e7f168caee3e9)
+Signed-off-by: John Snow <jsnow@redhat.com>
+---
+ async.c | 14 ++++++++++----
+ 1 file changed, 10 insertions(+), 4 deletions(-)
+
+Signed-off-by: jen <jen@redhat.com>
+---
+ async.c | 14 ++++++++++----
+ 1 file changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/async.c b/async.c
+index 5ce3633..d7ec1ea 100644
+--- a/async.c
++++ b/async.c
+@@ -117,15 +117,21 @@ void qemu_bh_schedule_idle(QEMUBH *bh)
+ 
+ void qemu_bh_schedule(QEMUBH *bh)
+ {
++    AioContext *ctx;
++
+     if (bh->scheduled)
+         return;
++    ctx = bh->ctx;
+     bh->idle = 0;
+-    /* Make sure that idle & any writes needed by the callback are done
+-     * before the locations are read in the aio_bh_poll.
++    /* Make sure that:
++     * 1. idle & any writes needed by the callback are done before the
++     *    locations are read in the aio_bh_poll.
++     * 2. ctx is loaded before scheduled is set and the callback has a chance
++     *    to execute.
+      */
+-    smp_wmb();
++    smp_mb();
+     bh->scheduled = 1;
+-    aio_notify(bh->ctx);
++    aio_notify(ctx);
+ }
+ 
+ 
+-- 
+1.9.3
+

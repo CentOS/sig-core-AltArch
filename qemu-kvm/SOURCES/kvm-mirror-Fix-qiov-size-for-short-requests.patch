@@ -1,0 +1,93 @@
+From 332e8935dd300a4c6f77407e281fe339759bc505 Mon Sep 17 00:00:00 2001
+From: Eric Blake <eblake@redhat.com>
+Date: Wed, 20 Aug 2014 16:40:14 +0200
+Subject: [PATCH 11/11] mirror: Fix qiov size for short requests
+
+Message-id: <1408552814-23031-8-git-send-email-eblake@redhat.com>
+Patchwork-id: 60650
+O-Subject: [qemu-kvm-rhev 7.0.z PATCH 7/7] mirror: Fix qiov size for short requests
+Bugzilla: 1130603
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+When mirroring an image of a size that is not a multiple of the
+mirror job granularity, the last request would have the right nb_sectors
+argument, but a qiov that is rounded up to the next multiple of the
+granularity. Don't do this.
+
+This fixes a segfault that is caused by raw-posix being confused by this
+and allocating a buffer with request length, but operating on it with
+qiov length.
+
+[s/Driver/Drive/ in qemu-iotests 041 as suggested by Eric
+--Stefan]
+
+Reported-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Tested-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 5a0f6fd5c84573387056e0464a7fc0c6fb70b2dc)
+
+Conflicts:
+	tests/qemu-iotests/041.out - context with fewer tests run downstream
+
+Signed-off-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/mirror.c             |    4 +++-
+ tests/qemu-iotests/041     |    5 +++++
+ tests/qemu-iotests/041.out |    4 ++--
+ 3 files changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/block/mirror.c b/block/mirror.c
+index cdc0268..b7cf4ab 100644
+--- a/block/mirror.c
++++ b/block/mirror.c
+@@ -243,9 +243,11 @@ static void coroutine_fn mirror_iteration(MirrorBlockJob *s)
+     next_sector = sector_num;
+     while (nb_chunks-- > 0) {
+         MirrorBuffer *buf = QSIMPLEQ_FIRST(&s->buf_free);
++        size_t remaining = (nb_sectors * BDRV_SECTOR_SIZE) - op->qiov.size;
++
+         QSIMPLEQ_REMOVE_HEAD(&s->buf_free, next);
+         s->buf_free_count--;
+-        qemu_iovec_add(&op->qiov, buf, s->granularity);
++        qemu_iovec_add(&op->qiov, buf, MIN(s->granularity, remaining));
+ 
+         /* Advance the HBitmapIter in parallel, so that we do not examine
+          * the same sector twice.
+diff --git a/tests/qemu-iotests/041 b/tests/qemu-iotests/041
+index 912e499..b654081 100755
+--- a/tests/qemu-iotests/041
++++ b/tests/qemu-iotests/041
+@@ -270,6 +270,11 @@ class TestSingleDriveZeroLength(TestSingleDrive):
+     test_small_buffer2 = None
+     test_large_cluster = None
+ 
++class TestSingleDriveUnalignedLength(TestSingleDrive):
++    image_len = 1025 * 1024
++    test_small_buffer2 = None
++    test_large_cluster = None
++
+ class TestMirrorNoBacking(ImageMirroringTestCase):
+     image_len = 2 * 1024 * 1024 # MB
+ 
+diff --git a/tests/qemu-iotests/041.out b/tests/qemu-iotests/041.out
+index cfa5c0d..802ffaa 100644
+--- a/tests/qemu-iotests/041.out
++++ b/tests/qemu-iotests/041.out
+@@ -1,5 +1,5 @@
+-...................................
++...........................................
+ ----------------------------------------------------------------------
+-Ran 35 tests
++Ran 43 tests
+ 
+ OK
+-- 
+1.7.1
+

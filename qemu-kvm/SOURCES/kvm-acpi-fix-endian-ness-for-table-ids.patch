@@ -1,0 +1,249 @@
+From 87f01cd69488bf39e80c422b92717029fed0bef6 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Wed, 11 May 2016 12:33:43 +0200
+Subject: [PATCH 04/10] acpi: fix endian-ness for table ids
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1462970028-10959-3-git-send-email-lersek@redhat.com>
+Patchwork-id: 70379
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 2/7] acpi: fix endian-ness for table ids
+Bugzilla: 1330969
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+
+From: "Michael S. Tsirkin" <mst@redhat.com>
+
+when using signature for table ID, we forgot to byte-swap it.
+signatures are really ASCII strings, let's treat them as such.
+While at it, get rid of most of _SIGNATURE macros.
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 821e3227863ea8db057190e578efa0f1f57ed9de)
+
+RHEL-7 backport notes: this patch is being backported only to decrease the
+number of conflicts in the upcoming patches; we only support x86_64 hosts,
+which is unaffected by the endianness issue described in the upstream
+commit message.
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+---
+ hw/i386/acpi-defs.h  | 14 --------------
+ hw/i386/acpi-build.c | 31 ++++++++++++++++---------------
+ 2 files changed, 16 insertions(+), 29 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/acpi-build.c | 31 ++++++++++++++++---------------
+ hw/i386/acpi-defs.h  | 14 --------------
+ 2 files changed, 16 insertions(+), 29 deletions(-)
+
+diff --git a/hw/i386/acpi-build.c b/hw/i386/acpi-build.c
+index a3a4c3b..be32bc3 100644
+--- a/hw/i386/acpi-build.c
++++ b/hw/i386/acpi-build.c
+@@ -243,14 +243,14 @@ static void acpi_get_pci_info(PcPciInfo *info)
+ 
+ static void
+ build_header(GArray *linker, GArray *table_data,
+-             AcpiTableHeader *h, uint32_t sig, int len, uint8_t rev)
++             AcpiTableHeader *h, const char *sig, int len, uint8_t rev)
+ {
+-    h->signature = cpu_to_le32(sig);
++    memcpy(&h->signature, sig, 4);
+     h->length = cpu_to_le32(len);
+     h->revision = rev;
+     memcpy(h->oem_id, ACPI_BUILD_APPNAME6, 6);
+     memcpy(h->oem_table_id, ACPI_BUILD_APPNAME4, 4);
+-    memcpy(h->oem_table_id + 4, (void *)&sig, 4);
++    memcpy(h->oem_table_id + 4, sig, 4);
+     h->oem_revision = cpu_to_le32(1);
+     memcpy(h->asl_compiler_id, ACPI_BUILD_APPNAME4, 4);
+     h->asl_compiler_revision = cpu_to_le32(1);
+@@ -463,7 +463,7 @@ static void
+ build_facs(GArray *table_data, GArray *linker, PcGuestInfo *guest_info)
+ {
+     AcpiFacsDescriptorRev1 *facs = acpi_data_push(table_data, sizeof *facs);
+-    facs->signature = cpu_to_le32(ACPI_FACS_SIGNATURE);
++    memcpy(&facs->signature, "FACS", 4);
+     facs->length = cpu_to_le32(sizeof(*facs));
+ }
+ 
+@@ -520,7 +520,7 @@ build_fadt(GArray *table_data, GArray *linker, AcpiPmInfo *pm,
+     fadt_setup(fadt, pm);
+ 
+     build_header(linker, table_data,
+-                 (void *)fadt, ACPI_FACP_SIGNATURE, sizeof(*fadt), 1);
++                 (void *)fadt, "FACP", sizeof(*fadt), 1);
+ }
+ 
+ static void
+@@ -589,7 +589,7 @@ build_madt(GArray *table_data, GArray *linker, AcpiCpuInfo *cpu,
+     local_nmi->lint         = 1; /* ACPI_LINT1 */
+ 
+     build_header(linker, table_data,
+-                 (void *)(table_data->data + madt_start), ACPI_APIC_SIGNATURE,
++                 (void *)(table_data->data + madt_start), "APIC",
+                  table_data->len - madt_start, 1);
+ }
+ 
+@@ -782,7 +782,7 @@ build_ssdt(GArray *table_data, GArray *linker,
+ 
+     build_header(linker, table_data,
+                  (void *)(table_data->data + ssdt_start),
+-                 ACPI_SSDT_SIGNATURE, table_data->len - ssdt_start, 1);
++                 "SSDT", table_data->len - ssdt_start, 1);
+ }
+ 
+ static void
+@@ -797,7 +797,7 @@ build_hpet(GArray *table_data, GArray *linker)
+     hpet->timer_block_id = cpu_to_le32(0x8086a201);
+     hpet->addr.address = cpu_to_le64(HPET_BASE);
+     build_header(linker, table_data,
+-                 (void *)hpet, ACPI_HPET_SIGNATURE, sizeof(*hpet), 1);
++                 (void *)hpet, "HPET", sizeof(*hpet), 1);
+ }
+ 
+ static void
+@@ -889,7 +889,7 @@ build_srat(GArray *table_data, GArray *linker,
+ 
+     build_header(linker, table_data,
+                  (void *)(table_data->data + srat_start),
+-                 ACPI_SRAT_SIGNATURE,
++                 "SRAT",
+                  table_data->len - srat_start, 1);
+ }
+ 
+@@ -897,7 +897,7 @@ static void
+ build_mcfg_q35(GArray *table_data, GArray *linker, AcpiMcfgInfo *info)
+ {
+     AcpiTableMcfg *mcfg;
+-    uint32_t sig;
++    const char *sig;
+     int len = sizeof(*mcfg) + 1 * sizeof(mcfg->allocation[0]);
+ 
+     mcfg = acpi_data_push(table_data, len);
+@@ -914,9 +914,10 @@ build_mcfg_q35(GArray *table_data, GArray *linker, AcpiMcfgInfo *info)
+      * ACPI spec requires OSPMs to ignore such tables.
+      */
+     if (info->mcfg_base == PCIE_BASE_ADDR_UNMAPPED) {
+-        sig = ACPI_RSRV_SIGNATURE;
++        /* Reserved signature: ignored by OSPM */
++        sig = "QEMU";
+     } else {
+-        sig = ACPI_MCFG_SIGNATURE;
++        sig = "MCFG";
+     }
+     build_header(linker, table_data, (void *)mcfg, sig, len, 1);
+ }
+@@ -932,7 +933,7 @@ build_dsdt(GArray *table_data, GArray *linker, AcpiMiscInfo *misc)
+     memcpy(dsdt, misc->dsdt_code, misc->dsdt_size);
+ 
+     memset(dsdt, 0, sizeof *dsdt);
+-    build_header(linker, table_data, dsdt, ACPI_DSDT_SIGNATURE,
++    build_header(linker, table_data, dsdt, "DSDT",
+                  misc->dsdt_size, 1);
+ }
+ 
+@@ -957,7 +958,7 @@ build_rsdt(GArray *table_data, GArray *linker, GArray *table_offsets)
+                                        sizeof(uint32_t));
+     }
+     build_header(linker, table_data,
+-                 (void *)rsdt, ACPI_RSDT_SIGNATURE, rsdt_len, 1);
++                 (void *)rsdt, "RSDT", rsdt_len, 1);
+ }
+ 
+ static GArray *
+@@ -968,7 +969,7 @@ build_rsdp(GArray *rsdp_table, GArray *linker, unsigned rsdt)
+     bios_linker_loader_alloc(linker, ACPI_BUILD_RSDP_FILE, 1,
+                              true /* fseg memory */);
+ 
+-    rsdp->signature = cpu_to_le64(ACPI_RSDP_SIGNATURE);
++    memcpy(&rsdp->signature, "RSD PTR ", 8);
+     memcpy(rsdp->oem_id, ACPI_BUILD_APPNAME6, 6);
+     rsdp->rsdt_physical_address = cpu_to_le32(rsdt);
+     /* Address to be filled by Guest linker */
+diff --git a/hw/i386/acpi-defs.h b/hw/i386/acpi-defs.h
+index 78ca204..e93babb 100644
+--- a/hw/i386/acpi-defs.h
++++ b/hw/i386/acpi-defs.h
+@@ -52,8 +52,6 @@ struct Acpi20GenericAddress {
+ } QEMU_PACKED;
+ typedef struct Acpi20GenericAddress Acpi20GenericAddress;
+ 
+-#define ACPI_RSDP_SIGNATURE 0x2052545020445352LL // "RSD PTR "
+-
+ struct AcpiRsdpDescriptor {        /* Root System Descriptor Pointer */
+     uint64_t signature;              /* ACPI signature, contains "RSD PTR " */
+     uint8_t  checksum;               /* To make sum of struct == 0 */
+@@ -92,7 +90,6 @@ typedef struct AcpiTableHeader AcpiTableHeader;
+ /*
+  * ACPI 1.0 Fixed ACPI Description Table (FADT)
+  */
+-#define ACPI_FACP_SIGNATURE 0x50434146 // FACP
+ struct AcpiFadtDescriptorRev1
+ {
+     ACPI_TABLE_HEADER_DEF     /* ACPI common table header */
+@@ -141,7 +138,6 @@ typedef struct AcpiFadtDescriptorRev1 AcpiFadtDescriptorRev1;
+ /*
+  * ACPI 1.0 Root System Description Table (RSDT)
+  */
+-#define ACPI_RSDT_SIGNATURE 0x54445352 // RSDT
+ struct AcpiRsdtDescriptorRev1
+ {
+     ACPI_TABLE_HEADER_DEF       /* ACPI common table header */
+@@ -153,7 +149,6 @@ typedef struct AcpiRsdtDescriptorRev1 AcpiRsdtDescriptorRev1;
+ /*
+  * ACPI 1.0 Firmware ACPI Control Structure (FACS)
+  */
+-#define ACPI_FACS_SIGNATURE 0x53434146 // FACS
+ struct AcpiFacsDescriptorRev1
+ {
+     uint32_t signature;           /* ACPI Signature */
+@@ -169,7 +164,6 @@ typedef struct AcpiFacsDescriptorRev1 AcpiFacsDescriptorRev1;
+ /*
+  * Differentiated System Description Table (DSDT)
+  */
+-#define ACPI_DSDT_SIGNATURE 0x54445344 // DSDT
+ 
+ /*
+  * MADT values and structures
+@@ -182,7 +176,6 @@ typedef struct AcpiFacsDescriptorRev1 AcpiFacsDescriptorRev1;
+ 
+ /* Master MADT */
+ 
+-#define ACPI_APIC_SIGNATURE 0x43495041 // APIC
+ struct AcpiMultipleApicTable
+ {
+     ACPI_TABLE_HEADER_DEF     /* ACPI common table header */
+@@ -253,7 +246,6 @@ typedef struct AcpiMadtLocalNmi AcpiMadtLocalNmi;
+ /*
+  * HPET Description Table
+  */
+-#define ACPI_HPET_SIGNATURE 0x54455048 // HPET
+ struct Acpi20Hpet {
+     ACPI_TABLE_HEADER_DEF                    /* ACPI common table header */
+     uint32_t           timer_block_id;
+@@ -268,7 +260,6 @@ typedef struct Acpi20Hpet Acpi20Hpet;
+  * SRAT (NUMA topology description) table
+  */
+ 
+-#define ACPI_SRAT_SIGNATURE 0x54415253 // SRAT
+ struct AcpiSystemResourceAffinityTable
+ {
+     ACPI_TABLE_HEADER_DEF
+@@ -316,11 +307,6 @@ struct AcpiMcfgAllocation {
+ } QEMU_PACKED;
+ typedef struct AcpiMcfgAllocation AcpiMcfgAllocation;
+ 
+-#define ACPI_MCFG_SIGNATURE 0x4746434d       // MCFG
+-
+-/* Reserved signature: ignored by OSPM */
+-#define ACPI_RSRV_SIGNATURE 0x554d4551       // QEMU
+-
+ struct AcpiTableMcfg {
+     ACPI_TABLE_HEADER_DEF;
+     uint8_t reserved[8];
+-- 
+1.8.3.1
+

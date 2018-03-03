@@ -1,0 +1,94 @@
+From 76196ca1133605fa60365b6d00eff5b97fa758ea Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Fri, 18 Oct 2013 08:14:35 +0200
+Subject: [PATCH 10/81] qemu-img: always probe the input image for allocated sectors
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1382084091-16636-11-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 54993
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 10/26] qemu-img: always probe the input image for allocated sectors
+Bugzilla: 989646
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+qemu-img convert can assume "that sectors which are unallocated in the
+input image are present in both the output's and input's base images".
+
+However it is only doing this if the output image returns true for
+bdrv_has_zero_init().  Testing bdrv_has_zero_init() does not make much
+sense if the output image is copy-on-write, because a copy-on-write
+image is never initialized to zero (it is initialized to the content
+of the backing file).
+
+There is nothing here that makes has_zero_init images special.  The
+input and output must be equal for the operation to make sense, and
+that's it.
+
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit e4a86f88cc6b214c37b4abe9160e41f0338ce4cd)
+---
+ qemu-img.c | 40 +++++++++++++++++++---------------------
+ 1 file changed, 19 insertions(+), 21 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qemu-img.c |   40 +++++++++++++++++++---------------------
+ 1 files changed, 19 insertions(+), 21 deletions(-)
+
+diff --git a/qemu-img.c b/qemu-img.c
+index 28efb4f..71cbc59 100644
+--- a/qemu-img.c
++++ b/qemu-img.c
+@@ -1476,28 +1476,26 @@ static int img_convert(int argc, char **argv)
+                 n = bs_offset + bs_sectors - sector_num;
+             }
+ 
+-            if (has_zero_init) {
+-                /* If the output image is being created as a copy on write image,
+-                   assume that sectors which are unallocated in the input image
+-                   are present in both the output's and input's base images (no
+-                   need to copy them). */
+-                if (out_baseimg) {
+-                    ret = bdrv_is_allocated(bs[bs_i], sector_num - bs_offset,
+-                                            n, &n1);
+-                    if (ret < 0) {
+-                        error_report("error while reading metadata for sector "
+-                                     "%" PRId64 ": %s",
+-                                     sector_num - bs_offset, strerror(-ret));
+-                        goto out;
+-                    }
+-                    if (!ret) {
+-                        sector_num += n1;
+-                        continue;
+-                    }
+-                    /* The next 'n1' sectors are allocated in the input image. Copy
+-                       only those as they may be followed by unallocated sectors. */
+-                    n = n1;
++            /* If the output image is being created as a copy on write image,
++               assume that sectors which are unallocated in the input image
++               are present in both the output's and input's base images (no
++               need to copy them). */
++            if (out_baseimg) {
++                ret = bdrv_is_allocated(bs[bs_i], sector_num - bs_offset,
++                                        n, &n1);
++                if (ret < 0) {
++                    error_report("error while reading metadata for sector "
++                                 "%" PRId64 ": %s",
++                                 sector_num - bs_offset, strerror(-ret));
++                    goto out;
++                }
++                if (!ret) {
++                    sector_num += n1;
++                    continue;
+                 }
++                /* The next 'n1' sectors are allocated in the input image. Copy
++                   only those as they may be followed by unallocated sectors. */
++                n = n1;
+             } else {
+                 n1 = n;
+             }
+-- 
+1.7.1
+

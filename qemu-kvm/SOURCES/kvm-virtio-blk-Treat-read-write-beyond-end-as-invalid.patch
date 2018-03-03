@@ -1,0 +1,56 @@
+From 55767ddb818ef53eee50777bd276cbf7e7813bfb Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Fri, 31 Oct 2014 16:29:54 +0100
+Subject: [PATCH 17/19] virtio-blk: Treat read/write beyond end as invalid
+
+Message-id: <1414772996-17272-4-git-send-email-armbru@redhat.com>
+Patchwork-id: 62019
+O-Subject: [PATCH RHEL-7.1 qemu-kvm 3/5] virtio-blk: Treat read/write beyond end as invalid
+Bugzilla: 1085232
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+The block layer fails such reads and writes just fine.  However, they
+then get treated like valid operations that fail: the error action
+gets executed.  Unwanted; reporting the error to the guest is the only
+sensible action.
+
+Reject them before passing them to the block layer.  This bypasses the
+error action and I/O accounting.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 3c2daac0b98952a858277878cb11294256b39e43)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/block/virtio-blk.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/hw/block/virtio-blk.c b/hw/block/virtio-blk.c
+index ffb311c..4f6aa22 100644
+--- a/hw/block/virtio-blk.c
++++ b/hw/block/virtio-blk.c
+@@ -284,12 +284,19 @@ static void virtio_blk_handle_flush(VirtIOBlockReq *req, MultiReqBuffer *mrb)
+ static bool virtio_blk_sect_range_ok(VirtIOBlock *dev,
+                                      uint64_t sector, size_t size)
+ {
++    uint64_t nb_sectors = size >> BDRV_SECTOR_BITS;
++    uint64_t total_sectors;
++
+     if (sector & dev->sector_mask) {
+         return false;
+     }
+     if (size % dev->conf->logical_block_size) {
+         return false;
+     }
++    bdrv_get_geometry(dev->bs, &total_sectors);
++    if (sector > total_sectors || nb_sectors > total_sectors - sector) {
++        return false;
++    }
+     return true;
+ }
+ 
+-- 
+1.8.3.1
+

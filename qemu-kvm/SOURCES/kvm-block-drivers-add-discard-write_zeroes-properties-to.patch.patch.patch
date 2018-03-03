@@ -1,0 +1,106 @@
+From d10c277da89a9a2d288560fc6ccdc455b3d39090 Mon Sep 17 00:00:00 2001
+Message-Id: <d10c277da89a9a2d288560fc6ccdc455b3d39090.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:09:18 +0100
+Subject: [PATCH 30/50] block drivers: add discard/write_zeroes properties to
+ bdrv_get_info implementation
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-33-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56069
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 32/52] block drivers: add discard/write_zeroes properties to bdrv_get_info implementation
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 95de6d7078b029b73708059a17cef20f332adcb7)
+---
+ block/qcow2.c | 2 ++
+ block/qed.c   | 2 ++
+ block/vdi.c   | 1 +
+ block/vhdx.c  | 3 +++
+ block/vpc.c   | 1 +
+ 5 files changed, 9 insertions(+)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ block/qcow2.c | 2 ++
+ block/qed.c   | 2 ++
+ block/vdi.c   | 1 +
+ block/vhdx.c  | 3 +++
+ block/vpc.c   | 1 +
+ 5 files changed, 9 insertions(+)
+
+diff --git a/block/qcow2.c b/block/qcow2.c
+index c109646..bbba11f 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -1886,6 +1886,8 @@ static int64_t qcow2_vm_state_offset(BDRVQcowState *s)
+ static int qcow2_get_info(BlockDriverState *bs, BlockDriverInfo *bdi)
+ {
+     BDRVQcowState *s = bs->opaque;
++    bdi->unallocated_blocks_are_zero = true;
++    bdi->can_write_zeroes_with_unmap = (s->qcow_version >= 3);
+     bdi->cluster_size = s->cluster_size;
+     bdi->vm_state_offset = qcow2_vm_state_offset(s);
+     return 0;
+diff --git a/block/qed.c b/block/qed.c
+index e163372..c470329 100644
+--- a/block/qed.c
++++ b/block/qed.c
+@@ -1475,6 +1475,8 @@ static int bdrv_qed_get_info(BlockDriverState *bs, BlockDriverInfo *bdi)
+     memset(bdi, 0, sizeof(*bdi));
+     bdi->cluster_size = s->header.cluster_size;
+     bdi->is_dirty = s->header.features & QED_F_NEED_CHECK;
++    bdi->unallocated_blocks_are_zero = true;
++    bdi->can_write_zeroes_with_unmap = true;
+     return 0;
+ }
+ 
+diff --git a/block/vdi.c b/block/vdi.c
+index dcbc27c..f973883 100644
+--- a/block/vdi.c
++++ b/block/vdi.c
+@@ -331,6 +331,7 @@ static int vdi_get_info(BlockDriverState *bs, BlockDriverInfo *bdi)
+     logout("\n");
+     bdi->cluster_size = s->block_size;
+     bdi->vm_state_offset = 0;
++    bdi->unallocated_blocks_are_zero = true;
+     return 0;
+ }
+ 
+diff --git a/block/vhdx.c b/block/vhdx.c
+index 7285b95..41c3065 100644
+--- a/block/vhdx.c
++++ b/block/vhdx.c
+@@ -884,6 +884,9 @@ static int vhdx_get_info(BlockDriverState *bs, BlockDriverInfo *bdi)
+ 
+     bdi->cluster_size = s->block_size;
+ 
++    bdi->unallocated_blocks_are_zero =
++        (s->params.data_bits & VHDX_PARAMS_HAS_PARENT) == 0;
++
+     return 0;
+ }
+ 
+diff --git a/block/vpc.c b/block/vpc.c
+index 49520c1..059069f 100644
+--- a/block/vpc.c
++++ b/block/vpc.c
+@@ -448,6 +448,7 @@ static int vpc_get_info(BlockDriverState *bs, BlockDriverInfo *bdi)
+         bdi->cluster_size = s->block_size;
+     }
+ 
++    bdi->unallocated_blocks_are_zero = true;
+     return 0;
+ }
+ 
+-- 
+1.7.11.7
+

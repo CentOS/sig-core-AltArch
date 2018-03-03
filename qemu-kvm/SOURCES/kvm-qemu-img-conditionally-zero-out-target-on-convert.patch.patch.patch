@@ -1,0 +1,69 @@
+From 33d075d8a2d5c6f22aaefb5fcfbee61e0c46586b Mon Sep 17 00:00:00 2001
+Message-Id: <33d075d8a2d5c6f22aaefb5fcfbee61e0c46586b.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:09:10 +0100
+Subject: [PATCH 22/50] qemu-img: conditionally zero out target on convert
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-25-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56061
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 24/52] qemu-img: conditionally zero out target on convert
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Peter Lieven <pl@kamp.de>
+
+If the target has_zero_init = 0, but supports efficiently
+writing zeroes by unmapping we call bdrv_make_zero to
+avoid fully allocating the target. This currently works
+only for iscsi.  It can be extended to raw with
+BLKDISCARDZEROES for example.
+
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 5a37b60a61c4c334e3b194758871f41494317d42)
+---
+ qemu-img.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ qemu-img.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/qemu-img.c b/qemu-img.c
+index dfd8a92..3dacbec 100644
+--- a/qemu-img.c
++++ b/qemu-img.c
+@@ -1353,7 +1353,7 @@ static int img_convert(int argc, char **argv)
+         }
+     }
+ 
+-    flags = BDRV_O_RDWR;
++    flags = min_sparse ? (BDRV_O_RDWR | BDRV_O_UNMAP) : BDRV_O_RDWR;
+     ret = bdrv_parse_cache_flags(cache, &flags);
+     if (ret < 0) {
+         error_report("Invalid cache option: %s", cache);
+@@ -1469,6 +1469,14 @@ static int img_convert(int argc, char **argv)
+     } else {
+         int has_zero_init = min_sparse ? bdrv_has_zero_init(out_bs) : 0;
+ 
++        if (!has_zero_init && bdrv_can_write_zeroes_with_unmap(out_bs)) {
++            ret = bdrv_make_zero(out_bs, BDRV_REQ_MAY_UNMAP);
++            if (ret < 0) {
++                goto out;
++            }
++            has_zero_init = 1;
++        }
++
+         sector_num = 0; // total number of sectors converted so far
+         nb_sectors = total_sectors - sector_num;
+         if (nb_sectors != 0) {
+-- 
+1.7.11.7
+

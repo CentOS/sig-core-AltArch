@@ -1,0 +1,104 @@
+From 714dfa20586988e535dc7290be0d5d8d6b0853f3 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Wed, 15 Jan 2014 15:39:10 +0100
+Subject: [PATCH 33/37] qemu-io: New command 'sleep'
+
+Message-id: <1392117622-28812-34-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57198
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 33/37] qemu-io: New command 'sleep'
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+There is no easy way to check that a request correctly waits for a
+different request. With a sleep command we can at least approximate it.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit cd33d02a1012e58ee0d3c8259159e8c60cfa0a4d)
+
+Conflicts:
+	qemu-io-cmds.c
+
+Conflicts because RHEL 7 doesn't have...
+- ...the qemu-io refactoring for supporting qemu-io from the monitor
+- ...the new timer API
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ qemu-io.c | 42 ++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 42 insertions(+)
+---
+ qemu-io.c |   42 ++++++++++++++++++++++++++++++++++++++++++
+ 1 files changed, 42 insertions(+), 0 deletions(-)
+
+diff --git a/qemu-io.c b/qemu-io.c
+index 7e258a5..0959178 100644
+--- a/qemu-io.c
++++ b/qemu-io.c
+@@ -22,6 +22,7 @@
+ #include "block/qapi.h"
+ #include "cmd.h"
+ #include "trace/control.h"
++#include "qemu/timer.h"
+ 
+ #define VERSION	"0.0.1"
+ 
+@@ -1773,6 +1774,46 @@ static const cmdinfo_t close_cmd = {
+     .oneline    = "close the current open file",
+ };
+ 
++static void sleep_cb(void *opaque)
++{
++    bool *expired = opaque;
++    *expired = true;
++}
++
++static int sleep_f(int argc, char **argv)
++{
++    char *endptr;
++    long ms;
++    struct QEMUTimer *timer;
++    bool expired = false;
++
++    ms = strtol(argv[1], &endptr, 0);
++    if (ms < 0 || *endptr != '\0') {
++        printf("%s is not a valid number\n", argv[1]);
++        return 0;
++    }
++
++    timer = qemu_new_timer_ns(host_clock, sleep_cb, &expired);
++    qemu_mod_timer(timer, qemu_get_clock_ns(host_clock) + SCALE_MS * ms);
++
++    while (!expired) {
++        main_loop_wait(false);
++    }
++
++    qemu_free_timer(timer);
++
++    return 0;
++}
++
++static const cmdinfo_t sleep_cmd = {
++       .name           = "sleep",
++       .argmin         = 1,
++       .argmax         = 1,
++       .cfunc          = sleep_f,
++       .flags          = CMD_NOFILE_OK,
++       .oneline        = "waits for the given value in milliseconds",
++};
++
+ static int openfile(char *name, int flags, int growable, QDict *opts)
+ {
+     Error *local_err = NULL;
+@@ -2052,6 +2093,7 @@ int main(int argc, char **argv)
+     add_command(&resume_cmd);
+     add_command(&wait_break_cmd);
+     add_command(&abort_cmd);
++    add_command(&sleep_cmd);
+ 
+     add_args_command(init_args_command);
+     add_check_command(init_check_command);
+-- 
+1.7.1
+

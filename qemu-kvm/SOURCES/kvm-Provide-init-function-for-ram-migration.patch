@@ -1,0 +1,113 @@
+From 86303381279f7c0e9d98693496d888801a503148 Mon Sep 17 00:00:00 2001
+From: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+Date: Thu, 8 May 2014 10:58:40 +0200
+Subject: [PATCH 05/31] Provide init function for ram migration
+
+RH-Author: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+Message-id: <1399546722-6350-3-git-send-email-dgilbert@redhat.com>
+Patchwork-id: 58742
+O-Subject: [RHEL7.1/RHEL7.0.z qemu-kvm PATCH 2/4] Provide init function for ram migration
+Bugzilla: 1066338
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+
+Provide ram_mig_init (like blk_mig_init) for vl.c to initialise stuff
+to do with ram migration (currently in arch_init.c).
+
+Signed-off-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Reviewed-by: Gonglei <arei.gonglei@huawei.com>
+Reviewed-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit 0d6ab3ab9149767eba192ec5ad659fd34e55a291)
+---
+ arch_init.c                   | 7 ++++++-
+ include/migration/migration.h | 2 --
+ include/sysemu/arch_init.h    | 1 +
+ vl.c                          | 3 +--
+ 4 files changed, 8 insertions(+), 5 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ arch_init.c                   |    7 ++++++-
+ include/migration/migration.h |    2 --
+ include/sysemu/arch_init.h    |    1 +
+ vl.c                          |    3 +--
+ 4 files changed, 8 insertions(+), 5 deletions(-)
+
+diff --git a/arch_init.c b/arch_init.c
+index 8641afa..37c9f6d 100644
+--- a/arch_init.c
++++ b/arch_init.c
+@@ -1099,7 +1099,7 @@ done:
+     return ret;
+ }
+ 
+-SaveVMHandlers savevm_ram_handlers = {
++static SaveVMHandlers savevm_ram_handlers = {
+     .save_live_setup = ram_save_setup,
+     .save_live_iterate = ram_save_iterate,
+     .save_live_complete = ram_save_complete,
+@@ -1108,6 +1108,11 @@ SaveVMHandlers savevm_ram_handlers = {
+     .cancel = ram_migration_cancel,
+ };
+ 
++void ram_mig_init(void)
++{
++    register_savevm_live(NULL, "ram", 0, 4, &savevm_ram_handlers, NULL);
++}
++
+ struct soundhw {
+     const char *name;
+     const char *descr;
+diff --git a/include/migration/migration.h b/include/migration/migration.h
+index 9314511..c99a67c 100644
+--- a/include/migration/migration.h
++++ b/include/migration/migration.h
+@@ -102,8 +102,6 @@ void free_xbzrle_decoded_buf(void);
+ 
+ void acct_update_position(QEMUFile *f, size_t size, bool zero);
+ 
+-extern SaveVMHandlers savevm_ram_handlers;
+-
+ uint64_t dup_mig_bytes_transferred(void);
+ uint64_t dup_mig_pages_transferred(void);
+ uint64_t skipped_mig_bytes_transferred(void);
+diff --git a/include/sysemu/arch_init.h b/include/sysemu/arch_init.h
+index be71bca..182d48d 100644
+--- a/include/sysemu/arch_init.h
++++ b/include/sysemu/arch_init.h
+@@ -29,6 +29,7 @@ extern const uint32_t arch_type;
+ void select_soundhw(const char *optarg);
+ void do_acpitable_option(const QemuOpts *opts);
+ void do_smbios_option(QemuOpts *opts);
++void ram_mig_init(void);
+ void cpudef_init(void);
+ void audio_init(void);
+ int tcg_available(void);
+diff --git a/vl.c b/vl.c
+index 51300e7..6ff06cc 100644
+--- a/vl.c
++++ b/vl.c
+@@ -4133,6 +4133,7 @@ int main(int argc, char **argv, char **envp)
+     cpu_exec_init_all();
+ 
+     blk_mig_init();
++    ram_mig_init();
+ 
+     /* open the virtual block devices */
+     if (snapshot)
+@@ -4147,8 +4148,6 @@ int main(int argc, char **argv, char **envp)
+     default_drive(default_floppy, snapshot, IF_FLOPPY, 0, FD_OPTS);
+     default_drive(default_sdcard, snapshot, IF_SD, 0, SD_OPTS);
+ 
+-    register_savevm_live(NULL, "ram", 0, 4, &savevm_ram_handlers, NULL);
+-
+     if (nb_numa_nodes > 0) {
+         int i;
+ 
+-- 
+1.7.1
+

@@ -1,0 +1,56 @@
+From 8c2d53ffb72c574d0c81e2c86115a18598e66c65 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Wed, 22 Feb 2017 12:36:26 +0100
+Subject: [PATCH 08/24] vnc: fix overflow in vnc_update_stats
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1487766986-6329-9-git-send-email-kraxel@redhat.com>
+Patchwork-id: 73975
+O-Subject: [RHEL-7.4 qemu-kvm PATCH 8/8] vnc: fix overflow in vnc_update_stats
+Bugzilla: 1377977
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Marc-André Lureau <mlureau@redhat.com>
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+
+Commit "bea60dd ui/vnc: fix potential memory corruption issues" is
+incomplete.  vnc_update_stats must calculate width and height the same
+way vnc_refresh_server_surface does it, to make sure we don't use width
+and height values larger than the qemu vnc server can handle.
+
+Commit "e22492d ui/vnc: disable adaptive update calculations if not
+needed" masks the issue in the default configuration.  It triggers only
+in case the "lossy" option is set to "on" (default is "off").
+
+Cc: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+Reviewed-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: 1485248428-575-1-git-send-email-kraxel@redhat.com
+(cherry picked from commit eebe0b7905642a986cbce7406d6ab7bf78f3e210)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ ui/vnc.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/ui/vnc.c b/ui/vnc.c
+index d0ada7e..b68918e 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -2581,8 +2581,10 @@ static int vnc_refresh_lossy_rect(VncDisplay *vd, int x, int y)
+ 
+ static int vnc_update_stats(VncDisplay *vd,  struct timeval * tv)
+ {
+-    int width = pixman_image_get_width(vd->guest.fb);
+-    int height = pixman_image_get_height(vd->guest.fb);
++    int width = MIN(pixman_image_get_width(vd->guest.fb),
++                    pixman_image_get_width(vd->server));
++    int height = MIN(pixman_image_get_height(vd->guest.fb),
++                     pixman_image_get_height(vd->server));
+     int x, y;
+     struct timeval res;
+     int has_dirty = 0;
+-- 
+1.8.3.1
+

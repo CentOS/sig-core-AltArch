@@ -1,0 +1,128 @@
+From b63bf0c1731359b15ec94c233bc5b3e11db089b4 Mon Sep 17 00:00:00 2001
+Message-Id: <b63bf0c1731359b15ec94c233bc5b3e11db089b4.1387369730.git.minovotn@redhat.com>
+In-Reply-To: <091eecc4fa42754760dfff393dabcc2b444e9693.1387369730.git.minovotn@redhat.com>
+References: <091eecc4fa42754760dfff393dabcc2b444e9693.1387369730.git.minovotn@redhat.com>
+From: Markus Armbruster <armbru@redhat.com>
+Date: Tue, 10 Dec 2013 15:29:14 +0100
+Subject: [PATCH 14/21] qapi.py: Decent syntax error reporting
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1386689361-30281-12-git-send-email-armbru@redhat.com>
+Patchwork-id: 56126
+O-Subject: [PATCH 7.0 qemu-kvm 11/18] qapi.py: Decent syntax error reporting
+Bugzilla: 997915
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Message-id: 1374939721-7876-5-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit 2caba36cc61ee3993334bc423f0852f8006fdfcf)
+---
+ scripts/qapi.py                       | 29 +++++++++++++++++++++++++++--
+ tests/qapi-schema/test-qapi.py        |  2 ++
+ tests/qapi-schema/unclosed-string.err |  2 +-
+ 3 files changed, 30 insertions(+), 3 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ scripts/qapi.py                       | 29 +++++++++++++++++++++++++++--
+ tests/qapi-schema/test-qapi.py        |  2 ++
+ tests/qapi-schema/unclosed-string.err |  2 +-
+ 3 files changed, 30 insertions(+), 3 deletions(-)
+
+diff --git a/scripts/qapi.py b/scripts/qapi.py
+index 58e315b..342d16c 100644
+--- a/scripts/qapi.py
++++ b/scripts/qapi.py
+@@ -12,6 +12,7 @@
+ # See the COPYING.LIB file in the top-level directory.
+ 
+ from ordereddict import OrderedDict
++import sys
+ 
+ builtin_types = [
+     'str', 'int', 'number', 'bool',
+@@ -34,6 +35,23 @@ builtin_type_qtypes = {
+     'uint64':   'QTYPE_QINT',
+ }
+ 
++class QAPISchemaError(Exception):
++    def __init__(self, schema, msg):
++        self.fp = schema.fp
++        self.msg = msg
++        self.line = self.col = 1
++        for ch in schema.src[0:schema.pos]:
++            if ch == '\n':
++                self.line += 1
++                self.col = 1
++            elif ch == '\t':
++                self.col = (self.col + 7) % 8 + 1
++            else:
++                self.col += 1
++
++    def __str__(self):
++        return "%s:%s:%s: %s" % (self.fp.name, self.line, self.col, self.msg)
++
+ class QAPISchema:
+ 
+     def __init__(self, fp):
+@@ -52,6 +70,7 @@ class QAPISchema:
+         while True:
+             bol = self.cursor == 0 or self.src[self.cursor-1] == '\n'
+             self.tok = self.src[self.cursor]
++            self.pos = self.cursor
+             self.cursor += 1
+             self.val = None
+ 
+@@ -66,7 +85,8 @@ class QAPISchema:
+                     ch = self.src[self.cursor]
+                     self.cursor += 1
+                     if ch == '\n':
+-                        raise Exception("Mismatched quotes")
++                        raise QAPISchemaError(self,
++                                              'Missing terminating "\'"')
+                     if esc:
+                         string += ch
+                         esc = False
+@@ -116,7 +136,12 @@ class QAPISchema:
+         return expr
+ 
+ def parse_schema(fp):
+-    schema = QAPISchema(fp)
++    try:
++        schema = QAPISchema(fp)
++    except QAPISchemaError as e:
++        print >>sys.stderr, e
++        exit(1)
++
+     exprs = []
+ 
+     for expr_eval in schema.exprs:
+diff --git a/tests/qapi-schema/test-qapi.py b/tests/qapi-schema/test-qapi.py
+index 3280eff..b3d1e1d 100644
+--- a/tests/qapi-schema/test-qapi.py
++++ b/tests/qapi-schema/test-qapi.py
+@@ -16,6 +16,8 @@ import sys
+ 
+ try:
+     exprs = parse_schema(sys.stdin)
++except SystemExit:
++    raise
+ except:
+     print >>sys.stderr, "Crashed:", sys.exc_info()[0]
+     exit(1)
+diff --git a/tests/qapi-schema/unclosed-string.err b/tests/qapi-schema/unclosed-string.err
+index 5af46c2..948d883 100644
+--- a/tests/qapi-schema/unclosed-string.err
++++ b/tests/qapi-schema/unclosed-string.err
+@@ -1 +1 @@
+-Crashed: <type 'exceptions.Exception'>
++<stdin>:1:11: Missing terminating "'"
+-- 
+1.7.11.7
+

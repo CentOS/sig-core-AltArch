@@ -1,0 +1,96 @@
+From 4aec281092b790f6a91b657c6d6293171243a187 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Fri, 29 May 2015 17:05:11 +0200
+Subject: [PATCH 1/8] qcow2: Pass discard type to qcow2_discard_clusters()
+
+Message-id: <1432919112-18076-2-git-send-email-kwolf@redhat.com>
+Patchwork-id: 65148
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 1/2] qcow2: Pass discard type to qcow2_discard_clusters()
+Bugzilla: 1208808
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+The function will be used internally instead of only being called for
+guest discard requests.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit 670df5e3b4b5ef830a7c3c970170dbfa11cbb8d2)
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-cluster.c | 8 ++++----
+ block/qcow2.c         | 2 +-
+ block/qcow2.h         | 2 +-
+ 3 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/block/qcow2-cluster.c b/block/qcow2-cluster.c
+index 67f1393..81d90d9 100644
+--- a/block/qcow2-cluster.c
++++ b/block/qcow2-cluster.c
+@@ -1333,7 +1333,7 @@ int qcow2_decompress_cluster(BlockDriverState *bs, uint64_t cluster_offset)
+  * clusters.
+  */
+ static int discard_single_l2(BlockDriverState *bs, uint64_t offset,
+-    unsigned int nb_clusters)
++    unsigned int nb_clusters, enum qcow2_discard_type type)
+ {
+     BDRVQcowState *s = bs->opaque;
+     uint64_t *l2_table;
+@@ -1362,7 +1362,7 @@ static int discard_single_l2(BlockDriverState *bs, uint64_t offset,
+         l2_table[l2_index + i] = cpu_to_be64(0);
+ 
+         /* Then decrease the refcount */
+-        qcow2_free_any_clusters(bs, old_offset, 1, QCOW2_DISCARD_REQUEST);
++        qcow2_free_any_clusters(bs, old_offset, 1, type);
+     }
+ 
+     ret = qcow2_cache_put(bs, s->l2_table_cache, (void**) &l2_table);
+@@ -1374,7 +1374,7 @@ static int discard_single_l2(BlockDriverState *bs, uint64_t offset,
+ }
+ 
+ int qcow2_discard_clusters(BlockDriverState *bs, uint64_t offset,
+-    int nb_sectors)
++    int nb_sectors, enum qcow2_discard_type type)
+ {
+     BDRVQcowState *s = bs->opaque;
+     uint64_t end_offset;
+@@ -1397,7 +1397,7 @@ int qcow2_discard_clusters(BlockDriverState *bs, uint64_t offset,
+ 
+     /* Each L2 table is handled by its own loop iteration */
+     while (nb_clusters > 0) {
+-        ret = discard_single_l2(bs, offset, nb_clusters);
++        ret = discard_single_l2(bs, offset, nb_clusters, type);
+         if (ret < 0) {
+             goto fail;
+         }
+diff --git a/block/qcow2.c b/block/qcow2.c
+index 005d513..babcb4b 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -1870,7 +1870,7 @@ static coroutine_fn int qcow2_co_discard(BlockDriverState *bs,
+ 
+     qemu_co_mutex_lock(&s->lock);
+     ret = qcow2_discard_clusters(bs, sector_num << BDRV_SECTOR_BITS,
+-        nb_sectors);
++        nb_sectors, QCOW2_DISCARD_REQUEST);
+     qemu_co_mutex_unlock(&s->lock);
+     return ret;
+ }
+diff --git a/block/qcow2.h b/block/qcow2.h
+index 1cc1ef0..9ad8aad 100644
+--- a/block/qcow2.h
++++ b/block/qcow2.h
+@@ -514,7 +514,7 @@ uint64_t qcow2_alloc_compressed_cluster_offset(BlockDriverState *bs,
+ 
+ int qcow2_alloc_cluster_link_l2(BlockDriverState *bs, QCowL2Meta *m);
+ int qcow2_discard_clusters(BlockDriverState *bs, uint64_t offset,
+-    int nb_sectors);
++    int nb_sectors, enum qcow2_discard_type type);
+ int qcow2_zero_clusters(BlockDriverState *bs, uint64_t offset, int nb_sectors);
+ 
+ int qcow2_expand_zero_clusters(BlockDriverState *bs);
+-- 
+1.8.3.1
+

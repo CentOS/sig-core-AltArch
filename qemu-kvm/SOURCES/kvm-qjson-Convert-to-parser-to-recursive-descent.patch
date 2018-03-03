@@ -1,0 +1,328 @@
+From 2975abb487a54b49246646db9aa40ee6d1beaa97 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 27 Jul 2016 07:35:08 +0200
+Subject: [PATCH 10/16] qjson: Convert to parser to recursive descent
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1469604913-12442-12-git-send-email-armbru@redhat.com>
+Patchwork-id: 71474
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 10/15] qjson: Convert to parser to recursive descent
+Bugzilla: 1276036
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+We backtrack in parse_value(), even though JSON is LL(1) and thus can
+be parsed by straightforward recursive descent.  Do exactly that.
+
+Based on an almost-correct patch from Paolo Bonzini.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Message-Id: <1448486613-17634-10-git-send-email-armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit d538b25543f4db026bb435066e2403a542522c40)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	qobject/json-parser.c
+
+Straighforward conflicts because lacking commit fc48ffc "qobject: Use
+'bool' for qbool", we still use qbool_from_int(), and we lack commit
+e549e71 "json-parser: Accept 'null' in QMP".
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+---
+ qobject/json-parser.c | 163 ++++++++++++++------------------------------------
+ 1 file changed, 46 insertions(+), 117 deletions(-)
+
+diff --git a/qobject/json-parser.c b/qobject/json-parser.c
+index 79f4173..b242fba 100644
+--- a/qobject/json-parser.c
++++ b/qobject/json-parser.c
+@@ -266,23 +266,6 @@ static QObject *parser_context_peek_token(JSONParserContext *ctxt)
+     return token;
+ }
+ 
+-static JSONParserContext parser_context_save(JSONParserContext *ctxt)
+-{
+-    JSONParserContext saved_ctxt = {0};
+-    saved_ctxt.tokens.pos = ctxt->tokens.pos;
+-    saved_ctxt.tokens.count = ctxt->tokens.count;
+-    saved_ctxt.tokens.buf = ctxt->tokens.buf;
+-    return saved_ctxt;
+-}
+-
+-static void parser_context_restore(JSONParserContext *ctxt,
+-                                   JSONParserContext saved_ctxt)
+-{
+-    ctxt->tokens.pos = saved_ctxt.tokens.pos;
+-    ctxt->tokens.count = saved_ctxt.tokens.count;
+-    ctxt->tokens.buf = saved_ctxt.tokens.buf;
+-}
+-
+ static void tokens_append_from_iter(QObject *obj, void *opaque)
+ {
+     JSONParserContext *ctxt = opaque;
+@@ -334,7 +317,6 @@ static void parser_context_free(JSONParserContext *ctxt)
+ static int parse_pair(JSONParserContext *ctxt, QDict *dict, va_list *ap)
+ {
+     QObject *key = NULL, *token = NULL, *value, *peek;
+-    JSONParserContext saved_ctxt = parser_context_save(ctxt);
+ 
+     peek = parser_context_peek_token(ctxt);
+     if (peek == NULL) {
+@@ -372,7 +354,6 @@ static int parse_pair(JSONParserContext *ctxt, QDict *dict, va_list *ap)
+     return 0;
+ 
+ out:
+-    parser_context_restore(ctxt, saved_ctxt);
+     qobject_decref(key);
+ 
+     return -1;
+@@ -382,16 +363,9 @@ static QObject *parse_object(JSONParserContext *ctxt, va_list *ap)
+ {
+     QDict *dict = NULL;
+     QObject *token, *peek;
+-    JSONParserContext saved_ctxt = parser_context_save(ctxt);
+ 
+     token = parser_context_pop_token(ctxt);
+-    if (token == NULL) {
+-        goto out;
+-    }
+-
+-    if (token_get_type(token) != JSON_LCURLY) {
+-        goto out;
+-    }
++    assert(token && token_get_type(token) == JSON_LCURLY);
+ 
+     dict = qdict_new();
+ 
+@@ -435,7 +409,6 @@ static QObject *parse_object(JSONParserContext *ctxt, va_list *ap)
+     return QOBJECT(dict);
+ 
+ out:
+-    parser_context_restore(ctxt, saved_ctxt);
+     QDECREF(dict);
+     return NULL;
+ }
+@@ -444,16 +417,9 @@ static QObject *parse_array(JSONParserContext *ctxt, va_list *ap)
+ {
+     QList *list = NULL;
+     QObject *token, *peek;
+-    JSONParserContext saved_ctxt = parser_context_save(ctxt);
+ 
+     token = parser_context_pop_token(ctxt);
+-    if (token == NULL) {
+-        goto out;
+-    }
+-
+-    if (token_get_type(token) != JSON_LSQUARE) {
+-        goto out;
+-    }
++    assert(token && token_get_type(token) == JSON_LSQUARE);
+ 
+     list = qlist_new();
+ 
+@@ -507,107 +473,70 @@ static QObject *parse_array(JSONParserContext *ctxt, va_list *ap)
+     return QOBJECT(list);
+ 
+ out:
+-    parser_context_restore(ctxt, saved_ctxt);
+     QDECREF(list);
+     return NULL;
+ }
+ 
+ static QObject *parse_keyword(JSONParserContext *ctxt)
+ {
+-    QObject *token, *ret;
+-    JSONParserContext saved_ctxt = parser_context_save(ctxt);
++    QObject *token;
+     const char *val;
+ 
+     token = parser_context_pop_token(ctxt);
+-    if (token == NULL) {
+-        goto out;
+-    }
+-
+-    if (token_get_type(token) != JSON_KEYWORD) {
+-        goto out;
+-    }
+-
++    assert(token && token_get_type(token) == JSON_KEYWORD);
+     val = token_get_value(token);
+ 
+     if (!strcmp(val, "true")) {
+-        ret = QOBJECT(qbool_from_int(true));
++        return QOBJECT(qbool_from_int(true));
+     } else if (!strcmp(val, "false")) {
+-        ret = QOBJECT(qbool_from_int(false));
+-    } else {
+-        parse_error(ctxt, token, "invalid keyword '%s'", val);
+-        goto out;
++        return QOBJECT(qbool_from_int(false));
+     }
+-
+-    return ret;
+-
+-out: 
+-    parser_context_restore(ctxt, saved_ctxt);
+-
++    parse_error(ctxt, token, "invalid keyword '%s'", val);
+     return NULL;
+ }
+ 
+ static QObject *parse_escape(JSONParserContext *ctxt, va_list *ap)
+ {
+-    QObject *token = NULL, *obj;
+-    JSONParserContext saved_ctxt = parser_context_save(ctxt);
++    QObject *token;
+     const char *val;
+ 
+     if (ap == NULL) {
+-        goto out;
++        return NULL;
+     }
+ 
+     token = parser_context_pop_token(ctxt);
+-    if (token == NULL) {
+-        goto out;
+-    }
+-
+-    if (token_get_type(token) != JSON_ESCAPE) {
+-        goto out;
+-    }
+-
++    assert(token && token_get_type(token) == JSON_ESCAPE);
+     val = token_get_value(token);
+ 
+     if (!strcmp(val, "%p")) {
+-        obj = va_arg(*ap, QObject *);
++        return va_arg(*ap, QObject *);
+     } else if (!strcmp(val, "%i")) {
+-        obj = QOBJECT(qbool_from_int(va_arg(*ap, int)));
++        return QOBJECT(qbool_from_int(va_arg(*ap, int)));
+     } else if (!strcmp(val, "%d")) {
+-        obj = QOBJECT(qint_from_int(va_arg(*ap, int)));
++        return QOBJECT(qint_from_int(va_arg(*ap, int)));
+     } else if (!strcmp(val, "%ld")) {
+-        obj = QOBJECT(qint_from_int(va_arg(*ap, long)));
++        return QOBJECT(qint_from_int(va_arg(*ap, long)));
+     } else if (!strcmp(val, "%lld") ||
+                !strcmp(val, "%I64d")) {
+-        obj = QOBJECT(qint_from_int(va_arg(*ap, long long)));
++        return QOBJECT(qint_from_int(va_arg(*ap, long long)));
+     } else if (!strcmp(val, "%s")) {
+-        obj = QOBJECT(qstring_from_str(va_arg(*ap, const char *)));
++        return QOBJECT(qstring_from_str(va_arg(*ap, const char *)));
+     } else if (!strcmp(val, "%f")) {
+-        obj = QOBJECT(qfloat_from_double(va_arg(*ap, double)));
+-    } else {
+-        goto out;
++        return QOBJECT(qfloat_from_double(va_arg(*ap, double)));
+     }
+-
+-    return obj;
+-
+-out:
+-    parser_context_restore(ctxt, saved_ctxt);
+-
+     return NULL;
+ }
+ 
+ static QObject *parse_literal(JSONParserContext *ctxt)
+ {
+-    QObject *token, *obj;
+-    JSONParserContext saved_ctxt = parser_context_save(ctxt);
++    QObject *token;
+ 
+     token = parser_context_pop_token(ctxt);
+-    if (token == NULL) {
+-        goto out;
+-    }
++    assert(token);
+ 
+     switch (token_get_type(token)) {
+     case JSON_STRING:
+-        obj = QOBJECT(qstring_from_escaped_str(ctxt, token));
+-        break;
++        return QOBJECT(qstring_from_escaped_str(ctxt, token));
+     case JSON_INTEGER: {
+         /* A possibility exists that this is a whole-valued float where the
+          * fractional part was left out due to being 0 (.0). It's not a big
+@@ -626,46 +555,46 @@ static QObject *parse_literal(JSONParserContext *ctxt)
+         errno = 0; /* strtoll doesn't set errno on success */
+         value = strtoll(token_get_value(token), NULL, 10);
+         if (errno != ERANGE) {
+-            obj = QOBJECT(qint_from_int(value));
+-            break;
++            return QOBJECT(qint_from_int(value));
+         }
+         /* fall through to JSON_FLOAT */
+     }
+     case JSON_FLOAT:
+         /* FIXME dependent on locale */
+-        obj = QOBJECT(qfloat_from_double(strtod(token_get_value(token), NULL)));
+-        break;
++        return QOBJECT(qfloat_from_double(strtod(token_get_value(token),
++                                                 NULL)));
+     default:
+-        goto out;
++        abort();
+     }
+-
+-    return obj;
+-
+-out:
+-    parser_context_restore(ctxt, saved_ctxt);
+-
+-    return NULL;
+ }
+ 
+ static QObject *parse_value(JSONParserContext *ctxt, va_list *ap)
+ {
+-    QObject *obj;
++    QObject *token;
+ 
+-    obj = parse_object(ctxt, ap);
+-    if (obj == NULL) {
+-        obj = parse_array(ctxt, ap);
+-    }
+-    if (obj == NULL) {
+-        obj = parse_escape(ctxt, ap);
+-    }
+-    if (obj == NULL) {
+-        obj = parse_keyword(ctxt);
+-    } 
+-    if (obj == NULL) {
+-        obj = parse_literal(ctxt);
++    token = parser_context_peek_token(ctxt);
++    if (token == NULL) {
++        parse_error(ctxt, NULL, "premature EOI");
++        return NULL;
+     }
+ 
+-    return obj;
++    switch (token_get_type(token)) {
++    case JSON_LCURLY:
++        return parse_object(ctxt, ap);
++    case JSON_LSQUARE:
++        return parse_array(ctxt, ap);
++    case JSON_ESCAPE:
++        return parse_escape(ctxt, ap);
++    case JSON_INTEGER:
++    case JSON_FLOAT:
++    case JSON_STRING:
++        return parse_literal(ctxt);
++    case JSON_KEYWORD:
++        return parse_keyword(ctxt);
++    default:
++        parse_error(ctxt, token, "expecting value");
++        return NULL;
++    }
+ }
+ 
+ QObject *json_parser_parse(QList *tokens, va_list *ap)
+-- 
+1.8.3.1
+

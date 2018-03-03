@@ -1,0 +1,69 @@
+From 38d5e0867780e352a3890792f684594deb7afd7e Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sun, 19 Jan 2014 18:07:55 +0100
+Subject: [PATCH 21/34] blockdev: use bdrv_getlength() in qmp_drive_mirror()
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1390154881-17140-2-git-send-email-mreitz@redhat.com>
+Patchwork-id: 56814
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 1/7] blockdev: use bdrv_getlength() in qmp_drive_mirror()
+Bugzilla: 921890
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+From: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 921890
+
+Use bdrv_getlength() for its byte units and error return instead of
+bdrv_get_geometry().
+
+Reported-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit ac3c5d831aa0ff796659300e186be1a35862dbd3)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ blockdev.c | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev.c |   10 +++++++---
+ 1 files changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index 33a5f5f..0ba2504 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -1541,7 +1541,7 @@ void qmp_drive_mirror(const char *device, const char *target,
+     BlockDriver *drv = NULL;
+     Error *local_err = NULL;
+     int flags;
+-    uint64_t size;
++    int64_t size;
+     int ret;
+ 
+     if (!has_speed) {
+@@ -1605,8 +1605,12 @@ void qmp_drive_mirror(const char *device, const char *target,
+         sync = MIRROR_SYNC_MODE_FULL;
+     }
+ 
+-    bdrv_get_geometry(bs, &size);
+-    size *= 512;
++    size = bdrv_getlength(bs);
++    if (size < 0) {
++        error_setg_errno(errp, -size, "bdrv_getlength failed");
++        return;
++    }
++
+     if (sync == MIRROR_SYNC_MODE_FULL && mode != NEW_IMAGE_MODE_EXISTING) {
+         /* create new image w/o backing file */
+         assert(format && drv);
+-- 
+1.7.1
+

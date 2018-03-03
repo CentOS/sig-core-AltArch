@@ -1,0 +1,110 @@
+From 80dd2cb01a00e19e5227955e31fcfebbfcec1f85 Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Wed, 31 Jul 2013 08:04:57 +0200
+Subject: pc: Add machine type "rhel6.1.0"
+
+Message-id: <1375201922-6794-11-git-send-email-armbru@redhat.com>
+Patchwork-id: 52822
+O-Subject: [RHEL-7 PATCH v3 10/15] pc: Add machine type "rhel6.1.0"
+Bugzilla: 983991
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Match RHEL-6's compat_props qxl.revision, qxl-vga.revision,
+VGA.rombar.
+
+RHEL-6's vmware-svga.rombar isn't needed, as we won't ship the device.
+
+RHEL-6's non-upstream virtio-serial-pci.flow_control isn't needed.
+RHEL-6 has it to enable migration back to RHEL-6.0 (see qemu-kvm-rhel6
+commit 975ced4), which isn't relevant in RHEL-7.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index e48545b..4ab39cd 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -777,7 +777,7 @@ static QEMUMachine pc_machine_rhel700 = {
+     DEFAULT_MACHINE_OPTIONS,
+ };
+ 
+-#define PC_RHEL6_0_COMPAT \
++#define PC_RHEL6_1_COMPAT \
+     {\
+         .driver   = "Conroe-" TYPE_X86_CPU,\
+         .property = "model",\
+@@ -870,11 +870,11 @@ static QEMUMachine pc_machine_rhel700 = {
+     },{\
+         .driver   = "qxl",\
+         .property = "revision",\
+-        .value    = stringify(1),\
++        .value    = stringify(2),\
+     },{\
+         .driver   = "qxl-vga",\
+         .property = "revision",\
+-        .value    = stringify(1),\
++        .value    = stringify(2),\
+     },{\
+         .driver   = "VGA",\
+         .property = "mmio",\
+@@ -923,6 +923,38 @@ static QEMUMachine pc_machine_rhel700 = {
+         .driver   = "AC97",\
+         .property = "use_broken_id",\
+         .value    = stringify(1),\
++    }
++
++static void pc_init_rhel610(QEMUMachineInitArgs *args)
++{
++    has_pvpanic = false;
++    disable_kvm_pv_eoi();
++    enable_compat_apic_id_mode();
++    pc_init_rhel700(args);
++}
++
++static QEMUMachine pc_machine_rhel610 = {
++    .name = "rhel6.1.0",
++    .desc = "RHEL 6.1.0 PC",
++    .init = pc_init_rhel610,
++    .max_cpus = 255,
++    .compat_props = (GlobalProperty[]) {
++        PC_RHEL6_1_COMPAT,
++        { /* end of list */ }
++    },
++    DEFAULT_MACHINE_OPTIONS,
++};
++
++#define PC_RHEL6_0_COMPAT \
++    PC_RHEL6_1_COMPAT,\
++    {\
++        .driver   = "qxl",\
++        .property = "revision",\
++        .value    = stringify(1),\
++    },{\
++        .driver   = "qxl-vga",\
++        .property = "revision",\
++        .value    = stringify(1),\
+     },{\
+         .driver   = "VGA",\
+         .property = "rombar",\
+@@ -931,10 +963,7 @@ static QEMUMachine pc_machine_rhel700 = {
+ 
+ static void pc_init_rhel600(QEMUMachineInitArgs *args)
+ {
+-    has_pvpanic = false;
+-    disable_kvm_pv_eoi();
+-    enable_compat_apic_id_mode();
+-    pc_init_rhel700(args);
++    pc_init_rhel610(args);
+ }
+ 
+ static QEMUMachine pc_machine_rhel600 = {
+@@ -952,6 +981,7 @@ static QEMUMachine pc_machine_rhel600 = {
+ static void rhel_machine_init(void)
+ {
+     qemu_register_machine(&pc_machine_rhel700);
++    qemu_register_machine(&pc_machine_rhel610);
+     qemu_register_machine(&pc_machine_rhel600);
+ }
+ 

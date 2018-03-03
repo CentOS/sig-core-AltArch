@@ -1,0 +1,117 @@
+From 707d22d6fe9d2f43d0372472b62d40ddb652385d Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:22:20 +0200
+Subject: [PATCH 26/42] qcow2: Fix refcount blocks beyond image end
+
+Message-id: <1434212556-3927-27-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66045
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 26/42] qcow2: Fix refcount blocks beyond image end
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1129893
+
+If the qcow2 check function detects a refcount block located beyond the
+image end, grow the image appropriately. This cannot break anything and
+is the logical fix for such a case.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 001c158defb65e88e6c50c85d6f20501f7149ddd)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-refcount.c | 67 +++++++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 63 insertions(+), 4 deletions(-)
+
+diff --git a/block/qcow2-refcount.c b/block/qcow2-refcount.c
+index 8f1215c..8ce0447 100644
+--- a/block/qcow2-refcount.c
++++ b/block/qcow2-refcount.c
+@@ -1545,7 +1545,7 @@ static int check_refblocks(BlockDriverState *bs, BdrvCheckResult *res,
+                            int64_t *nb_clusters)
+ {
+     BDRVQcowState *s = bs->opaque;
+-    int64_t i;
++    int64_t i, size;
+     int ret;
+ 
+     for(i = 0; i < s->refcount_table_size; i++) {
+@@ -1562,9 +1562,68 @@ static int check_refblocks(BlockDriverState *bs, BdrvCheckResult *res,
+         }
+ 
+         if (cluster >= *nb_clusters) {
+-            fprintf(stderr, "ERROR refcount block %" PRId64
+-                    " is outside image\n", i);
+-            res->corruptions++;
++            fprintf(stderr, "%s refcount block %" PRId64 " is outside image\n",
++                    fix & BDRV_FIX_ERRORS ? "Repairing" : "ERROR", i);
++
++            if (fix & BDRV_FIX_ERRORS) {
++                int64_t old_nb_clusters = *nb_clusters;
++                uint16_t *new_refcount_table;
++
++                if (offset > INT64_MAX - s->cluster_size) {
++                    ret = -EINVAL;
++                    goto resize_fail;
++                }
++
++                ret = bdrv_truncate(bs->file, offset + s->cluster_size);
++                if (ret < 0) {
++                    goto resize_fail;
++                }
++                size = bdrv_getlength(bs->file);
++                if (size < 0) {
++                    ret = size;
++                    goto resize_fail;
++                }
++
++                *nb_clusters = size_to_clusters(s, size);
++                assert(*nb_clusters >= old_nb_clusters);
++
++                new_refcount_table = g_try_realloc(*refcount_table,
++                                                   *nb_clusters *
++                                                   sizeof(**refcount_table));
++                if (!new_refcount_table) {
++                    *nb_clusters = old_nb_clusters;
++                    res->check_errors++;
++                    return -ENOMEM;
++                }
++                *refcount_table = new_refcount_table;
++
++                memset(*refcount_table + old_nb_clusters, 0,
++                       (*nb_clusters - old_nb_clusters) *
++                       sizeof(**refcount_table));
++
++                if (cluster >= *nb_clusters) {
++                    ret = -EINVAL;
++                    goto resize_fail;
++                }
++
++                res->corruptions_fixed++;
++                ret = inc_refcounts(bs, res, refcount_table, nb_clusters,
++                                    offset, s->cluster_size);
++                if (ret < 0) {
++                    return ret;
++                }
++                /* No need to check whether the refcount is now greater than 1:
++                 * This area was just allocated and zeroed, so it can only be
++                 * exactly 1 after inc_refcounts() */
++                continue;
++
++resize_fail:
++                res->corruptions++;
++                fprintf(stderr, "ERROR could not resize image: %s\n",
++                        strerror(-ret));
++            } else {
++                res->corruptions++;
++            }
+             continue;
+         }
+ 
+-- 
+1.8.3.1
+

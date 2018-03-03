@@ -1,0 +1,77 @@
+From 546f9e97d193307a2ca26c11bf1162d07cc2d31f Mon Sep 17 00:00:00 2001
+From: Michael S. Tsirkin <mst@redhat.com>
+Date: Wed, 14 May 2014 08:52:59 +0200
+Subject: [PATCH 24/31] hw/pci/pcie_aer.c: fix buffer overruns on invalid state load
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1400057538-6975-6-git-send-email-mst@redhat.com>
+Patchwork-id: 58872
+O-Subject: [PATCH qemu-kvm RHEL7.1 5/5] hw/pci/pcie_aer.c: fix buffer overruns on invalid state load
+Bugzilla: 1095716
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+
+4) CVE-2013-4529
+hw/pci/pcie_aer.c    pcie aer log can overrun the buffer if log_num is
+                     too large
+
+There are two issues in this file:
+1. log_max from remote can be larger than on local
+then buffer will overrun with data coming from state file.
+2. log_num can be larger then we get data corruption
+again with an overflow but not adversary controlled.
+
+Fix both issues.
+
+Reported-by: Anthony Liguori <anthony@codemonkey.ws>
+Reported-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Reviewed-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit 5f691ff91d323b6f97c6600405a7f9dc115a0ad1)
+
+Tested: lightly on developer's box
+Brew build: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7452039
+Bugzilla:1095716
+---
+ hw/pci/pcie_aer.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/pci/pcie_aer.c |   10 +++++++++-
+ 1 files changed, 9 insertions(+), 1 deletions(-)
+
+diff --git a/hw/pci/pcie_aer.c b/hw/pci/pcie_aer.c
+index 1ce72ce..ab5c9c6 100644
+--- a/hw/pci/pcie_aer.c
++++ b/hw/pci/pcie_aer.c
+@@ -795,6 +795,13 @@ static const VMStateDescription vmstate_pcie_aer_err = {
+     }
+ };
+ 
++static bool pcie_aer_state_log_num_valid(void *opaque, int version_id)
++{
++    PCIEAERLog *s = opaque;
++
++    return s->log_num <= s->log_max;
++}
++
+ const VMStateDescription vmstate_pcie_aer_log = {
+     .name = "PCIE_AER_ERROR_LOG",
+     .version_id = 1,
+@@ -802,7 +809,8 @@ const VMStateDescription vmstate_pcie_aer_log = {
+     .minimum_version_id_old = 1,
+     .fields     = (VMStateField[]) {
+         VMSTATE_UINT16(log_num, PCIEAERLog),
+-        VMSTATE_UINT16(log_max, PCIEAERLog),
++        VMSTATE_UINT16_EQUAL(log_max, PCIEAERLog),
++        VMSTATE_VALIDATE("log_num <= log_max", pcie_aer_state_log_num_valid),
+         VMSTATE_STRUCT_VARRAY_POINTER_UINT16(log, PCIEAERLog, log_num,
+                               vmstate_pcie_aer_err, PCIEAERErr),
+         VMSTATE_END_OF_LIST()
+-- 
+1.7.1
+

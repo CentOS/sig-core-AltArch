@@ -1,0 +1,126 @@
+From ccf8ee841c1d72d74bc4b6b54247089eb847087b Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Fri, 11 Jul 2014 14:20:34 +0200
+Subject: [PATCH 01/43] usb/hcd-xhci: QOM Upcast Sweep
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Message-id: <1405088470-24115-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 59835
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 01/37] usb/hcd-xhci: QOM Upcast Sweep
+Bugzilla: 980747
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Peter Crosthwaite <peter.crosthwaite@xilinx.com>
+
+Define and use standard QOM cast macro. Remove usages of DO_UPCAST()
+and direct -> style upcasting.
+
+Signed-off-by: Peter Crosthwaite <peter.crosthwaite@xilinx.com>
+[AF: Dropped usb_xhci_init() DeviceState argument and renamed variable]
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+
+(cherry picked from commit 37034575d23a06447e4f44ab365afec6b198c53f)
+---
+ hw/usb/hcd-xhci.c | 21 ++++++++++++++-------
+ 1 file changed, 14 insertions(+), 7 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/hcd-xhci.c | 21 ++++++++++++++-------
+ 1 file changed, 14 insertions(+), 7 deletions(-)
+
+diff --git a/hw/usb/hcd-xhci.c b/hw/usb/hcd-xhci.c
+index 2c9e36a..8fa1c6e 100644
+--- a/hw/usb/hcd-xhci.c
++++ b/hw/usb/hcd-xhci.c
+@@ -485,6 +485,11 @@ struct XHCIState {
+     XHCIRing cmd_ring;
+ };
+ 
++#define TYPE_XHCI "nec-usb-xhci"
++
++#define XHCI(obj) \
++    OBJECT_CHECK(XHCIState, (obj), TYPE_XHCI)
++
+ typedef struct XHCIEvRingSeg {
+     uint32_t addr_low;
+     uint32_t addr_high;
+@@ -2719,7 +2724,7 @@ static void xhci_port_reset(XHCIPort *port, bool warm_reset)
+ 
+ static void xhci_reset(DeviceState *dev)
+ {
+-    XHCIState *xhci = DO_UPCAST(XHCIState, pci_dev.qdev, dev);
++    XHCIState *xhci = XHCI(dev);
+     int i;
+ 
+     trace_usb_xhci_reset();
+@@ -2968,6 +2973,7 @@ static void xhci_oper_write(void *ptr, hwaddr reg,
+                             uint64_t val, unsigned size)
+ {
+     XHCIState *xhci = ptr;
++    DeviceState *d = DEVICE(ptr);
+ 
+     trace_usb_xhci_oper_write(reg, val);
+ 
+@@ -2989,7 +2995,7 @@ static void xhci_oper_write(void *ptr, hwaddr reg,
+         xhci->usbcmd = val & 0xc0f;
+         xhci_mfwrap_update(xhci);
+         if (val & USBCMD_HCRST) {
+-            xhci_reset(&xhci->pci_dev.qdev);
++            xhci_reset(d);
+         }
+         xhci_intx_update(xhci);
+         break;
+@@ -3315,8 +3321,9 @@ static USBBusOps xhci_bus_ops = {
+     .wakeup_endpoint = xhci_wakeup_endpoint,
+ };
+ 
+-static void usb_xhci_init(XHCIState *xhci, DeviceState *dev)
++static void usb_xhci_init(XHCIState *xhci)
+ {
++    DeviceState *dev = DEVICE(xhci);
+     XHCIPort *port;
+     int i, usbports, speedmask;
+ 
+@@ -3331,7 +3338,7 @@ static void usb_xhci_init(XHCIState *xhci, DeviceState *dev)
+     usbports = MAX(xhci->numports_2, xhci->numports_3);
+     xhci->numports = xhci->numports_2 + xhci->numports_3;
+ 
+-    usb_bus_new(&xhci->bus, &xhci_bus_ops, &xhci->pci_dev.qdev);
++    usb_bus_new(&xhci->bus, &xhci_bus_ops, dev);
+ 
+     for (i = 0; i < usbports; i++) {
+         speedmask = 0;
+@@ -3363,14 +3370,14 @@ static int usb_xhci_initfn(struct PCIDevice *dev)
+ {
+     int i, ret;
+ 
+-    XHCIState *xhci = DO_UPCAST(XHCIState, pci_dev, dev);
++    XHCIState *xhci = XHCI(dev);
+ 
+     xhci->pci_dev.config[PCI_CLASS_PROG] = 0x30;    /* xHCI */
+     xhci->pci_dev.config[PCI_INTERRUPT_PIN] = 0x01; /* interrupt pin 1 */
+     xhci->pci_dev.config[PCI_CACHE_LINE_SIZE] = 0x10;
+     xhci->pci_dev.config[0x60] = 0x30; /* release number */
+ 
+-    usb_xhci_init(xhci, &dev->qdev);
++    usb_xhci_init(xhci);
+ 
+     if (xhci->numintrs > MAXINTRS) {
+         xhci->numintrs = MAXINTRS;
+@@ -3644,7 +3651,7 @@ static void xhci_class_init(ObjectClass *klass, void *data)
+ }
+ 
+ static const TypeInfo xhci_info = {
+-    .name          = "nec-usb-xhci",
++    .name          = TYPE_XHCI,
+     .parent        = TYPE_PCI_DEVICE,
+     .instance_size = sizeof(XHCIState),
+     .class_init    = xhci_class_init,
+-- 
+1.8.3.1
+

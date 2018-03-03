@@ -1,0 +1,94 @@
+From 7262d3c7280343601ab3b0be0d469ffb867b86d7 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Fri, 31 Oct 2014 16:29:55 +0100
+Subject: [PATCH 18/19] ide: Treat read/write beyond end as invalid
+
+Message-id: <1414772996-17272-5-git-send-email-armbru@redhat.com>
+Patchwork-id: 62015
+O-Subject: [PATCH RHEL-7.1 qemu-kvm 4/5] ide: Treat read/write beyond end as invalid
+Bugzilla: 1085232
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+The block layer fails such reads and writes just fine.  However, they
+then get treated like valid operations that fail: the error action
+gets executed.  Unwanted; reporting the error to the guest is the only
+sensible action.
+
+Reject them before passing them to the block layer.  This bypasses the
+error action and I/O accounting.  Not quite correct for DMA, because
+DMA can fail after some success, and when that happens, the part that
+succeeded isn't counted.  Tolerable, because I/O accounting is an
+inconsistent mess anyway.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 58ac321135af890b503ebe56d0d00e184779918f)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/ide/core.c | 28 ++++++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/hw/ide/core.c b/hw/ide/core.c
+index 98128fb..4c36f52 100644
+--- a/hw/ide/core.c
++++ b/hw/ide/core.c
+@@ -513,6 +513,18 @@ static void ide_rw_error(IDEState *s) {
+     ide_set_irq(s->bus);
+ }
+ 
++static bool ide_sect_range_ok(IDEState *s,
++                              uint64_t sector, uint64_t nb_sectors)
++{
++    uint64_t total_sectors;
++
++    bdrv_get_geometry(s->bs, &total_sectors);
++    if (sector > total_sectors || nb_sectors > total_sectors - sector) {
++        return false;
++    }
++    return true;
++}
++
+ static void ide_sector_read_cb(void *opaque, int ret)
+ {
+     IDEState *s = opaque;
+@@ -568,6 +580,11 @@ void ide_sector_read(IDEState *s)
+     printf("sector=%" PRId64 "\n", sector_num);
+ #endif
+ 
++    if (!ide_sect_range_ok(s, sector_num, n)) {
++        ide_rw_error(s);
++        return;
++    }
++
+     s->iov.iov_base = s->io_buffer;
+     s->iov.iov_len  = n * BDRV_SECTOR_SIZE;
+     qemu_iovec_init_external(&s->qiov, &s->iov, 1);
+@@ -685,6 +702,12 @@ void ide_dma_cb(void *opaque, int ret)
+            sector_num, n, s->dma_cmd);
+ #endif
+ 
++    if (!ide_sect_range_ok(s, sector_num, n)) {
++        dma_buf_commit(s);
++        ide_dma_error(s);
++        return;
++    }
++
+     switch (s->dma_cmd) {
+     case IDE_DMA_READ:
+         s->bus->dma->aiocb = dma_bdrv_read(s->bs, &s->sg, sector_num,
+@@ -804,6 +827,11 @@ void ide_sector_write(IDEState *s)
+         n = s->req_nb_sectors;
+     }
+ 
++    if (!ide_sect_range_ok(s, sector_num, n)) {
++        ide_rw_error(s);
++        return;
++    }
++
+     s->iov.iov_base = s->io_buffer;
+     s->iov.iov_len  = n * BDRV_SECTOR_SIZE;
+     qemu_iovec_init_external(&s->qiov, &s->iov, 1);
+-- 
+1.8.3.1
+

@@ -1,0 +1,134 @@
+From 8683104151659e4d210bdeb2eaf9da667b005fd2 Mon Sep 17 00:00:00 2001
+From: Juan Quintela <quintela@redhat.com>
+Date: Tue, 14 Jan 2014 15:07:39 +0100
+Subject: [PATCH 28/40] memory: s/dirty/clean/ in cpu_physical_memory_is_dirty()
+
+RH-Author: Juan Quintela <quintela@redhat.com>
+Message-id: <1389712071-23303-29-git-send-email-quintela@redhat.com>
+Patchwork-id: 56682
+O-Subject: [RHEL7 qemu-kvm PATCH 28/40] memory: s/dirty/clean/ in cpu_physical_memory_is_dirty()
+Bugzilla: 997559
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+
+All uses except one really want the other meaning.
+
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Orit Wasserman <owasserm@redhat.com>
+(cherry picked from commit a2cd8c852d2d8c2a084b68b2470f214d6726f6d2)
+
+Conflicts:
+	cputlb.c
+	exec.c
+
+Missing upstream commit:
+
+commit 149f54b53b7666a3facd45e86eece60ce7d3b114
+Author: Paolo Bonzini <pbonzini@redhat.com>
+Date:   Fri May 24 12:59:37 2013 +0200
+
+    memory: add address_space_translate
+
+and
+
+commit 0cac1b66c88c4cd3ec1d358091486787837215a3
+Author: Blue Swirl <blauwirbel@gmail.com>
+Date:   Mon Apr 9 16:50:52 2012 +0000
+
+    cputlb: move TLB handling to a separate file
+
+is what remove tlb_udate_dirty() that we have to change
+
+Signed-off-by: Juan Quintela <quintela@trasno.org>
+---
+ cputlb.c                       | 4 ++--
+ exec.c                         | 6 +++---
+ include/exec/memory-internal.h | 5 ++---
+ 3 files changed, 7 insertions(+), 8 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ cputlb.c                       |    4 ++--
+ exec.c                         |    6 +++---
+ include/exec/memory-internal.h |    5 ++---
+ 3 files changed, 7 insertions(+), 8 deletions(-)
+
+diff --git a/cputlb.c b/cputlb.c
+index 9c89c01..04d7f14 100644
+--- a/cputlb.c
++++ b/cputlb.c
+@@ -167,7 +167,7 @@ static inline void tlb_update_dirty(CPUTLBEntry *tlb_entry)
+         p = (void *)(uintptr_t)((tlb_entry->addr_write & TARGET_PAGE_MASK)
+             + tlb_entry->addend);
+         ram_addr = qemu_ram_addr_from_host_nofail(p);
+-        if (!cpu_physical_memory_is_dirty(ram_addr)) {
++        if (cpu_physical_memory_is_clean(ram_addr)) {
+             tlb_entry->addr_write |= TLB_NOTDIRTY;
+         }
+     }
+@@ -300,7 +300,7 @@ void tlb_set_page(CPUArchState *env, target_ulong vaddr,
+             /* Write access calls the I/O callback.  */
+             te->addr_write = address | TLB_MMIO;
+         } else if (memory_region_is_ram(section->mr)
+-                   && !cpu_physical_memory_is_dirty(
++                   && cpu_physical_memory_is_clean(
+                            section->mr->ram_addr
+                            + memory_region_section_addr(section, paddr))) {
+             te->addr_write = address | TLB_NOTDIRTY;
+diff --git a/exec.c b/exec.c
+index 77c2a0a..ec01b0f 100644
+--- a/exec.c
++++ b/exec.c
+@@ -1509,7 +1509,7 @@ static void notdirty_mem_write(void *opaque, hwaddr ram_addr,
+     cpu_physical_memory_set_dirty_flag(ram_addr, DIRTY_MEMORY_VGA);
+     /* we remove the notdirty callback only if the code has been
+        flushed */
+-    if (cpu_physical_memory_is_dirty(ram_addr))
++    if (!cpu_physical_memory_is_clean(ram_addr))
+         tlb_set_dirty(cpu_single_env, cpu_single_env->mem_io_vaddr);
+ }
+ 
+@@ -1924,7 +1924,7 @@ int cpu_memory_rw_debug(CPUArchState *env, target_ulong addr,
+ static void invalidate_and_set_dirty(hwaddr addr,
+                                      hwaddr length)
+ {
+-    if (!cpu_physical_memory_is_dirty(addr)) {
++    if (cpu_physical_memory_is_clean(addr)) {
+         /* invalidate code */
+         tb_invalidate_phys_page_range(addr, addr + length, 0);
+         /* set dirty bit */
+@@ -2440,7 +2440,7 @@ void stl_phys_notdirty(hwaddr addr, uint32_t val)
+         stl_p(ptr, val);
+ 
+         if (unlikely(in_migration)) {
+-            if (!cpu_physical_memory_is_dirty(addr1)) {
++            if (cpu_physical_memory_is_clean(addr1)) {
+                 /* invalidate code */
+                 tb_invalidate_phys_page_range(addr1, addr1 + 4, 0);
+                 /* set dirty bit */
+diff --git a/include/exec/memory-internal.h b/include/exec/memory-internal.h
+index 94bd6af..416ce86 100644
+--- a/include/exec/memory-internal.h
++++ b/include/exec/memory-internal.h
+@@ -70,14 +70,13 @@ static inline bool cpu_physical_memory_get_dirty_flag(ram_addr_t addr,
+     return cpu_physical_memory_get_dirty(addr, 1, client);
+ }
+ 
+-/* read dirty bit (return 0 or 1) */
+-static inline bool cpu_physical_memory_is_dirty(ram_addr_t addr)
++static inline bool cpu_physical_memory_is_clean(ram_addr_t addr)
+ {
+     bool vga = cpu_physical_memory_get_dirty_flag(addr, DIRTY_MEMORY_VGA);
+     bool code = cpu_physical_memory_get_dirty_flag(addr, DIRTY_MEMORY_CODE);
+     bool migration =
+         cpu_physical_memory_get_dirty_flag(addr, DIRTY_MEMORY_MIGRATION);
+-    return vga && code && migration;
++    return !(vga && code && migration);
+ }
+ 
+ static inline void cpu_physical_memory_set_dirty_flag(ram_addr_t addr,
+-- 
+1.7.1
+

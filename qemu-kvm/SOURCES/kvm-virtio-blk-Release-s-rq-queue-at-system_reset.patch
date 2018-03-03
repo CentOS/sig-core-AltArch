@@ -1,0 +1,68 @@
+From 200748826a6069c31f5004dde00614675bac659b Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Tue, 7 Feb 2017 09:21:53 +0100
+Subject: [PATCH 02/11] virtio-blk: Release s->rq queue at system_reset
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <20170207092153.8331-1-famz@redhat.com>
+Patchwork-id: 73553
+O-Subject: [RHEL-7.4 qemu-kvm PATCH] virtio-blk: Release s->rq queue at system_reset
+Bugzilla: 1361488
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+At system_reset, there is no point in retrying the queued request,
+because the driver that issued the request won't be around any more.
+
+Analyzed-by: Laszlo Ersek <lersek@redhat.com>
+Reported-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Message-id: 1470278654-13525-2-git-send-email-famz@redhat.com
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 26307f6aa451708b8c60a49d605a78bbd29f70ef)
+
+ Conflicts:
+	hw/block/virtio-blk.c
+
+The context is different. The hunk is placed below bdrv_drain_all() with
+the comment updated to match downstream.
+
+There is no virtio_blk_free_request in qemu-kvm in RHEL 7, use g_free().
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/block/virtio-blk.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/hw/block/virtio-blk.c b/hw/block/virtio-blk.c
+index 4f6aa22..462ac81 100644
+--- a/hw/block/virtio-blk.c
++++ b/hw/block/virtio-blk.c
+@@ -474,6 +474,7 @@ static void virtio_blk_dma_restart_cb(void *opaque, int running,
+ static void virtio_blk_reset(VirtIODevice *vdev)
+ {
+     VirtIOBlock *s = VIRTIO_BLK(vdev);
++    VirtIOBlockReq *req;
+ 
+ #ifdef CONFIG_VIRTIO_BLK_DATA_PLANE
+     if (s->dataplane) {
+@@ -487,6 +488,13 @@ static void virtio_blk_reset(VirtIODevice *vdev)
+      */
+     bdrv_drain_all();
+     bdrv_set_enable_write_cache(s->bs, s->original_wce);
++    /* We drop queued requests after bdrv_drain_all() because bdrv_drain_all()
++     * itself can produce them. */
++    while (s->rq) {
++        req = s->rq;
++        s->rq = req->next;
++        g_free(req);
++    }
+ }
+ 
+ /* coalesce internal state, copy to pci i/o region 0
+-- 
+1.8.3.1
+

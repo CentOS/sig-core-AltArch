@@ -1,0 +1,218 @@
+From 3ca6e2a4a1ecd9515eda8ebe400e0791a227fb79 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Thu, 23 Oct 2014 10:10:09 +0200
+Subject: [PATCH 05/19] qemu-iotests: Test a few blockdev-add error cases
+
+Message-id: <1414059011-15516-7-git-send-email-kwolf@redhat.com>
+Patchwork-id: 61841
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v2 6/8] qemu-iotests: Test a few blockdev-add error cases
+Bugzilla: 1088176
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+(cherry picked from commit c75203c8d343dc71d95144862bbb47290689c455)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	tests/qemu-iotests/group
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ tests/qemu-iotests/087     | 122 +++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/087.out |  40 +++++++++++++++
+ tests/qemu-iotests/group   |   1 +
+ 3 files changed, 163 insertions(+)
+ create mode 100755 tests/qemu-iotests/087
+ create mode 100644 tests/qemu-iotests/087.out
+
+diff --git a/tests/qemu-iotests/087 b/tests/qemu-iotests/087
+new file mode 100755
+index 0000000..53b6c43
+--- /dev/null
++++ b/tests/qemu-iotests/087
+@@ -0,0 +1,122 @@
++#!/bin/bash
++#
++# Test unsupported blockdev-add cases
++#
++# Copyright (C) 2014 Red Hat, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++
++# creator
++owner=kwolf@redhat.com
++
++seq=`basename $0`
++echo "QA output created by $seq"
++
++here=`pwd`
++tmp=/tmp/$$
++status=1	# failure is the default!
++
++# get standard environment, filters and checks
++. ./common.rc
++. ./common.filter
++
++_supported_fmt qcow2
++_supported_proto file
++_supported_os Linux
++
++function do_run_qemu()
++{
++    echo Testing: "$@"
++    $QEMU -nographic -qmp stdio -serial none "$@"
++    echo
++}
++
++function run_qemu()
++{
++    do_run_qemu "$@" 2>&1 | _filter_testdir | _filter_qmp | sed -e 's/\("actual-size":\s*\)[0-9]\+/\1SIZE/g'
++}
++
++size=128M
++
++_make_test_img $size
++
++echo
++echo === Missing ID ===
++echo
++
++run_qemu <<EOF
++{ "execute": "qmp_capabilities" }
++{ "execute": "blockdev-add",
++  "arguments": {
++      "options": {
++        "driver": "$IMGFMT",
++        "file": {
++            "driver": "file",
++            "filename": "$TEST_IMG"
++        }
++      }
++    }
++  }
++{ "execute": "quit" }
++EOF
++
++echo
++echo === aio=native without O_DIRECT ===
++echo
++
++run_qemu <<EOF
++{ "execute": "qmp_capabilities" }
++{ "execute": "blockdev-add",
++  "arguments": {
++      "options": {
++        "driver": "$IMGFMT",
++        "id": "disk",
++        "aio": "native",
++        "file": {
++            "driver": "file",
++            "filename": "$TEST_IMG"
++        }
++      }
++    }
++  }
++{ "execute": "quit" }
++EOF
++
++echo
++echo === Encrypted image ===
++echo
++
++_make_test_img -o encryption=on $size
++run_qemu <<EOF
++{ "execute": "qmp_capabilities" }
++{ "execute": "blockdev-add",
++  "arguments": {
++      "options": {
++        "driver": "$IMGFMT",
++        "id": "disk",
++        "file": {
++            "driver": "file",
++            "filename": "$TEST_IMG"
++        }
++      }
++    }
++  }
++{ "execute": "quit" }
++EOF
++
++# success, all done
++echo "*** done"
++rm -f $seq.full
++status=0
+diff --git a/tests/qemu-iotests/087.out b/tests/qemu-iotests/087.out
+new file mode 100644
+index 0000000..b871032
+--- /dev/null
++++ b/tests/qemu-iotests/087.out
+@@ -0,0 +1,40 @@
++QA output created by 087
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=134217728 
++
++=== Missing ID ===
++
++Testing:
++QMP_VERSION
++{"return": {}}
++{"error": {"class": "GenericError", "desc": "Block device needs an ID"}}
++{"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN"}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_TRAY_MOVED", "data": {"device": "ide1-cd0", "tray-open": true}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_TRAY_MOVED", "data": {"device": "floppy0", "tray-open": true}}
++
++
++=== aio=native without O_DIRECT ===
++
++Testing:
++QMP_VERSION
++{"return": {}}
++{"error": {"class": "GenericError", "desc": "aio=native requires cache.direct=true"}}
++{"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN"}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_TRAY_MOVED", "data": {"device": "ide1-cd0", "tray-open": true}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_TRAY_MOVED", "data": {"device": "floppy0", "tray-open": true}}
++
++
++=== Encrypted image ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=134217728 encryption=on 
++Testing:
++QMP_VERSION
++{"return": {}}
++{"error": {"class": "GenericError", "desc": "blockdev-add doesn't support encrypted devices"}}
++{"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN"}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_TRAY_MOVED", "data": {"device": "ide1-cd0", "tray-open": true}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_TRAY_MOVED", "data": {"device": "floppy0", "tray-open": true}}
++
++*** done
+diff --git a/tests/qemu-iotests/group b/tests/qemu-iotests/group
+index e588404..3fad61d 100644
+--- a/tests/qemu-iotests/group
++++ b/tests/qemu-iotests/group
+@@ -81,5 +81,6 @@
+ 082 rw auto quick
+ 084 img auto
+ 086 rw auto quick
++087 rw auto quick
+ 088 rw auto
+ 092 rw auto quick
+-- 
+1.8.3.1
+

@@ -1,0 +1,73 @@
+From bf9dd867ef8d4164685cac6451e88b6c32b190b1 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 15 Feb 2016 09:28:15 +0100
+Subject: [PATCH 02/18] vmdk: Use g_random_int to generate CID
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1455528511-9357-3-git-send-email-famz@redhat.com>
+Patchwork-id: 69168
+O-Subject: [RHEL-7.3 qemu-kvm PATCH 02/18] vmdk: Use g_random_int to generate CID
+Bugzilla: 1299250
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+BZ: https://bugzilla.redhat.com/show_bug.cgi?id=1299250
+
+This replaces two "time(NULL)" invocations with "g_random_int()".
+According to VMDK spec, CID "is a random 32‐bit value updated the first
+time the content of the virtual disk is modified after the virtual disk
+is opened". Using "seconds since epoch" is just a "lame way" to generate
+it, and not completely safe because of the low precision.
+
+Suggested-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Don Koch <dkoch@verizon.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Message-id: 1417649314-13704-2-git-send-email-famz@redhat.com
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit e5dc64b8ff09cc4c186273e4461c7479739db2ae)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vmdk.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index fa53d2f..a9f5bab 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -28,6 +28,7 @@
+ #include "qemu/module.h"
+ #include "migration/migration.h"
+ #include <zlib.h>
++#include <glib.h>
+ 
+ #define VMDK3_MAGIC (('C' << 24) | ('O' << 16) | ('W' << 8) | 'D')
+ #define VMDK4_MAGIC (('K' << 24) | ('D' << 16) | ('M' << 8) | 'V')
+@@ -1540,7 +1541,7 @@ static int vmdk_write(BlockDriverState *bs, int64_t sector_num,
+         /* update CID on the first write every time the virtual disk is
+          * opened */
+         if (!s->cid_updated) {
+-            ret = vmdk_write_cid(bs, time(NULL));
++            ret = vmdk_write_cid(bs, g_random_int());
+             if (ret < 0) {
+                 return ret;
+             }
+@@ -1927,7 +1928,7 @@ static int vmdk_create(const char *filename, QEMUOptionParameter *options,
+     }
+     /* generate descriptor file */
+     desc = g_strdup_printf(desc_template,
+-                           (uint32_t)time(NULL),
++                           g_random_int(),
+                            parent_cid,
+                            fmt,
+                            parent_desc_line,
+-- 
+1.8.3.1
+

@@ -1,0 +1,104 @@
+From d9420445fe0b78de91dc8615a61b973ed64e4f78 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 9 Sep 2013 14:27:57 +0200
+Subject: [PATCH 06/38] blockdev: drop redundant proto_drv check
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1378736903-18489-7-git-send-email-kwolf@redhat.com>
+Patchwork-id: 54193
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 06/32] blockdev: drop redundant proto_drv check
+Bugzilla: 1005818
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Stefan Hajnoczi <stefanha@redhat.com>
+
+Bugzilla: 1005818
+
+It is not necessary to check that we can find a protocol block driver
+since we create or open the image file.  This produces the error that we
+need anyway.
+
+Besides, the QERR_INVALID_BLOCK_FORMAT is inappropriate since the
+protocol is incorrect rather than the format.
+
+Also drop an empty line between bdrv_open() and checking its return
+value.  This may be due to copy-pasting from earlier code that performed
+other operations before handling errors.
+
+Reported-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Wenchao Xia <xiawenc@linux.vnet.ibm.com>
+Reviewed-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit cb78466ef60ccf707a6f38a1294c435b65a828e0)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ blockdev.c | 15 ---------------
+ 1 file changed, 15 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev.c |   15 ---------------
+ 1 files changed, 0 insertions(+), 15 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index b8521c7..1f405c9 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -818,7 +818,6 @@ typedef struct ExternalSnapshotStates {
+ static void external_snapshot_prepare(BlkTransactionStates *common,
+                                       Error **errp)
+ {
+-    BlockDriver *proto_drv;
+     BlockDriver *drv;
+     int flags, ret;
+     Error *local_err = NULL;
+@@ -874,12 +873,6 @@ static void external_snapshot_prepare(BlkTransactionStates *common,
+ 
+     flags = states->old_bs->open_flags;
+ 
+-    proto_drv = bdrv_find_protocol(new_image_file);
+-    if (!proto_drv) {
+-        error_set(errp, QERR_INVALID_BLOCK_FORMAT, format);
+-        return;
+-    }
+-
+     /* create new image w/backing file */
+     if (mode != NEW_IMAGE_MODE_EXISTING) {
+         bdrv_img_create(new_image_file, format,
+@@ -1372,7 +1365,6 @@ void qmp_drive_mirror(const char *device, const char *target,
+ {
+     BlockDriverState *bs;
+     BlockDriverState *source, *target_bs;
+-    BlockDriver *proto_drv;
+     BlockDriver *drv = NULL;
+     Error *local_err = NULL;
+     int flags;
+@@ -1440,12 +1432,6 @@ void qmp_drive_mirror(const char *device, const char *target,
+         sync = MIRROR_SYNC_MODE_FULL;
+     }
+ 
+-    proto_drv = bdrv_find_protocol(target);
+-    if (!proto_drv) {
+-        error_set(errp, QERR_INVALID_BLOCK_FORMAT, format);
+-        return;
+-    }
+-
+     bdrv_get_geometry(bs, &size);
+     size *= 512;
+     if (sync == MIRROR_SYNC_MODE_FULL && mode != NEW_IMAGE_MODE_EXISTING) {
+@@ -1480,7 +1466,6 @@ void qmp_drive_mirror(const char *device, const char *target,
+      */
+     target_bs = bdrv_new("");
+     ret = bdrv_open(target_bs, target, NULL, flags | BDRV_O_NO_BACKING, drv);
+-
+     if (ret < 0) {
+         bdrv_delete(target_bs);
+         error_set(errp, QERR_OPEN_FILE_FAILED, target);
+-- 
+1.7.1
+

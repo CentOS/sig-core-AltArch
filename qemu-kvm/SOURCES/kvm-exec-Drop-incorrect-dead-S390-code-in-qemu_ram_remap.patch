@@ -1,0 +1,82 @@
+From b65927de7dd0ac9a52fa9b855cd17860c5303e6c Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 18 Sep 2013 09:31:06 +0200
+Subject: [PATCH 22/29] exec: Drop incorrect & dead S390 code in qemu_ram_remap()
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1379496669-22778-6-git-send-email-armbru@redhat.com>
+Patchwork-id: 54426
+O-Subject: [PATCH 7.0 qemu-kvm 5/8] exec: Drop incorrect & dead S390 code in qemu_ram_remap()
+Bugzilla: 1009328
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Old S390 KVM wants guest RAM mapped in a peculiar way.  Commit 6b02494
+implemented that.
+
+When qemu_ram_remap() got added in commit cd19cfa, its code carefully
+mimicked the allocation code: peculiar way if defined(TARGET_S390X) &&
+defined(CONFIG_KVM), else normal way.
+
+For new S390 KVM, we actually want the normal way.  Commit fdec991
+changed qemu_ram_alloc_from_ptr() accordingly, but forgot to update
+qemu_ram_remap().  If qemu_ram_alloc_from_ptr() maps RAM the normal
+way, but qemu_ram_remap() remaps it the peculiar way, remapping
+changes protection and flags, which it shouldn't.
+
+Fortunately, this can't happen, as we never remap on S390.
+
+Replace the incorrect code with an assertion.
+
+Thanks to Christian Borntraeger for help with assessing the bug's
+(non-)impact.
+
+Acked-by: Christian Borntraeger <borntraeger@de.ibm.com>
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Acked-by: Laszlo Ersek <lersek@redhat.com>
+Acked-by: Stefano Stabellini <stefano.stabellini@eu.citrix.com>
+Message-id: 1375276272-15988-6-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <anthony@codemonkey.ws>
+(cherry picked from commit 2eb9fbaab56c6350c7d137428f4bd0bc79168214)
+---
+ exec.c | 13 +++++++------
+ 1 file changed, 7 insertions(+), 6 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ exec.c |   13 +++++++------
+ 1 files changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/exec.c b/exec.c
+index 42a0005..185155c 100644
+--- a/exec.c
++++ b/exec.c
+@@ -1201,15 +1201,16 @@ void qemu_ram_remap(ram_addr_t addr, ram_addr_t length)
+                     area = mmap(vaddr, length, PROT_READ | PROT_WRITE,
+                                 flags, block->fd, offset);
+                 } else {
+-#if defined(TARGET_S390X) && defined(CONFIG_KVM)
+-                    flags |= MAP_SHARED | MAP_ANONYMOUS;
+-                    area = mmap(vaddr, length, PROT_EXEC|PROT_READ|PROT_WRITE,
+-                                flags, -1, 0);
+-#else
++                    /*
++                     * Remap needs to match alloc.  Accelerators that
++                     * set phys_mem_alloc never remap.  If they did,
++                     * we'd need a remap hook here.
++                     */
++                    assert(phys_mem_alloc == qemu_anon_ram_alloc);
++
+                     flags |= MAP_PRIVATE | MAP_ANONYMOUS;
+                     area = mmap(vaddr, length, PROT_READ | PROT_WRITE,
+                                 flags, -1, 0);
+-#endif
+                 }
+                 if (area != vaddr) {
+                     fprintf(stderr, "Could not remap addr: "
+-- 
+1.7.1
+

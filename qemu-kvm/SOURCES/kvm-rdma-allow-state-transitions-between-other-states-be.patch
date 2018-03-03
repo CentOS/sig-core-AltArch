@@ -1,0 +1,110 @@
+From d6d76951c7e02baad0ee5944d4a6b5a5468d0d40 Mon Sep 17 00:00:00 2001
+Message-Id: <d6d76951c7e02baad0ee5944d4a6b5a5468d0d40.1387382496.git.minovotn@redhat.com>
+In-Reply-To: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+References: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+From: Nigel Croxon <ncroxon@redhat.com>
+Date: Thu, 14 Nov 2013 22:52:53 +0100
+Subject: [PATCH 17/46] rdma: allow state transitions between other states
+ besides ACTIVE
+
+RH-Author: Nigel Croxon <ncroxon@redhat.com>
+Message-id: <1384469598-13137-18-git-send-email-ncroxon@redhat.com>
+Patchwork-id: 55705
+O-Subject: [RHEL7.0 PATCH 17/42] rdma: allow state transitions between other states besides ACTIVE
+Bugzilla: 1011720
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: 1011720
+https://bugzilla.redhat.com/show_bug.cgi?id=1011720
+
+>From commit ID:
+commit d58f574bf39796ed2396dfd1e308352fbb03f944
+Author: Michael R. Hines <mrhines@us.ibm.com>
+Date:   Mon Jul 22 10:01:56 2013 -0400
+
+    rdma: allow state transitions between other states besides ACTIVE
+
+    This patch is in preparation for the next ones: Until now the MIG_STATE_SETUP
+    state was not really a 'formal' state. It has been used as a 'zero' state
+    and QEMU has been unconditionally transitioning into this state when
+    the QMP migrate command was called. In preparation for timing this state,
+    we have to make this state a a 'real' state which actually gets transitioned
+    from later in the migration_thread() from SETUP => ACTIVE, rather than just
+    automatically dropping into this state at the beginninig of the migration.
+
+    This means that the state transition function (migration_finish_set_state())
+    needs to be capable of transitioning from valid states _other_ than just
+    MIG_STATE_ACTIVE.
+
+    The function is in fact already capable of doing that, but was not allowing the
+    old state to be a parameter specified as an input.
+
+    This patch fixes that and only makes the transition if the current state
+    matches the old state that the caller intended to transition from.
+
+    Reviewed-by: Juan Quintela <quintela@redhat.com>
+    Tested-by: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Juan Quintela <quintela@redhat.com>
+---
+ migration.c |   12 ++++++------
+ 1 files changed, 6 insertions(+), 6 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ migration.c | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/migration.c b/migration.c
+index 2fa0237..e885bb7 100644
+--- a/migration.c
++++ b/migration.c
+@@ -296,9 +296,9 @@ static void migrate_fd_cleanup(void *opaque)
+     notifier_list_notify(&migration_state_notifiers, s);
+ }
+ 
+-static void migrate_finish_set_state(MigrationState *s, int new_state)
++static void migrate_set_state(MigrationState *s, int old_state, int new_state)
+ {
+-    if (atomic_cmpxchg(&s->state, MIG_STATE_ACTIVE, new_state) == new_state) {
++    if (atomic_cmpxchg(&s->state, old_state, new_state) == new_state) {
+         trace_migrate_set_state(new_state);
+     }
+ }
+@@ -316,7 +316,7 @@ static void migrate_fd_cancel(MigrationState *s)
+ {
+     DPRINTF("cancelling migration\n");
+ 
+-    migrate_finish_set_state(s, MIG_STATE_CANCELLED);
++    migrate_set_state(s, s->state, MIG_STATE_CANCELLED);
+ }
+ 
+ void add_migration_state_change_notifier(Notifier *notify)
+@@ -578,19 +578,19 @@ static void *migration_thread(void *opaque)
+                 qemu_mutex_unlock_iothread();
+ 
+                 if (ret < 0) {
+-                    migrate_finish_set_state(s, MIG_STATE_ERROR);
++                    migrate_set_state(s, MIG_STATE_ACTIVE, MIG_STATE_ERROR);
+                     break;
+                 }
+ 
+                 if (!qemu_file_get_error(s->file)) {
+-                    migrate_finish_set_state(s, MIG_STATE_COMPLETED);
++                    migrate_set_state(s, MIG_STATE_ACTIVE, MIG_STATE_COMPLETED);
+                     break;
+                 }
+             }
+         }
+ 
+         if (qemu_file_get_error(s->file)) {
+-            migrate_finish_set_state(s, MIG_STATE_ERROR);
++            migrate_set_state(s, MIG_STATE_ACTIVE, MIG_STATE_ERROR);
+             break;
+         }
+         current_time = qemu_get_clock_ms(rt_clock);
+-- 
+1.7.11.7
+

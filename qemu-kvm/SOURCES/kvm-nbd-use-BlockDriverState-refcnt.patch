@@ -1,0 +1,89 @@
+From 33eef488233850a3eeb806bf11d562c86eaacb72 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Fri, 17 Jan 2014 03:07:51 +0100
+Subject: [PATCH 08/34] nbd: use BlockDriverState refcnt
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1389928083-8921-7-git-send-email-famz@redhat.com>
+Patchwork-id: 56768
+O-Subject: [RHEL-7 qemu-kvm PATCH 06/18] nbd: use BlockDriverState refcnt
+Bugzilla: 1041301
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Previously, nbd calls drive_get_ref() on the drive of bs. A BDS doesn't
+always have associated dinfo, which nbd doesn't care either. We already
+have BDS ref count, so use it to make it safe for a BDS w/o blockdev.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 38b54b6dc18ae7e2a32e5ae38b312fb13f0584c8)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ blockdev-nbd.c | 10 +---------
+ nbd.c          |  5 +++++
+ 2 files changed, 6 insertions(+), 9 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev-nbd.c |   10 +---------
+ nbd.c          |    5 +++++
+ 2 files changed, 6 insertions(+), 9 deletions(-)
+
+diff --git a/blockdev-nbd.c b/blockdev-nbd.c
+index 95f10c8..922cf56 100644
+--- a/blockdev-nbd.c
++++ b/blockdev-nbd.c
+@@ -69,12 +69,6 @@ static void nbd_close_notifier(Notifier *n, void *data)
+     g_free(cn);
+ }
+ 
+-static void nbd_server_put_ref(NBDExport *exp)
+-{
+-    BlockDriverState *bs = nbd_export_get_blockdev(exp);
+-    drive_put_ref(drive_get_by_blockdev(bs));
+-}
+-
+ void qmp_nbd_server_add(const char *device, bool has_writable, bool writable,
+                         Error **errp)
+ {
+@@ -105,11 +99,9 @@ void qmp_nbd_server_add(const char *device, bool has_writable, bool writable,
+         writable = false;
+     }
+ 
+-    exp = nbd_export_new(bs, 0, -1, writable ? 0 : NBD_FLAG_READ_ONLY,
+-                         nbd_server_put_ref);
++    exp = nbd_export_new(bs, 0, -1, writable ? 0 : NBD_FLAG_READ_ONLY, NULL);
+ 
+     nbd_export_set_name(exp, device);
+-    drive_get_ref(drive_get_by_blockdev(bs));
+ 
+     n = g_malloc0(sizeof(NBDCloseNotifier));
+     n->n.notify = nbd_close_notifier;
+diff --git a/nbd.c b/nbd.c
+index 2606403..f258cdd 100644
+--- a/nbd.c
++++ b/nbd.c
+@@ -881,6 +881,7 @@ NBDExport *nbd_export_new(BlockDriverState *bs, off_t dev_offset,
+     exp->nbdflags = nbdflags;
+     exp->size = size == -1 ? bdrv_getlength(bs) : size;
+     exp->close = close;
++    bdrv_ref(bs);
+     return exp;
+ }
+ 
+@@ -927,6 +928,10 @@ void nbd_export_close(NBDExport *exp)
+     }
+     nbd_export_set_name(exp, NULL);
+     nbd_export_put(exp);
++    if (exp->bs) {
++        bdrv_unref(exp->bs);
++        exp->bs = NULL;
++    }
+ }
+ 
+ void nbd_export_get(NBDExport *exp)
+-- 
+1.7.1
+

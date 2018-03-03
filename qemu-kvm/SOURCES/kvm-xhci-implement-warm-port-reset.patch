@@ -1,0 +1,74 @@
+From 6e80e82c534ca31d46e556ab10b83ebbd381a627 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Fri, 30 Aug 2013 09:39:37 +0200
+Subject: [PATCH 08/29] xhci: implement warm port reset
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1377855577-11693-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 53942
+O-Subject: [RHEL-7 qemu-kvm PATCH 1/1] xhci: implement warm port reset
+Bugzilla: 949514
+RH-Acked-by: Hans de Goede <hdegoede@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Without this patch windows can't do port resets for usb3 devices.
+
+https://bugzilla.redhat.com/show_bug.cgi?id=949514
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit dad5b9ea0895c227bc9d48b7f0a6fa51eaaa8661)
+
+Note: the upstream commit message is incomplete.  This patch also
+fixes cold port reset with USB_SPEED_SUPER.
+---
+ hw/usb/hcd-xhci.c | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/hcd-xhci.c |   13 +++++++++++--
+ 1 files changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/hw/usb/hcd-xhci.c b/hw/usb/hcd-xhci.c
+index 3d3d6c3..233f3b6 100644
+--- a/hw/usb/hcd-xhci.c
++++ b/hw/usb/hcd-xhci.c
+@@ -2655,7 +2655,7 @@ static void xhci_port_update(XHCIPort *port, int is_detach)
+     xhci_port_notify(port, PORTSC_CSC);
+ }
+ 
+-static void xhci_port_reset(XHCIPort *port)
++static void xhci_port_reset(XHCIPort *port, bool warm_reset)
+ {
+     trace_usb_xhci_port_reset(port->portnr);
+ 
+@@ -2666,6 +2666,11 @@ static void xhci_port_reset(XHCIPort *port)
+     usb_device_reset(port->uport->dev);
+ 
+     switch (port->uport->dev->speed) {
++    case USB_SPEED_SUPER:
++        if (warm_reset) {
++            port->portsc |= PORTSC_WRC;
++        }
++        /* fall through */
+     case USB_SPEED_LOW:
+     case USB_SPEED_FULL:
+     case USB_SPEED_HIGH:
+@@ -2828,8 +2833,12 @@ static void xhci_port_write(void *ptr, hwaddr reg,
+     switch (reg) {
+     case 0x00: /* PORTSC */
+         /* write-1-to-start bits */
++        if (val & PORTSC_WPR) {
++            xhci_port_reset(port, true);
++            break;
++        }
+         if (val & PORTSC_PR) {
+-            xhci_port_reset(port);
++            xhci_port_reset(port, false);
+             break;
+         }
+ 
+-- 
+1.7.1
+

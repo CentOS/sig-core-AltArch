@@ -1,0 +1,204 @@
+From ecbbc511c0c4239fed38527e05677f058e5dd5f9 Mon Sep 17 00:00:00 2001
+Message-Id: <ecbbc511c0c4239fed38527e05677f058e5dd5f9.1387288155.git.minovotn@redhat.com>
+In-Reply-To: <527da6c2ce2c09d0183aa8595fc95f136f61b6df.1387288155.git.minovotn@redhat.com>
+References: <527da6c2ce2c09d0183aa8595fc95f136f61b6df.1387288155.git.minovotn@redhat.com>
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Thu, 12 Dec 2013 16:21:24 +0100
+Subject: [PATCH 4/8] libqtest: rename qmp() to qmp_discard_response()
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Stefan Hajnoczi <stefanha@redhat.com>
+Message-id: <1386865288-1575-5-git-send-email-stefanha@redhat.com>
+Patchwork-id: 56258
+O-Subject: [RHEL7 qemu-kvm PATCH 4/8] libqtest: rename qmp() to qmp_discard_response()
+Bugzilla: 1003773
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+Existing qmp() callers do not expect a response object.  In order to
+implement real QMP test cases it will be necessary to inspect the
+response object.
+
+Rename qmp() to qmp_discard_response().  Later patches will introduce a
+qmp() function that returns the response object and tests that use it.
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit 0d1aa05e9eba2437fdcdfbaa846c850c986bf7c6)
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Conflicts:
+	tests/boot-order-test.c
+	tests/ide-test.c
+
+RHEL does not have tests/ide-test.c:test_flush() and the
+boot-order-test.c is also slightly older.
+---
+ tests/boot-order-test.c |  4 ++--
+ tests/fdc-test.c        | 15 +++++++++------
+ tests/libqtest.c        | 10 +++++-----
+ tests/libqtest.h        | 20 ++++++++++----------
+ 4 files changed, 26 insertions(+), 23 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ tests/boot-order-test.c |  4 ++--
+ tests/fdc-test.c        | 15 +++++++++------
+ tests/libqtest.c        | 10 +++++-----
+ tests/libqtest.h        | 20 ++++++++++----------
+ 4 files changed, 26 insertions(+), 23 deletions(-)
+
+diff --git a/tests/boot-order-test.c b/tests/boot-order-test.c
+index 447be31..a35e9f7 100644
+--- a/tests/boot-order-test.c
++++ b/tests/boot-order-test.c
+@@ -36,12 +36,12 @@ static void test_pc_with_args(const char *test_args,
+ 
+     qtest_start(args);
+     test_pc_cmos(boot1, boot2);
+-    qmp("{ 'execute': 'system_reset' }");
++    qmp_discard_response("{ 'execute': 'system_reset' }");
+     /*
+      * system_reset only requests reset.  We get a RESET event after
+      * the actual reset completes.  Need to wait for that.
+      */
+-    qmp("");                    /* HACK: wait for event */
++    qmp_discard_response("");   /* HACK: wait for event */
+     test_pc_cmos(reboot1, reboot2);
+     qtest_quit(global_qtest);
+     g_free(args);
+diff --git a/tests/fdc-test.c b/tests/fdc-test.c
+index fd198dc..38b5b17 100644
+--- a/tests/fdc-test.c
++++ b/tests/fdc-test.c
+@@ -290,10 +290,12 @@ static void test_media_insert(void)
+ 
+     /* Insert media in drive. DSKCHK should not be reset until a step pulse
+      * is sent. */
+-    qmp("{'execute':'change', 'arguments':{ 'device':'floppy0', "
+-        "'target': '%s' }}", test_image);
+-    qmp(""); /* ignore event (FIXME open -> open transition?!) */
+-    qmp(""); /* ignore event */
++    qmp_discard_response("{'execute':'change', 'arguments':{"
++                         " 'device':'floppy0', 'target': '%s' }}",
++                         test_image);
++    qmp_discard_response(""); /* ignore event
++                                 (FIXME open -> open transition?!) */
++    qmp_discard_response(""); /* ignore event */
+ 
+     dir = inb(FLOPPY_BASE + reg_dir);
+     assert_bit_set(dir, DSKCHG);
+@@ -322,8 +324,9 @@ static void test_media_change(void)
+ 
+     /* Eject the floppy and check that DSKCHG is set. Reading it out doesn't
+      * reset the bit. */
+-    qmp("{'execute':'eject', 'arguments':{ 'device':'floppy0' }}");
+-    qmp(""); /* ignore event */
++    qmp_discard_response("{'execute':'eject', 'arguments':{"
++                         " 'device':'floppy0' }}");
++    qmp_discard_response(""); /* ignore event */
+ 
+     dir = inb(FLOPPY_BASE + reg_dir);
+     assert_bit_set(dir, DSKCHG);
+diff --git a/tests/libqtest.c b/tests/libqtest.c
+index bb82069..dc4c983 100644
+--- a/tests/libqtest.c
++++ b/tests/libqtest.c
+@@ -151,8 +151,8 @@ QTestState *qtest_init(const char *extra_args)
+     }
+ 
+     /* Read the QMP greeting and then do the handshake */
+-    qtest_qmp(s, "");
+-    qtest_qmp(s, "{ 'execute': 'qmp_capabilities' }");
++    qtest_qmp_discard_response(s, "");
++    qtest_qmp_discard_response(s, "{ 'execute': 'qmp_capabilities' }");
+ 
+     if (getenv("QTEST_STOP")) {
+         kill(qtest_qemu_pid(s), SIGSTOP);
+@@ -291,7 +291,7 @@ redo:
+     return words;
+ }
+ 
+-void qtest_qmpv(QTestState *s, const char *fmt, va_list ap)
++void qtest_qmpv_discard_response(QTestState *s, const char *fmt, va_list ap)
+ {
+     bool has_reply = false;
+     int nesting = 0;
+@@ -326,12 +326,12 @@ void qtest_qmpv(QTestState *s, const char *fmt, va_list ap)
+     }
+ }
+ 
+-void qtest_qmp(QTestState *s, const char *fmt, ...)
++void qtest_qmp_discard_response(QTestState *s, const char *fmt, ...)
+ {
+     va_list ap;
+ 
+     va_start(ap, fmt);
+-    qtest_qmpv(s, fmt, ap);
++    qtest_qmpv_discard_response(s, fmt, ap);
+     va_end(ap);
+ }
+ 
+diff --git a/tests/libqtest.h b/tests/libqtest.h
+index 0f6aade..3faa49b 100644
+--- a/tests/libqtest.h
++++ b/tests/libqtest.h
+@@ -44,23 +44,23 @@ QTestState *qtest_init(const char *extra_args);
+ void qtest_quit(QTestState *s);
+ 
+ /**
+- * qtest_qmp:
++ * qtest_qmp_discard_response:
+  * @s: #QTestState instance to operate on.
+  * @fmt...: QMP message to send to qemu
+  *
+- * Sends a QMP message to QEMU
++ * Sends a QMP message to QEMU and consumes the response.
+  */
+-void qtest_qmp(QTestState *s, const char *fmt, ...);
++void qtest_qmp_discard_response(QTestState *s, const char *fmt, ...);
+ 
+ /**
+- * qtest_qmpv:
++ * qtest_qmpv_discard_response:
+  * @s: #QTestState instance to operate on.
+  * @fmt: QMP message to send to QEMU
+  * @ap: QMP message arguments
+  *
+- * Sends a QMP message to QEMU.
++ * Sends a QMP message to QEMU and consumes the response.
+  */
+-void qtest_qmpv(QTestState *s, const char *fmt, va_list ap);
++void qtest_qmpv_discard_response(QTestState *s, const char *fmt, va_list ap);
+ 
+ /**
+  * qtest_get_irq:
+@@ -331,17 +331,17 @@ static inline void qtest_end(void)
+ }
+ 
+ /**
+- * qmp:
++ * qmp_discard_response:
+  * @fmt...: QMP message to send to qemu
+  *
+- * Sends a QMP message to QEMU
++ * Sends a QMP message to QEMU and consumes the response.
+  */
+-static inline void qmp(const char *fmt, ...)
++static inline void qmp_discard_response(const char *fmt, ...)
+ {
+     va_list ap;
+ 
+     va_start(ap, fmt);
+-    qtest_qmpv(global_qtest, fmt, ap);
++    qtest_qmpv_discard_response(global_qtest, fmt, ap);
+     va_end(ap);
+ }
+ 
+-- 
+1.7.11.7
+

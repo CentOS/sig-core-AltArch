@@ -1,0 +1,62 @@
+From 71930418e15b0acb825fbd02dc4f954ccdea6ece Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 19 Aug 2013 18:54:25 +0800
+Subject: [PATCH 10/13] vmdk: Move l1_size check into vmdk_add_extent()
+
+Message-id: <1377573001-27070-11-git-send-email-famz@redhat.com>
+Patchwork-id: 53790
+O-Subject: [RHEL-7 qemu-kvm PATCH 10/13] vmdk: Move l1_size check into
+        vmdk_add_extent()
+Bugzilla: 995866
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+This header check is common to VMDK3 and VMDK4, so move it into
+vmdk_add_extent().
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit b0651b8c246d0d9e6ad0831b3e34fd756016ad7e)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ block/vmdk.c |   16 ++++++++--------
+ 1 files changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 73d9907..4388038 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -401,6 +401,14 @@ static int vmdk_add_extent(BlockDriverState *bs,
+         error_report("invalid granularity, image may be corrupt");
+         return -EINVAL;
+     }
++    if (l1_size > 512 * 1024 * 1024) {
++        /* Although with big capacity and small l1_entry_sectors, we can get a
++         * big l1_size, we don't want unbounded value to allocate the table.
++         * Limit it to 512M, which is 16PB for default cluster and L2 table
++         * size */
++        error_report("L1 size too big");
++        return -EFBIG;
++    }
+ 
+     s->extents = g_realloc(s->extents,
+                               (s->num_extents + 1) * sizeof(VmdkExtent));
+@@ -598,14 +606,6 @@ static int vmdk_open_vmdk4(BlockDriverState *bs,
+     }
+     l1_size = (le64_to_cpu(header.capacity) + l1_entry_sectors - 1)
+                 / l1_entry_sectors;
+-    if (l1_size > 512 * 1024 * 1024) {
+-        /* although with big capacity and small l1_entry_sectors, we can get a
+-         * big l1_size, we don't want unbounded value to allocate the table.
+-         * Limit it to 512M, which is 16PB for default cluster and L2 table
+-         * size */
+-        error_report("L1 size too big");
+-        return -EFBIG;
+-    }
+     if (le32_to_cpu(header.flags) & VMDK4_FLAG_RGD) {
+         l1_backup_offset = le64_to_cpu(header.rgd_offset) << 9;
+     }
+-- 
+1.7.1
+

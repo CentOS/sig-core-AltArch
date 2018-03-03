@@ -1,0 +1,64 @@
+From e7ea7509ab95b71445d98b7c76cc74e1e1304779 Mon Sep 17 00:00:00 2001
+From: Amit Shah <amit.shah@redhat.com>
+Date: Fri, 11 Apr 2014 09:28:47 +0200
+Subject: [PATCH 02/13] migration: qmp_migrate(): keep working after syntax error
+
+RH-Author: Amit Shah <amit.shah@redhat.com>
+Message-id: <717d7d24efbff7fe32d70c506edea41ea00d1edc.1397208304.git.amit.shah@redhat.com>
+Patchwork-id: 58439
+O-Subject: [RHEL7.0.z qemu-kvm PATCH 1/1] migration: qmp_migrate(): keep working after syntax error
+Bugzilla: 1086598
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+
+From: Luiz Capitulino <lcapitulino@redhat.com>
+
+If a user or QMP client enter a bad syntax for the migrate
+command in QMP/HMP, then the migrate command will never succeed
+from that point on.
+
+For example, if you enter:
+
+(qemu) migrate tcp;0:4444
+migrate: Parameter 'uri' expects a valid migration protocol
+
+Then the migrate command will always fail from now on:
+
+(qemu) migrate tcp:0:4444
+migrate: There's a migration process in progress
+
+The problem is that qmp_migrate() sets the migration status to
+MIG_STATE_SETUP and doesn't reset it on syntax error. This bug
+was introduced by commit 29ae8a4133082e16970c9d4be09f4b6a15034617.
+
+Bugzilla: 1086598
+
+Reviewed-by: Michael R. Hines <mrhines@us.ibm.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit c950114286ea358a93ce632db0421945e1008395)
+Signed-off-by: Amit Shah <amit.shah@redhat.com>
+---
+ migration.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ migration.c |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+diff --git a/migration.c b/migration.c
+index 93de654..7efbd25 100644
+--- a/migration.c
++++ b/migration.c
+@@ -457,6 +457,7 @@ void qmp_migrate(const char *uri, bool has_blk, bool blk,
+ #endif
+     } else {
+         error_set(errp, QERR_INVALID_PARAMETER_VALUE, "uri", "a valid migration protocol");
++        s->state = MIG_STATE_ERROR;
+         return;
+     }
+ 
+-- 
+1.7.1
+

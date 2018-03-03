@@ -1,0 +1,175 @@
+From ed2a49b247a70b0e841296f5a63285390b842e06 Mon Sep 17 00:00:00 2001
+Message-Id: <ed2a49b247a70b0e841296f5a63285390b842e06.1418766606.git.jen@redhat.com>
+In-Reply-To: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+References: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 4 Dec 2014 00:05:24 -0600
+Subject: [CHANGE 30/31] vmdk: Fix integer overflow in offset calculation
+To: rhvirt-patches@redhat.com,
+    jen@redhat.com
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1417651524-18041-31-git-send-email-famz@redhat.com>
+Patchwork-id: 62703
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v5 30/30] vmdk: Fix integer overflow in offset calculation
+Bugzilla: 1002493
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+This fixes the bug introduced by commit c6ac36e (vmdk: Optimize cluster
+allocation).
+
+$ ~/build/master/qemu-io /stor/vm/arch.vmdk -c 'write 2G 1k'
+write failed: Invalid argument
+
+Reported-by: Mark Cave-Ayland <mark.cave-ayland@ilande.co.uk>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Message-id: 1411437381-11234-1-git-send-email-famz@redhat.com
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit d1319b077a4bd980ca1b8a167b02b519330dd26b)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Jeff E. Nelson <jen@redhat.com>
+
+Conflicts:
+	tests/qemu-iotests/group
+
+Signed-off-by: Jeff E. Nelson <jen@redhat.com>
+---
+ block/vmdk.c               |  2 +-
+ tests/qemu-iotests/105     | 70 ++++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/105.out | 21 ++++++++++++++
+ tests/qemu-iotests/group   |  1 +
+ 4 files changed, 93 insertions(+), 1 deletion(-)
+ create mode 100755 tests/qemu-iotests/105
+ create mode 100644 tests/qemu-iotests/105.out
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 0593a1a..cfcaa84 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -1116,7 +1116,7 @@ static int get_cluster_offset(BlockDriverState *bs,
+     uint32_t min_count, *l2_table;
+     bool zeroed = false;
+     int64_t ret;
+-    int32_t cluster_sector;
++    int64_t cluster_sector;
+ 
+     if (m_data) {
+         m_data->valid = 0;
+diff --git a/tests/qemu-iotests/105 b/tests/qemu-iotests/105
+new file mode 100755
+index 0000000..9bae49e
+--- /dev/null
++++ b/tests/qemu-iotests/105
+@@ -0,0 +1,70 @@
++#!/bin/bash
++#
++# Create, read, write big image
++#
++# Copyright (C) 2014 Red Hat, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++
++# creator
++owner=famz@redhat.com
++
++seq=`basename $0`
++echo "QA output created by $seq"
++
++here=`pwd`
++tmp=/tmp/$$
++status=1	# failure is the default!
++
++_cleanup()
++{
++	_cleanup_test_img
++}
++trap "_cleanup; exit \$status" 0 1 2 3 15
++
++# get standard environment, filters and checks
++. ./common.rc
++. ./common.filter
++
++_supported_fmt qcow2 vmdk vhdx qed
++_supported_proto generic
++_supported_os Linux
++_unsupported_imgopts "subformat=twoGbMaxExtentFlat" \
++                     "subformat=twoGbMaxExtentSparse"
++
++echo
++echo "creating large image"
++_make_test_img 16T
++
++echo
++echo "small read"
++$QEMU_IO -c "read 1024 4096" "$TEST_IMG" | _filter_qemu_io
++
++echo
++echo "small write"
++$QEMU_IO -c "write 8192 4096" "$TEST_IMG" | _filter_qemu_io
++
++echo
++echo "small read at high offset"
++$QEMU_IO -c "read 14T 4096" "$TEST_IMG" | _filter_qemu_io
++
++echo
++echo "small write at high offset"
++$QEMU_IO -c "write 14T 4096" "$TEST_IMG" | _filter_qemu_io
++
++# success, all done
++echo "*** done"
++rm -f $seq.full
++status=0
+diff --git a/tests/qemu-iotests/105.out b/tests/qemu-iotests/105.out
+new file mode 100644
+index 0000000..13ffcb5
+--- /dev/null
++++ b/tests/qemu-iotests/105.out
+@@ -0,0 +1,21 @@
++QA output created by 105
++
++creating large image
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=17592186044416
++
++small read
++read 4096/4096 bytes at offset 1024
++4 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++small write
++wrote 4096/4096 bytes at offset 8192
++4 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++small read at high offset
++read 4096/4096 bytes at offset 15393162788864
++4 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++small write at high offset
++wrote 4096/4096 bytes at offset 15393162788864
++4 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++*** done
+diff --git a/tests/qemu-iotests/group b/tests/qemu-iotests/group
+index 572438e..cd8384a 100644
+--- a/tests/qemu-iotests/group
++++ b/tests/qemu-iotests/group
+@@ -85,3 +85,4 @@
+ 087 rw auto quick
+ 088 rw auto
+ 092 rw auto quick
++105 rw auto quick
+-- 
+2.1.0
+

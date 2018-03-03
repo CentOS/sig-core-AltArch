@@ -1,0 +1,74 @@
+From 8d2dfb2e031ded182868c14423b874464cd98949 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Mon, 27 Jan 2014 10:31:27 +0100
+Subject: [PATCH 01/14] piix: gigabyte alignment for ram
+
+Message-id: <1389867959-12463-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 56744
+O-Subject: [RHEL-7 qemu-kvm PATCH 1/4] piix: gigabyte alignment for ram
+Bugzilla: 1026548
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Map 3G (i440fx) of memory below 4G, so the RAM pieces
+are nicely aligned to gigabyte borders.
+
+Keep old memory layout for (a) old machine types and (b) in case all
+memory fits below 4G and thus we don't have to split RAM into pieces
+in the first place.  The later makes sure this change doesn't take
+away memory from 32bit guests.
+
+So, with i440fx and up to 3.5 GB of memory, all of it will be mapped
+below 4G.  With more than 3.5 GB of memory 3 GB will be mapped below
+4G and the remaining amount will be mapped above 4G.
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit bb43d3839c29b17a2f5c122114cd4ca978065a18)
+
+Conflicts:
+	hw/i386/pc_piix.c
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/pc_piix.c |    9 ++++++---
+ 1 files changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index 663c9d5..9f1d0b5 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -61,6 +61,7 @@ static const int ide_irq[MAX_IDE_BUS] = { 14, 15 };
+ static bool smbios_type1_defaults = true;
+ static bool has_pci_info;
+ static bool has_acpi_build = true;
++static bool gigabyte_align = true;
+ 
+ /* PC hardware initialisation */
+ static void pc_init1(QEMUMachineInitArgs *args,
+@@ -101,9 +102,10 @@ static void pc_init1(QEMUMachineInitArgs *args,
+         kvmclock_create();
+     }
+ 
+-    if (args->ram_size >= QEMU_BELOW_4G_RAM_END ) {
+-        above_4g_mem_size = args->ram_size - QEMU_BELOW_4G_RAM_END;
+-        below_4g_mem_size = QEMU_BELOW_4G_RAM_END;
++    if (args->ram_size >= 0xe0000000) {
++        ram_addr_t lowmem = gigabyte_align ? 0xc0000000 : 0xe0000000;
++        above_4g_mem_size = args->ram_size - lowmem;
++        below_4g_mem_size = lowmem;
+     } else {
+         above_4g_mem_size = 0;
+         below_4g_mem_size = args->ram_size;
+@@ -929,6 +931,7 @@ static void pc_compat_rhel650(QEMUMachineInitArgs *args)
+ 
+     rom_file_in_ram = false; 
+     has_acpi_build = false;
++    gigabyte_align = false;
+ }
+ 
+ static void pc_init_rhel650(QEMUMachineInitArgs *args)
+-- 
+1.7.1
+

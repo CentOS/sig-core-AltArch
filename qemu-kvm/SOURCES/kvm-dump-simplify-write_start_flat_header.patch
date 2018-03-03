@@ -1,0 +1,76 @@
+From b170e55f6dff27d44e32667af0f79a4c2704711b Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Fri, 7 Nov 2014 17:18:08 +0100
+Subject: [PATCH 21/41] dump: simplify write_start_flat_header()
+
+Message-id: <1415380693-16593-22-git-send-email-lersek@redhat.com>
+Patchwork-id: 62207
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 21/26] dump: simplify write_start_flat_header()
+Bugzilla: 1157798
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: dgibson <dgibson@redhat.com>
+
+Currently, the function
+- defines and populates an auto variable of type MakedumpfileHeader
+- allocates and zeroes a buffer of size MAX_SIZE_MDF_HEADER (4096)
+- copies the former into the latter (covering an initial portion of the
+  latter)
+
+Fill in the MakedumpfileHeader structure in its final place (the alignment
+is OK because the structure lives at the address returned by g_malloc0()).
+
+Approximately-suggested-by: Luiz Capitulino <lcapitulino@redhat.com>
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit 92ba1401e0f81ea170803045c1ae366bf5d9d87e)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c | 20 +++++++++-----------
+ 1 file changed, 9 insertions(+), 11 deletions(-)
+
+diff --git a/dump.c b/dump.c
+index 533b914..ee28777 100644
+--- a/dump.c
++++ b/dump.c
+@@ -717,27 +717,25 @@ static int create_vmcore(DumpState *s)
+ 
+ static int write_start_flat_header(int fd)
+ {
+-    uint8_t *buf;
+-    MakedumpfileHeader mh;
++    MakedumpfileHeader *mh;
+     int ret = 0;
+ 
+-    memset(&mh, 0, sizeof(mh));
+-    memcpy(mh.signature, MAKEDUMPFILE_SIGNATURE,
+-           MIN(sizeof mh.signature, sizeof MAKEDUMPFILE_SIGNATURE));
++    QEMU_BUILD_BUG_ON(sizeof *mh > MAX_SIZE_MDF_HEADER);
++    mh = g_malloc0(MAX_SIZE_MDF_HEADER);
+ 
+-    mh.type = cpu_to_be64(TYPE_FLAT_HEADER);
+-    mh.version = cpu_to_be64(VERSION_FLAT_HEADER);
++    memcpy(mh->signature, MAKEDUMPFILE_SIGNATURE,
++           MIN(sizeof mh->signature, sizeof MAKEDUMPFILE_SIGNATURE));
+ 
+-    buf = g_malloc0(MAX_SIZE_MDF_HEADER);
+-    memcpy(buf, &mh, sizeof(mh));
++    mh->type = cpu_to_be64(TYPE_FLAT_HEADER);
++    mh->version = cpu_to_be64(VERSION_FLAT_HEADER);
+ 
+     size_t written_size;
+-    written_size = qemu_write_full(fd, buf, MAX_SIZE_MDF_HEADER);
++    written_size = qemu_write_full(fd, mh, MAX_SIZE_MDF_HEADER);
+     if (written_size != MAX_SIZE_MDF_HEADER) {
+         ret = -1;
+     }
+ 
+-    g_free(buf);
++    g_free(mh);
+     return ret;
+ }
+ 
+-- 
+1.8.3.1
+

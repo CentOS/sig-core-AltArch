@@ -1,0 +1,66 @@
+From 871111d1bf38bc391728793f898527823717ed6d Mon Sep 17 00:00:00 2001
+Message-Id: <871111d1bf38bc391728793f898527823717ed6d.1418766606.git.jen@redhat.com>
+In-Reply-To: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+References: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 4 Dec 2014 00:05:12 -0600
+Subject: [CHANGE 18/31] qemu-img: Convert by cluster size if target is
+ compressed
+To: rhvirt-patches@redhat.com,
+    jen@redhat.com
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1417651524-18041-19-git-send-email-famz@redhat.com>
+Patchwork-id: 62691
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v5 18/30] qemu-img: Convert by cluster size if target is compressed
+Bugzilla: 1134283
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+If target block driver forces compression, qemu-img convert needs to
+write by cluster size as well as "-c" option.
+
+Particularly, this applies for converting to VMDK streamOptimized
+format.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 85f49cad879adfb5c3cbdc47ca3c3b50eb8f40bc)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Jeff E. Nelson <jen@redhat.com>
+---
+ include/block/block.h | 4 ++++
+ qemu-img.c            | 1 +
+ 2 files changed, 5 insertions(+)
+
+diff --git a/include/block/block.h b/include/block/block.h
+index 3651bd9..b06a9dc 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -34,6 +34,10 @@ typedef struct BlockDriverInfo {
+      * opened with BDRV_O_UNMAP flag for this to work.
+      */
+     bool can_write_zeroes_with_unmap;
++    /*
++     * True if this block driver only supports compressed writes
++     */
++    bool needs_compressed_writes;
+ } BlockDriverInfo;
+ 
+ typedef struct BlockFragInfo {
+diff --git a/qemu-img.c b/qemu-img.c
+index f14890f..9c021e7 100644
+--- a/qemu-img.c
++++ b/qemu-img.c
+@@ -1477,6 +1477,7 @@ static int img_convert(int argc, char **argv)
+             goto out;
+         }
+     } else {
++        compress = compress || bdi.needs_compressed_writes;
+         cluster_sectors = bdi.cluster_size / BDRV_SECTOR_SIZE;
+     }
+ 
+-- 
+2.1.0
+

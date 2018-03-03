@@ -1,0 +1,166 @@
+From 4308c37b2fdabc82803dc9d2d521f564e2f34807 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Wed, 20 Nov 2013 09:16:43 +0100
+Subject: [PATCH 04/14] block: Avoid unecessary drv->bdrv_getlength() calls
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1384939004-30831-2-git-send-email-famz@redhat.com>
+Patchwork-id: 55784
+O-Subject: [RHEL-7 qemu-kvm PATCH 1/2] block: Avoid unecessary drv->bdrv_getlength() calls
+Bugzilla: 1025138
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+The block layer generally keeps the size of an image cached in
+bs->total_sectors so that it doesn't have to perform expensive
+operations to get the size whenever it needs it.
+
+This doesn't work however when using a backend that can change its size
+without qemu being aware of it, i.e. passthrough of removable media like
+CD-ROMs or floppy disks. For this reason, the caching is disabled when a
+removable device is used.
+
+It is obvious that checking whether the _guest_ device has removable
+media isn't the right thing to do when we want to know whether the size
+of the host backend can change. To make things worse, non-top-level
+BlockDriverStates never have any device attached, which makes qemu
+assume they are removable, so drv->bdrv_getlength() is always called on
+the protocol layer. In the case of raw-posix, this causes unnecessary
+lseek() system calls, which turned out to be rather expensive.
+
+This patch completely changes the logic and disables bs->total_sectors
+caching only for certain block driver types, for which a size change is
+expected: host_cdrom and host_floppy on POSIX, host_device on win32; also
+the raw format in case it sits on top of one of these protocols, but in
+the common case the nested bdrv_getlength() call on the protocol driver
+will use the cache again and avoid an expensive drv->bdrv_getlength()
+call.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit b94a2610573cd9314f244207c8b04cb75e42d7f8)
+
+Conflicts:
+	block/raw_bsd.c
+
+Conflict because only have block/raw.c.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ block.c                   | 7 ++++---
+ block/raw-posix.c         | 9 ++++++---
+ block/raw-win32.c         | 4 +++-
+ block/raw.c               | 1 +
+ include/block/block_int.h | 3 +++
+ 5 files changed, 17 insertions(+), 7 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c                   |    7 ++++---
+ block/raw-posix.c         |    9 ++++++---
+ block/raw-win32.c         |    4 +++-
+ block/raw.c               |    1 +
+ include/block/block_int.h |    3 +++
+ 5 files changed, 17 insertions(+), 7 deletions(-)
+
+diff --git a/block.c b/block.c
+index 6913799..301c4fb 100644
+--- a/block.c
++++ b/block.c
+@@ -2838,9 +2838,10 @@ int64_t bdrv_getlength(BlockDriverState *bs)
+     if (!drv)
+         return -ENOMEDIUM;
+ 
+-    if (bdrv_dev_has_removable_media(bs)) {
+-        if (drv->bdrv_getlength) {
+-            return drv->bdrv_getlength(bs);
++    if (drv->has_variable_length) {
++        int ret = refresh_total_sectors(bs, bs->total_sectors);
++        if (ret < 0) {
++            return ret;
+         }
+     }
+     return bs->total_sectors * BDRV_SECTOR_SIZE;
+diff --git a/block/raw-posix.c b/block/raw-posix.c
+index 74b15da..eae1b40 100644
+--- a/block/raw-posix.c
++++ b/block/raw-posix.c
+@@ -1718,7 +1718,8 @@ static BlockDriver bdrv_host_floppy = {
+     .bdrv_aio_flush	= raw_aio_flush,
+ 
+     .bdrv_truncate      = raw_truncate,
+-    .bdrv_getlength	= raw_getlength,
++    .bdrv_getlength      = raw_getlength,
++    .has_variable_length = true,
+     .bdrv_get_allocated_file_size
+                         = raw_get_allocated_file_size,
+ 
+@@ -1827,7 +1828,8 @@ static BlockDriver bdrv_host_cdrom = {
+     .bdrv_aio_flush	= raw_aio_flush,
+ 
+     .bdrv_truncate      = raw_truncate,
+-    .bdrv_getlength     = raw_getlength,
++    .bdrv_getlength      = raw_getlength,
++    .has_variable_length = true,
+     .bdrv_get_allocated_file_size
+                         = raw_get_allocated_file_size,
+ 
+@@ -1954,7 +1956,8 @@ static BlockDriver bdrv_host_cdrom = {
+     .bdrv_aio_flush	= raw_aio_flush,
+ 
+     .bdrv_truncate      = raw_truncate,
+-    .bdrv_getlength     = raw_getlength,
++    .bdrv_getlength      = raw_getlength,
++    .has_variable_length = true,
+     .bdrv_get_allocated_file_size
+                         = raw_get_allocated_file_size,
+ 
+diff --git a/block/raw-win32.c b/block/raw-win32.c
+index 3e0251f..584790f 100644
+--- a/block/raw-win32.c
++++ b/block/raw-win32.c
+@@ -618,7 +618,9 @@ static BlockDriver bdrv_host_device = {
+     .bdrv_aio_writev    = raw_aio_writev,
+     .bdrv_aio_flush     = raw_aio_flush,
+ 
+-    .bdrv_getlength	= raw_getlength,
++    .bdrv_getlength      = raw_getlength,
++    .has_variable_length = true,
++
+     .bdrv_get_allocated_file_size
+                         = raw_get_allocated_file_size,
+ };
+diff --git a/block/raw.c b/block/raw.c
+index 66eda91..e1ed8cc 100644
+--- a/block/raw.c
++++ b/block/raw.c
+@@ -151,6 +151,7 @@ static BlockDriver bdrv_raw = {
+ 
+     .bdrv_probe         = raw_probe,
+     .bdrv_getlength     = raw_getlength,
++    .has_variable_length = true,
+     .bdrv_truncate      = raw_truncate,
+ 
+     .bdrv_is_inserted   = raw_is_inserted,
+diff --git a/include/block/block_int.h b/include/block/block_int.h
+index 0dbc34f..54708c6 100644
+--- a/include/block/block_int.h
++++ b/include/block/block_int.h
+@@ -151,8 +151,11 @@ struct BlockDriver {
+ 
+     const char *protocol_name;
+     int (*bdrv_truncate)(BlockDriverState *bs, int64_t offset);
++
+     int64_t (*bdrv_getlength)(BlockDriverState *bs);
++    bool has_variable_length;
+     int64_t (*bdrv_get_allocated_file_size)(BlockDriverState *bs);
++
+     int (*bdrv_write_compressed)(BlockDriverState *bs, int64_t sector_num,
+                                  const uint8_t *buf, int nb_sectors);
+ 
+-- 
+1.7.1
+

@@ -1,0 +1,128 @@
+From b6e8e4d8b191e48d0a850eb6715ff2d70dd1ed8b Mon Sep 17 00:00:00 2001
+Message-Id: <b6e8e4d8b191e48d0a850eb6715ff2d70dd1ed8b.1387369730.git.minovotn@redhat.com>
+In-Reply-To: <091eecc4fa42754760dfff393dabcc2b444e9693.1387369730.git.minovotn@redhat.com>
+References: <091eecc4fa42754760dfff393dabcc2b444e9693.1387369730.git.minovotn@redhat.com>
+From: Markus Armbruster <armbru@redhat.com>
+Date: Tue, 10 Dec 2013 15:29:15 +0100
+Subject: [PATCH 15/21] qapi.py: Reject invalid characters in schema file
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1386689361-30281-13-git-send-email-armbru@redhat.com>
+Patchwork-id: 56131
+O-Subject: [PATCH 7.0 qemu-kvm 12/18] qapi.py: Reject invalid characters in schema file
+Bugzilla: 997915
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Message-id: 1374939721-7876-6-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit 9213aa5391f7c8d3766420d96888f1353af4c890)
+
+Backporting hack: need to unindent a comment in qapi-schem.json we got
+from commit 8707cd1 via v1.5.3.  The upstream trunk has the commit
+after the QAPI parser rewrite.  Indented comments just work there.
+The stable branch doesn't have the QAPI parser rewrite.  It works only
+because it silently ignores invalid characters.  Misfeature, cleaned
+up in this commit.
+
+The comment will be reindented in the backport of the commit that
+makes indented comments work properly.
+---
+ qapi-schema.json                  | 2 +-
+ scripts/qapi.py                   | 2 ++
+ tests/qapi-schema/comments.err    | 1 +
+ tests/qapi-schema/comments.exit   | 2 +-
+ tests/qapi-schema/comments.out    | 3 ---
+ tests/qapi-schema/funny-char.err  | 1 +
+ tests/qapi-schema/funny-char.exit | 2 +-
+ tests/qapi-schema/funny-char.out  | 3 ---
+ 8 files changed, 7 insertions(+), 9 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ qapi-schema.json                  | 2 +-
+ scripts/qapi.py                   | 2 ++
+ tests/qapi-schema/comments.err    | 1 +
+ tests/qapi-schema/comments.exit   | 2 +-
+ tests/qapi-schema/comments.out    | 3 ---
+ tests/qapi-schema/funny-char.err  | 1 +
+ tests/qapi-schema/funny-char.exit | 2 +-
+ tests/qapi-schema/funny-char.out  | 3 ---
+ 8 files changed, 7 insertions(+), 9 deletions(-)
+
+diff --git a/qapi-schema.json b/qapi-schema.json
+index b27108f..81fe591 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -3437,7 +3437,7 @@
+                                        'spiceport' : 'ChardevSpicePort',
+                                        'vc'     : 'ChardevVC',
+                                        'ringbuf': 'ChardevRingbuf',
+-                                       # next one is just for compatibility
++# next one is just for compatibility
+                                        'memory' : 'ChardevRingbuf' } }
+ 
+ ##
+diff --git a/scripts/qapi.py b/scripts/qapi.py
+index 342d16c..0b48a1e 100644
+--- a/scripts/qapi.py
++++ b/scripts/qapi.py
+@@ -101,6 +101,8 @@ class QAPISchema:
+                 if self.cursor == len(self.src):
+                     self.tok = None
+                     return
++            elif not self.tok.isspace():
++                raise QAPISchemaError(self, 'Stray "%s"' % self.tok)
+ 
+     def get_members(self):
+         expr = OrderedDict()
+diff --git a/tests/qapi-schema/comments.err b/tests/qapi-schema/comments.err
+index e69de29..4a82b26 100644
+--- a/tests/qapi-schema/comments.err
++++ b/tests/qapi-schema/comments.err
+@@ -0,0 +1 @@
++<stdin>:2:33: Stray "#"
+diff --git a/tests/qapi-schema/comments.exit b/tests/qapi-schema/comments.exit
+index 573541a..d00491f 100644
+--- a/tests/qapi-schema/comments.exit
++++ b/tests/qapi-schema/comments.exit
+@@ -1 +1 @@
+-0
++1
+diff --git a/tests/qapi-schema/comments.out b/tests/qapi-schema/comments.out
+index e3bd904..e69de29 100644
+--- a/tests/qapi-schema/comments.out
++++ b/tests/qapi-schema/comments.out
+@@ -1,3 +0,0 @@
+-[OrderedDict([('enum', 'Status'), ('data', ['good', 'bad', 'ugly'])])]
+-['Status']
+-[]
+diff --git a/tests/qapi-schema/funny-char.err b/tests/qapi-schema/funny-char.err
+index e69de29..d3dd293 100644
+--- a/tests/qapi-schema/funny-char.err
++++ b/tests/qapi-schema/funny-char.err
+@@ -0,0 +1 @@
++<stdin>:2:36: Stray ";"
+diff --git a/tests/qapi-schema/funny-char.exit b/tests/qapi-schema/funny-char.exit
+index 573541a..d00491f 100644
+--- a/tests/qapi-schema/funny-char.exit
++++ b/tests/qapi-schema/funny-char.exit
+@@ -1 +1 @@
+-0
++1
+diff --git a/tests/qapi-schema/funny-char.out b/tests/qapi-schema/funny-char.out
+index e3bd904..e69de29 100644
+--- a/tests/qapi-schema/funny-char.out
++++ b/tests/qapi-schema/funny-char.out
+@@ -1,3 +0,0 @@
+-[OrderedDict([('enum', 'Status'), ('data', ['good', 'bad', 'ugly'])])]
+-['Status']
+-[]
+-- 
+1.7.11.7
+

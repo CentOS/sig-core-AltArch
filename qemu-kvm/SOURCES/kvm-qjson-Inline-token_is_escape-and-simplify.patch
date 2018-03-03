@@ -1,0 +1,97 @@
+From 225cb3d48dd4dcbc7bf845c0b4b06a90030874f3 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 27 Jul 2016 07:35:06 +0200
+Subject: [PATCH 08/16] qjson: Inline token_is_escape() and simplify
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1469604913-12442-10-git-send-email-armbru@redhat.com>
+Patchwork-id: 71479
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 08/15] qjson: Inline token_is_escape() and simplify
+Bugzilla: 1276036
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Message-Id: <1448486613-17634-8-git-send-email-armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit 6b9606f68ec589def27bd2a9cea97ec63cffd581)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	qobject/json-parser.c
+
+Straighforward conflict because lacking commit fc48ffc "qobject: Use
+'bool' for qbool", we still use qbool_from_int().
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+---
+ qobject/json-parser.c | 32 +++++++++++++++-----------------
+ 1 file changed, 15 insertions(+), 17 deletions(-)
+
+diff --git a/qobject/json-parser.c b/qobject/json-parser.c
+index e3690de..79f4173 100644
+--- a/qobject/json-parser.c
++++ b/qobject/json-parser.c
+@@ -64,15 +64,6 @@ static JSONTokenType token_get_type(QObject *obj)
+     return qdict_get_int(qobject_to_qdict(obj), "type");
+ }
+ 
+-static int token_is_escape(QObject *obj, const char *value)
+-{
+-    if (token_get_type(obj) != JSON_ESCAPE) {
+-        return 0;
+-    }
+-
+-    return (strcmp(token_get_value(obj), value) == 0);
+-}
+-
+ /**
+  * Error handler
+  */
+@@ -559,6 +550,7 @@ static QObject *parse_escape(JSONParserContext *ctxt, va_list *ap)
+ {
+     QObject *token = NULL, *obj;
+     JSONParserContext saved_ctxt = parser_context_save(ctxt);
++    const char *val;
+ 
+     if (ap == NULL) {
+         goto out;
+@@ -569,20 +561,26 @@ static QObject *parse_escape(JSONParserContext *ctxt, va_list *ap)
+         goto out;
+     }
+ 
+-    if (token_is_escape(token, "%p")) {
++    if (token_get_type(token) != JSON_ESCAPE) {
++        goto out;
++    }
++
++    val = token_get_value(token);
++
++    if (!strcmp(val, "%p")) {
+         obj = va_arg(*ap, QObject *);
+-    } else if (token_is_escape(token, "%i")) {
++    } else if (!strcmp(val, "%i")) {
+         obj = QOBJECT(qbool_from_int(va_arg(*ap, int)));
+-    } else if (token_is_escape(token, "%d")) {
++    } else if (!strcmp(val, "%d")) {
+         obj = QOBJECT(qint_from_int(va_arg(*ap, int)));
+-    } else if (token_is_escape(token, "%ld")) {
++    } else if (!strcmp(val, "%ld")) {
+         obj = QOBJECT(qint_from_int(va_arg(*ap, long)));
+-    } else if (token_is_escape(token, "%lld") ||
+-               token_is_escape(token, "%I64d")) {
++    } else if (!strcmp(val, "%lld") ||
++               !strcmp(val, "%I64d")) {
+         obj = QOBJECT(qint_from_int(va_arg(*ap, long long)));
+-    } else if (token_is_escape(token, "%s")) {
++    } else if (!strcmp(val, "%s")) {
+         obj = QOBJECT(qstring_from_str(va_arg(*ap, const char *)));
+-    } else if (token_is_escape(token, "%f")) {
++    } else if (!strcmp(val, "%f")) {
+         obj = QOBJECT(qfloat_from_double(va_arg(*ap, double)));
+     } else {
+         goto out;
+-- 
+1.8.3.1
+

@@ -1,0 +1,48 @@
+From c7d5655eea99e3a62075c5ca067a6d8f670ddf9d Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:22:00 +0200
+Subject: [PATCH 06/42] block: Catch !bs->drv in bdrv_check()
+
+Message-id: <1434212556-3927-7-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66025
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 06/42] block: Catch !bs->drv in bdrv_check()
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1129893
+
+qemu-img check calls bdrv_check() twice if the first run repaired some
+inconsistencies. If the first run however again triggered corruption
+prevention (on qcow2) due to very bad inconsistencies, bs->drv may be
+NULL afterwards. Thus, bdrv_check() should check whether bs->drv is set.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 908bcd540f489f7adf2d804347905b0025d808d3)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/block.c b/block.c
+index caea2ea..1afa544 100644
+--- a/block.c
++++ b/block.c
+@@ -1998,6 +1998,9 @@ bool bdrv_dev_is_medium_locked(BlockDriverState *bs)
+  */
+ int bdrv_check(BlockDriverState *bs, BdrvCheckResult *res, BdrvCheckMode fix)
+ {
++    if (bs->drv == NULL) {
++        return -ENOMEDIUM;
++    }
+     if (bs->drv->bdrv_check == NULL) {
+         return -ENOTSUP;
+     }
+-- 
+1.8.3.1
+

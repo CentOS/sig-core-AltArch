@@ -1,0 +1,928 @@
+From 3e04367b75615f4b1b53350b875c5c14b68dc785 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Wed, 6 Nov 2013 14:41:12 +0100
+Subject: [PATCH 36/81] qdev: Replace no_user by cannot_instantiate_with_device_add_yet
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383748882-22831-8-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55533
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 07/17] qdev: Replace no_user by cannot_instantiate_with_device_add_yet
+Bugzilla: 1001216
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+In an ideal world, machines can be built by wiring devices together
+with configuration, not code.  Unfortunately, that's not the world we
+live in right now.  We still have quite a few devices that need to be
+wired up by code.  If you try to device_add such a device, it'll fail
+in sometimes mysterious ways.  If you're lucky, you get an
+unmysterious immediate crash.
+
+To protect users from such badness, DeviceClass member no_user used to
+make device models unavailable with -device / device_add, but that
+regressed in commit 18b6dad.  The device model is still omitted from
+help, but is available anyway.
+
+Attempts to fix the regression have been rejected with the argument
+that the purpose of no_user isn't clear, and it's prone to misuse.
+
+This commit clarifies no_user's purpose.  Anthony suggested to rename
+it cannot_instantiate_with_device_add_yet_due_to_internal_bugs, which
+I shorten somewhat to keep checkpatch happy.  While there, make it
+bool.
+
+Every use of cannot_instantiate_with_device_add_yet gets a FIXME
+comment asking for rationale.  The next few commits will clean them
+all up, either by providing a rationale, or by getting rid of the use.
+
+With that done, the regression fix is hopefully acceptable.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Marcel Apfelbaum <marcel.a@redhat.com>
+(cherry picked from pending upstream submission)
+
+Conflicts:
+	hw/dma/pl080.c
+	hw/i386/kvm/clock.c
+	hw/i386/pc.c
+	hw/input/pckbd.c
+	hw/input/vmmouse.c
+	hw/misc/vmport.c
+	hw/nvram/fw_cfg.c
+	hw/pci-host/piix.c
+	hw/timer/hpet.c
+	hw/timer/m48t59.c
+	hw/timer/mc146818rtc.c
+
+A few more semantic conflicts elsewhere.  Conflict resolution is
+always the same: replace just no_user, keep context intact.
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ hw/acpi/piix4.c            |  2 +-
+ hw/alpha/typhoon.c         |  2 +-
+ hw/arm/versatilepb.c       |  2 +-
+ hw/audio/pcspk.c           |  2 +-
+ hw/audio/pl041.c           |  2 +-
+ hw/block/fdc.c             |  2 +-
+ hw/display/pl110.c         |  6 +++---
+ hw/dma/pl080.c             |  4 ++--
+ hw/i2c/smbus_ich9.c        |  2 +-
+ hw/i386/kvm/clock.c        |  2 +-
+ hw/i386/kvmvapic.c         |  2 +-
+ hw/i386/pc.c               |  2 +-
+ hw/ide/piix.c              |  6 +++---
+ hw/ide/via.c               |  2 +-
+ hw/input/pckbd.c           |  2 +-
+ hw/input/vmmouse.c         |  2 +-
+ hw/intc/apic_common.c      |  2 +-
+ hw/intc/arm_gic.c          |  2 +-
+ hw/intc/arm_gic_common.c   |  2 +-
+ hw/intc/arm_gic_kvm.c      |  2 +-
+ hw/intc/i8259_common.c     |  2 +-
+ hw/intc/ioapic_common.c    |  2 +-
+ hw/intc/pl190.c            |  2 +-
+ hw/isa/isa-bus.c           |  2 +-
+ hw/isa/lpc_ich9.c          |  2 +-
+ hw/isa/piix4.c             |  2 +-
+ hw/isa/vt82c686.c          |  2 +-
+ hw/misc/arm_l2x0.c         |  2 +-
+ hw/misc/pvpanic.c          |  2 +-
+ hw/misc/vmport.c           |  2 +-
+ hw/nvram/fw_cfg.c          |  2 +-
+ hw/pci-host/bonito.c       |  4 ++--
+ hw/pci-host/grackle.c      |  4 ++--
+ hw/pci-host/piix.c         |  8 ++++----
+ hw/pci-host/prep.c         |  4 ++--
+ hw/ppc/spapr_vio.c         |  2 +-
+ hw/s390x/ipl.c             |  2 +-
+ hw/s390x/s390-virtio-bus.c |  2 +-
+ hw/s390x/virtio-ccw.c      |  2 +-
+ hw/sd/pl181.c              |  2 +-
+ hw/timer/arm_mptimer.c     |  2 +-
+ hw/timer/hpet.c            |  2 +-
+ hw/timer/i8254_common.c    |  2 +-
+ hw/timer/m48t59.c          |  2 +-
+ hw/timer/mc146818rtc.c     |  2 +-
+ hw/timer/pl031.c           |  2 +-
+ include/hw/qdev-core.h     | 13 ++++++++++++-
+ qdev-monitor.c             |  5 +++--
+ qom/cpu.c                  |  2 +-
+ 49 files changed, 73 insertions(+), 61 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/acpi/piix4.c            |    2 +-
+ hw/alpha/typhoon.c         |    2 +-
+ hw/arm/versatilepb.c       |    2 +-
+ hw/audio/pcspk.c           |    2 +-
+ hw/audio/pl041.c           |    2 +-
+ hw/block/fdc.c             |    2 +-
+ hw/display/pl110.c         |    6 +++---
+ hw/dma/pl080.c             |    4 ++--
+ hw/i2c/smbus_ich9.c        |    2 +-
+ hw/i386/kvm/clock.c        |    2 +-
+ hw/i386/kvmvapic.c         |    2 +-
+ hw/i386/pc.c               |    2 +-
+ hw/ide/piix.c              |    6 +++---
+ hw/ide/via.c               |    2 +-
+ hw/input/pckbd.c           |    2 +-
+ hw/input/vmmouse.c         |    2 +-
+ hw/intc/apic_common.c      |    2 +-
+ hw/intc/arm_gic.c          |    2 +-
+ hw/intc/arm_gic_common.c   |    2 +-
+ hw/intc/arm_gic_kvm.c      |    2 +-
+ hw/intc/i8259_common.c     |    2 +-
+ hw/intc/ioapic_common.c    |    2 +-
+ hw/intc/pl190.c            |    2 +-
+ hw/isa/isa-bus.c           |    2 +-
+ hw/isa/lpc_ich9.c          |    2 +-
+ hw/isa/piix4.c             |    2 +-
+ hw/isa/vt82c686.c          |    2 +-
+ hw/misc/arm_l2x0.c         |    2 +-
+ hw/misc/pvpanic.c          |    2 +-
+ hw/misc/vmport.c           |    2 +-
+ hw/nvram/fw_cfg.c          |    2 +-
+ hw/pci-host/bonito.c       |    4 ++--
+ hw/pci-host/grackle.c      |    4 ++--
+ hw/pci-host/piix.c         |    8 ++++----
+ hw/pci-host/prep.c         |    4 ++--
+ hw/ppc/spapr_vio.c         |    2 +-
+ hw/s390x/ipl.c             |    2 +-
+ hw/s390x/s390-virtio-bus.c |    2 +-
+ hw/s390x/virtio-ccw.c      |    2 +-
+ hw/sd/pl181.c              |    2 +-
+ hw/timer/arm_mptimer.c     |    2 +-
+ hw/timer/hpet.c            |    2 +-
+ hw/timer/i8254_common.c    |    2 +-
+ hw/timer/m48t59.c          |    2 +-
+ hw/timer/mc146818rtc.c     |    2 +-
+ hw/timer/pl031.c           |    2 +-
+ include/hw/qdev-core.h     |   13 ++++++++++++-
+ qdev-monitor.c             |    5 +++--
+ qom/cpu.c                  |    2 +-
+ 49 files changed, 73 insertions(+), 61 deletions(-)
+
+diff --git a/hw/acpi/piix4.c b/hw/acpi/piix4.c
+index f14867a..46685b7 100644
+--- a/hw/acpi/piix4.c
++++ b/hw/acpi/piix4.c
+@@ -494,7 +494,7 @@ static void piix4_pm_class_init(ObjectClass *klass, void *data)
+     k->revision = 0x03;
+     k->class_id = PCI_CLASS_BRIDGE_OTHER;
+     dc->desc = "PM";
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_acpi;
+     dc->props = piix4_pm_properties;
+ }
+diff --git a/hw/alpha/typhoon.c b/hw/alpha/typhoon.c
+index 1ead187..55a0e76 100644
+--- a/hw/alpha/typhoon.c
++++ b/hw/alpha/typhoon.c
+@@ -823,7 +823,7 @@ static void typhoon_pcihost_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = typhoon_pcihost_init;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo typhoon_pcihost_info = {
+diff --git a/hw/arm/versatilepb.c b/hw/arm/versatilepb.c
+index 753757e..84cd1ed 100644
+--- a/hw/arm/versatilepb.c
++++ b/hw/arm/versatilepb.c
+@@ -387,7 +387,7 @@ static void vpb_sic_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = vpb_sic_init;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_vpb_sic;
+ }
+ 
+diff --git a/hw/audio/pcspk.c b/hw/audio/pcspk.c
+index 4e03bc9..9186304 100644
+--- a/hw/audio/pcspk.c
++++ b/hw/audio/pcspk.c
+@@ -188,7 +188,7 @@ static void pcspk_class_initfn(ObjectClass *klass, void *data)
+ 
+     ic->init = pcspk_initfn;
+     set_bit(DEVICE_CATEGORY_SOUND, dc->categories);
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->props = pcspk_properties;
+ }
+ 
+diff --git a/hw/audio/pl041.c b/hw/audio/pl041.c
+index 9b11cc9..36a7ecb 100644
+--- a/hw/audio/pl041.c
++++ b/hw/audio/pl041.c
+@@ -627,7 +627,7 @@ static void pl041_device_class_init(ObjectClass *klass, void *data)
+ 
+     k->init = pl041_init;
+     set_bit(DEVICE_CATEGORY_SOUND, dc->categories);
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->reset = pl041_device_reset;
+     dc->vmsd = &vmstate_pl041;
+     dc->props = pl041_device_properties;
+diff --git a/hw/block/fdc.c b/hw/block/fdc.c
+index e292f4c..1524e09 100644
+--- a/hw/block/fdc.c
++++ b/hw/block/fdc.c
+@@ -2206,7 +2206,7 @@ static void isabus_fdc_class_init(ObjectClass *klass, void *data)
+     ISADeviceClass *ic = ISA_DEVICE_CLASS(klass);
+     ic->init = isabus_fdc_init1;
+     dc->fw_name = "fdc";
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->reset = fdctrl_external_reset_isa;
+     dc->vmsd = &vmstate_isa_fdc;
+     dc->props = isa_fdc_properties;
+diff --git a/hw/display/pl110.c b/hw/display/pl110.c
+index b45a7be..173ddf8 100644
+--- a/hw/display/pl110.c
++++ b/hw/display/pl110.c
+@@ -482,7 +482,7 @@ static void pl110_class_init(ObjectClass *klass, void *data)
+ 
+     k->init = pl110_init;
+     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_pl110;
+ }
+ 
+@@ -500,7 +500,7 @@ static void pl110_versatile_class_init(ObjectClass *klass, void *data)
+ 
+     k->init = pl110_versatile_init;
+     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_pl110;
+ }
+ 
+@@ -518,7 +518,7 @@ static void pl111_class_init(ObjectClass *klass, void *data)
+ 
+     k->init = pl111_init;
+     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_pl110;
+ }
+ 
+diff --git a/hw/dma/pl080.c b/hw/dma/pl080.c
+index 00b66b4..2920780 100644
+--- a/hw/dma/pl080.c
++++ b/hw/dma/pl080.c
+@@ -382,7 +382,7 @@ static void pl080_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = pl080_init;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_pl080;
+ }
+ 
+@@ -399,7 +399,7 @@ static void pl081_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = pl081_init;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_pl080;
+ }
+ 
+diff --git a/hw/i2c/smbus_ich9.c b/hw/i2c/smbus_ich9.c
+index ca22978..c1ffa34 100644
+--- a/hw/i2c/smbus_ich9.c
++++ b/hw/i2c/smbus_ich9.c
+@@ -97,7 +97,7 @@ static void ich9_smb_class_init(ObjectClass *klass, void *data)
+     k->device_id = PCI_DEVICE_ID_INTEL_ICH9_6;
+     k->revision = ICH9_A2_SMB_REVISION;
+     k->class_id = PCI_CLASS_SERIAL_SMBUS;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_ich9_smbus;
+     dc->desc = "ICH9 SMBUS Bridge";
+     k->init = ich9_smbus_initfn;
+diff --git a/hw/i386/kvm/clock.c b/hw/i386/kvm/clock.c
+index 98e5ca5..6204939 100644
+--- a/hw/i386/kvm/clock.c
++++ b/hw/i386/kvm/clock.c
+@@ -110,7 +110,7 @@ static void kvmclock_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = kvmclock_init;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &kvmclock_vmsd;
+ }
+ 
+diff --git a/hw/i386/kvmvapic.c b/hw/i386/kvmvapic.c
+index 655483b..e6405da 100644
+--- a/hw/i386/kvmvapic.c
++++ b/hw/i386/kvmvapic.c
+@@ -809,7 +809,7 @@ static void vapic_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *sc = SYS_BUS_DEVICE_CLASS(klass);
+     DeviceClass *dc = DEVICE_CLASS(klass);
+ 
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->reset   = vapic_reset;
+     dc->vmsd    = &vmstate_vapic;
+     sc->init    = vapic_init;
+diff --git a/hw/i386/pc.c b/hw/i386/pc.c
+index d3acbbb..0a8840a 100644
+--- a/hw/i386/pc.c
++++ b/hw/i386/pc.c
+@@ -538,7 +538,7 @@ static void port92_class_initfn(ObjectClass *klass, void *data)
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     ISADeviceClass *ic = ISA_DEVICE_CLASS(klass);
+     ic->init = port92_initfn;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->reset = port92_reset;
+     dc->vmsd = &vmstate_port92_isa;
+ }
+diff --git a/hw/ide/piix.c b/hw/ide/piix.c
+index 8d4bf2f..e6864b1 100644
+--- a/hw/ide/piix.c
++++ b/hw/ide/piix.c
+@@ -249,7 +249,7 @@ static void piix3_ide_class_init(ObjectClass *klass, void *data)
+     k->device_id = PCI_DEVICE_ID_INTEL_82371SB_1;
+     k->class_id = PCI_CLASS_STORAGE_IDE;
+     set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo piix3_ide_info = {
+@@ -269,7 +269,7 @@ static void piix3_ide_xen_class_init(ObjectClass *klass, void *data)
+     k->device_id = PCI_DEVICE_ID_INTEL_82371SB_1;
+     k->class_id = PCI_CLASS_STORAGE_IDE;
+     set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->unplug = pci_piix3_xen_ide_unplug;
+ }
+ 
+@@ -292,7 +292,7 @@ static void piix4_ide_class_init(ObjectClass *klass, void *data)
+     k->device_id = PCI_DEVICE_ID_INTEL_82371AB;
+     k->class_id = PCI_CLASS_STORAGE_IDE;
+     set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo piix4_ide_info = {
+diff --git a/hw/ide/via.c b/hw/ide/via.c
+index 30dedd8..6ba99c8 100644
+--- a/hw/ide/via.c
++++ b/hw/ide/via.c
+@@ -224,7 +224,7 @@ static void via_ide_class_init(ObjectClass *klass, void *data)
+     k->revision = 0x06;
+     k->class_id = PCI_CLASS_STORAGE_IDE;
+     set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo via_ide_info = {
+diff --git a/hw/input/pckbd.c b/hw/input/pckbd.c
+index 17a5614..98b8b15 100644
+--- a/hw/input/pckbd.c
++++ b/hw/input/pckbd.c
+@@ -514,7 +514,7 @@ static void i8042_class_initfn(ObjectClass *klass, void *data)
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     ISADeviceClass *ic = ISA_DEVICE_CLASS(klass);
+     ic->init = i8042_initfn;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_kbd_isa;
+ }
+ 
+diff --git a/hw/input/vmmouse.c b/hw/input/vmmouse.c
+index a610738..c9d5131 100644
+--- a/hw/input/vmmouse.c
++++ b/hw/input/vmmouse.c
+@@ -284,7 +284,7 @@ static void vmmouse_class_initfn(ObjectClass *klass, void *data)
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     ISADeviceClass *ic = ISA_DEVICE_CLASS(klass);
+     ic->init = vmmouse_initfn;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->reset = vmmouse_reset;
+     dc->vmsd = &vmstate_vmmouse;
+     dc->props = vmmouse_properties;
+diff --git a/hw/intc/apic_common.c b/hw/intc/apic_common.c
+index b03e904..208e7b1 100644
+--- a/hw/intc/apic_common.c
++++ b/hw/intc/apic_common.c
+@@ -386,7 +386,7 @@ static void apic_common_class_init(ObjectClass *klass, void *data)
+ 
+     dc->vmsd = &vmstate_apic_common;
+     dc->reset = apic_reset_common;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->props = apic_properties_common;
+     idc->init = apic_init_common;
+ }
+diff --git a/hw/intc/arm_gic.c b/hw/intc/arm_gic.c
+index bae6572..243cbf1 100644
+--- a/hw/intc/arm_gic.c
++++ b/hw/intc/arm_gic.c
+@@ -702,7 +702,7 @@ static void arm_gic_class_init(ObjectClass *klass, void *data)
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     ARMGICClass *agc = ARM_GIC_CLASS(klass);
+ 
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     agc->parent_realize = dc->realize;
+     dc->realize = arm_gic_realize;
+ }
+diff --git a/hw/intc/arm_gic_common.c b/hw/intc/arm_gic_common.c
+index 08560f2..26b7756 100644
+--- a/hw/intc/arm_gic_common.c
++++ b/hw/intc/arm_gic_common.c
+@@ -156,7 +156,7 @@ static void arm_gic_common_class_init(ObjectClass *klass, void *data)
+     dc->realize = arm_gic_common_realize;
+     dc->props = arm_gic_common_properties;
+     dc->vmsd = &vmstate_gic;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo arm_gic_common_type = {
+diff --git a/hw/intc/arm_gic_kvm.c b/hw/intc/arm_gic_kvm.c
+index b756456..cb4ce23 100644
+--- a/hw/intc/arm_gic_kvm.c
++++ b/hw/intc/arm_gic_kvm.c
+@@ -148,7 +148,7 @@ static void kvm_arm_gic_class_init(ObjectClass *klass, void *data)
+     kgc->parent_reset = dc->reset;
+     dc->realize = kvm_arm_gic_realize;
+     dc->reset = kvm_arm_gic_reset;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo kvm_arm_gic_info = {
+diff --git a/hw/intc/i8259_common.c b/hw/intc/i8259_common.c
+index c2ba6a5..70868a5 100644
+--- a/hw/intc/i8259_common.c
++++ b/hw/intc/i8259_common.c
+@@ -139,7 +139,7 @@ static void pic_common_class_init(ObjectClass *klass, void *data)
+     DeviceClass *dc = DEVICE_CLASS(klass);
+ 
+     dc->vmsd = &vmstate_pic_common;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->props = pic_properties_common;
+     ic->init = pic_init_common;
+ }
+diff --git a/hw/intc/ioapic_common.c b/hw/intc/ioapic_common.c
+index 5c5bb3c..ce610b7 100644
+--- a/hw/intc/ioapic_common.c
++++ b/hw/intc/ioapic_common.c
+@@ -100,7 +100,7 @@ static void ioapic_common_class_init(ObjectClass *klass, void *data)
+ 
+     sc->init = ioapic_init_common;
+     dc->vmsd = &vmstate_ioapic_common;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo ioapic_common_type = {
+diff --git a/hw/intc/pl190.c b/hw/intc/pl190.c
+index 9610673..ff0e5b0 100644
+--- a/hw/intc/pl190.c
++++ b/hw/intc/pl190.c
+@@ -269,7 +269,7 @@ static void pl190_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = pl190_init;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->reset = pl190_reset;
+     dc->vmsd = &vmstate_pl190;
+ }
+diff --git a/hw/isa/isa-bus.c b/hw/isa/isa-bus.c
+index 7860b17..a87a841 100644
+--- a/hw/isa/isa-bus.c
++++ b/hw/isa/isa-bus.c
+@@ -217,7 +217,7 @@ static void isabus_bridge_class_init(ObjectClass *klass, void *data)
+ 
+     k->init = isabus_bridge_init;
+     dc->fw_name = "isa";
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo isabus_bridge_info = {
+diff --git a/hw/isa/lpc_ich9.c b/hw/isa/lpc_ich9.c
+index 2760dce..580e9ac 100644
+--- a/hw/isa/lpc_ich9.c
++++ b/hw/isa/lpc_ich9.c
+@@ -603,7 +603,7 @@ static void ich9_lpc_class_init(ObjectClass *klass, void *data)
+     dc->reset = ich9_lpc_reset;
+     k->init = ich9_lpc_initfn;
+     dc->vmsd = &vmstate_ich9_lpc;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     k->config_write = ich9_lpc_config_write;
+     dc->desc = "ICH9 LPC bridge";
+     k->vendor_id = PCI_VENDOR_ID_INTEL;
+diff --git a/hw/isa/piix4.c b/hw/isa/piix4.c
+index d750413..10bf8ff 100644
+--- a/hw/isa/piix4.c
++++ b/hw/isa/piix4.c
+@@ -113,7 +113,7 @@ static void piix4_class_init(ObjectClass *klass, void *data)
+     k->device_id = PCI_DEVICE_ID_INTEL_82371AB_0;
+     k->class_id = PCI_CLASS_BRIDGE_ISA;
+     dc->desc = "ISA bridge";
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_piix4;
+ }
+ 
+diff --git a/hw/isa/vt82c686.c b/hw/isa/vt82c686.c
+index 79057a6..563e154 100644
+--- a/hw/isa/vt82c686.c
++++ b/hw/isa/vt82c686.c
+@@ -468,7 +468,7 @@ static void via_class_init(ObjectClass *klass, void *data)
+     k->class_id = PCI_CLASS_BRIDGE_ISA;
+     k->revision = 0x40;
+     dc->desc = "ISA bridge";
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_via;
+ }
+ 
+diff --git a/hw/misc/arm_l2x0.c b/hw/misc/arm_l2x0.c
+index eb4427d..2b19e34 100644
+--- a/hw/misc/arm_l2x0.c
++++ b/hw/misc/arm_l2x0.c
+@@ -174,7 +174,7 @@ static void l2x0_class_init(ObjectClass *klass, void *data)
+ 
+     k->init = l2x0_priv_init;
+     dc->vmsd = &vmstate_l2x0;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->props = l2x0_properties;
+     dc->reset = l2x0_priv_reset;
+ }
+diff --git a/hw/misc/pvpanic.c b/hw/misc/pvpanic.c
+index 31e1b1d..af4a8b2 100644
+--- a/hw/misc/pvpanic.c
++++ b/hw/misc/pvpanic.c
+@@ -125,7 +125,7 @@ static void pvpanic_isa_class_init(ObjectClass *klass, void *data)
+     ISADeviceClass *ic = ISA_DEVICE_CLASS(klass);
+ 
+     ic->init = pvpanic_isa_initfn;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->props = pvpanic_isa_properties;
+ }
+ 
+diff --git a/hw/misc/vmport.c b/hw/misc/vmport.c
+index c146129..ab7adf1 100644
+--- a/hw/misc/vmport.c
++++ b/hw/misc/vmport.c
+@@ -156,7 +156,7 @@ static void vmport_class_initfn(ObjectClass *klass, void *data)
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     ISADeviceClass *ic = ISA_DEVICE_CLASS(klass);
+     ic->init = vmport_initfn;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo vmport_info = {
+diff --git a/hw/nvram/fw_cfg.c b/hw/nvram/fw_cfg.c
+index 1a7e49c..155edd4 100644
+--- a/hw/nvram/fw_cfg.c
++++ b/hw/nvram/fw_cfg.c
+@@ -559,7 +559,7 @@ static void fw_cfg_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = fw_cfg_init1;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->reset = fw_cfg_reset;
+     dc->vmsd = &vmstate_fw_cfg;
+     dc->props = fw_cfg_properties;
+diff --git a/hw/pci-host/bonito.c b/hw/pci-host/bonito.c
+index 974150b..b73359e 100644
+--- a/hw/pci-host/bonito.c
++++ b/hw/pci-host/bonito.c
+@@ -811,7 +811,7 @@ static void bonito_class_init(ObjectClass *klass, void *data)
+     k->revision = 0x01;
+     k->class_id = PCI_CLASS_BRIDGE_HOST;
+     dc->desc = "Host bridge";
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_bonito;
+ }
+ 
+@@ -828,7 +828,7 @@ static void bonito_pcihost_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = bonito_pcihost_initfn;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo bonito_pcihost_info = {
+diff --git a/hw/pci-host/grackle.c b/hw/pci-host/grackle.c
+index 69344d9..5eb2840 100644
+--- a/hw/pci-host/grackle.c
++++ b/hw/pci-host/grackle.c
+@@ -130,7 +130,7 @@ static void grackle_pci_class_init(ObjectClass *klass, void *data)
+     k->device_id = PCI_DEVICE_ID_MOTOROLA_MPC106;
+     k->revision  = 0x00;
+     k->class_id  = PCI_CLASS_BRIDGE_HOST;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo grackle_pci_info = {
+@@ -146,7 +146,7 @@ static void pci_grackle_class_init(ObjectClass *klass, void *data)
+     DeviceClass *dc = DEVICE_CLASS(klass);
+ 
+     k->init = pci_grackle_init_device;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo grackle_pci_host_info = {
+diff --git a/hw/pci-host/piix.c b/hw/pci-host/piix.c
+index f9e68c3..b9c2dcf 100644
+--- a/hw/pci-host/piix.c
++++ b/hw/pci-host/piix.c
+@@ -564,7 +564,7 @@ static void piix3_class_init(ObjectClass *klass, void *data)
+ 
+     dc->desc        = "ISA bridge";
+     dc->vmsd        = &vmstate_piix3;
+-    dc->no_user     = 1,
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     k->no_hotplug   = 1;
+     k->init         = piix3_initfn;
+     k->config_write = piix3_write_config;
+@@ -588,7 +588,7 @@ static void piix3_xen_class_init(ObjectClass *klass, void *data)
+ 
+     dc->desc        = "ISA bridge";
+     dc->vmsd        = &vmstate_piix3;
+-    dc->no_user     = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     k->no_hotplug   = 1;
+     k->init         = piix3_initfn;
+     k->config_write = piix3_write_config_xen;
+@@ -618,7 +618,7 @@ static void i440fx_class_init(ObjectClass *klass, void *data)
+     k->revision = 0x02;
+     k->class_id = PCI_CLASS_BRIDGE_HOST;
+     dc->desc = "Host bridge";
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_i440fx;
+ }
+ 
+@@ -636,7 +636,7 @@ static void i440fx_pcihost_class_init(ObjectClass *klass, void *data)
+ 
+     k->init = i440fx_pcihost_initfn;
+     dc->fw_name = "pci";
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo i440fx_pcihost_info = {
+diff --git a/hw/pci-host/prep.c b/hw/pci-host/prep.c
+index 8c4e6eb..eec538e 100644
+--- a/hw/pci-host/prep.c
++++ b/hw/pci-host/prep.c
+@@ -196,7 +196,7 @@ static void raven_class_init(ObjectClass *klass, void *data)
+     k->class_id = PCI_CLASS_BRIDGE_HOST;
+     dc->desc = "PReP Host Bridge - Motorola Raven";
+     dc->vmsd = &vmstate_raven;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo raven_info = {
+@@ -213,7 +213,7 @@ static void raven_pcihost_class_init(ObjectClass *klass, void *data)
+     set_bit(DEVICE_CATEGORY_BRIDGE, dc->categories);
+     dc->realize = raven_pcihost_realizefn;
+     dc->fw_name = "pci";
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo raven_pcihost_info = {
+diff --git a/hw/ppc/spapr_vio.c b/hw/ppc/spapr_vio.c
+index 1405c32..42b6367 100644
+--- a/hw/ppc/spapr_vio.c
++++ b/hw/ppc/spapr_vio.c
+@@ -533,7 +533,7 @@ static void spapr_vio_bridge_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = spapr_vio_bridge_init;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo spapr_vio_bridge_info = {
+diff --git a/hw/s390x/ipl.c b/hw/s390x/ipl.c
+index d69adb2..f86a4af 100644
+--- a/hw/s390x/ipl.c
++++ b/hw/s390x/ipl.c
+@@ -181,7 +181,7 @@ static void s390_ipl_class_init(ObjectClass *klass, void *data)
+     k->init = s390_ipl_init;
+     dc->props = s390_ipl_properties;
+     dc->reset = s390_ipl_reset;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo s390_ipl_info = {
+diff --git a/hw/s390x/s390-virtio-bus.c b/hw/s390x/s390-virtio-bus.c
+index 207eb82..9078bfb 100644
+--- a/hw/s390x/s390-virtio-bus.c
++++ b/hw/s390x/s390-virtio-bus.c
+@@ -679,7 +679,7 @@ static void s390_virtio_bridge_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = s390_virtio_bridge_init;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo s390_virtio_bridge_info = {
+diff --git a/hw/s390x/virtio-ccw.c b/hw/s390x/virtio-ccw.c
+index de51589..74eb559 100644
+--- a/hw/s390x/virtio-ccw.c
++++ b/hw/s390x/virtio-ccw.c
+@@ -1075,7 +1075,7 @@ static void virtual_css_bridge_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = virtual_css_bridge_init;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo virtual_css_bridge_info = {
+diff --git a/hw/sd/pl181.c b/hw/sd/pl181.c
+index 2527296..95e4587 100644
+--- a/hw/sd/pl181.c
++++ b/hw/sd/pl181.c
+@@ -497,7 +497,7 @@ static void pl181_class_init(ObjectClass *klass, void *data)
+     sdc->init = pl181_init;
+     k->vmsd = &vmstate_pl181;
+     k->reset = pl181_reset;
+-    k->no_user = 1;
++    k->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo pl181_info = {
+diff --git a/hw/timer/arm_mptimer.c b/hw/timer/arm_mptimer.c
+index 317f5e4..6b088fa 100644
+--- a/hw/timer/arm_mptimer.c
++++ b/hw/timer/arm_mptimer.c
+@@ -290,7 +290,7 @@ static void arm_mptimer_class_init(ObjectClass *klass, void *data)
+     sbc->init = arm_mptimer_init;
+     dc->vmsd = &vmstate_arm_mptimer;
+     dc->reset = arm_mptimer_reset;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->props = arm_mptimer_properties;
+ }
+ 
+diff --git a/hw/timer/hpet.c b/hw/timer/hpet.c
+index 95dd01d..3f7f457 100644
+--- a/hw/timer/hpet.c
++++ b/hw/timer/hpet.c
+@@ -739,7 +739,7 @@ static void hpet_device_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = hpet_init;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->reset = hpet_reset;
+     dc->vmsd = &vmstate_hpet;
+     dc->props = hpet_device_properties;
+diff --git a/hw/timer/i8254_common.c b/hw/timer/i8254_common.c
+index f6f9d26..8f01313 100644
+--- a/hw/timer/i8254_common.c
++++ b/hw/timer/i8254_common.c
+@@ -291,7 +291,7 @@ static void pit_common_class_init(ObjectClass *klass, void *data)
+ 
+     ic->init = pit_init_common;
+     dc->vmsd = &vmstate_pit_common;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo pit_common_type = {
+diff --git a/hw/timer/m48t59.c b/hw/timer/m48t59.c
+index 45753d8..e536bb9 100644
+--- a/hw/timer/m48t59.c
++++ b/hw/timer/m48t59.c
+@@ -740,7 +740,7 @@ static void m48t59_isa_class_init(ObjectClass *klass, void *data)
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     ISADeviceClass *ic = ISA_DEVICE_CLASS(klass);
+     ic->init = m48t59_init_isa1;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->reset = m48t59_reset_isa;
+     dc->props = m48t59_isa_properties;
+ }
+diff --git a/hw/timer/mc146818rtc.c b/hw/timer/mc146818rtc.c
+index 481604d..7a70556 100644
+--- a/hw/timer/mc146818rtc.c
++++ b/hw/timer/mc146818rtc.c
+@@ -904,7 +904,7 @@ static void rtc_class_initfn(ObjectClass *klass, void *data)
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     ISADeviceClass *ic = ISA_DEVICE_CLASS(klass);
+     ic->init = rtc_initfn;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_rtc;
+     dc->props = mc146818rtc_properties;
+ }
+diff --git a/hw/timer/pl031.c b/hw/timer/pl031.c
+index 764940b..aa9c5a6 100644
+--- a/hw/timer/pl031.c
++++ b/hw/timer/pl031.c
+@@ -246,7 +246,7 @@ static void pl031_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = pl031_init;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_pl031;
+ }
+ 
+diff --git a/include/hw/qdev-core.h b/include/hw/qdev-core.h
+index a8618db..44feb54 100644
+--- a/include/hw/qdev-core.h
++++ b/include/hw/qdev-core.h
+@@ -97,7 +97,18 @@ typedef struct DeviceClass {
+     const char *fw_name;
+     const char *desc;
+     Property *props;
+-    int no_user;
++
++    /*
++     * Shall we hide this device model from -device / device_add?
++     * All devices should support instantiation with device_add, and
++     * this flag should not exist.  But we're not there, yet.  Some
++     * devices fail to instantiate with cryptic error messages.
++     * Others instantiate, but don't work.  Exposing users to such
++     * behavior would be cruel; this flag serves to protect them.  It
++     * should never be set without a comment explaining why it is set.
++     * TODO remove once we're there
++     */
++    bool cannot_instantiate_with_device_add_yet;
+ 
+     /* callbacks */
+     void (*reset)(DeviceState *dev);
+diff --git a/qdev-monitor.c b/qdev-monitor.c
+index aa6a261..f54cb21 100644
+--- a/qdev-monitor.c
++++ b/qdev-monitor.c
+@@ -87,7 +87,7 @@ static void qdev_print_devinfo(DeviceClass *dc)
+     if (dc->desc) {
+         error_printf(", desc \"%s\"", dc->desc);
+     }
+-    if (dc->no_user) {
++    if (dc->cannot_instantiate_with_device_add_yet) {
+         error_printf(", no-user");
+     }
+     error_printf("\n");
+@@ -127,7 +127,8 @@ static void qdev_print_devinfos(bool show_no_user)
+             if ((i < DEVICE_CATEGORY_MAX
+                  ? !test_bit(i, dc->categories)
+                  : !bitmap_empty(dc->categories, DEVICE_CATEGORY_MAX))
+-                || (!show_no_user && dc->no_user)) {
++                || (!show_no_user
++                    && dc->cannot_instantiate_with_device_add_yet)) {
+                 continue;
+             }
+             if (!cat_printed) {
+diff --git a/qom/cpu.c b/qom/cpu.c
+index b25fbc9..f97e1b8 100644
+--- a/qom/cpu.c
++++ b/qom/cpu.c
+@@ -210,7 +210,7 @@ static void cpu_class_init(ObjectClass *klass, void *data)
+     k->write_elf64_qemunote = cpu_common_write_elf64_qemunote;
+     k->write_elf64_note = cpu_common_write_elf64_note;
+     dc->realize = cpu_common_realizefn;
+-    dc->no_user = 1;
++    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo cpu_type_info = {
+-- 
+1.7.1
+

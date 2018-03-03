@@ -1,0 +1,64 @@
+From 95b523f48df55dfd60229d2573385828a884aa7c Mon Sep 17 00:00:00 2001
+From: Jeff Cody <jcody@redhat.com>
+Date: Tue, 25 Mar 2014 14:23:25 +0100
+Subject: [PATCH 18/49] vhdx: Bounds checking for block_size and logical_sector_size (CVE-2014-0148)
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1395753835-7591-19-git-send-email-kwolf@redhat.com>
+Patchwork-id: n/a
+O-Subject: [virt-devel] [EMBARGOED RHEL-7.0 qemu-kvm PATCH 18/48] vhdx: Bounds checking for block_size and logical_sector_size (CVE-2014-0148)
+Bugzilla: 1079346
+RH-Acked-by: Jeff Cody <jcody@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: Jeff Cody <jcody@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1079346
+Upstream status: Embargoed
+
+Other variables (e.g. sectors_per_block) are calculated using these
+variables, and if not range-checked illegal values could be obtained
+causing infinite loops and other potential issues when calculating
+BAT entries.
+
+The 1.00 VHDX spec requires BlockSize to be min 1MB, max 256MB.
+LogicalSectorSize is required to be either 512 or 4096 bytes.
+
+Reported-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block/vhdx.c |   12 ++++++++++--
+ 1 files changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/block/vhdx.c b/block/vhdx.c
+index 1995778..66a25c9 100644
+--- a/block/vhdx.c
++++ b/block/vhdx.c
+@@ -785,12 +785,20 @@ static int vhdx_parse_metadata(BlockDriverState *bs, BDRVVHDXState *s)
+     le32_to_cpus(&s->logical_sector_size);
+     le32_to_cpus(&s->physical_sector_size);
+ 
+-    if (s->logical_sector_size == 0 || s->params.block_size == 0) {
++    if (s->params.block_size < VHDX_BLOCK_SIZE_MIN ||
++        s->params.block_size > VHDX_BLOCK_SIZE_MAX) {
+         ret = -EINVAL;
+         goto exit;
+     }
+ 
+-    /* both block_size and sector_size are guaranteed powers of 2 */
++    /* only 2 supported sector sizes */
++    if (s->logical_sector_size != 512 && s->logical_sector_size != 4096) {
++        ret = -EINVAL;
++        goto exit;
++    }
++
++    /* Both block_size and sector_size are guaranteed powers of 2, below.
++       Due to range checks above, s->sectors_per_block can never be < 256 */
+     s->sectors_per_block = s->params.block_size / s->logical_sector_size;
+     s->chunk_ratio = (VHDX_MAX_SECTORS_PER_BLOCK) *
+                      (uint64_t)s->logical_sector_size /
+-- 
+1.7.1
+

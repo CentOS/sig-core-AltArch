@@ -1,0 +1,49 @@
+From c4f4c924bac393b2112ce89c66b825730327159f Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Tue, 4 Nov 2014 03:06:39 +0100
+Subject: [PATCH 5/9] virtio-scsi: Report error if num_queues is 0 or too large
+
+Message-id: <1415070401-21222-2-git-send-email-famz@redhat.com>
+Patchwork-id: 62060
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v2 1/3] virtio-scsi: Report error if num_queues is 0 or too large
+Bugzilla: 1089606
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+No cmd vq surprises guest (Linux panics in virtscsi_probe), too many
+queues abort qemu (in the following virtio_add_queue).
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit c9f6552803d852d593dec9ef5bb39b7a61091963)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+
+Downstream notes: changed error_setg -> error_report because downstream
+oesn't have errp. Also changed "return;" -> "return -1".
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/scsi/virtio-scsi.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/hw/scsi/virtio-scsi.c b/hw/scsi/virtio-scsi.c
+index 35b3d65..73f5ad1 100644
+--- a/hw/scsi/virtio-scsi.c
++++ b/hw/scsi/virtio-scsi.c
+@@ -605,6 +605,12 @@ int virtio_scsi_common_init(VirtIOSCSICommon *s)
+     virtio_init(VIRTIO_DEVICE(s), "virtio-scsi", VIRTIO_ID_SCSI,
+                 sizeof(VirtIOSCSIConfig));
+ 
++    if (s->conf.num_queues <= 0 || s->conf.num_queues > VIRTIO_PCI_QUEUE_MAX) {
++        error_report("Invalid number of queues (= %" PRId32 "), "
++                         "must be a positive integer less than %d.",
++                     s->conf.num_queues, VIRTIO_PCI_QUEUE_MAX);
++        return -1;
++    }
+     s->cmd_vqs = g_malloc0(s->conf.num_queues * sizeof(VirtQueue *));
+     s->sense_size = VIRTIO_SCSI_SENSE_SIZE;
+     s->cdb_size = VIRTIO_SCSI_CDB_SIZE;
+-- 
+1.8.3.1
+

@@ -1,0 +1,157 @@
+From 37782b793485e0f45a6e6f0da40d24c04191a13b Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Wed, 16 Jul 2014 02:20:28 -0500
+Subject: [CHANGE 28/29] block: use per-object cflags and libs
+To: rhvirt-patches@redhat.com,
+    jen@redhat.com
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1405477228-11490-5-git-send-email-famz@redhat.com>
+Patchwork-id: 59918
+O-Subject: [RHEL-7 qemu-kvm PATCH 4/4] block: use per-object cflags and libs
+Bugzilla: 1017685
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Miroslav Rezanina <mrezanin@redhat.com>
+
+Upstream: 6ebc91e5d0f408371460ab4329dc6de7f93306ac
+
+No longer adds flags and libs for them to global variables, instead
+create config-host.mak variables like FOO_CFLAGS and FOO_LIBS, which is
+used as per object cflags and libs.
+
+This removes unwanted dependencies from libcacard.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+[Split from Fam's patch to enable modules. - Paolo]
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Manual backport.
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ block/Makefile.objs | 13 ++++++++++++-
+ configure           | 20 ++++++++------------
+ 2 files changed, 20 insertions(+), 13 deletions(-)
+
+Signed-off-by: jen <jen@redhat.com>
+---
+ block/Makefile.objs | 13 ++++++++++++-
+ configure           | 20 ++++++++------------
+ 2 files changed, 20 insertions(+), 13 deletions(-)
+
+diff --git a/block/Makefile.objs b/block/Makefile.objs
+index 84dd57f..dd01fb3 100644
+--- a/block/Makefile.objs
++++ b/block/Makefile.objs
+@@ -24,4 +24,15 @@ common-obj-y += commit.o
+ common-obj-y += mirror.o
+ endif
+ 
+-$(obj)/curl.o: QEMU_CFLAGS+=$(CURL_CFLAGS)
++iscsi.o-cflags     := $(LIBISCSI_CFLAGS)
++iscsi.o-libs       := $(LIBISCSI_LIBS)
++curl.o-cflags      := $(CURL_CFLAGS)
++curl.o-libs        := $(CURL_LIBS)
++rbd.o-cflags       := $(RBD_CFLAGS)
++rbd.o-libs         := $(RBD_LIBS)
++gluster.o-cflags   := $(GLUSTERFS_CFLAGS)
++gluster.o-libs     := $(GLUSTERFS_LIBS)
++ssh.o-cflags       := $(LIBSSH2_CFLAGS)
++ssh.o-libs         := $(LIBSSH2_LIBS)
++qcow.o-libs        := -lz
++linux-aio.o-libs   := -laio
+diff --git a/configure b/configure
+index 8c6f4e5..4552e08 100755
+--- a/configure
++++ b/configure
+@@ -2290,8 +2290,6 @@ EOF
+   curl_libs=`$curlconfig --libs 2>/dev/null`
+   if compile_prog "$curl_cflags" "$curl_libs" ; then
+     curl=yes
+-    libs_tools="$curl_libs $libs_tools"
+-    libs_softmmu="$curl_libs $libs_softmmu"
+   else
+     if test "$curl" = "yes" ; then
+       feature_not_found "curl"
+@@ -2442,9 +2440,6 @@ if test "$libssh2" != "no" ; then
+     libssh2_cflags=`$pkg_config libssh2 --cflags`
+     libssh2_libs=`$pkg_config libssh2 --libs`
+     libssh2=yes
+-    libs_tools="$libssh2_libs $libs_tools"
+-    libs_softmmu="$libssh2_libs $libs_softmmu"
+-    QEMU_CFLAGS="$QEMU_CFLAGS $libssh2_cflags"
+   else
+     if test "$libssh2" = "yes" ; then
+       error_exit "libssh2 >= $min_libssh2_version required for --enable-libssh2"
+@@ -2490,8 +2485,6 @@ int main(void) { io_setup(0, NULL); io_set_eventfd(NULL, 0); eventfd(0, 0); retu
+ EOF
+   if compile_prog "" "-laio" ; then
+     linux_aio=yes
+-    libs_softmmu="$libs_softmmu -laio"
+-    libs_tools="$libs_tools -laio"
+   else
+     if test "$linux_aio" = "yes" ; then
+       feature_not_found "linux AIO"
+@@ -2644,8 +2637,6 @@ EOF
+   glusterfs_libs="-lgfapi -lgfrpc -lgfxdr"
+   if compile_prog "" "$glusterfs_libs" ; then
+     glusterfs=yes
+-    libs_tools="$glusterfs_libs $libs_tools"
+-    libs_softmmu="$glusterfs_libs $libs_softmmu"
+   else
+     if test "$glusterfs" = "yes" ; then
+       feature_not_found "GlusterFS backend support"
+@@ -3002,11 +2993,9 @@ EOF
+     libiscsi="yes"
+     libiscsi_cflags=$($pkg_config --cflags libiscsi 2>/dev/null)
+     libiscsi_libs=$($pkg_config --libs libiscsi 2>/dev/null)
+-    CFLAGS="$CFLAGS $libiscsi_cflags"
+-    LIBS="$LIBS $libiscsi_libs"
+   elif compile_prog "" "-liscsi" ; then
+     libiscsi="yes"
+-    LIBS="$LIBS -liscsi"
++    libiscsi_libs="-liscsi"
+   else
+     if test "$libiscsi" = "yes" ; then
+       feature_not_found "libiscsi"
+@@ -3877,6 +3866,7 @@ fi
+ if test "$curl" = "yes" ; then
+   echo "CONFIG_CURL=y" >> $config_host_mak
+   echo "CURL_CFLAGS=$curl_cflags" >> $config_host_mak
++  echo "CURL_LIBS=$curl_libs" >> $config_host_mak
+ fi
+ if test "$brlapi" = "yes" ; then
+   echo "CONFIG_BRLAPI=y" >> $config_host_mak
+@@ -3966,6 +3956,8 @@ fi
+ 
+ if test "$libiscsi" = "yes" ; then
+   echo "CONFIG_LIBISCSI=y" >> $config_host_mak
++  echo "LIBISCSI_CFLAGS=$libiscsi_cflags" >> $config_host_mak
++  echo "LIBISCSI_LIBS=$libiscsi_libs" >> $config_host_mak
+ fi
+ 
+ if test "$seccomp" = "yes"; then
+@@ -4022,10 +4014,14 @@ fi
+ 
+ if test "$glusterfs" = "yes" ; then
+   echo "CONFIG_GLUSTERFS=y" >> $config_host_mak
++  echo "GLUSTERFS_CFLAGS=$glusterfs_cflags" >> $config_host_mak
++  echo "GLUSTERFS_LIBS=$glusterfs_libs" >> $config_host_mak
+ fi
+ 
+ if test "$libssh2" = "yes" ; then
+   echo "CONFIG_LIBSSH2=y" >> $config_host_mak
++  echo "LIBSSH2_CFLAGS=$libssh2_cflags" >> $config_host_mak
++  echo "LIBSSH2_LIBS=$libssh2_libs" >> $config_host_mak
+ fi
+ 
+ if test "$virtio_blk_data_plane" = "yes" ; then
+-- 
+1.9.3
+

@@ -1,0 +1,114 @@
+From bf8262fae14e0dd80ad8a9c302bd2317139d18a3 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Fri, 7 Nov 2014 17:18:02 +0100
+Subject: [PATCH 15/41] dump: Drop qmp_dump_guest_memory() stub and build for
+ all targets
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Message-id: <1415380693-16593-16-git-send-email-lersek@redhat.com>
+Patchwork-id: 62201
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 15/26] dump: Drop qmp_dump_guest_memory() stub and build for all targets
+Bugzilla: 1157798
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: dgibson <dgibson@redhat.com>
+
+From: Andreas Färber <afaerber@suse.de>
+
+qmp_dump_guest_memory() calls dump_init() and returns an Error when
+cpu_get_dump_info() returns an error, as done by the stub.
+So there is no need to have a stub for qmp_dump_guest_memory().
+
+Enable the documentation of the always-present dump-guest-memory command.
+
+That way we can drop CONFIG_HAVE_CORE_DUMP and leave configure
+completely out of the picture for target CPU features.
+
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit 2a78636bd204e389068d203473ec76558083b44b)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	Makefile.target
+	stubs/dump.c
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+---
+ Makefile.target | 2 +-
+ configure       | 4 ----
+ hmp-commands.hx | 2 --
+ stubs/dump.c    | 8 --------
+ 4 files changed, 1 insertion(+), 15 deletions(-)
+
+diff --git a/Makefile.target b/Makefile.target
+index ca407d7..ea874c9 100644
+--- a/Makefile.target
++++ b/Makefile.target
+@@ -119,7 +119,7 @@ obj-$(CONFIG_FDT) += device_tree.o
+ obj-$(CONFIG_KVM) += kvm-all.o
+ obj-y += memory.o savevm.o cputlb.o
+ obj-$(CONFIG_HAVE_GET_MEMORY_MAPPING) += memory_mapping.o
+-obj-$(CONFIG_HAVE_CORE_DUMP) += dump.o
++obj-y += dump.o
+ obj-$(CONFIG_NO_GET_MEMORY_MAPPING) += memory_mapping-stub.o
+ LIBS+=$(libs_softmmu)
+ 
+diff --git a/configure b/configure
+index 5373237..ca8b107 100755
+--- a/configure
++++ b/configure
+@@ -4483,10 +4483,6 @@ if test "$target_bigendian" = "yes" ; then
+ fi
+ if test "$target_softmmu" = "yes" ; then
+   echo "CONFIG_SOFTMMU=y" >> $config_target_mak
+-  case "$target_arch2" in
+-    i386|x86_64)
+-      echo "CONFIG_HAVE_CORE_DUMP=y" >> $config_target_mak
+-  esac
+ fi
+ if test "$target_user_only" = "yes" ; then
+   echo "CONFIG_USER_ONLY=y" >> $config_target_mak
+diff --git a/hmp-commands.hx b/hmp-commands.hx
+index 467dd70..58498f7 100644
+--- a/hmp-commands.hx
++++ b/hmp-commands.hx
+@@ -1013,7 +1013,6 @@ server will ask the spice/vnc client to automatically reconnect using the
+ new parameters (if specified) once the vm migration finished successfully.
+ ETEXI
+ 
+-#if defined(CONFIG_HAVE_CORE_DUMP)
+     {
+         .name       = "dump-guest-memory",
+         .args_type  = "paging:-p,filename:F,begin:i?,length:i?",
+@@ -1037,7 +1036,6 @@ gdb.
+     length: the memory size, in bytes. It's optional, and should be specified
+             with begin together.
+ ETEXI
+-#endif
+ 
+ #ifdef CONFIG_LIVE_BLOCK_OPS
+     {
+diff --git a/stubs/dump.c b/stubs/dump.c
+index 5749e2c..370cd96 100644
+--- a/stubs/dump.c
++++ b/stubs/dump.c
+@@ -16,14 +16,6 @@
+ #include "qapi/qmp/qerror.h"
+ #include "qmp-commands.h"
+ 
+-/* we need this function in hmp.c */
+-void qmp_dump_guest_memory(bool paging, const char *file, bool has_begin,
+-                           int64_t begin, bool has_length, int64_t length,
+-                           Error **errp)
+-{
+-    error_set(errp, QERR_UNSUPPORTED);
+-}
+-
+ int cpu_get_dump_info(ArchDumpInfo *info,
+                       const struct GuestPhysBlockList *guest_phys_blocks)
+ {
+-- 
+1.8.3.1
+

@@ -1,0 +1,141 @@
+From beb312b86b7ee776bbaea14d3c7625ec8d2d8402 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Tue, 8 Sep 2015 18:06:19 +0200
+Subject: [PATCH 1/7] Drop superfluous conditionals around g_strdup()
+
+Message-id: <1441735585-23432-2-git-send-email-armbru@redhat.com>
+Patchwork-id: 67708
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 1/7] Drop superfluous conditionals around g_strdup()
+Bugzilla: 1218919
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Michael Tokarev <mjt@tls.msk.ru>
+(cherry picked from commit 24588100ab39afead7b9a0e9c61182a02320a1b9)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ backends/rng-random.c    |  6 +-----
+ hw/tpm/tpm_passthrough.c |  4 +---
+ util/uri.c               | 43 +++++++++++++++++--------------------------
+ 3 files changed, 19 insertions(+), 34 deletions(-)
+
+diff --git a/backends/rng-random.c b/backends/rng-random.c
+index 68dfc8a..573a64e 100644
+--- a/backends/rng-random.c
++++ b/backends/rng-random.c
+@@ -88,11 +88,7 @@ static char *rng_random_get_filename(Object *obj, Error **errp)
+ {
+     RndRandom *s = RNG_RANDOM(obj);
+ 
+-    if (s->filename) {
+-        return g_strdup(s->filename);
+-    }
+-
+-    return NULL;
++    return g_strdup(s->filename);
+ }
+ 
+ static void rng_random_set_filename(Object *obj, const char *filename,
+diff --git a/hw/tpm/tpm_passthrough.c b/hw/tpm/tpm_passthrough.c
+index 56e9e0f..2bf3c6f 100644
+--- a/hw/tpm/tpm_passthrough.c
++++ b/hw/tpm/tpm_passthrough.c
+@@ -400,9 +400,7 @@ static int tpm_passthrough_handle_device_opts(QemuOpts *opts, TPMBackend *tb)
+     const char *value;
+ 
+     value = qemu_opt_get(opts, "cancel-path");
+-    if (value) {
+-        tb->cancel_path = g_strdup(value);
+-    }
++    tb->cancel_path = g_strdup(value);
+ 
+     value = qemu_opt_get(opts, "path");
+     if (!value) {
+diff --git a/util/uri.c b/util/uri.c
+index e348c17..bbf2832 100644
+--- a/util/uri.c
++++ b/util/uri.c
+@@ -1736,24 +1736,21 @@ uri_resolve(const char *uri, const char *base) {
+ 	goto done;
+     if ((ref->scheme == NULL) && (ref->path == NULL) &&
+ 	((ref->authority == NULL) && (ref->server == NULL))) {
+-	if (bas->scheme != NULL)
+-	    res->scheme = g_strdup(bas->scheme);
++        res->scheme = g_strdup(bas->scheme);
+ 	if (bas->authority != NULL)
+ 	    res->authority = g_strdup(bas->authority);
+ 	else if (bas->server != NULL) {
+-	    res->server = g_strdup(bas->server);
+-	    if (bas->user != NULL)
+-		res->user = g_strdup(bas->user);
+-	    res->port = bas->port;
++            res->server = g_strdup(bas->server);
++            res->user = g_strdup(bas->user);
++            res->port = bas->port;
+ 	}
+-	if (bas->path != NULL)
+-	    res->path = g_strdup(bas->path);
+-	if (ref->query != NULL)
++        res->path = g_strdup(bas->path);
++        if (ref->query != NULL) {
+ 	    res->query = g_strdup (ref->query);
+-	else if (bas->query != NULL)
+-	    res->query = g_strdup(bas->query);
+-	if (ref->fragment != NULL)
+-	    res->fragment = g_strdup(ref->fragment);
++        } else {
++            res->query = g_strdup(bas->query);
++        }
++        res->fragment = g_strdup(ref->fragment);
+ 	goto step_7;
+     }
+ 
+@@ -1767,13 +1764,10 @@ uri_resolve(const char *uri, const char *base) {
+ 	val = uri_to_string(ref);
+ 	goto done;
+     }
+-    if (bas->scheme != NULL)
+-	res->scheme = g_strdup(bas->scheme);
++    res->scheme = g_strdup(bas->scheme);
+ 
+-    if (ref->query != NULL)
+-	res->query = g_strdup(ref->query);
+-    if (ref->fragment != NULL)
+-	res->fragment = g_strdup(ref->fragment);
++    res->query = g_strdup(ref->query);
++    res->fragment = g_strdup(ref->fragment);
+ 
+     /*
+      * 4) If the authority component is defined, then the reference is a
+@@ -1787,20 +1781,17 @@ uri_resolve(const char *uri, const char *base) {
+ 	    res->authority = g_strdup(ref->authority);
+ 	else {
+ 	    res->server = g_strdup(ref->server);
+-	    if (ref->user != NULL)
+-		res->user = g_strdup(ref->user);
++            res->user = g_strdup(ref->user);
+             res->port = ref->port;
+ 	}
+-	if (ref->path != NULL)
+-	    res->path = g_strdup(ref->path);
++        res->path = g_strdup(ref->path);
+ 	goto step_7;
+     }
+     if (bas->authority != NULL)
+ 	res->authority = g_strdup(bas->authority);
+     else if (bas->server != NULL) {
+-	res->server = g_strdup(bas->server);
+-	if (bas->user != NULL)
+-	    res->user = g_strdup(bas->user);
++        res->server = g_strdup(bas->server);
++        res->user = g_strdup(bas->user);
+ 	res->port = bas->port;
+     }
+ 
+-- 
+1.8.3.1
+

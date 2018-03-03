@@ -1,0 +1,114 @@
+From 7861f4a9c8f7125b758e9be430b195527db83430 Mon Sep 17 00:00:00 2001
+Message-Id: <7861f4a9c8f7125b758e9be430b195527db83430.1387382496.git.minovotn@redhat.com>
+In-Reply-To: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+References: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+From: Nigel Croxon <ncroxon@redhat.com>
+Date: Thu, 14 Nov 2013 22:53:17 +0100
+Subject: [PATCH 41/46] migration: fix spice migration
+
+RH-Author: Nigel Croxon <ncroxon@redhat.com>
+Message-id: <1384469598-13137-42-git-send-email-ncroxon@redhat.com>
+Patchwork-id: 55722
+O-Subject: [RHEL7.0 PATCH 41/42] migration: fix spice migration
+Bugzilla: 1011720
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: 1011720
+https://bugzilla.redhat.com/show_bug.cgi?id=1011720
+
+>From commit ID:
+commit 02edd2e7665bceb307bedd8afe625c0f7e8d7cfa
+Author: Stefan Hajnoczi <stefanha@redhat.com>
+Date:   Mon Jul 29 15:01:58 2013 +0200
+
+    migration: fix spice migration
+
+    Commit 29ae8a4133082e16970c9d4be09f4b6a15034617 ("rdma: introduce
+    MIG_STATE_NONE and change MIG_STATE_SETUP state transition") changed the
+    state transitions during migration setup.
+
+    Spice used to be notified with MIG_STATE_ACTIVE and it detected this
+    using migration_is_active().  Spice is now notified with
+    MIG_STATE_SETUP and migration_is_active() no longer works.
+
+    Replace migration_is_active() with migration_in_setup() to fix spice
+    migration.
+
+    Cc: Michael R. Hines <mrhines@us.ibm.com>
+    Reviewed-by: Kevin Wolf <kwolf@redhat.com>
+    Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+---
+ hw/block/virtio-blk.c         |    2 +-
+ include/migration/migration.h |    2 +-
+ migration.c                   |    4 ++--
+ ui/spice-core.c               |    2 +-
+ 4 files changed, 5 insertions(+), 5 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/block/virtio-blk.c         | 2 +-
+ include/migration/migration.h | 2 +-
+ migration.c                   | 4 ++--
+ ui/spice-core.c               | 2 +-
+ 4 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/hw/block/virtio-blk.c b/hw/block/virtio-blk.c
+index 9fe622d..49a23c3 100644
+--- a/hw/block/virtio-blk.c
++++ b/hw/block/virtio-blk.c
+@@ -658,7 +658,7 @@ static void virtio_blk_migration_state_changed(Notifier *notifier, void *data)
+                                   migration_state_notifier);
+     MigrationState *mig = data;
+ 
+-    if (migration_is_active(mig)) {
++    if (migration_in_setup(mig)) {
+         if (!s->dataplane) {
+             return;
+         }
+diff --git a/include/migration/migration.h b/include/migration/migration.h
+index 08c772d..140e6b4 100644
+--- a/include/migration/migration.h
++++ b/include/migration/migration.h
+@@ -90,7 +90,7 @@ int migrate_fd_close(MigrationState *s);
+ 
+ void add_migration_state_change_notifier(Notifier *notify);
+ void remove_migration_state_change_notifier(Notifier *notify);
+-bool migration_is_active(MigrationState *);
++bool migration_in_setup(MigrationState *);
+ bool migration_has_finished(MigrationState *);
+ bool migration_has_failed(MigrationState *);
+ MigrationState *migrate_get_current(void);
+diff --git a/migration.c b/migration.c
+index c0202b4..13fc59b 100644
+--- a/migration.c
++++ b/migration.c
+@@ -339,9 +339,9 @@ void remove_migration_state_change_notifier(Notifier *notify)
+     notifier_remove(notify);
+ }
+ 
+-bool migration_is_active(MigrationState *s)
++bool migration_in_setup(MigrationState *s)
+ {
+-    return s->state == MIG_STATE_ACTIVE;
++    return s->state == MIG_STATE_SETUP;
+ }
+ 
+ bool migration_has_finished(MigrationState *s)
+diff --git a/ui/spice-core.c b/ui/spice-core.c
+index c8337ab..d67449e 100644
+--- a/ui/spice-core.c
++++ b/ui/spice-core.c
+@@ -561,7 +561,7 @@ static void migration_state_notifier(Notifier *notifier, void *data)
+ {
+     MigrationState *s = data;
+ 
+-    if (migration_is_active(s)) {
++    if (migration_in_setup(s)) {
+         spice_server_migrate_start(spice_server);
+     } else if (migration_has_finished(s)) {
+         spice_server_migrate_end(spice_server, true);
+-- 
+1.7.11.7
+

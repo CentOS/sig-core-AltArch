@@ -1,0 +1,57 @@
+From 1f9218a32773bb616f65f581f3a6b22699b2f6be Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Tue, 27 Dec 2016 20:43:20 +0100
+Subject: [PATCH 2/4] vl: Don't silently change topology when all -smp options
+ were set
+
+RH-Author: Eduardo Habkost <ehabkost@redhat.com>
+Message-id: <1482871400-24971-1-git-send-email-ehabkost@redhat.com>
+Patchwork-id: 73103
+O-Subject: [RHEL-7.4 qemu-kvm PATCH] vl: Don't silently change topology when all -smp options were set
+Bugzilla: 1375507
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Andrew Jones <drjones@redhat.com>
+RH-Acked-by: David Hildenbrand <david@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1375507
+
+QEMU tries to change the "threads" option even if it was explicitly set
+in the command-line, and it shouldn't do that.
+
+The right thing to do when all options (cpus, sockets, cores, threds)
+are explicitly set is to sanity check them and abort in case they don't
+make sense (i.e. when sockets*cores*threads < cpus).
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+Reviewed-by: Andrew Jones <drjones@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit ec2cbbdd80463efd4bc81a9d1362a2acb3097a21)
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ vl.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/vl.c b/vl.c
+index 9756361..7c34b7c 100644
+--- a/vl.c
++++ b/vl.c
+@@ -1393,8 +1393,14 @@ static void smp_parse(const char *optarg)
+         if (cores == 0) {
+             threads = threads > 0 ? threads : 1;
+             cores = smp / (sockets * threads);
+-        } else {
++        } else if (threads == 0) {
+             threads = smp / (cores * sockets);
++        } else if (sockets * cores * threads < smp) {
++            fprintf(stderr, "cpu topology: error: "
++                    "sockets (%u) * cores (%u) * threads (%u) < "
++                    "smp_cpus (%u)\n",
++                    sockets, cores, threads, smp);
++            exit(1);
+         }
+     }
+     smp_cpus = smp;
+-- 
+1.8.3.1
+

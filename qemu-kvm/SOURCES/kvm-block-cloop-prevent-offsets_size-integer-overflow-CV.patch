@@ -1,0 +1,112 @@
+From f0b6df5c7146425c80ab72928aa8848c8f1a93a9 Mon Sep 17 00:00:00 2001
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Tue, 25 Mar 2014 14:23:12 +0100
+Subject: [PATCH 05/49] block/cloop: prevent offsets_size integer overflow (CVE-2014-0143)
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1395753835-7591-6-git-send-email-kwolf@redhat.com>
+Patchwork-id: n/a
+O-Subject: [virt-devel] [EMBARGOED RHEL-7.0 qemu-kvm PATCH 05/48] block/cloop: prevent offsets_size integer overflow (CVE-2014-0143)
+Bugzilla: 1079320
+RH-Acked-by: Jeff Cody <jcody@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: Stefan Hajnoczi <stefanha@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1079320
+Upstream status: Embargoed
+
+The following integer overflow in offsets_size can lead to out-of-bounds
+memory stores when n_blocks has a huge value:
+
+uint32_t n_blocks, offsets_size;
+[...]
+ret = bdrv_pread(bs->file, 128 + 4, &s->n_blocks, 4);
+[...]
+s->n_blocks = be32_to_cpu(s->n_blocks);
+
+/bin /boot /cgroup /dev /etc /home /lib /lib64 /lost+found /media /misc /mnt /net /opt /proc /root /sbin /selinux /srv /sys /tmp /usr /var read offsets audio/ backends/ block/ bsd-user/ default-configs/ disas/ docs/ dtc/ fpu/ fsdev/ gdb-xml/ hw/ include/ ldscripts/ libcacard/ linux-headers/ linux-user/ net/ pc-bios/ pixman/ po/ qapi/ qga/ QMP/ qobject/ qom/ redhat/ roms/ scripts/ slirp/ stubs/ sysconfigs/ target-alpha/ target-arm/ target-cris/ target-i386/ target-lm32/ target-m68k/ target-microblaze/ target-mips/ target-moxie/ target-openrisc/ target-ppc/ target-s390x/ target-sh4/ target-sparc/ target-unicore32/ target-xtensa/ tcg/ tests/ trace/ ui/ util/
+offsets_size = s->n_blocks 0001-usb-host-move-legacy-cmd-line-bits.patch 0002-usb-host-remove-usb_host_device_close.patch 0003-use-libusb-for-usb-host.patch 0004-libusb-spec-file-windup.patch aio-posix.c aio-win32.c arch_init.c async.c audio backends balloon.c block block.c blockdev.c blockdev-nbd.c blockjob.c block-migration.c bsd-user bt-host.c bt-vhci.c Changelog cmd.c cmd.h CODING_STYLE configure COPYING COPYING.LIB coroutine-gthread.c coroutine-sigaltstack.c coroutine-ucontext.c coroutine-win32.c cpu-exec.c cpus.c cputlb.c default-configs device-hotplug.c device_tree.c disas disas.c dma-helpers.c docs dtc dump.c exec.c fpu fsdev gdbstub.c gdb-xml HACKING hmp.c hmp-commands.hx hmp.h hw include iohandler.c ioport.c kvm-all.c kvm-stub.c kvmvapic-add-ioport-read-accessor.patch ldscripts libcacard LICENSE linux-headers linux-user main-loop.c MAINTAINERS Makefile Makefile.objs Makefile.target memory.c memory_mapping.c memory_mapping-stub.c migration.c migration-exec.c migration-fd.c migration-rdma.c migration-tcp.c migration-unix.c monitor.c nbd.c net os-posix.c os-win32.c page_cache.c pc-bios pixman po qapi qapi-schema.json qdev-monitor.c qdict-test-data.txt qemu-bridge-helper.c qemu-char.c qemu-coroutine.c qemu-coroutine-io.c qemu-coroutine-lock.c qemu-coroutine-sleep.c qemu-doc.texi qemu-img.c qemu-img-cmds.hx qemu-img.texi qemu-io.c qemu-log.c qemu-nbd.c qemu-nbd.texi qemu-options.h qemu-options.hx qemu-options-wrapper.h qemu.sasl qemu-seccomp.c qemu-tech.texi qemu-timer.c qga QMP qmp.c qmp-commands.hx qobject qom qtest.c readline.c README redhat roms rules.mak savevm.c scripts slirp spice-qemu-char.c stubs sysconfigs target-alpha target-arm target-cris target-i386 target-lm32 target-m68k target-microblaze target-mips target-moxie target-openrisc target-ppc target-s390x target-sh4 target-sparc target-unicore32 target-xtensa tcg tcg-runtime.c tci.c tests thread-pool.c thunk.c tpm.c trace trace-events translate-all.c translate-all.h ui user-exec.c util VERSION version.rc vl.c vl.c.orig xbzrle.c xen-all.c xen-mapcache.c xen-stub.c sizeof(uint64_t);
+s->offsets = g_malloc(offsets_size);
+
+[...]
+
+for(i=0;i<s->n_blocks;i++) {
+s->offsets[i] = be64_to_cpu(s->offsets[i]);
+
+offsets_size can be smaller than n_blocks due to integer overflow.
+Therefore s->offsets[] is too small when the for loop byteswaps offsets.
+
+This patch refuses to open files if offsets_size would overflow.
+
+Note that changing the type of offsets_size is not a fix since 32-bit
+hosts still only have 32-bit size_t.
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block/cloop.c              |    7 +++++++
+ tests/qemu-iotests/075     |    7 +++++++
+ tests/qemu-iotests/075.out |    4 ++++
+ 3 files changed, 18 insertions(+), 0 deletions(-)
+
+diff --git a/block/cloop.c b/block/cloop.c
+index f021663..563e916 100644
+--- a/block/cloop.c
++++ b/block/cloop.c
+@@ -99,6 +99,13 @@ static int cloop_open(BlockDriverState *bs, QDict *options, int flags,
+     s->n_blocks = be32_to_cpu(s->n_blocks);
+ 
+     /* read offsets */
++    if (s->n_blocks > UINT32_MAX / sizeof(uint64_t)) {
++        /* Prevent integer overflow */
++        error_setg(errp, "n_blocks %u must be %zu or less",
++                   s->n_blocks,
++                   UINT32_MAX / sizeof(uint64_t));
++        return -EINVAL;
++    }
+     offsets_size = s->n_blocks * sizeof(uint64_t);
+     s->offsets = g_malloc(offsets_size);
+ 
+diff --git a/tests/qemu-iotests/075 b/tests/qemu-iotests/075
+index 8f54a99..9ce6b1f 100755
+--- a/tests/qemu-iotests/075
++++ b/tests/qemu-iotests/075
+@@ -43,6 +43,7 @@ _supported_proto generic
+ _supported_os Linux
+ 
+ block_size_offset=128
++n_blocks_offset=132
+ 
+ echo
+ echo "== check that the first sector can be read =="
+@@ -67,6 +68,12 @@ _use_sample_img simple-pattern.cloop.bz2
+ poke_file "$TEST_IMG" "$block_size_offset" "\xff\xff\xfe\x00"
+ $QEMU_IO -c "read 0 512" $TEST_IMG 2>&1 | _filter_qemu_io | _filter_testdir
+ 
++echo
++echo "== offsets_size overflow ==="
++_use_sample_img simple-pattern.cloop.bz2
++poke_file "$TEST_IMG" "$n_blocks_offset" "\xff\xff\xff\xff"
++$QEMU_IO -c "read 0 512" $TEST_IMG 2>&1 | _filter_qemu_io | _filter_testdir
++
+ # success, all done
+ echo "*** done"
+ rm -f $seq.full
+diff --git a/tests/qemu-iotests/075.out b/tests/qemu-iotests/075.out
+index d362c95..a771789 100644
+--- a/tests/qemu-iotests/075.out
++++ b/tests/qemu-iotests/075.out
+@@ -15,4 +15,8 @@ no file open, try 'help open'
+ == huge block_size ===
+ qemu-io: can't open device TEST_DIR/simple-pattern.cloop: block_size 4294966784 must be 64 MB or less
+ no file open, try 'help open'
++
++== offsets_size overflow ===
++qemu-io: can't open device TEST_DIR/simple-pattern.cloop: n_blocks 4294967295 must be 536870911 or less
++no file open, try 'help open'
+ *** done
+-- 
+1.7.1
+

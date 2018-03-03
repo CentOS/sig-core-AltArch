@@ -1,0 +1,280 @@
+From 7e9beb48fd9438354ea6d6747cbbefdc3b553590 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Wed, 6 Nov 2013 14:41:20 +0100
+Subject: [PATCH 44/81] isa: Clean up use of cannot_instantiate_with_device_add_yet
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383748882-22831-16-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55541
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 15/17] isa: Clean up use of cannot_instantiate_with_device_add_yet
+Bugzilla: 1001216
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Drop it when there's no obvious reason why device_add could not work.
+Else keep and document why.
+
+* isa-fdc: drop
+
+* i8042: drop, even though its I/O base is hardcoded (because you
+  could conceivably still add one to a board that has none), and even
+  though PC board code wires up the A20 line (because that wiring is
+  optional)
+
+* port92: keep because it needs additional wiring by port92_init()
+
+* mc146818rtc: keep because it needs to be wired up by rtc_init()
+
+* m48t59_isa: keep because needs to be wired up by m48t59_init_isa()
+
+* isa-pit, kvm-pit: keep (in their abstract base pic-common) because
+  the PIT needs additional wiring by board code, depending on HPET
+  presence
+
+* pcspk: keep because of pointer property pit, and because realize
+  sets global pcspk_state
+
+* vmmouse: keep because of pointer property ps2_mouse
+
+* vmport: keep because realize sets global port_state
+
+* isa-i8259, kvm-i8259: keep (in their abstract base pic-common),
+  because the PICs' IRQ input lines are set up by board code, and the
+  wiring of the slave to the master is hard-coded in device model code
+(cherry picked from pending upstream submission)
+
+Conflicts:
+	hw/i386/pc.c
+	hw/input/pckbd.c
+	hw/input/vmmouse.c
+	hw/intc/i8259_common.c
+	hw/misc/vmport.c
+	hw/timer/m48t59.c
+	hw/timer/mc146818rtc.c
+
+Conflicts because we don't have commit db895a1 "isa: Use realizefn
+for ISADevice".  Resolution is straightforward.
+
+We got one more ISA device to cover than upstream:
+
+* pvpanic : keep, so the future backport of commit a5d3f64 "hw/misc:
+  make pvpanic known to user" can drop it, just like it dropped
+  no_user upstream.  Artifact of backporting out-of-order.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ hw/audio/pcspk.c        | 3 ++-
+ hw/block/fdc.c          | 1 -
+ hw/i386/pc.c            | 7 ++++++-
+ hw/input/pckbd.c        | 1 -
+ hw/input/vmmouse.c      | 3 ++-
+ hw/intc/i8259_common.c  | 8 +++++++-
+ hw/misc/pvpanic.c       | 6 +++++-
+ hw/misc/vmport.c        | 3 ++-
+ hw/timer/i8254_common.c | 7 ++++++-
+ hw/timer/m48t59.c       | 3 ++-
+ hw/timer/mc146818rtc.c  | 3 ++-
+ 11 files changed, 34 insertions(+), 11 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/audio/pcspk.c        |    3 ++-
+ hw/block/fdc.c          |    1 -
+ hw/i386/pc.c            |    7 ++++++-
+ hw/input/pckbd.c        |    1 -
+ hw/input/vmmouse.c      |    3 ++-
+ hw/intc/i8259_common.c  |    8 +++++++-
+ hw/misc/pvpanic.c       |    6 +++++-
+ hw/misc/vmport.c        |    3 ++-
+ hw/timer/i8254_common.c |    7 ++++++-
+ hw/timer/m48t59.c       |    3 ++-
+ hw/timer/mc146818rtc.c  |    3 ++-
+ 11 files changed, 34 insertions(+), 11 deletions(-)
+
+diff --git a/hw/audio/pcspk.c b/hw/audio/pcspk.c
+index 9186304..c54b78d 100644
+--- a/hw/audio/pcspk.c
++++ b/hw/audio/pcspk.c
+@@ -188,8 +188,9 @@ static void pcspk_class_initfn(ObjectClass *klass, void *data)
+ 
+     ic->init = pcspk_initfn;
+     set_bit(DEVICE_CATEGORY_SOUND, dc->categories);
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->props = pcspk_properties;
++    /* Reason: pointer property "pit", realize sets global pcspk_state */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo pcspk_info = {
+diff --git a/hw/block/fdc.c b/hw/block/fdc.c
+index 1524e09..f3b5bec 100644
+--- a/hw/block/fdc.c
++++ b/hw/block/fdc.c
+@@ -2206,7 +2206,6 @@ static void isabus_fdc_class_init(ObjectClass *klass, void *data)
+     ISADeviceClass *ic = ISA_DEVICE_CLASS(klass);
+     ic->init = isabus_fdc_init1;
+     dc->fw_name = "fdc";
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->reset = fdctrl_external_reset_isa;
+     dc->vmsd = &vmstate_isa_fdc;
+     dc->props = isa_fdc_properties;
+diff --git a/hw/i386/pc.c b/hw/i386/pc.c
+index 0a8840a..9e5a082 100644
+--- a/hw/i386/pc.c
++++ b/hw/i386/pc.c
+@@ -538,9 +538,14 @@ static void port92_class_initfn(ObjectClass *klass, void *data)
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     ISADeviceClass *ic = ISA_DEVICE_CLASS(klass);
+     ic->init = port92_initfn;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->reset = port92_reset;
+     dc->vmsd = &vmstate_port92_isa;
++    /*
++     * Reason: unlike ordinary ISA devices, this one needs additional
++     * wiring: its A20 output line needs to be wired up by
++     * port92_init().
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo port92_info = {
+diff --git a/hw/input/pckbd.c b/hw/input/pckbd.c
+index 98b8b15..ed396bf 100644
+--- a/hw/input/pckbd.c
++++ b/hw/input/pckbd.c
+@@ -514,7 +514,6 @@ static void i8042_class_initfn(ObjectClass *klass, void *data)
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     ISADeviceClass *ic = ISA_DEVICE_CLASS(klass);
+     ic->init = i8042_initfn;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_kbd_isa;
+ }
+ 
+diff --git a/hw/input/vmmouse.c b/hw/input/vmmouse.c
+index c9d5131..c6059a4 100644
+--- a/hw/input/vmmouse.c
++++ b/hw/input/vmmouse.c
+@@ -284,10 +284,11 @@ static void vmmouse_class_initfn(ObjectClass *klass, void *data)
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     ISADeviceClass *ic = ISA_DEVICE_CLASS(klass);
+     ic->init = vmmouse_initfn;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->reset = vmmouse_reset;
+     dc->vmsd = &vmstate_vmmouse;
+     dc->props = vmmouse_properties;
++    /* Reason: pointer property "ps2_mouse" */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo vmmouse_info = {
+diff --git a/hw/intc/i8259_common.c b/hw/intc/i8259_common.c
+index 70868a5..3358341 100644
+--- a/hw/intc/i8259_common.c
++++ b/hw/intc/i8259_common.c
+@@ -139,9 +139,15 @@ static void pic_common_class_init(ObjectClass *klass, void *data)
+     DeviceClass *dc = DEVICE_CLASS(klass);
+ 
+     dc->vmsd = &vmstate_pic_common;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->props = pic_properties_common;
+     ic->init = pic_init_common;
++    /*
++     * Reason: unlike ordinary ISA devices, the PICs need additional
++     * wiring: its IRQ input lines are set up by board code, and the
++     * wiring of the slave to the master is hard-coded in device model
++     * code.
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo pic_common_type = {
+diff --git a/hw/misc/pvpanic.c b/hw/misc/pvpanic.c
+index af4a8b2..439d636 100644
+--- a/hw/misc/pvpanic.c
++++ b/hw/misc/pvpanic.c
+@@ -125,8 +125,12 @@ static void pvpanic_isa_class_init(ObjectClass *klass, void *data)
+     ISADeviceClass *ic = ISA_DEVICE_CLASS(klass);
+ 
+     ic->init = pvpanic_isa_initfn;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->props = pvpanic_isa_properties;
++    /*
++     * To be dropped in future backport of commit a5d3f64 "hw/misc:
++     * make pvpanic known to user":
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static TypeInfo pvpanic_isa_info = {
+diff --git a/hw/misc/vmport.c b/hw/misc/vmport.c
+index ab7adf1..d7e1182 100644
+--- a/hw/misc/vmport.c
++++ b/hw/misc/vmport.c
+@@ -156,7 +156,8 @@ static void vmport_class_initfn(ObjectClass *klass, void *data)
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     ISADeviceClass *ic = ISA_DEVICE_CLASS(klass);
+     ic->init = vmport_initfn;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
++    /* Reason: realize sets global port_state */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo vmport_info = {
+diff --git a/hw/timer/i8254_common.c b/hw/timer/i8254_common.c
+index 8f01313..d0737fa 100644
+--- a/hw/timer/i8254_common.c
++++ b/hw/timer/i8254_common.c
+@@ -291,7 +291,12 @@ static void pit_common_class_init(ObjectClass *klass, void *data)
+ 
+     ic->init = pit_init_common;
+     dc->vmsd = &vmstate_pit_common;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
++    /*
++     * Reason: unlike ordinary ISA devices, the PIT may need to be
++     * wired to the HPET, and because of that, some wiring is always
++     * done by board code.
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo pit_common_type = {
+diff --git a/hw/timer/m48t59.c b/hw/timer/m48t59.c
+index e536bb9..d8a13fb 100644
+--- a/hw/timer/m48t59.c
++++ b/hw/timer/m48t59.c
+@@ -740,9 +740,10 @@ static void m48t59_isa_class_init(ObjectClass *klass, void *data)
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     ISADeviceClass *ic = ISA_DEVICE_CLASS(klass);
+     ic->init = m48t59_init_isa1;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->reset = m48t59_reset_isa;
+     dc->props = m48t59_isa_properties;
++    /* Reason: needs to be wired up by m48t59_init_isa() */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo m48t59_isa_info = {
+diff --git a/hw/timer/mc146818rtc.c b/hw/timer/mc146818rtc.c
+index 7a70556..432b16c 100644
+--- a/hw/timer/mc146818rtc.c
++++ b/hw/timer/mc146818rtc.c
+@@ -904,9 +904,10 @@ static void rtc_class_initfn(ObjectClass *klass, void *data)
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     ISADeviceClass *ic = ISA_DEVICE_CLASS(klass);
+     ic->init = rtc_initfn;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_rtc;
+     dc->props = mc146818rtc_properties;
++    /* Reason: needs to be wired up by rtc_init() */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo mc146818rtc_info = {
+-- 
+1.7.1
+

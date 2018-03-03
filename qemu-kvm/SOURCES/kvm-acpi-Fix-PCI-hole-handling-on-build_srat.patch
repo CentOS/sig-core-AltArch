@@ -1,0 +1,68 @@
+From fc20209d16cb8ce59b20f3e9b98f99044b8bebaa Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Tue, 11 Feb 2014 14:03:48 +0100
+Subject: [PATCH 12/28] acpi: Fix PCI hole handling on build_srat()
+
+RH-Author: Eduardo Habkost <ehabkost@redhat.com>
+Message-id: <1392127428-9286-3-git-send-email-ehabkost@redhat.com>
+Patchwork-id: 57205
+O-Subject: [PATCH 2/2] acpi: Fix PCI hole handling on build_srat()
+Bugzilla: 1048080
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+
+Bugzilla: 1048080
+Brew scratch build: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7027865
+
+The original SeaBIOS code used the RamSize variable, that was used by
+SeaBIOS for the size of RAM below 4GB, not for all RAM. When copied to
+QEMU, the code was changed to use the full RAM size, and this broke the
+build_srat() code that handles the PCI hole.
+
+Change build_srat() to use ram_size_below_4g instead of ram_size, to
+restore the original behavior from SeaBIOS.
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 4c8a949b2416158a311abefc09a20153aa107e93)
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+---
+ hw/i386/acpi-build.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/acpi-build.c |   10 +++++-----
+ 1 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/hw/i386/acpi-build.c b/hw/i386/acpi-build.c
+index befc39f..33012c9 100644
+--- a/hw/i386/acpi-build.c
++++ b/hw/i386/acpi-build.c
+@@ -867,16 +867,16 @@ build_srat(GArray *table_data, GArray *linker,
+         next_base = mem_base + mem_len;
+ 
+         /* Cut out the ACPI_PCI hole */
+-        if (mem_base <= guest_info->ram_size &&
+-            next_base > guest_info->ram_size) {
+-            mem_len -= next_base - guest_info->ram_size;
++        if (mem_base <= guest_info->ram_size_below_4g &&
++            next_base > guest_info->ram_size_below_4g) {
++            mem_len -= next_base - guest_info->ram_size_below_4g;
+             if (mem_len > 0) {
+                 numamem = acpi_data_push(table_data, sizeof *numamem);
+                 acpi_build_srat_memory(numamem, mem_base, mem_len, i-1, 1);
+             }
+             mem_base = 1ULL << 32;
+-            mem_len = next_base - guest_info->ram_size;
+-            next_base += (1ULL << 32) - guest_info->ram_size;
++            mem_len = next_base - guest_info->ram_size_below_4g;
++            next_base += (1ULL << 32) - guest_info->ram_size_below_4g;
+         }
+         numamem = acpi_data_push(table_data, sizeof *numamem);
+         acpi_build_srat_memory(numamem, mem_base, mem_len, i - 1, 1);
+-- 
+1.7.1
+

@@ -1,0 +1,94 @@
+From 9c6b84014b3650e478494d3c19b7461b947b3b14 Mon Sep 17 00:00:00 2001
+From: Gal Hammer <ghammer@redhat.com>
+Date: Sun, 16 Mar 2014 09:57:09 +0100
+Subject: [PATCH 01/31] char: restore read callback on a reattached (hotplug) chardev
+
+RH-Author: Gal Hammer <ghammer@redhat.com>
+Message-id: <1394963829-5384-1-git-send-email-ghammer@redhat.com>
+Patchwork-id: 58105
+O-Subject: [RHEL-7.0 qemu-kvm PATCH] char: restore read callback on a reattached (hotplug) chardev
+Bugzilla: 1038914
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Amos Kong <akong@redhat.com>
+
+Bugzilla: 1027181
+Brew: https://brewweb.devel.redhat.com/taskinfo?taskID=7207613
+Upstream: commit ac1b84dd1e020648db82a99260891aa982d1142c
+
+Fix a bug that was introduced in commit 386a5a1e. A removal of a device
+set the chr handlers to NULL. However when the device is plugged back,
+its read callback is not restored so data can't be transferred from the
+host to the guest (e.g. via the virtio-serial port).
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1027181
+
+Signed-off-by: Gal Hammer <ghammer@redhat.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+---
+ qemu-char.c | 17 +++++++++++++++--
+ 1 file changed, 15 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qemu-char.c |   17 +++++++++++++++--
+ 1 files changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/qemu-char.c b/qemu-char.c
+index 983f686..930f3d4 100644
+--- a/qemu-char.c
++++ b/qemu-char.c
+@@ -215,7 +215,7 @@ void qemu_chr_add_handlers(CharDriverState *s,
+     s->chr_read = fd_read;
+     s->chr_event = fd_event;
+     s->handler_opaque = opaque;
+-    if (s->chr_update_read_handler)
++    if (fe_open && s->chr_update_read_handler)
+         s->chr_update_read_handler(s);
+ 
+     if (!s->explicit_fe_open) {
+@@ -1140,13 +1140,14 @@ static void pty_chr_state(CharDriverState *chr, int connected)
+         if (!s->connected) {
+             s->connected = 1;
+             qemu_chr_be_generic_open(chr);
++        }
++        if (!chr->fd_in_tag) {
+             chr->fd_in_tag = io_add_watch_poll(s->fd, pty_chr_read_poll,
+                                                pty_chr_read, chr);
+         }
+     }
+ }
+ 
+-
+ static void pty_chr_close(struct CharDriverState *chr)
+ {
+     PtyCharDriver *s = chr->opaque;
+@@ -2514,6 +2515,17 @@ static void tcp_chr_connect(void *opaque)
+     qemu_chr_be_generic_open(chr);
+ }
+ 
++static void tcp_chr_update_read_handler(CharDriverState *chr)
++{
++    TCPCharDriver *s = chr->opaque;
++
++    remove_fd_in_watch(chr);
++    if (s->chan) {
++        chr->fd_in_tag = io_add_watch_poll(s->chan, tcp_chr_read_poll,
++                                           tcp_chr_read, chr);
++    }
++}
++
+ #define IACSET(x,a,b,c) x[0] = a; x[1] = b; x[2] = c;
+ static void tcp_chr_telnet_init(int fd)
+ {
+@@ -2669,6 +2681,7 @@ static CharDriverState *qemu_chr_open_socket_fd(int fd, bool do_nodelay,
+     chr->get_msgfd = tcp_get_msgfd;
+     chr->chr_add_client = tcp_chr_add_client;
+     chr->chr_add_watch = tcp_chr_add_watch;
++    chr->chr_update_read_handler = tcp_chr_update_read_handler;
+     /* be isn't opened until we get a connection */
+     chr->explicit_be_open = true;
+ 
+-- 
+1.7.1
+

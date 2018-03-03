@@ -1,0 +1,58 @@
+From c1a149658ffb385f55e8bb06f06b6d195b91fd1b Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 9 Sep 2013 14:28:03 +0200
+Subject: [PATCH 12/38] block: Always enable discard on the protocol level
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1378736903-18489-13-git-send-email-kwolf@redhat.com>
+Patchwork-id: 54196
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 12/32] block: Always enable discard on the protocol level
+Bugzilla: 1005818
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Bugzilla: 1005818
+
+Turning on discard options in qcow2 doesn't help a lot when the discard
+requests that it issues are thrown away by the raw-posix layer. This
+patch always enables discard functionality on the protocol level so that
+it's the image format's responsibility to send (or not) discard
+requests. Requests sent by the guest will be allowed or ignored by the
+top level BlockDriverState, which depends on the discard=... option like
+before.
+
+In particular, this means that even without specifying options, the
+qcow2 default of discarding deleted snapshots actually takes effect now,
+both for qemu and qemu-img.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 50b05b6f2e24296b4d739a638e1e7427767ed7cd)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/block.c b/block.c
+index 2584ec7..20820fa 100644
+--- a/block.c
++++ b/block.c
+@@ -1055,7 +1055,7 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+     extract_subqdict(options, &file_options, "file.");
+ 
+     ret = bdrv_file_open(&file, filename, file_options,
+-                         bdrv_open_flags(bs, flags));
++                         bdrv_open_flags(bs, flags | BDRV_O_UNMAP));
+     if (ret < 0) {
+         goto fail;
+     }
+-- 
+1.7.1
+

@@ -1,0 +1,70 @@
+From 9bce100f4930cb500127110999c63474e9a6cfe2 Mon Sep 17 00:00:00 2001
+Message-Id: <9bce100f4930cb500127110999c63474e9a6cfe2.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:17:00 +0100
+Subject: [PATCH 05/56] qapi: make visit_type_size fallback to type_int
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-6-git-send-email-mst@redhat.com>
+Patchwork-id: 56310
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 05/57] qapi: make visit_type_size fallback to type_int
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Vasilis Liaskovitis <vasilis.liaskovitis@profitbricks.com>
+
+Currently visit_type_size checks if the visitor's type_size function pointer is
+NULL. If not, it calls it, otherwise it calls v->type_uint64(). But neither of
+these pointers are ever set. Fallback to calling v->type_int() in this third
+(default) case.
+
+Signed-off-by: Vasilis Liaskovitis <vasilis.liaskovitis@profitbricks.com>
+Signed-off-by: Hu Tao <hutao@cn.fujitsu.com>
+Signed-off-by: Igor Mammedov <imammedo@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Reviewed-by: Andreas Färber <afaerber@suse.de>
+Message-id: 1375109277-25561-6-git-send-email-imammedo@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit b887796217b7f5b754657e85760693e4ced63356)
+---
+ qapi/qapi-visit-core.c | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ qapi/qapi-visit-core.c | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/qapi/qapi-visit-core.c b/qapi/qapi-visit-core.c
+index d6a4012..6451a21 100644
+--- a/qapi/qapi-visit-core.c
++++ b/qapi/qapi-visit-core.c
+@@ -263,8 +263,17 @@ void visit_type_int64(Visitor *v, int64_t *obj, const char *name, Error **errp)
+ 
+ void visit_type_size(Visitor *v, uint64_t *obj, const char *name, Error **errp)
+ {
++    int64_t value;
+     if (!error_is_set(errp)) {
+-        (v->type_size ? v->type_size : v->type_uint64)(v, obj, name, errp);
++        if (v->type_size) {
++            v->type_size(v, obj, name, errp);
++        } else if (v->type_uint64) {
++            v->type_uint64(v, obj, name, errp);
++        } else {
++            value = *obj;
++            v->type_int(v, &value, name, errp);
++            *obj = value;
++        }
+     }
+ }
+ 
+-- 
+1.7.11.7
+

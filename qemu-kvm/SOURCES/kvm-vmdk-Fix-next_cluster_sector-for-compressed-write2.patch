@@ -1,0 +1,55 @@
+From bc048d2d5f362757fa0bf51add81d92ec19ad161 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 15 Feb 2016 09:28:28 +0100
+Subject: [PATCH 15/18] vmdk: Fix next_cluster_sector for compressed write
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1455528511-9357-16-git-send-email-famz@redhat.com>
+Patchwork-id: 69181
+O-Subject: [RHEL-7.3 qemu-kvm PATCH 15/18] vmdk: Fix next_cluster_sector for compressed write
+Bugzilla: 1299250
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+From: Radoslav Gerganov <rgerganov@vmware.com>
+
+BZ: https://bugzilla.redhat.com/show_bug.cgi?id=1299250
+
+When the VMDK is streamOptimized (or compressed), the
+next_cluster_sector must not be incremented by a fixed number of
+sectors. Instead of this, it must be rounded up to the next consecutive
+sector. Fixing this results in much smaller compressed images.
+
+Signed-off-by: Radoslav Gerganov <rgerganov@vmware.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 3efffc3292d94271a15b1606b4a56adf6c6f04ed)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vmdk.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index cb5255c..7009660 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -1333,8 +1333,12 @@ static int vmdk_write_extent(VmdkExtent *extent, int64_t cluster_offset,
+ 
+     write_end_sector = DIV_ROUND_UP(write_offset + write_len, BDRV_SECTOR_SIZE);
+ 
+-    extent->next_cluster_sector = MAX(extent->next_cluster_sector,
+-                                      write_end_sector);
++    if (extent->compressed) {
++        extent->next_cluster_sector = write_end_sector;
++    } else {
++        extent->next_cluster_sector = MAX(extent->next_cluster_sector,
++                                          write_end_sector);
++    }
+ 
+     if (ret != write_len) {
+         ret = ret < 0 ? ret : -EIO;
+-- 
+1.8.3.1
+

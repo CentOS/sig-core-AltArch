@@ -1,0 +1,85 @@
+From 808711fd7cfcd6daca455db6dbd9d0f1f17a8b96 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Fri, 11 Jul 2014 14:20:39 +0200
+Subject: [PATCH 06/43] xhci: add tracepoint for endpoint state changes
+
+Message-id: <1405088470-24115-7-git-send-email-kraxel@redhat.com>
+Patchwork-id: 59843
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 06/37] xhci: add tracepoint for endpoint state changes
+Bugzilla: 980833
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 1c82392a158471355aa6d1922df2d1545bb16b95)
+---
+ hw/usb/hcd-xhci.c | 19 +++++++++++++++++++
+ trace-events      |  1 +
+ 2 files changed, 20 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/hcd-xhci.c | 19 +++++++++++++++++++
+ trace-events      |  1 +
+ 2 files changed, 20 insertions(+)
+
+diff --git a/hw/usb/hcd-xhci.c b/hw/usb/hcd-xhci.c
+index 00623f9..e8fa26c 100644
+--- a/hw/usb/hcd-xhci.c
++++ b/hw/usb/hcd-xhci.c
+@@ -589,6 +589,14 @@ static const char *TRBCCode_names[] = {
+     [CC_SPLIT_TRANSACTION_ERROR]       = "CC_SPLIT_TRANSACTION_ERROR",
+ };
+ 
++static const char *ep_state_names[] = {
++    [EP_DISABLED] = "disabled",
++    [EP_RUNNING]  = "running",
++    [EP_HALTED]   = "halted",
++    [EP_STOPPED]  = "stopped",
++    [EP_ERROR]    = "error",
++};
++
+ static const char *lookup_name(uint32_t index, const char **list, uint32_t llen)
+ {
+     if (index >= llen || list[index] == NULL) {
+@@ -609,6 +617,12 @@ static const char *event_name(XHCIEvent *event)
+                        ARRAY_SIZE(TRBCCode_names));
+ }
+ 
++static const char *ep_state_name(uint32_t state)
++{
++    return lookup_name(state, ep_state_names,
++                       ARRAY_SIZE(ep_state_names));
++}
++
+ static uint64_t xhci_mfindex_get(XHCIState *xhci)
+ {
+     int64_t now = qemu_get_clock_ns(vm_clock);
+@@ -1206,6 +1220,11 @@ static void xhci_set_ep_state(XHCIState *xhci, XHCIEPContext *epctx,
+     }
+ 
+     xhci_dma_write_u32s(xhci, epctx->pctx, ctx, sizeof(ctx));
++    if (epctx->state != state) {
++        trace_usb_xhci_ep_state(epctx->slotid, epctx->epid,
++                                ep_state_name(epctx->state),
++                                ep_state_name(state));
++    }
+     epctx->state = state;
+ }
+ 
+diff --git a/trace-events b/trace-events
+index b9144b2..4058dd5 100644
+--- a/trace-events
++++ b/trace-events
+@@ -378,6 +378,7 @@ usb_xhci_ep_set_dequeue(uint32_t slotid, uint32_t epid, uint32_t streamid, uint6
+ usb_xhci_ep_kick(uint32_t slotid, uint32_t epid, uint32_t streamid) "slotid %d, epid %d, streamid %d"
+ usb_xhci_ep_stop(uint32_t slotid, uint32_t epid) "slotid %d, epid %d"
+ usb_xhci_ep_reset(uint32_t slotid, uint32_t epid) "slotid %d, epid %d"
++usb_xhci_ep_state(uint32_t slotid, uint32_t epid, const char *os, const char *ns) "slotid %d, epid %d, %s -> %s"
+ usb_xhci_xfer_start(void *xfer, uint32_t slotid, uint32_t epid, uint32_t streamid) "%p: slotid %d, epid %d, streamid %d"
+ usb_xhci_xfer_async(void *xfer) "%p"
+ usb_xhci_xfer_nak(void *xfer) "%p"
+-- 
+1.8.3.1
+

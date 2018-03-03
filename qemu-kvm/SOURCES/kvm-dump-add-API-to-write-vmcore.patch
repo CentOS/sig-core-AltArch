@@ -1,0 +1,70 @@
+From f1155542d2e8ce5192a4001b1156b9d3bff4a398 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Fri, 7 Nov 2014 17:17:53 +0100
+Subject: [PATCH 06/41] dump: add API to write vmcore
+
+Message-id: <1415380693-16593-7-git-send-email-lersek@redhat.com>
+Patchwork-id: 62192
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 06/26] dump: add API to write vmcore
+Bugzilla: 1157798
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: dgibson <dgibson@redhat.com>
+
+From: qiaonuohan <qiaonuohan@cn.fujitsu.com>
+
+Function is used to write vmcore in flatten format. In flatten format, data is
+written block by block, and in front of each block, a struct
+MakedumpfileDataHeader is stored there to indicate the offset and size of the
+data block.
+
+struct MakedumpfileDataHeader {
+    int64_t offset;
+    int64_t buf_size;
+};
+
+Signed-off-by: Qiao Nuohan <qiaonuohan@cn.fujitsu.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit 5d31babe5c7d854d6b8470bc9fa67a698926e65d)
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/dump.c b/dump.c
+index 6c902e5..710893f 100644
+--- a/dump.c
++++ b/dump.c
+@@ -734,6 +734,27 @@ static int write_end_flat_header(int fd)
+     return 0;
+ }
+ 
++static int write_buffer(int fd, off_t offset, const void *buf, size_t size)
++{
++    size_t written_size;
++    MakedumpfileDataHeader mdh;
++
++    mdh.offset = cpu_to_be64(offset);
++    mdh.buf_size = cpu_to_be64(size);
++
++    written_size = qemu_write_full(fd, &mdh, sizeof(mdh));
++    if (written_size != sizeof(mdh)) {
++        return -1;
++    }
++
++    written_size = qemu_write_full(fd, buf, size);
++    if (written_size != size) {
++        return -1;
++    }
++
++    return 0;
++}
++
+ static ram_addr_t get_start_block(DumpState *s)
+ {
+     GuestPhysBlock *block;
+-- 
+1.8.3.1
+

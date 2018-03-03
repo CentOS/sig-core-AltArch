@@ -1,0 +1,61 @@
+From 6a2046866f4e057da661d496fc8014e5bca0d44e Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Thu, 16 Jan 2014 10:25:59 +0100
+Subject: [PATCH 03/14] q35: gigabyle alignment for ram
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1389867959-12463-5-git-send-email-kraxel@redhat.com>
+Patchwork-id: 56746
+O-Subject: [RHEL-7 qemu-kvm PATCH 4/4] q35: gigabyle alignment for ram
+Bugzilla: 1026548
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Map 2G of memory below 4G, so the two RAM pieces are nicely
+aligned to gigabyte borders.
+
+Keep old memory layout for in case all memory fits below 4G and
+thus we don't have to split RAM into pieces in the first place.
+
+upstream: Not yet.  Planned, but want sort mmconf bar issues first.
+          Put into rhel7 nevertheless to make life simpler for rhel8
+          (i.e. no need to support gigabyte alignment the rhel6 way).
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+---
+ hw/i386/pc_q35.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/pc_q35.c |    6 ++++--
+ 1 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/hw/i386/pc_q35.c b/hw/i386/pc_q35.c
+index 232c62d..7e46799 100644
+--- a/hw/i386/pc_q35.c
++++ b/hw/i386/pc_q35.c
+@@ -51,6 +51,7 @@
+ static bool smbios_type1_defaults = true;
+ static bool has_pci_info;
+ static bool has_acpi_build = true;
++static bool gigabyte_align = true;
+ 
+ /* PC hardware initialisation */
+ static void pc_q35_init(QEMUMachineInitArgs *args)
+@@ -87,8 +88,9 @@ static void pc_q35_init(QEMUMachineInitArgs *args)
+     kvmclock_create();
+ 
+     if (args->ram_size >= 0xb0000000) {
+-        above_4g_mem_size = args->ram_size - 0xb0000000;
+-        below_4g_mem_size = 0xb0000000;
++        ram_addr_t lowmem = gigabyte_align ? 0x80000000 : 0xb0000000;
++        above_4g_mem_size = args->ram_size - lowmem;
++        below_4g_mem_size = lowmem;
+     } else {
+         above_4g_mem_size = 0;
+         below_4g_mem_size = args->ram_size;
+-- 
+1.7.1
+

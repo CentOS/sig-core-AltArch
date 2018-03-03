@@ -1,0 +1,234 @@
+From 0e79ef6691f77a7c0da31dff9276b6dad42441a0 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 4 Nov 2013 22:31:59 +0100
+Subject: [PATCH 06/87] qcow2: Add corrupt bit
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-9-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55308
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 08/43] qcow2: Add corrupt bit
+Bugzilla: 1004347
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1004347
+
+This adds an incompatible bit indicating corruption to qcow2. Any image
+with this bit set may not be written to unless for repairing (and
+subsequently clearing the bit if the repair has been successful).
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 69c98726537627e708abb8fcb33e3a2b10e40bf1)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2.c              | 47 ++++++++++++++++++++++++++++++++++++++++++++++
+ block/qcow2.h              |  7 ++++++-
+ docs/specs/qcow2.txt       |  7 ++++++-
+ tests/qemu-iotests/031.out | 12 ++++++------
+ tests/qemu-iotests/036.out |  2 +-
+ 5 files changed, 66 insertions(+), 9 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2.c              |   47 ++++++++++++++++++++++++++++++++++++++++++++
+ block/qcow2.h              |    7 +++++-
+ docs/specs/qcow2.txt       |    7 +++++-
+ tests/qemu-iotests/031.out |   12 +++++-----
+ tests/qemu-iotests/036.out |    2 +-
+ 5 files changed, 66 insertions(+), 9 deletions(-)
+
+diff --git a/block/qcow2.c b/block/qcow2.c
+index c2728c9..aa9dd23 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -272,6 +272,37 @@ static int qcow2_mark_clean(BlockDriverState *bs)
+     return 0;
+ }
+ 
++/*
++ * Marks the image as corrupt.
++ */
++int qcow2_mark_corrupt(BlockDriverState *bs)
++{
++    BDRVQcowState *s = bs->opaque;
++
++    s->incompatible_features |= QCOW2_INCOMPAT_CORRUPT;
++    return qcow2_update_header(bs);
++}
++
++/*
++ * Marks the image as consistent, i.e., unsets the corrupt bit, and flushes
++ * before if necessary.
++ */
++int qcow2_mark_consistent(BlockDriverState *bs)
++{
++    BDRVQcowState *s = bs->opaque;
++
++    if (s->incompatible_features & QCOW2_INCOMPAT_CORRUPT) {
++        int ret = bdrv_flush(bs);
++        if (ret < 0) {
++            return ret;
++        }
++
++        s->incompatible_features &= ~QCOW2_INCOMPAT_CORRUPT;
++        return qcow2_update_header(bs);
++    }
++    return 0;
++}
++
+ static int qcow2_check(BlockDriverState *bs, BdrvCheckResult *result,
+                        BdrvCheckMode fix)
+ {
+@@ -402,6 +433,17 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags)
+         goto fail;
+     }
+ 
++    if (s->incompatible_features & QCOW2_INCOMPAT_CORRUPT) {
++        /* Corrupt images may not be written to unless they are being repaired
++         */
++        if ((flags & BDRV_O_RDWR) && !(flags & BDRV_O_CHECK)) {
++            error_report("qcow2: Image is corrupt; cannot be opened "
++                    "read/write.");
++            ret = -EACCES;
++            goto fail;
++        }
++    }
++
+     /* Check support for various header values */
+     if (header.refcount_order != 4) {
+         report_unsupported(bs, "%d bit reference counts",
+@@ -1140,6 +1182,11 @@ int qcow2_update_header(BlockDriverState *bs)
+             .name = "dirty bit",
+         },
+         {
++            .type = QCOW2_FEAT_TYPE_INCOMPATIBLE,
++            .bit  = QCOW2_INCOMPAT_CORRUPT_BITNR,
++            .name = "corrupt bit",
++        },
++        {
+             .type = QCOW2_FEAT_TYPE_COMPATIBLE,
+             .bit  = QCOW2_COMPAT_LAZY_REFCOUNTS_BITNR,
+             .name = "lazy refcounts",
+diff --git a/block/qcow2.h b/block/qcow2.h
+index dba9771..4297487 100644
+--- a/block/qcow2.h
++++ b/block/qcow2.h
+@@ -119,9 +119,12 @@ enum {
+ /* Incompatible feature bits */
+ enum {
+     QCOW2_INCOMPAT_DIRTY_BITNR   = 0,
++    QCOW2_INCOMPAT_CORRUPT_BITNR = 1,
+     QCOW2_INCOMPAT_DIRTY         = 1 << QCOW2_INCOMPAT_DIRTY_BITNR,
++    QCOW2_INCOMPAT_CORRUPT       = 1 << QCOW2_INCOMPAT_CORRUPT_BITNR,
+ 
+-    QCOW2_INCOMPAT_MASK          = QCOW2_INCOMPAT_DIRTY,
++    QCOW2_INCOMPAT_MASK          = QCOW2_INCOMPAT_DIRTY
++                                 | QCOW2_INCOMPAT_CORRUPT,
+ };
+ 
+ /* Compatible feature bits */
+@@ -361,6 +364,8 @@ int qcow2_backing_read1(BlockDriverState *bs, QEMUIOVector *qiov,
+                   int64_t sector_num, int nb_sectors);
+ 
+ int qcow2_mark_dirty(BlockDriverState *bs);
++int qcow2_mark_corrupt(BlockDriverState *bs);
++int qcow2_mark_consistent(BlockDriverState *bs);
+ int qcow2_update_header(BlockDriverState *bs);
+ 
+ /* qcow2-refcount.c functions */
+diff --git a/docs/specs/qcow2.txt b/docs/specs/qcow2.txt
+index 36a559d..33eca36 100644
+--- a/docs/specs/qcow2.txt
++++ b/docs/specs/qcow2.txt
+@@ -80,7 +80,12 @@ in the description of a field.
+                                 tables to repair refcounts before accessing the
+                                 image.
+ 
+-                    Bits 1-63:  Reserved (set to 0)
++                    Bit 1:      Corrupt bit.  If this bit is set then any data
++                                structure may be corrupt and the image must not
++                                be written to (unless for regaining
++                                consistency).
++
++                    Bits 2-63:  Reserved (set to 0)
+ 
+          80 -  87:  compatible_features
+                     Bitmask of compatible features. An implementation can
+diff --git a/tests/qemu-iotests/031.out b/tests/qemu-iotests/031.out
+index 796c993..a943344 100644
+--- a/tests/qemu-iotests/031.out
++++ b/tests/qemu-iotests/031.out
+@@ -54,7 +54,7 @@ header_length             72
+ 
+ Header extension:
+ magic                     0x6803f857
+-length                    96
++length                    144
+ data                      <binary>
+ 
+ Header extension:
+@@ -68,7 +68,7 @@ No errors were found on the image.
+ 
+ magic                     0x514649fb
+ version                   2
+-backing_file_offset       0xf8
++backing_file_offset       0x128
+ backing_file_size         0x17
+ cluster_bits              16
+ size                      67108864
+@@ -92,7 +92,7 @@ data                      'host_device'
+ 
+ Header extension:
+ magic                     0x6803f857
+-length                    96
++length                    144
+ data                      <binary>
+ 
+ Header extension:
+@@ -155,7 +155,7 @@ header_length             104
+ 
+ Header extension:
+ magic                     0x6803f857
+-length                    96
++length                    144
+ data                      <binary>
+ 
+ Header extension:
+@@ -169,7 +169,7 @@ No errors were found on the image.
+ 
+ magic                     0x514649fb
+ version                   3
+-backing_file_offset       0x118
++backing_file_offset       0x148
+ backing_file_size         0x17
+ cluster_bits              16
+ size                      67108864
+@@ -193,7 +193,7 @@ data                      'host_device'
+ 
+ Header extension:
+ magic                     0x6803f857
+-length                    96
++length                    144
+ data                      <binary>
+ 
+ Header extension:
+diff --git a/tests/qemu-iotests/036.out b/tests/qemu-iotests/036.out
+index 063ca22..55a3e6e 100644
+--- a/tests/qemu-iotests/036.out
++++ b/tests/qemu-iotests/036.out
+@@ -46,7 +46,7 @@ header_length             104
+ 
+ Header extension:
+ magic                     0x6803f857
+-length                    96
++length                    144
+ data                      <binary>
+ 
+ *** done
+-- 
+1.7.1
+

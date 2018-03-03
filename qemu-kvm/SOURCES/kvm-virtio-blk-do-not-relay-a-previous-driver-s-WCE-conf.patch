@@ -1,0 +1,126 @@
+From 20180f303f6fd602ca8fd66bdd746916184177de Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 23 Sep 2013 17:08:02 +0200
+Subject: [PATCH 04/29] virtio-blk: do not relay a previous driver's WCE configuration to the current
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1379956082-3646-3-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 54492
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 2/2] virtio-blk: do not relay a previous driver's WCE configuration to the current
+Bugzilla: 1009993
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+The following sequence happens:
+- the SeaBIOS virtio-blk driver does not support the WCE feature, which
+causes QEMU to disable writeback caching
+
+- the Linux virtio-blk driver resets the device, finds WCE is available
+but writeback caching is disabled; tells block layer to not send cache
+flush commands
+
+- the Linux virtio-blk driver sets the DRIVER_OK bit, which causes
+writeback caching to be re-enabled, but the Linux virtio-blk driver does
+not know of this side effect and cache flushes remain disabled
+
+The bug is at the third step.  If the guest does know about CONFIG_WCE,
+QEMU should ignore the WCE feature's state.  The guest will control the
+cache mode solely using configuration space.  This change makes Linux
+do flushes correctly, but Linux will keep SeaBIOS's writethrough mode.
+
+Hence, whenever the guest is reset, the cache mode of the disk should
+be reset to whatever was specified in the "-drive" option.  With this
+change, the Linux virtio-blk driver finds that writeback caching is
+enabled, and tells the block layer to send cache flush commands
+appropriately.
+
+Reported-by: Rusty Russell <rusty@au1.ibm.com
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit ef5bc96268ceec64769617dc53b0ac3a20ff351c)
+---
+ hw/block/virtio-blk.c          | 24 ++++++++++++++++++++++--
+ include/hw/virtio/virtio-blk.h |  1 +
+ 2 files changed, 23 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/block/virtio-blk.c          |   24 ++++++++++++++++++++++--
+ include/hw/virtio/virtio-blk.h |    1 +
+ 2 files changed, 23 insertions(+), 2 deletions(-)
+
+diff --git a/hw/block/virtio-blk.c b/hw/block/virtio-blk.c
+index cca0c77..ce1a523 100644
+--- a/hw/block/virtio-blk.c
++++ b/hw/block/virtio-blk.c
+@@ -460,9 +460,9 @@ static void virtio_blk_dma_restart_cb(void *opaque, int running,
+ 
+ static void virtio_blk_reset(VirtIODevice *vdev)
+ {
+-#ifdef CONFIG_VIRTIO_BLK_DATA_PLANE
+     VirtIOBlock *s = VIRTIO_BLK(vdev);
+ 
++#ifdef CONFIG_VIRTIO_BLK_DATA_PLANE
+     if (s->dataplane) {
+         virtio_blk_data_plane_stop(s->dataplane);
+     }
+@@ -473,6 +473,7 @@ static void virtio_blk_reset(VirtIODevice *vdev)
+      * are per-device request lists.
+      */
+     bdrv_drain_all();
++    bdrv_set_enable_write_cache(s->bs, s->original_wce);
+ }
+ 
+ /* coalesce internal state, copy to pci i/o region 0
+@@ -564,7 +565,25 @@ static void virtio_blk_set_status(VirtIODevice *vdev, uint8_t status)
+     }
+ 
+     features = vdev->guest_features;
+-    bdrv_set_enable_write_cache(s->bs, !!(features & (1 << VIRTIO_BLK_F_WCE)));
++
++    /* A guest that supports VIRTIO_BLK_F_CONFIG_WCE must be able to send
++     * cache flushes.  Thus, the "auto writethrough" behavior is never
++     * necessary for guests that support the VIRTIO_BLK_F_CONFIG_WCE feature.
++     * Leaving it enabled would break the following sequence:
++     *
++     *     Guest started with "-drive cache=writethrough"
++     *     Guest sets status to 0
++     *     Guest sets DRIVER bit in status field
++     *     Guest reads host features (WCE=0, CONFIG_WCE=1)
++     *     Guest writes guest features (WCE=0, CONFIG_WCE=1)
++     *     Guest writes 1 to the WCE configuration field (writeback mode)
++     *     Guest sets DRIVER_OK bit in status field
++     *
++     * s->bs would erroneously be placed in writethrough mode.
++     */
++    if (!(features & (1 << VIRTIO_BLK_F_CONFIG_WCE))) {
++        bdrv_set_enable_write_cache(s->bs, !!(features & (1 << VIRTIO_BLK_F_WCE)));
++    }
+ }
+ 
+ static void virtio_blk_save(QEMUFile *f, void *opaque)
+@@ -674,6 +693,7 @@ static int virtio_blk_device_init(VirtIODevice *vdev)
+     }
+ 
+     blkconf_serial(&blk->conf, &blk->serial);
++    s->original_wce = bdrv_enable_write_cache(blk->conf.bs);
+     if (blkconf_geometry(&blk->conf, NULL, 65535, 255, 255) < 0) {
+         return -1;
+     }
+diff --git a/include/hw/virtio/virtio-blk.h b/include/hw/virtio/virtio-blk.h
+index b87cf49..41885da 100644
+--- a/include/hw/virtio/virtio-blk.h
++++ b/include/hw/virtio/virtio-blk.h
+@@ -123,6 +123,7 @@ typedef struct VirtIOBlock {
+     BlockConf *conf;
+     VirtIOBlkConf blk;
+     unsigned short sector_mask;
++    bool original_wce;
+     VMChangeStateEntry *change;
+ #ifdef CONFIG_VIRTIO_BLK_DATA_PLANE
+     Notifier migration_state_notifier;
+-- 
+1.7.1
+

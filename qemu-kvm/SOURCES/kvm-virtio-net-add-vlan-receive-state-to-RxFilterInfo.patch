@@ -1,0 +1,154 @@
+From 89c377a3dbf9f2caf94f210025c96bc84f7c2a4d Mon Sep 17 00:00:00 2001
+From: Amos Kong <akong@redhat.com>
+Date: Mon, 4 Aug 2014 04:12:08 +0200
+Subject: [PATCH 2/4] virtio-net: add vlan receive state to RxFilterInfo
+
+Message-id: <1407125528-27862-3-git-send-email-akong@redhat.com>
+Patchwork-id: 60416
+O-Subject: [RHEL-7.1/7.0.z qemu-kvm PATCH 2/2] virtio-net: add vlan receive state to RxFilterInfo
+Bugzilla: 1065724
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Xiao Wang <jasowang@redhat.com>
+RH-Acked-by: Vlad Yasevich <vyasevic@redhat.com>
+
+Stefan Fritsch just fixed a virtio-net driver bug [1], virtio-net won't
+filter out VLAN-tagged packets if VIRTIO_NET_F_CTRL_VLAN isn't negotiated.
+
+This patch added a new field to @RxFilterInfo to indicate vlan receive
+state ('normal', 'none', 'all'). If VIRTIO_NET_F_CTRL_VLAN isn't
+negotiated, vlan receive state will be 'all', then all VLAN-tagged packets
+will be received by guest.
+
+This patch also fixed a boundary issue in visiting vlan table.
+
+[1] http://lists.nongnu.org/archive/html/qemu-devel/2014-02/msg02604.html
+
+Signed-off-by: Amos Kong <akong@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(backport from commit f7bc8ef8091229a4bec0e2a40af90abb8dcb3834)
+---
+ hw/net/virtio-net.c |   42 +++++++++++++++++++++++++++++-------------
+ qapi-schema.json    |    3 +++
+ qmp-commands.hx     |    2 ++
+ 3 files changed, 34 insertions(+), 13 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/net/virtio-net.c |   42 +++++++++++++++++++++++++++++-------------
+ qapi-schema.json    |    3 +++
+ qmp-commands.hx     |    2 ++
+ 3 files changed, 34 insertions(+), 13 deletions(-)
+
+diff --git a/hw/net/virtio-net.c b/hw/net/virtio-net.c
+index 8e58139..4a50869 100644
+--- a/hw/net/virtio-net.c
++++ b/hw/net/virtio-net.c
+@@ -222,13 +222,33 @@ static char *mac_strdup_printf(const uint8_t *mac)
+                             mac[1], mac[2], mac[3], mac[4], mac[5]);
+ }
+ 
++static intList *get_vlan_table(VirtIONet *n)
++{
++    intList *list, *entry;
++    int i, j;
++
++    list = NULL;
++    for (i = 0; i < MAX_VLAN >> 5; i++) {
++        for (j = 0; n->vlans[i] && j <= 0x1f; j++) {
++            if (n->vlans[i] & (1U << j)) {
++                entry = g_malloc0(sizeof(*entry));
++                entry->value = (i << 5) + j;
++                entry->next = list;
++                list = entry;
++            }
++        }
++    }
++
++    return list;
++}
++
+ static RxFilterInfo *virtio_net_query_rxfilter(NetClientState *nc)
+ {
+     VirtIONet *n = qemu_get_nic_opaque(nc);
++    VirtIODevice *vdev = VIRTIO_DEVICE(n);
+     RxFilterInfo *info;
+     strList *str_list, *entry;
+-    intList *int_list, *int_entry;
+-    int i, j;
++    int i;
+ 
+     info = g_malloc0(sizeof(*info));
+     info->name = g_strdup(nc->name);
+@@ -273,19 +293,15 @@ static RxFilterInfo *virtio_net_query_rxfilter(NetClientState *nc)
+         str_list = entry;
+     }
+     info->multicast_table = str_list;
++    info->vlan_table = get_vlan_table(n);
+ 
+-    int_list = NULL;
+-    for (i = 0; i < MAX_VLAN >> 5; i++) {
+-        for (j = 0; n->vlans[i] && j < 0x1f; j++) {
+-            if (n->vlans[i] & (1U << j)) {
+-                int_entry = g_malloc0(sizeof(*int_entry));
+-                int_entry->value = (i << 5) + j;
+-                int_entry->next = int_list;
+-                int_list = int_entry;
+-            }
+-        }
++    if (!((1 << VIRTIO_NET_F_CTRL_VLAN) & vdev->guest_features)) {
++        info->vlan = RX_STATE_ALL;
++    } else if (!info->vlan_table) {
++        info->vlan = RX_STATE_NONE;
++    } else {
++        info->vlan = RX_STATE_NORMAL;
+     }
+-    info->vlan_table = int_list;
+ 
+     /* enable event notification after query */
+     nc->rxfilter_notify_enabled = 1;
+diff --git a/qapi-schema.json b/qapi-schema.json
+index 017b3b7..aaa86f5 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -4044,6 +4044,8 @@
+ #
+ # @unicast: unicast receive state
+ #
++# @vlan: vlan receive state (Since 2.0)
++#
+ # @broadcast-allowed: whether to receive broadcast
+ #
+ # @multicast-overflow: multicast table is overflowed or not
+@@ -4067,6 +4069,7 @@
+     'promiscuous':        'bool',
+     'multicast':          'RxState',
+     'unicast':            'RxState',
++    'vlan':               'RxState',
+     'broadcast-allowed':  'bool',
+     'multicast-overflow': 'bool',
+     'unicast-overflow':   'bool',
+diff --git a/qmp-commands.hx b/qmp-commands.hx
+index 08a01ee..1d4be84 100644
+--- a/qmp-commands.hx
++++ b/qmp-commands.hx
+@@ -3230,6 +3230,7 @@ Each array entry contains the following:
+ - "promiscuous": promiscuous mode is enabled (json-bool)
+ - "multicast": multicast receive state (one of 'normal', 'none', 'all')
+ - "unicast": unicast receive state  (one of 'normal', 'none', 'all')
++- "vlan": vlan receive state (one of 'normal', 'none', 'all') (Since 2.0)
+ - "broadcast-allowed": allow to receive broadcast (json-bool)
+ - "multicast-overflow": multicast table is overflowed (json-bool)
+ - "unicast-overflow": unicast table is overflowed (json-bool)
+@@ -3247,6 +3248,7 @@ Example:
+             "name": "vnet0",
+             "main-mac": "52:54:00:12:34:56",
+             "unicast": "normal",
++            "vlan": "normal",
+             "vlan-table": [
+                 4,
+                 0
+-- 
+1.7.1
+

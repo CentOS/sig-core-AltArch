@@ -1,0 +1,111 @@
+From 2f85f6c61990fd4d46e4980128ee8ba2d3cfaa37 Mon Sep 17 00:00:00 2001
+From: Vadim Rozenfeld <vrozenfe@redhat.com>
+Date: Mon, 3 Mar 2014 12:09:14 +0100
+Subject: [PATCH 02/12] kvm: Fix uninitialized cpuid_data
+
+RH-Author: Vadim Rozenfeld <vrozenfe@redhat.com>
+Message-id: <1393848564-10511-3-git-send-email-vrozenfe@redhat.com>
+Patchwork-id: 57958
+O-Subject: [RHEL-7.0 qemu-kvm v4 PATCH 02/12] kvm: Fix uninitialized cpuid_data
+Bugzilla: 1057173
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+From: Stefan Weil <sw@weilnetz.de>
+
+This error was reported by valgrind when running qemu-system-x86_64
+with kvm:
+
+==975== Conditional jump or move depends on uninitialised value(s)
+==975==    at 0x521C38: cpuid_find_entry (kvm.c:176)
+==975==    by 0x5235BA: kvm_arch_init_vcpu (kvm.c:686)
+==975==    by 0x4D5175: kvm_init_vcpu (kvm-all.c:267)
+==975==    by 0x45035B: qemu_kvm_cpu_thread_fn (cpus.c:858)
+==975==    by 0xD361E0D: start_thread (pthread_create.c:311)
+==975==    by 0xD65E9EC: clone (clone.S:113)
+==975==  Uninitialised value was created by a stack allocation
+==975==    at 0x5226E4: kvm_arch_init_vcpu (kvm.c:446)
+
+Instead of adding more memset calls for parts of cpuid_data, the existing
+calls were removed and cpuid_data is now initialized completely in one
+call.
+
+Signed-off-by: Stefan Weil <sw@weilnetz.de>
+Signed-off-by: Gleb Natapov <gleb@redhat.com>
+(cherry picked from commit ef4cbe14342c1f63b3c754e306218f004f4e26c4)
+---
+ target-i386/kvm.c | 9 ++-------
+ 1 file changed, 2 insertions(+), 7 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/kvm.c |    9 ++-------
+ 1 files changed, 2 insertions(+), 7 deletions(-)
+
+diff --git a/target-i386/kvm.c b/target-i386/kvm.c
+index c7fabd7..3a9e376 100644
+--- a/target-i386/kvm.c
++++ b/target-i386/kvm.c
+@@ -453,11 +453,12 @@ int kvm_arch_init_vcpu(CPUState *cs)
+     uint32_t signature[3];
+     int r;
+ 
++    memset(&cpuid_data, 0, sizeof(cpuid_data));
++
+     cpuid_i = 0;
+ 
+     /* Paravirtualization CPUIDs */
+     c = &cpuid_data.entries[cpuid_i++];
+-    memset(c, 0, sizeof(*c));
+     c->function = KVM_CPUID_SIGNATURE;
+     if (!hyperv_enabled(cpu)) {
+         memcpy(signature, "KVMKVMKVM\0\0\0", 12);
+@@ -471,7 +472,6 @@ int kvm_arch_init_vcpu(CPUState *cs)
+     c->edx = signature[2];
+ 
+     c = &cpuid_data.entries[cpuid_i++];
+-    memset(c, 0, sizeof(*c));
+     c->function = KVM_CPUID_FEATURES;
+     c->eax = env->features[FEAT_KVM];
+ 
+@@ -480,13 +480,11 @@ int kvm_arch_init_vcpu(CPUState *cs)
+         c->eax = signature[0];
+ 
+         c = &cpuid_data.entries[cpuid_i++];
+-        memset(c, 0, sizeof(*c));
+         c->function = HYPERV_CPUID_VERSION;
+         c->eax = 0x00001bbc;
+         c->ebx = 0x00060001;
+ 
+         c = &cpuid_data.entries[cpuid_i++];
+-        memset(c, 0, sizeof(*c));
+         c->function = HYPERV_CPUID_FEATURES;
+         if (cpu->hyperv_relaxed_timing) {
+             c->eax |= HV_X64_MSR_HYPERCALL_AVAILABLE;
+@@ -497,7 +495,6 @@ int kvm_arch_init_vcpu(CPUState *cs)
+         }
+ 
+         c = &cpuid_data.entries[cpuid_i++];
+-        memset(c, 0, sizeof(*c));
+         c->function = HYPERV_CPUID_ENLIGHTMENT_INFO;
+         if (cpu->hyperv_relaxed_timing) {
+             c->eax |= HV_X64_RELAXED_TIMING_RECOMMENDED;
+@@ -508,13 +505,11 @@ int kvm_arch_init_vcpu(CPUState *cs)
+         c->ebx = cpu->hyperv_spinlock_attempts;
+ 
+         c = &cpuid_data.entries[cpuid_i++];
+-        memset(c, 0, sizeof(*c));
+         c->function = HYPERV_CPUID_IMPLEMENT_LIMITS;
+         c->eax = 0x40;
+         c->ebx = 0x40;
+ 
+         c = &cpuid_data.entries[cpuid_i++];
+-        memset(c, 0, sizeof(*c));
+         c->function = KVM_CPUID_SIGNATURE_NEXT;
+         memcpy(signature, "KVMKVMKVM\0\0\0", 12);
+         c->eax = 0;
+-- 
+1.7.1
+

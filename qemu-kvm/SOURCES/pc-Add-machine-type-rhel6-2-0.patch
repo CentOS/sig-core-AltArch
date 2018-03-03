@@ -1,0 +1,137 @@
+From 26e8594d99236281d19435ba40c323665ca21bcd Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Wed, 31 Jul 2013 08:05:31 +0200
+Subject: pc: Add machine type "rhel6.2.0"
+
+Message-id: <1375201922-6794-12-git-send-email-armbru@redhat.com>
+Patchwork-id: 52823
+O-Subject: [RHEL-7 PATCH v3 11/15] pc: Add machine type "rhel6.2.0"
+Bugzilla: 983991
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Match RHEL-6's compat_props qxl.revision,
+qxl-vga.revision. virtio-blk-pci.event_idx,
+virtio-serial-pci.event_idx, virtio-net-pci.event_idx,
+virtio-balloon-pci.event_idx.
+
+RHEL-6's non-upstream hda-duplex.mcompat, hda-micro.mcompat,
+hda-output.mcompat aren't needed.  RHEL-6 has them to enable migration
+back to RHEL-6.1 (see qemu-kvm-rhel6 commit d619762), which isn't
+relevant in RHEL-7.
+
+Non-upstream usb-tablet.migrate, usb-mouse.migrate, usb-kbd.migrate
+will be covered separately (bug 953304).
+
+PIIX4_PM.disable_s3, PIIX4_PM.disable_s4 will be covered separately
+(bug 980840).
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index 4ab39cd..eaf3af1 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -777,7 +777,7 @@ static QEMUMachine pc_machine_rhel700 = {
+     DEFAULT_MACHINE_OPTIONS,
+ };
+ 
+-#define PC_RHEL6_1_COMPAT \
++#define PC_RHEL6_2_COMPAT \
+     {\
+         .driver   = "Conroe-" TYPE_X86_CPU,\
+         .property = "model",\
+@@ -870,11 +870,11 @@ static QEMUMachine pc_machine_rhel700 = {
+     },{\
+         .driver   = "qxl",\
+         .property = "revision",\
+-        .value    = stringify(2),\
++        .value    = stringify(3),\
+     },{\
+         .driver   = "qxl-vga",\
+         .property = "revision",\
+-        .value    = stringify(2),\
++        .value    = stringify(3),\
+     },{\
+         .driver   = "VGA",\
+         .property = "mmio",\
+@@ -900,6 +900,46 @@ static QEMUMachine pc_machine_rhel700 = {
+         .property = "class",\
+         .value    = stringify(PCI_CLASS_MEMORY_RAM),\
+     },{\
++        .driver   = TYPE_PCI_DEVICE,\
++        .property = "command_serr_enable",\
++        .value    = "off",\
++    },{\
++        .driver   = "AC97",\
++        .property = "use_broken_id",\
++        .value    = stringify(1),\
++    }
++
++static void pc_init_rhel620(QEMUMachineInitArgs *args)
++{
++    has_pvpanic = false;
++    disable_kvm_pv_eoi();
++    enable_compat_apic_id_mode();
++    pc_init_rhel700(args);
++}
++
++static QEMUMachine pc_machine_rhel620 = {
++    .name = "rhel6.2.0",
++    .desc = "RHEL 6.2.0 PC",
++    .init = pc_init_rhel620,
++    .max_cpus = 255,
++    .compat_props = (GlobalProperty[]) {
++        PC_RHEL6_2_COMPAT,
++        { /* end of list */ }
++    },
++    DEFAULT_MACHINE_OPTIONS,
++};
++
++#define PC_RHEL6_1_COMPAT \
++    PC_RHEL6_2_COMPAT,\
++    {\
++        .driver   = "qxl",\
++        .property = "revision",\
++        .value    = stringify(2),\
++    },{\
++        .driver   = "qxl-vga",\
++        .property = "revision",\
++        .value    = stringify(2),\
++    },{\
+         .driver   = "virtio-blk-pci",\
+         .property = "event_idx",\
+         .value    = "off",\
+@@ -915,22 +955,11 @@ static QEMUMachine pc_machine_rhel700 = {
+         .driver   = "virtio-balloon-pci",\
+         .property = "event_idx",\
+         .value    = "off",\
+-    },{\
+-        .driver   = TYPE_PCI_DEVICE,\
+-        .property = "command_serr_enable",\
+-        .value    = "off",\
+-    },{\
+-        .driver   = "AC97",\
+-        .property = "use_broken_id",\
+-        .value    = stringify(1),\
+     }
+ 
+ static void pc_init_rhel610(QEMUMachineInitArgs *args)
+ {
+-    has_pvpanic = false;
+-    disable_kvm_pv_eoi();
+-    enable_compat_apic_id_mode();
+-    pc_init_rhel700(args);
++    pc_init_rhel620(args);
+ }
+ 
+ static QEMUMachine pc_machine_rhel610 = {
+@@ -981,6 +1010,7 @@ static QEMUMachine pc_machine_rhel600 = {
+ static void rhel_machine_init(void)
+ {
+     qemu_register_machine(&pc_machine_rhel700);
++    qemu_register_machine(&pc_machine_rhel620);
+     qemu_register_machine(&pc_machine_rhel610);
+     qemu_register_machine(&pc_machine_rhel600);
+ }

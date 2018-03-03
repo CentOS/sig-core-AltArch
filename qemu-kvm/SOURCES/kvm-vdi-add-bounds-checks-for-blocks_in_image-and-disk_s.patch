@@ -1,0 +1,112 @@
+From 6ce116dda5d5a7708d660e32713ff40fc3f749ef Mon Sep 17 00:00:00 2001
+From: Jeff Cody <jcody@redhat.com>
+Date: Tue, 25 Mar 2014 14:23:24 +0100
+Subject: [PATCH 17/49] vdi: add bounds checks for blocks_in_image and disk_size header fields (CVE-2014-0144)
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1395753835-7591-18-git-send-email-kwolf@redhat.com>
+Patchwork-id: n/a
+O-Subject: [virt-devel] [EMBARGOED RHEL-7.0 qemu-kvm PATCH 17/48] vdi: add bounds checks for blocks_in_image and disk_size header fields (CVE-2014-0144)
+Bugzilla: 1079455
+RH-Acked-by: Jeff Cody <jcody@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: Jeff Cody <jcody@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1079455
+Upstream status: Embargoed
+
+The maximum blocks_in_image is 0xffffffff / 4, which also limits the
+maximum disk_size for a VDI image.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+
+Conflicts:
+block/vdi.c
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block/vdi.c |   26 ++++++++++++++++++++++++--
+ 1 files changed, 24 insertions(+), 2 deletions(-)
+
+diff --git a/block/vdi.c b/block/vdi.c
+index f973883..0457298 100644
+--- a/block/vdi.c
++++ b/block/vdi.c
+@@ -120,6 +120,12 @@ typedef unsigned char uuid_t[16];
+ 
+ #define VDI_IS_ALLOCATED(X) ((X) < VDI_DISCARDED)
+ 
++#define VDI_BLOCK_SIZE           (1 * MiB)
++/* max blocks in image is (0xffffffff / 4) */
++#define VDI_BLOCKS_IN_IMAGE_MAX  0x3fffffff
++#define VDI_DISK_SIZE_MAX        ((uint64_t)VDI_BLOCKS_IN_IMAGE_MAX * \
++                                  (uint64_t)VDI_BLOCK_SIZE)
++
+ #if !defined(CONFIG_UUID)
+ static inline void uuid_generate(uuid_t out)
+ {
+@@ -385,6 +391,11 @@ static int vdi_open(BlockDriverState *bs, QDict *options, int flags,
+     vdi_header_print(&header);
+ #endif
+ 
++    if (header.disk_size > VDI_DISK_SIZE_MAX) {
++        ret = -EINVAL;
++        goto fail;
++    }
++
+     if (header.disk_size % SECTOR_SIZE != 0) {
+         /* 'VBoxManage convertfromraw' can create images with odd disk sizes.
+            We accept them but round the disk size to the next multiple of
+@@ -417,7 +428,7 @@ static int vdi_open(BlockDriverState *bs, QDict *options, int flags,
+         logout("unsupported sector size %u B\n", header.sector_size);
+         ret = -ENOTSUP;
+         goto fail;
+-    } else if (header.block_size != 1 * MiB) {
++    } else if (header.block_size != VDI_BLOCK_SIZE) {
+         logout("unsupported block size %u B\n", header.block_size);
+         ret = -ENOTSUP;
+         goto fail;
+@@ -434,6 +445,10 @@ static int vdi_open(BlockDriverState *bs, QDict *options, int flags,
+         logout("parent uuid != 0, unsupported\n");
+         ret = -ENOTSUP;
+         goto fail;
++    } else if (header.blocks_in_image > VDI_BLOCKS_IN_IMAGE_MAX) {
++        logout("unsupported number of blocks in image\n");
++        ret = -ENOTSUP;
++        goto fail;
+     }
+ 
+     bs->total_sectors = header.disk_size / SECTOR_SIZE;
+@@ -682,11 +697,17 @@ static int vdi_create(const char *filename, QEMUOptionParameter *options,
+         options++;
+     }
+ 
++    if (bytes > VDI_DISK_SIZE_MAX) {
++        result = -EINVAL;
++        goto exit;
++    }
++
+     fd = qemu_open(filename,
+                    O_WRONLY | O_CREAT | O_TRUNC | O_BINARY | O_LARGEFILE,
+                    0644);
+     if (fd < 0) {
+-        return -errno;
++        result = -errno;
++        goto exit;
+     }
+ 
+     /* We need enough blocks to store the given disk size,
+@@ -747,6 +768,7 @@ static int vdi_create(const char *filename, QEMUOptionParameter *options,
+         result = -errno;
+     }
+ 
++exit:
+     return result;
+ }
+ 
+-- 
+1.7.1
+

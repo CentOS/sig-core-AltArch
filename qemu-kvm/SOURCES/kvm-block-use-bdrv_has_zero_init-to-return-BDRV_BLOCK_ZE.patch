@@ -1,0 +1,61 @@
+From 95dd0c697b1b924c282cad302fc7f5af3330993d Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Fri, 18 Oct 2013 08:14:40 +0200
+Subject: [PATCH 15/81] block: use bdrv_has_zero_init to return BDRV_BLOCK_ZERO
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1382084091-16636-16-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 54998
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 15/26] block: use bdrv_has_zero_init to return BDRV_BLOCK_ZERO
+Bugzilla: 989646
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+Alternatively, this could use a "discard zeroes data" flag returned
+by bdrv_get_info.
+
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 415b5b013ce74126e71459b922a92377918ae2ef)
+---
+ block.c | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c |   11 ++++++++++-
+ 1 files changed, 10 insertions(+), 1 deletions(-)
+
+diff --git a/block.c b/block.c
+index 8c583bf..00bc3b2 100644
+--- a/block.c
++++ b/block.c
+@@ -3041,6 +3041,7 @@ static int64_t coroutine_fn bdrv_co_get_block_status(BlockDriverState *bs,
+ {
+     int64_t length;
+     int64_t n;
++    int64_t ret;
+ 
+     length = bdrv_getlength(bs);
+     if (length < 0) {
+@@ -3062,7 +3063,15 @@ static int64_t coroutine_fn bdrv_co_get_block_status(BlockDriverState *bs,
+         return BDRV_BLOCK_DATA;
+     }
+ 
+-    return bs->drv->bdrv_co_get_block_status(bs, sector_num, nb_sectors, pnum);
++    ret = bs->drv->bdrv_co_get_block_status(bs, sector_num, nb_sectors, pnum);
++    if (ret < 0) {
++        return ret;
++    }
++
++    if (!(ret & BDRV_BLOCK_DATA) && bdrv_has_zero_init(bs)) {
++        ret |= BDRV_BLOCK_ZERO;
++    }
++    return ret;
+ }
+ 
+ /* Coroutine wrapper for bdrv_get_block_status() */
+-- 
+1.7.1
+

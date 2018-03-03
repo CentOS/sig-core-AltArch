@@ -1,0 +1,55 @@
+From b8159f39be879b1133ce89bcb2c892e0d6711fdb Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sun, 22 Dec 2013 16:12:39 +0100
+Subject: [PATCH 1/8] block/stream: Don't stream unbacked devices
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1387728759-7141-2-git-send-email-mreitz@redhat.com>
+Patchwork-id: 56422
+O-Subject: [RHEL-7.0 qemu-kvm PATCH] block/stream: Don't stream unbacked devices
+Bugzilla: 965636
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+BZ: 965636
+
+If a block device is unbacked, a streaming blockjob should immediately
+finish instead of beginning to try to stream, then noticing the backing
+file does not contain even the first sector (since it does not exist)
+and then finishing normally.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Wenchao Xia <xiawenc@linux.vnet.ibm.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit f4a193e717e6b5179a2e57423bfe110b724662d8)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/stream.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/stream.c |    5 +++++
+ 1 files changed, 5 insertions(+), 0 deletions(-)
+
+diff --git a/block/stream.c b/block/stream.c
+index 276487c..cbae815 100644
+--- a/block/stream.c
++++ b/block/stream.c
+@@ -84,6 +84,11 @@ static void coroutine_fn stream_run(void *opaque)
+     int n = 0;
+     void *buf;
+ 
++    if (!bs->backing_hd) {
++        block_job_completed(&s->common, 0);
++        return;
++    }
++
+     s->common.len = bdrv_getlength(bs);
+     if (s->common.len < 0) {
+         block_job_completed(&s->common, s->common.len);
+-- 
+1.7.1
+

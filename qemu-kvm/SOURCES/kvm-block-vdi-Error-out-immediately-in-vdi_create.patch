@@ -1,0 +1,72 @@
+From 5a762ccf05fea97bc3e98b8dd317374c51c14c26 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Tue, 16 Sep 2014 20:11:47 +0200
+Subject: [PATCH 09/20] block/vdi: Error out immediately in vdi_create()
+
+Message-id: <2947dd91a4c9967cbd5a241145c355263e04207a.1410897407.git.jcody@redhat.com>
+Patchwork-id: 61213
+O-Subject: [PATCH qemu-kvm-rhel RHEL7.1 08/15] block/vdi: Error out immediately in vdi_create()
+Bugzilla: 1098086
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Max Reitz <mreitz@redhat.com>
+
+Currently, if an error occurs during the part of vdi_create() which
+actually writes the image, the function stores -errno, but continues
+anyway.
+
+Instead of trying to write data which (if it can be written at all) does
+not make any sense without the operations before succeeding (e.g.,
+writing the image header), just error out immediately.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Stefan Weil <sw@weilnetz.de>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 0549ea8b6d3ed4eba9a3bd0abfaed3af5de69873)
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vdi.c |    7 ++++++-
+ 1 files changed, 6 insertions(+), 1 deletions(-)
+
+diff --git a/block/vdi.c b/block/vdi.c
+index 0211023..fb25424 100644
+--- a/block/vdi.c
++++ b/block/vdi.c
+@@ -753,6 +753,7 @@ static int vdi_create(const char *filename, QEMUOptionParameter *options,
+     vdi_header_to_le(&header);
+     if (write(fd, &header, sizeof(header)) < 0) {
+         result = -errno;
++        goto close_and_exit;
+     }
+ 
+     if (bmap_size > 0) {
+@@ -766,6 +767,8 @@ static int vdi_create(const char *filename, QEMUOptionParameter *options,
+         }
+         if (write(fd, bmap, bmap_size) < 0) {
+             result = -errno;
++            g_free(bmap);
++            goto close_and_exit;
+         }
+         g_free(bmap);
+     }
+@@ -773,10 +776,12 @@ static int vdi_create(const char *filename, QEMUOptionParameter *options,
+     if (image_type == VDI_TYPE_STATIC) {
+         if (ftruncate(fd, sizeof(header) + bmap_size + blocks * block_size)) {
+             result = -errno;
++            goto close_and_exit;
+         }
+     }
+ 
+-    if (close(fd) < 0) {
++close_and_exit:
++    if ((close(fd) < 0) && !result) {
+         result = -errno;
+     }
+ 
+-- 
+1.7.1
+

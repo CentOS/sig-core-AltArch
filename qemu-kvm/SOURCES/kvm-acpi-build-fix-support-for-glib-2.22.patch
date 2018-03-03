@@ -1,0 +1,66 @@
+From 6fa0fc12221718bb405d01683acf635a24c34daf Mon Sep 17 00:00:00 2001
+Message-Id: <6fa0fc12221718bb405d01683acf635a24c34daf.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:19:24 +0100
+Subject: [PATCH 54/56] acpi-build: fix support for glib < 2.22
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-55-git-send-email-mst@redhat.com>
+Patchwork-id: 56360
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 54/57] acpi-build: fix support for glib < 2.22
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+glib < 2.22 does not have g_array_get_element_size,
+limit it's use (to check all elements are 1 byte
+in size) to newer glib.
+
+This fixes build on RHEL 5.3.
+
+Reported-by: Richard Henderson <rth@redhat.com>
+Reported-by: Erik Rull <erik.rull@rdsoftware.de>
+Tested-by: Richard Henderson <rth@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Message-id: 20131125220039.GA16386@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@amazon.com>
+(cherry picked from commit 134d42d614768b2803e551621f6654dab1fdc2d2)
+---
+ hw/i386/acpi-build.c | 6 ++----
+ 1 file changed, 2 insertions(+), 4 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/i386/acpi-build.c | 6 ++----
+ 1 file changed, 2 insertions(+), 4 deletions(-)
+
+diff --git a/hw/i386/acpi-build.c b/hw/i386/acpi-build.c
+index 4074350..316d6d3 100644
+--- a/hw/i386/acpi-build.c
++++ b/hw/i386/acpi-build.c
+@@ -425,7 +425,7 @@ static inline void *acpi_data_push(GArray *table_data, unsigned size)
+ 
+ static unsigned acpi_data_len(GArray *table)
+ {
+-#if GLIB_CHECK_VERSION(2, 14, 0)
++#if GLIB_CHECK_VERSION(2, 22, 0)
+     assert(g_array_get_element_size(table) == 1);
+ #endif
+     return table->len;
+@@ -436,9 +436,7 @@ static void acpi_align_size(GArray *blob, unsigned align)
+     /* Align size to multiple of given size. This reduces the chance
+      * we need to change size in the future (breaking cross version migration).
+      */
+-    g_array_set_size(blob, (ROUND_UP(acpi_data_len(blob), align) +
+-                            g_array_get_element_size(blob) - 1) /
+-                             g_array_get_element_size(blob));
++    g_array_set_size(blob, ROUND_UP(acpi_data_len(blob), align));
+ }
+ 
+ /* Get pointer within table in a safe manner */
+-- 
+1.7.11.7
+

@@ -1,0 +1,103 @@
+From 9ac777bc498f6be28cab47c96a1f0822b5a01868 Mon Sep 17 00:00:00 2001
+Message-Id: <9ac777bc498f6be28cab47c96a1f0822b5a01868.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:18:44 +0100
+Subject: [PATCH 39/56] i386: define pc guest info
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-40-git-send-email-mst@redhat.com>
+Patchwork-id: 56345
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 39/57] i386: define pc guest info
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+This defines a structure that will be used to fill in acpi tables
+where relevant properties are not yet available using QOM.
+
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Gerd Hoffmann <kraxel@redhat.com>
+Tested-by: Gerd Hoffmann <kraxel@redhat.com>
+Reviewed-by: Igor Mammedov <imammedo@redhat.com>
+Tested-by: Igor Mammedov <imammedo@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit b20c9bd5f6d8860856f6078836d197c6c2e27ef1)
+
+Conflicts:
+	include/hw/i386/pc.h
+---
+ include/hw/i386/pc.h |  9 +++++++++
+ hw/i386/pc.c         | 21 +++++++++++++++++++++
+ 2 files changed, 30 insertions(+)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/i386/pc.c         | 21 +++++++++++++++++++++
+ include/hw/i386/pc.h |  9 +++++++++
+ 2 files changed, 30 insertions(+)
+
+diff --git a/hw/i386/pc.c b/hw/i386/pc.c
+index e5ebd52..4d54c0b 100644
+--- a/hw/i386/pc.c
++++ b/hw/i386/pc.c
+@@ -1042,6 +1042,27 @@ PcGuestInfo *pc_guest_info_init(ram_addr_t below_4g_mem_size,
+ {
+     PcGuestInfoState *guest_info_state = g_malloc0(sizeof *guest_info_state);
+     PcGuestInfo *guest_info = &guest_info_state->info;
++    int i, j;
++
++    guest_info->ram_size = below_4g_mem_size + above_4g_mem_size;
++    guest_info->apic_id_limit = pc_apic_id_limit(max_cpus);
++    guest_info->apic_xrupt_override = kvm_allows_irq0_override();
++    guest_info->numa_nodes = nb_numa_nodes;
++    guest_info->node_mem = g_memdup(node_mem, guest_info->numa_nodes *
++                                    sizeof *guest_info->node_mem);
++    guest_info->node_cpu = g_malloc0(guest_info->apic_id_limit *
++                                     sizeof *guest_info->node_cpu);
++
++    for (i = 0; i < max_cpus; i++) {
++        unsigned int apic_id = x86_cpu_apic_id_from_index(i);
++        assert(apic_id < guest_info->apic_id_limit);
++        for (j = 0; j < nb_numa_nodes; j++) {
++            if (test_bit(i, node_cpumask[j])) {
++                guest_info->node_cpu[apic_id] = j;
++                break;
++            }
++        }
++    }
+ 
+     guest_info_state->machine_done.notify = pc_guest_info_machine_done;
+     qemu_add_machine_init_done_notifier(&guest_info_state->machine_done);
+diff --git a/include/hw/i386/pc.h b/include/hw/i386/pc.h
+index abaaf93..ec91fae 100644
+--- a/include/hw/i386/pc.h
++++ b/include/hw/i386/pc.h
+@@ -11,6 +11,9 @@
+ #include "hw/i386/ioapic.h"
+ 
+ #include "qemu/range.h"
++#include "qemu/bitmap.h"
++#include "sysemu/sysemu.h"
++#include "hw/pci/pci.h"
+ 
+ /* PC-style peripherals (also used by other machines).  */
+ 
+@@ -21,6 +24,12 @@ typedef struct PcPciInfo {
+ 
+ struct PcGuestInfo {
+     bool has_pci_info;
++    hwaddr ram_size;
++    unsigned apic_id_limit;
++    bool apic_xrupt_override;
++    uint64_t numa_nodes;
++    uint64_t *node_mem;
++    uint64_t *node_cpu;
+     FWCfgState *fw_cfg;
+ };
+ 
+-- 
+1.7.11.7
+

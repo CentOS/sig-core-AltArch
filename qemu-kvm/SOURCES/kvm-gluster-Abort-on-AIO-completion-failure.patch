@@ -1,0 +1,73 @@
+From ecfbec2139f06a75a03c510e24f265a869684edb Mon Sep 17 00:00:00 2001
+From: Asias He <asias@redhat.com>
+Date: Thu, 12 Sep 2013 07:39:35 +0200
+Subject: [PATCH 15/29] gluster: Abort on AIO completion failure
+
+RH-Author: Asias He <asias@redhat.com>
+Message-id: <1378971575-22416-5-git-send-email-asias@redhat.com>
+Patchwork-id: 54324
+O-Subject: [RHEL7.0 qemu-kvm PATCH 4/4] gluster: Abort on AIO completion failure
+Bugzilla: 1007226
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+From: Bharata B Rao <bharata@linux.vnet.ibm.com>
+
+BZ: https://bugzilla.redhat.com/show_bug.cgi?id=1004733
+Brew: https://brewweb.devel.redhat.com/taskinfo?taskID=6275752
+
+Currently if gluster AIO callback thread fails to notify the QEMU thread about
+AIO completion, we try graceful recovery by marking the disk drive as
+inaccessible. This error recovery code is race-prone as found by Asias and
+Stefan. However as found out by Paolo, this kind of error is impossible and
+hence simplify the code that handles this error recovery.
+
+Signed-off-by: Bharata B Rao <bharata@linux.vnet.ibm.com>
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 9faa574f7d07109e2256c0b4b63e8711d650f2d8)
+
+Conflicts:
+	block/gluster.c
+---
+ block/gluster.c | 17 ++---------------
+ 1 file changed, 2 insertions(+), 15 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/gluster.c |   17 ++---------------
+ 1 files changed, 2 insertions(+), 15 deletions(-)
+
+diff --git a/block/gluster.c b/block/gluster.c
+index 7b10e9c..90a51ca 100644
+--- a/block/gluster.c
++++ b/block/gluster.c
+@@ -436,22 +436,9 @@ static void gluster_finish_aiocb(struct glfs_fd *fd, ssize_t ret, void *arg)
+         /*
+          * Gluster AIO callback thread failed to notify the waiting
+          * QEMU thread about IO completion.
+-         *
+-         * Complete this IO request and make the disk inaccessible for
+-         * subsequent reads and writes.
+          */
+-        error_report("Gluster failed to notify QEMU about IO completion");
+-
+-        qemu_mutex_lock_iothread(); /* We are in gluster thread context */
+-        acb->common.cb(acb->common.opaque, -EIO);
+-        qemu_aio_release(acb);
+-        s->qemu_aio_count--;
+-        close(s->fds[GLUSTER_FD_READ]);
+-        close(s->fds[GLUSTER_FD_WRITE]);
+-        qemu_aio_set_fd_handler(s->fds[GLUSTER_FD_READ], NULL, NULL, NULL,
+-            NULL);
+-        bs->drv = NULL; /* Make the disk inaccessible */
+-        qemu_mutex_unlock_iothread();
++        error_report("Gluster AIO completion failed: %s", strerror(errno));
++        abort();
+     }
+ }
+ 
+-- 
+1.7.1
+

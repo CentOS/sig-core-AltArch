@@ -1,0 +1,144 @@
+From 18fbf10e53408ce0a74abb32490bacf077713e9a Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Tue, 16 Sep 2014 20:11:49 +0200
+Subject: [PATCH 11/20] block: vpc - use QEMU_PACKED for on-disk structures
+
+Message-id: <924b119681bb117e6551215f16be3f38e80c1179.1410897407.git.jcody@redhat.com>
+Patchwork-id: 61215
+O-Subject: [PATCH qemu-kvm-rhel RHEL7.1 10/15] block: vpc - use QEMU_PACKED for on-disk structures
+Bugzilla: 1098086
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+The VHD footer and header structs (vhd_footer and vhd_dyndisk_header)
+are on-disk structures for the image format, and as such should be
+packed.
+
+Go ahead and make these typedefs as well, with the preferred QEMU
+naming convention, so that the packed attribute is used consistently
+with the struct.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Reviewed-by: Richard Henderson <rth@twiddle.net>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit e54835c06d1f4896941c1505a86532aa1403ebe8)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vpc.c |   28 ++++++++++++++--------------
+ 1 files changed, 14 insertions(+), 14 deletions(-)
+
+diff --git a/block/vpc.c b/block/vpc.c
+index 2f3d4ac..ab74eb9 100644
+--- a/block/vpc.c
++++ b/block/vpc.c
+@@ -48,7 +48,7 @@ enum vhd_type {
+ #define VHD_MAX_SECTORS       (65535LL * 255 * 255)
+ 
+ // always big-endian
+-struct vhd_footer {
++typedef struct vhd_footer {
+     char        creator[8]; // "conectix"
+     uint32_t    features;
+     uint32_t    version;
+@@ -81,9 +81,9 @@ struct vhd_footer {
+     uint8_t     uuid[16];
+ 
+     uint8_t     in_saved_state;
+-};
++} QEMU_PACKED VHDFooter;
+ 
+-struct vhd_dyndisk_header {
++typedef struct vhd_dyndisk_header {
+     char        magic[8]; // "cxsparse"
+ 
+     // Offset of next header structure, 0xFFFFFFFF if none
+@@ -113,7 +113,7 @@ struct vhd_dyndisk_header {
+         uint32_t    reserved;
+         uint64_t    data_offset;
+     } parent_locator[8];
+-};
++} QEMU_PACKED VHDDynDiskHeader;
+ 
+ typedef struct BDRVVPCState {
+     CoMutex lock;
+@@ -162,8 +162,8 @@ static int vpc_open(BlockDriverState *bs, QDict *options, int flags,
+ {
+     BDRVVPCState *s = bs->opaque;
+     int i;
+-    struct vhd_footer* footer;
+-    struct vhd_dyndisk_header* dyndisk_header;
++    VHDFooter *footer;
++    VHDDynDiskHeader *dyndisk_header;
+     uint8_t buf[HEADER_SIZE];
+     uint32_t checksum;
+     uint64_t computed_size;
+@@ -175,7 +175,7 @@ static int vpc_open(BlockDriverState *bs, QDict *options, int flags,
+         goto fail;
+     }
+ 
+-    footer = (struct vhd_footer*) s->footer_buf;
++    footer = (VHDFooter *) s->footer_buf;
+     if (strncmp(footer->creator, "conectix", 8)) {
+         int64_t offset = bdrv_getlength(bs->file);
+         if (offset < 0) {
+@@ -228,7 +228,7 @@ static int vpc_open(BlockDriverState *bs, QDict *options, int flags,
+             goto fail;
+         }
+ 
+-        dyndisk_header = (struct vhd_dyndisk_header *) buf;
++        dyndisk_header = (VHDDynDiskHeader *) buf;
+ 
+         if (strncmp(dyndisk_header->magic, "cxsparse", 8)) {
+             ret = -EINVAL;
+@@ -484,7 +484,7 @@ static int vpc_read(BlockDriverState *bs, int64_t sector_num,
+     int ret;
+     int64_t offset;
+     int64_t sectors, sectors_per_block;
+-    struct vhd_footer *footer = (struct vhd_footer *) s->footer_buf;
++    VHDFooter *footer = (VHDFooter *) s->footer_buf;
+ 
+     if (cpu_to_be32(footer->type) == VHD_FIXED) {
+         return bdrv_read(bs->file, sector_num, buf, nb_sectors);
+@@ -533,7 +533,7 @@ static int vpc_write(BlockDriverState *bs, int64_t sector_num,
+     int64_t offset;
+     int64_t sectors, sectors_per_block;
+     int ret;
+-    struct vhd_footer *footer =  (struct vhd_footer *) s->footer_buf;
++    VHDFooter *footer =  (VHDFooter *) s->footer_buf;
+ 
+     if (cpu_to_be32(footer->type) == VHD_FIXED) {
+         return bdrv_write(bs->file, sector_num, buf, nb_sectors);
+@@ -635,8 +635,8 @@ static int calculate_geometry(int64_t total_sectors, uint16_t* cyls,
+ 
+ static int create_dynamic_disk(int fd, uint8_t *buf, int64_t total_sectors)
+ {
+-    struct vhd_dyndisk_header* dyndisk_header =
+-        (struct vhd_dyndisk_header*) buf;
++    VHDDynDiskHeader *dyndisk_header =
++        (VHDDynDiskHeader *) buf;
+     size_t block_size, num_bat_entries;
+     int i;
+     int ret = -EIO;
+@@ -726,7 +726,7 @@ static int vpc_create(const char *filename, QEMUOptionParameter *options,
+                       Error **errp)
+ {
+     uint8_t buf[1024];
+-    struct vhd_footer *footer = (struct vhd_footer *) buf;
++    VHDFooter *footer = (VHDFooter *) buf;
+     QEMUOptionParameter *disk_type_param;
+     int fd, i;
+     uint16_t cyls = 0;
+@@ -829,7 +829,7 @@ static int vpc_create(const char *filename, QEMUOptionParameter *options,
+ static int vpc_has_zero_init(BlockDriverState *bs)
+ {
+     BDRVVPCState *s = bs->opaque;
+-    struct vhd_footer *footer =  (struct vhd_footer *) s->footer_buf;
++    VHDFooter *footer =  (VHDFooter *) s->footer_buf;
+ 
+     if (cpu_to_be32(footer->type) == VHD_FIXED) {
+         return bdrv_has_zero_init(bs->file);
+-- 
+1.7.1
+

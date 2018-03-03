@@ -1,0 +1,82 @@
+From d3ec1ceddceff322c71dae8c6efff7bec166aeb8 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Wed, 8 Jan 2014 19:43:25 +0000
+Subject: [PATCH 01/37] block: fix backing file segfault
+
+Message-id: <1392117622-28812-2-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57166
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 01/37] block: fix backing file segfault
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Peter Feiner <peter@gridcentric.ca>
+
+When a backing file is opened such that (1) a protocol is directly
+used as the block driver and (2) the block driver has bdrv_file_open,
+bdrv_open_backing_file segfaults. The problem arises because
+bdrv_open_common returns without setting bd->backing_hd->file.
+
+To effect (1), you seem to have to use the -F flag in qemu-img. There
+are several block drivers that satisfy (2), such as "file" and "nbd".
+Here are some concrete examples:
+
+    #!/bin/bash
+
+    echo Test file format
+    ./qemu-img create -f file base.file 1m
+    ./qemu-img create -f qcow2 -F file -o backing_file=base.file\
+        file-overlay.qcow2
+    ./qemu-img convert -O raw file-overlay.qcow2 file-convert.raw
+
+    echo Test nbd format
+    SOCK=$PWD/nbd.sock
+    ./qemu-img create -f raw base.raw 1m
+    ./qemu-nbd -t -k $SOCK base.raw &
+    trap "kill $!" EXIT
+    while ! test -e $SOCK; do sleep 1; done
+    ./qemu-img create -f qcow2 -F nbd -o backing_file=nbd:unix:$SOCK\
+        nbd-overlay.qcow2
+    ./qemu-img convert -O raw nbd-overlay.qcow2 nbd-convert.raw
+
+Without this patch, the two qemu-img convert commands segfault.
+
+This is a regression that was introduced in v1.7 by
+dbecebddfa4932d1c83915bcb9b5ba5984eb91be.
+
+Signed-off-by: Peter Feiner <peter@gridcentric.ca>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit d80ac658f2caacfb14ea386211c4a9bea0cea280)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+---
+ block.c |    8 ++++++--
+ 1 files changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/block.c b/block.c
+index 1433844..df0adf3 100644
+--- a/block.c
++++ b/block.c
+@@ -978,8 +978,12 @@ int bdrv_open_backing_file(BlockDriverState *bs, QDict *options, Error **errp)
+         error_propagate(errp, local_err);
+         return ret;
+     }
+-    pstrcpy(bs->backing_file, sizeof(bs->backing_file),
+-            bs->backing_hd->file->filename);
++
++    if (bs->backing_hd->file) {
++        pstrcpy(bs->backing_file, sizeof(bs->backing_file),
++                bs->backing_hd->file->filename);
++    }
++
+     return 0;
+ }
+ 
+-- 
+1.7.1
+

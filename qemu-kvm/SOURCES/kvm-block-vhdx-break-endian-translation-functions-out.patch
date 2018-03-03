@@ -1,0 +1,273 @@
+From 88e96c366d923305d0d3f124bbe295ef5068c6bc Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Wed, 20 Nov 2013 19:43:54 +0100
+Subject: [PATCH 11/25] block: vhdx - break endian translation functions out
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <0f4c21e92172fde45d0a5c609a19afa2e1f5a015.1384975172.git.jcody@redhat.com>
+Patchwork-id: 55804
+O-Subject: [RHEL7 qemu-kvm PATCH 11/26] block: vhdx - break endian translation functions out
+Bugzilla: 879234
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+This moves the endian translation functions out from the vhdx.c source,
+into a separate source file. In addition to the previously defined
+endian functions, new endian translation functions for log support are
+added as well.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 0f48e8f0978afe0bd44c63749e7df6411da6c437)
+---
+ block/Makefile.objs |   2 +-
+ block/vhdx-endian.c | 141 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ block/vhdx.c        |  43 ----------------
+ block/vhdx.h        |   8 +++
+ 4 files changed, 150 insertions(+), 44 deletions(-)
+ create mode 100644 block/vhdx-endian.c
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/Makefile.objs |    2 +-
+ block/vhdx-endian.c |  141 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ block/vhdx.c        |   43 ----------------
+ block/vhdx.h        |    8 +++
+ 4 files changed, 150 insertions(+), 44 deletions(-)
+ create mode 100644 block/vhdx-endian.c
+
+diff --git a/block/Makefile.objs b/block/Makefile.objs
+index 114f8a5..a7b3b87 100644
+--- a/block/Makefile.objs
++++ b/block/Makefile.objs
+@@ -2,7 +2,7 @@ block-obj-y += raw.o cow.o qcow.o vdi.o vmdk.o cloop.o dmg.o bochs.o vpc.o vvfat
+ block-obj-y += qcow2.o qcow2-refcount.o qcow2-cluster.o qcow2-snapshot.o qcow2-cache.o
+ block-obj-y += qed.o qed-gencb.o qed-l2-cache.o qed-table.o qed-cluster.o
+ block-obj-y += qed-check.o
+-block-obj-$(CONFIG_VHDX) += vhdx.o
++block-obj-$(CONFIG_VHDX) += vhdx.o vhdx-endian.o
+ block-obj-y += parallels.o blkdebug.o blkverify.o
+ block-obj-y += snapshot.o qapi.o
+ block-obj-$(CONFIG_WIN32) += raw-win32.o win32-aio.o
+diff --git a/block/vhdx-endian.c b/block/vhdx-endian.c
+new file mode 100644
+index 0000000..3e93e63
+--- /dev/null
++++ b/block/vhdx-endian.c
+@@ -0,0 +1,141 @@
++/*
++ * Block driver for Hyper-V VHDX Images
++ *
++ * Copyright (c) 2013 Red Hat, Inc.,
++ *
++ * Authors:
++ *  Jeff Cody <jcody@redhat.com>
++ *
++ *  This is based on the "VHDX Format Specification v1.00", published 8/25/2012
++ *  by Microsoft:
++ *      https://www.microsoft.com/en-us/download/details.aspx?id=34750
++ *
++ * This work is licensed under the terms of the GNU LGPL, version 2 or later.
++ * See the COPYING.LIB file in the top-level directory.
++ *
++ */
++
++#include "qemu-common.h"
++#include "block/block_int.h"
++#include "block/vhdx.h"
++
++#include <uuid/uuid.h>
++
++
++/*
++ * All the VHDX formats on disk are little endian - the following
++ * are helper import/export functions to correctly convert
++ * endianness from disk read to native cpu format, and back again.
++ */
++
++
++/* VHDX File Header */
++
++
++void vhdx_header_le_import(VHDXHeader *h)
++{
++    assert(h != NULL);
++
++    le32_to_cpus(&h->signature);
++    le32_to_cpus(&h->checksum);
++    le64_to_cpus(&h->sequence_number);
++
++    leguid_to_cpus(&h->file_write_guid);
++    leguid_to_cpus(&h->data_write_guid);
++    leguid_to_cpus(&h->log_guid);
++
++    le16_to_cpus(&h->log_version);
++    le16_to_cpus(&h->version);
++    le32_to_cpus(&h->log_length);
++    le64_to_cpus(&h->log_offset);
++}
++
++void vhdx_header_le_export(VHDXHeader *orig_h, VHDXHeader *new_h)
++{
++    assert(orig_h != NULL);
++    assert(new_h != NULL);
++
++    new_h->signature       = cpu_to_le32(orig_h->signature);
++    new_h->checksum        = cpu_to_le32(orig_h->checksum);
++    new_h->sequence_number = cpu_to_le64(orig_h->sequence_number);
++
++    new_h->file_write_guid = orig_h->file_write_guid;
++    new_h->data_write_guid = orig_h->data_write_guid;
++    new_h->log_guid        = orig_h->log_guid;
++
++    cpu_to_leguids(&new_h->file_write_guid);
++    cpu_to_leguids(&new_h->data_write_guid);
++    cpu_to_leguids(&new_h->log_guid);
++
++    new_h->log_version     = cpu_to_le16(orig_h->log_version);
++    new_h->version         = cpu_to_le16(orig_h->version);
++    new_h->log_length      = cpu_to_le32(orig_h->log_length);
++    new_h->log_offset      = cpu_to_le64(orig_h->log_offset);
++}
++
++
++/* VHDX Log Headers */
++
++
++void vhdx_log_desc_le_import(VHDXLogDescriptor *d)
++{
++    assert(d != NULL);
++
++    le32_to_cpus(&d->signature);
++    le32_to_cpus(&d->trailing_bytes);
++    le64_to_cpus(&d->leading_bytes);
++    le64_to_cpus(&d->file_offset);
++    le64_to_cpus(&d->sequence_number);
++}
++
++void vhdx_log_desc_le_export(VHDXLogDescriptor *d)
++{
++    assert(d != NULL);
++
++    cpu_to_le32s(&d->signature);
++    cpu_to_le32s(&d->trailing_bytes);
++    cpu_to_le64s(&d->leading_bytes);
++    cpu_to_le64s(&d->file_offset);
++    cpu_to_le64s(&d->sequence_number);
++}
++
++void vhdx_log_data_le_export(VHDXLogDataSector *d)
++{
++    assert(d != NULL);
++
++    cpu_to_le32s(&d->data_signature);
++    cpu_to_le32s(&d->sequence_high);
++    cpu_to_le32s(&d->sequence_low);
++}
++
++void vhdx_log_entry_hdr_le_import(VHDXLogEntryHeader *hdr)
++{
++    assert(hdr != NULL);
++
++    le32_to_cpus(&hdr->signature);
++    le32_to_cpus(&hdr->checksum);
++    le32_to_cpus(&hdr->entry_length);
++    le32_to_cpus(&hdr->tail);
++    le64_to_cpus(&hdr->sequence_number);
++    le32_to_cpus(&hdr->descriptor_count);
++    leguid_to_cpus(&hdr->log_guid);
++    le64_to_cpus(&hdr->flushed_file_offset);
++    le64_to_cpus(&hdr->last_file_offset);
++}
++
++void vhdx_log_entry_hdr_le_export(VHDXLogEntryHeader *hdr)
++{
++    assert(hdr != NULL);
++
++    cpu_to_le32s(&hdr->signature);
++    cpu_to_le32s(&hdr->checksum);
++    cpu_to_le32s(&hdr->entry_length);
++    cpu_to_le32s(&hdr->tail);
++    cpu_to_le64s(&hdr->sequence_number);
++    cpu_to_le32s(&hdr->descriptor_count);
++    cpu_to_leguids(&hdr->log_guid);
++    cpu_to_le64s(&hdr->flushed_file_offset);
++    cpu_to_le64s(&hdr->last_file_offset);
++}
++
++
+diff --git a/block/vhdx.c b/block/vhdx.c
+index 16321ff..2efece1 100644
+--- a/block/vhdx.c
++++ b/block/vhdx.c
+@@ -223,49 +223,6 @@ static int vhdx_probe(const uint8_t *buf, int buf_size, const char *filename)
+     return 0;
+ }
+ 
+-/* All VHDX structures on disk are little endian */
+-static void vhdx_header_le_import(VHDXHeader *h)
+-{
+-    assert(h != NULL);
+-
+-    le32_to_cpus(&h->signature);
+-    le32_to_cpus(&h->checksum);
+-    le64_to_cpus(&h->sequence_number);
+-
+-    leguid_to_cpus(&h->file_write_guid);
+-    leguid_to_cpus(&h->data_write_guid);
+-    leguid_to_cpus(&h->log_guid);
+-
+-    le16_to_cpus(&h->log_version);
+-    le16_to_cpus(&h->version);
+-    le32_to_cpus(&h->log_length);
+-    le64_to_cpus(&h->log_offset);
+-}
+-
+-/* All VHDX structures on disk are little endian */
+-static void vhdx_header_le_export(VHDXHeader *orig_h, VHDXHeader *new_h)
+-{
+-    assert(orig_h != NULL);
+-    assert(new_h != NULL);
+-
+-    new_h->signature       = cpu_to_le32(orig_h->signature);
+-    new_h->checksum        = cpu_to_le32(orig_h->checksum);
+-    new_h->sequence_number = cpu_to_le64(orig_h->sequence_number);
+-
+-    new_h->file_write_guid = orig_h->file_write_guid;
+-    new_h->data_write_guid = orig_h->data_write_guid;
+-    new_h->log_guid        = orig_h->log_guid;
+-
+-    cpu_to_leguids(&new_h->file_write_guid);
+-    cpu_to_leguids(&new_h->data_write_guid);
+-    cpu_to_leguids(&new_h->log_guid);
+-
+-    new_h->log_version     = cpu_to_le16(orig_h->log_version);
+-    new_h->version         = cpu_to_le16(orig_h->version);
+-    new_h->log_length      = cpu_to_le32(orig_h->log_length);
+-    new_h->log_offset      = cpu_to_le64(orig_h->log_offset);
+-}
+-
+ /* Update the VHDX headers
+  *
+  * This follows the VHDX spec procedures for header updates.
+diff --git a/block/vhdx.h b/block/vhdx.h
+index 76ce4aa..55975a2 100644
+--- a/block/vhdx.h
++++ b/block/vhdx.h
+@@ -394,4 +394,12 @@ static inline void cpu_to_leguids(MSGUID *guid)
+     cpu_to_le16s(&guid->data3);
+ }
+ 
++void vhdx_header_le_import(VHDXHeader *h);
++void vhdx_header_le_export(VHDXHeader *orig_h, VHDXHeader *new_h);
++void vhdx_log_desc_le_import(VHDXLogDescriptor *d);
++void vhdx_log_desc_le_export(VHDXLogDescriptor *d);
++void vhdx_log_data_le_export(VHDXLogDataSector *d);
++void vhdx_log_entry_hdr_le_import(VHDXLogEntryHeader *hdr);
++void vhdx_log_entry_hdr_le_export(VHDXLogEntryHeader *hdr);
++
+ #endif
+-- 
+1.7.1
+

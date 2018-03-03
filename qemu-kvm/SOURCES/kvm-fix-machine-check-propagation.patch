@@ -1,0 +1,75 @@
+From a573bf83cd8f541f3129a53238ee7c2e9ad61ff8 Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Wed, 26 Mar 2014 12:30:43 +0100
+Subject: [PATCH 49/49] fix machine-check propagation
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1395837043-17408-1-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 58256
+O-Subject: [RHEL 7.0 qemu-kvm PATCH] fix machine-check propagation
+Bugzilla: 740107
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+
+From: Dean Nelson <dnelson@redhat.com>
+
+Bugzilla: 740107
+
+Upstream status: fixed by a big patch that should not be backported
+
+Brew build: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7257203
+
+Machine-check propagation was broken by this commit
+
+    commit a60f24b56b07f46453424263b276b0879c25c4e6
+    Author: Andreas Färber <afaerber@suse.de>
+    Date:   Sat Dec 1 05:35:08 2012 +0100
+
+    cpu: Move kvm_state field into CPUState
+
+    Adapt some functions to take CPUState / {PowerPC,S390}CPU argument.
+
+    Signed-off-by: Andreas Färber <afaerber@suse.de>
+
+due to a typo.  In RHEL7, first_cpu is an "env" so you need ENV_GET_CPU
+to convert it to a "cpu" and fish out the kvm_state.  ENV_GET_CPU is
+basically a "container_of" type of operation.  Instead, CPU was being used
+(which is just a cast).
+
+Upstream, everything was fixed magically when first_cpu was changed
+from "env" to "cpu" in commit 182735e (cpu: Make first_cpu and next_cpu
+CPUState, 2013-05-29).
+
+This patch fixes the bug by using the right cast.  All the work was done
+by Dean Nelson.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ target-i386/kvm.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/kvm.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/target-i386/kvm.c b/target-i386/kvm.c
+index ba2cd7f..6b250f5 100644
+--- a/target-i386/kvm.c
++++ b/target-i386/kvm.c
+@@ -357,7 +357,7 @@ int kvm_arch_on_sigbus(int code, void *addr)
+ 
+         /* Hope we are lucky for AO MCE */
+         if (qemu_ram_addr_from_host(addr, &ram_addr) ||
+-            !kvm_physical_memory_addr_from_host(CPU(first_cpu)->kvm_state,
++            !kvm_physical_memory_addr_from_host(ENV_GET_CPU(first_cpu)->kvm_state,
+                                                 addr, &paddr)) {
+             fprintf(stderr, "Hardware memory error for memory used by "
+                     "QEMU itself instead of guest system!: %p\n", addr);
+-- 
+1.7.1
+

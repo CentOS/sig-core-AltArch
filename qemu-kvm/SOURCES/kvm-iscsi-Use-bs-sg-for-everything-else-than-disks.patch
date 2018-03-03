@@ -1,0 +1,63 @@
+From 9273caf09add518239e77f02081bc4f455e24425 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 10 Mar 2014 11:07:21 +0100
+Subject: [PATCH 13/16] iscsi: Use bs->sg for everything else than disks
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1394449642-13562-2-git-send-email-kwolf@redhat.com>
+Patchwork-id: 58063
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 1/2] iscsi: Use bs->sg for everything else than disks
+Bugzilla: 1067784
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+The current iscsi block driver code makes the rather arbitrary decision
+that TYPE_MEDIUM_CHANGER and TYPE_TAPE devices have bs->sg = 1 and all
+other device types are disks.
+
+Instead of this, check for TYPE_DISK to expose the disk interface and
+make everything else bs->sg = 1. In particular, this includes devices
+with TYPE_STORAGE_ARRAY, which is what LUN 0 of an iscsi target is.
+(See https://bugzilla.redhat.com/show_bug.cgi?id=1067784 for the exact
+scenario.)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit f47c3f5a800a927238d20de9f99b5c77f0bc3fe0)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block/iscsi.c | 9 ++++-----
+ 1 file changed, 4 insertions(+), 5 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/iscsi.c |    9 ++++-----
+ 1 files changed, 4 insertions(+), 5 deletions(-)
+
+diff --git a/block/iscsi.c b/block/iscsi.c
+index 63a21e2..64a8295 100644
+--- a/block/iscsi.c
++++ b/block/iscsi.c
+@@ -1399,12 +1399,11 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
+     bs->total_sectors = sector_lun2qemu(iscsilun->num_blocks, iscsilun);
+     bs->request_alignment = iscsilun->block_size;
+ 
+-    /* Medium changer or tape. We dont have any emulation for this so this must
+-     * be sg ioctl compatible. We force it to be sg, otherwise qemu will try
+-     * to read from the device to guess the image format.
++    /* We don't have any emulation for devices other than disks and CD-ROMs, so
++     * this must be sg ioctl compatible. We force it to be sg, otherwise qemu
++     * will try to read from the device to guess the image format.
+      */
+-    if (iscsilun->type == TYPE_MEDIUM_CHANGER ||
+-        iscsilun->type == TYPE_TAPE) {
++    if (iscsilun->type != TYPE_DISK && iscsilun->type != TYPE_ROM) {
+         bs->sg = 1;
+     }
+ 
+-- 
+1.7.1
+

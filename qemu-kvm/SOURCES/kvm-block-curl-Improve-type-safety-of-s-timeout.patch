@@ -1,0 +1,88 @@
+From c44c930396e5c19511f36bc45c3f386966b15f9d Mon Sep 17 00:00:00 2001
+From: Richard Jones <rjones@redhat.com>
+Date: Thu, 11 Jun 2015 11:40:28 +0200
+Subject: [PATCH 28/30] block/curl: Improve type safety of s->timeout.
+
+Message-id: <1434022828-13037-22-git-send-email-rjones@redhat.com>
+Patchwork-id: 65856
+O-Subject: [RHEL-7.2 qemu-kvm v3 PATCH 21/21] block/curl: Improve type safety of s->timeout.
+Bugzilla: 1226684
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: "Richard W.M. Jones" <rjones@redhat.com>
+
+qemu_opt_get_number returns a uint64_t, and curl_easy_setopt expects a
+long (not an int).  There is no warning about the latter type error
+because curl_easy_setopt uses a varargs argument.
+
+Store the timeout (which is a positive number of seconds) as a
+uint64_t.  Check that the number given by the user is reasonable.
+Zero is permissible (meaning no timeout is enforced by cURL).
+
+Cast it to long before calling curl_easy_setopt to fix the type error.
+
+Example error message after this change has been applied:
+
+$ ./qemu-img create -f qcow2 /tmp/test.qcow2 \
+    -b 'json: { "file.driver":"https",
+                "file.url":"https://foo/bar",
+                "file.timeout":-1 }'
+qemu-img: /tmp/test.qcow2: Could not open 'json: { "file.driver":"https", "file.url":"https://foo/bar", "file.timeout":-1 }': timeout parameter is too large or negative: Invalid argument
+
+Signed-off-by: Richard W.M. Jones <rjones@redhat.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Gonglei <arei.gonglei@huawei.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Upstream-status: f76faeda4bd59f972d09dd9d954297f17c21dd60
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/curl.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/block/curl.c b/block/curl.c
+index 5b407aa..3088329 100644
+--- a/block/curl.c
++++ b/block/curl.c
+@@ -64,6 +64,7 @@ static CURLMcode __curl_multi_socket_action(CURLM *multi_handle,
+ #define SECTOR_SIZE     512
+ #define READ_AHEAD_DEFAULT (256 * 1024)
+ #define CURL_TIMEOUT_DEFAULT 5
++#define CURL_TIMEOUT_MAX 10000
+ 
+ #define FIND_RET_NONE   0
+ #define FIND_RET_OK     1
+@@ -112,7 +113,7 @@ typedef struct BDRVCURLState {
+     char *url;
+     size_t readahead_size;
+     bool sslverify;
+-    int timeout;
++    uint64_t timeout;
+     char *cookie;
+     bool accept_range;
+ } BDRVCURLState;
+@@ -387,7 +388,7 @@ static CURLState *curl_init_state(BDRVCURLState *s)
+         if (s->cookie) {
+             curl_easy_setopt(state->curl, CURLOPT_COOKIE, s->cookie);
+         }
+-        curl_easy_setopt(state->curl, CURLOPT_TIMEOUT, s->timeout);
++        curl_easy_setopt(state->curl, CURLOPT_TIMEOUT, (long)s->timeout);
+         curl_easy_setopt(state->curl, CURLOPT_WRITEFUNCTION,
+                          (void *)curl_read_cb);
+         curl_easy_setopt(state->curl, CURLOPT_WRITEDATA, (void *)state);
+@@ -496,6 +497,10 @@ static int curl_open(BlockDriverState *bs, QDict *options, int flags,
+ 
+     s->timeout = qemu_opt_get_number(opts, CURL_BLOCK_OPT_TIMEOUT,
+                                      CURL_TIMEOUT_DEFAULT);
++    if (s->timeout > CURL_TIMEOUT_MAX) {
++        error_setg(errp, "timeout parameter is too large or negative");
++        goto out_noclean;
++    }
+ 
+     s->sslverify = qemu_opt_get_bool(opts, CURL_BLOCK_OPT_SSLVERIFY, true);
+ 
+-- 
+1.8.3.1
+

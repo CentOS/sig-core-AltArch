@@ -1,0 +1,56 @@
+From dc37b3a1cd7c01dfccf9459a973694cee266957f Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Sat, 11 Jan 2014 17:59:59 +0100
+Subject: [PATCH 09/22] fix double free the memslot in kvm_set_phys_mem
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1389463208-6278-10-git-send-email-lersek@redhat.com>
+Patchwork-id: 56622
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 09/18] fix double free the memslot in kvm_set_phys_mem
+Bugzilla: 1032346
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Andrew Jones <drjones@redhat.com>
+
+From: Xiao Guangrong <xiaoguangrong@linux.vnet.ibm.com>
+
+Luiz Capitulino reported that guest refused to boot and qemu
+complained with:
+kvm_set_phys_mem: error unregistering overlapping slot: Invalid argument
+
+It is caused by commit 235e8982ad that did double free for the memslot
+so that the second one raises the -EINVAL error
+
+Fix it by reset memory size only if it is needed
+
+Reported-by: Luiz Capitulino <lcapitulino@redhat.com>
+Signed-off-by: Xiao Guangrong <xiaoguangrong@linux.vnet.ibm.com>
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit 651eb0f41b793021f7de672de78892def5819fb9)
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+---
+ kvm-all.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ kvm-all.c |    3 ++-
+ 1 files changed, 2 insertions(+), 1 deletions(-)
+
+diff --git a/kvm-all.c b/kvm-all.c
+index 42c71b9..16e4f65 100644
+--- a/kvm-all.c
++++ b/kvm-all.c
+@@ -208,7 +208,8 @@ static int kvm_set_user_memory_region(KVMState *s, KVMSlot *slot)
+     if (s->migration_log) {
+         mem.flags |= KVM_MEM_LOG_DIRTY_PAGES;
+     }
+-    if (mem.flags & KVM_MEM_READONLY) {
++
++    if (slot->memory_size && mem.flags & KVM_MEM_READONLY) {
+         /* Set the slot size to 0 before setting the slot to the desired
+          * value. This is needed based on KVM commit 75d61fbc. */
+         mem.memory_size = 0;
+-- 
+1.7.1
+

@@ -1,0 +1,71 @@
+From f7f34dfdb448a0344210f6bfa77b67c637ffea56 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 15 Feb 2016 09:28:27 +0100
+Subject: [PATCH 14/18] vmdk: Use vmdk_find_index_in_cluster everywhere
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1455528511-9357-15-git-send-email-famz@redhat.com>
+Patchwork-id: 69180
+O-Subject: [RHEL-7.3 qemu-kvm PATCH 14/18] vmdk: Use vmdk_find_index_in_cluster everywhere
+Bugzilla: 1299250
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+BZ: https://bugzilla.redhat.com/show_bug.cgi?id=1299250
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 90df601f06de14f062d2e8dc1bc57f0decf86fd1)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vmdk.c | 10 ++--------
+ 1 file changed, 2 insertions(+), 8 deletions(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 10c08f3..cb5255c 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -1418,7 +1418,6 @@ static int vmdk_read(BlockDriverState *bs, int64_t sector_num,
+     BDRVVmdkState *s = bs->opaque;
+     int ret;
+     uint64_t n, index_in_cluster;
+-    uint64_t extent_begin_sector, extent_relative_sector_num;
+     VmdkExtent *extent = NULL;
+     uint64_t cluster_offset;
+ 
+@@ -1430,9 +1429,7 @@ static int vmdk_read(BlockDriverState *bs, int64_t sector_num,
+         ret = get_cluster_offset(bs, extent, NULL,
+                                  sector_num << 9, false, &cluster_offset,
+                                  0, 0);
+-        extent_begin_sector = extent->end_sector - extent->sectors;
+-        extent_relative_sector_num = sector_num - extent_begin_sector;
+-        index_in_cluster = extent_relative_sector_num % extent->cluster_sectors;
++        index_in_cluster = vmdk_find_index_in_cluster(extent, sector_num);
+         n = extent->cluster_sectors - index_in_cluster;
+         if (n > nb_sectors) {
+             n = nb_sectors;
+@@ -1494,7 +1491,6 @@ static int vmdk_write(BlockDriverState *bs, int64_t sector_num,
+     VmdkExtent *extent = NULL;
+     int ret;
+     int64_t index_in_cluster, n;
+-    uint64_t extent_begin_sector, extent_relative_sector_num;
+     uint64_t cluster_offset;
+     VmdkMetaData m_data;
+ 
+@@ -1510,9 +1506,7 @@ static int vmdk_write(BlockDriverState *bs, int64_t sector_num,
+         if (!extent) {
+             return -EIO;
+         }
+-        extent_begin_sector = extent->end_sector - extent->sectors;
+-        extent_relative_sector_num = sector_num - extent_begin_sector;
+-        index_in_cluster = extent_relative_sector_num % extent->cluster_sectors;
++        index_in_cluster = vmdk_find_index_in_cluster(extent, sector_num);
+         n = extent->cluster_sectors - index_in_cluster;
+         if (n > nb_sectors) {
+             n = nb_sectors;
+-- 
+1.8.3.1
+

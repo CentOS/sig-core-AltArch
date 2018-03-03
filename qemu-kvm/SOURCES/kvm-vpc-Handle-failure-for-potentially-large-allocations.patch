@@ -1,0 +1,51 @@
+From 46415e245ed90b1bb08ff4d67559a6c0f34cf9db Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Wed, 29 Jul 2015 16:59:53 +0200
+Subject: [PATCH 02/13] vpc: Handle failure for potentially large allocations
+
+Message-id: <e1f23ed0869898acec75825bec74cf375bee876b.1438188988.git.jcody@redhat.com>
+Patchwork-id: 67196
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 1/3] vpc: Handle failure for potentially large allocations
+Bugzilla: 1217349
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+Some code in the block layer makes potentially huge allocations. Failure
+is not completely unexpected there, so avoid aborting qemu and handle
+out-of-memory situations gracefully.
+
+This patch addresses the allocations in the vpc block driver.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+(cherry picked from commit 5fb09cd5867aabf26d5b85b0913dccd496b71421)
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vpc.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/block/vpc.c b/block/vpc.c
+index 849501a..6fdce40 100644
+--- a/block/vpc.c
++++ b/block/vpc.c
+@@ -260,7 +260,11 @@ static int vpc_open(BlockDriverState *bs, QDict *options, int flags,
+             goto fail;
+         }
+ 
+-        s->pagetable = qemu_blockalign(bs, s->max_table_entries * 4);
++        s->pagetable = qemu_try_blockalign(bs->file, s->max_table_entries * 4);
++        if (s->pagetable == NULL) {
++            ret = -ENOMEM;
++            goto fail;
++        }
+ 
+         s->bat_offset = be64_to_cpu(dyndisk_header->table_offset);
+ 
+-- 
+1.8.3.1
+

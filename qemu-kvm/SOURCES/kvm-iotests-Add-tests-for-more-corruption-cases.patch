@@ -1,0 +1,94 @@
+From 39256a95ce8205edc697a21b0478047908cb440b Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:22:32 +0200
+Subject: [PATCH 38/42] iotests: Add tests for more corruption cases
+
+Message-id: <1434212556-3927-39-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66057
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 38/42] iotests: Add tests for more corruption cases
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1129893
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit f30136b35a271109b89353b9a5349cf32e6aeda7)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/060     | 15 +++++++++++++++
+ tests/qemu-iotests/060.out | 13 +++++++++++++
+ 2 files changed, 28 insertions(+)
+
+diff --git a/tests/qemu-iotests/060 b/tests/qemu-iotests/060
+index e1187a3..ab44c83 100644
+--- a/tests/qemu-iotests/060
++++ b/tests/qemu-iotests/060
+@@ -183,6 +183,12 @@ $QEMU_IO -c "write 0 64k" "$TEST_IMG" | _filter_qemu_io
+ poke_file "$TEST_IMG" "$l1_offset" "\x80\x00\x00\x00\x00\x04\x2a\x00"
+ $QEMU_IO -c "read 0 64k" "$TEST_IMG" | _filter_qemu_io
+ 
++# Test how well zero cluster expansion can cope with this
++_make_test_img 64M
++$QEMU_IO -c "write 0 64k" "$TEST_IMG" | _filter_qemu_io
++poke_file "$TEST_IMG" "$l1_offset" "\x80\x00\x00\x00\x00\x04\x2a\x00"
++$QEMU_IMG amend -o compat=0.10 "$TEST_IMG"
++
+ echo
+ echo "=== Testing unaligned L2 entry ==="
+ echo
+@@ -192,6 +198,15 @@ poke_file "$TEST_IMG" "$l2_offset" "\x80\x00\x00\x00\x00\x05\x2a\x00"
+ $QEMU_IO -c "read 0 64k" "$TEST_IMG" | _filter_qemu_io
+ 
+ echo
++echo "=== Testing unaligned pre-allocated zero cluster ==="
++echo
++_make_test_img 64M
++$QEMU_IO -c "write 0 64k" "$TEST_IMG" | _filter_qemu_io
++poke_file "$TEST_IMG" "$l2_offset" "\x80\x00\x00\x00\x00\x05\x2a\x01"
++# zero cluster expansion
++$QEMU_IMG amend -o compat=0.10 "$TEST_IMG"
++
++echo
+ echo "=== Testing unaligned reftable entry ==="
+ echo
+ _make_test_img 64M
+diff --git a/tests/qemu-iotests/060.out b/tests/qemu-iotests/060.out
+index 88332e4..def7447 100644
+--- a/tests/qemu-iotests/060.out
++++ b/tests/qemu-iotests/060.out
+@@ -115,6 +115,11 @@ wrote 65536/65536 bytes at offset 0
+ 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ qcow2: Marking image as corrupt: L2 table offset 0x42a00 unaligned (L1 index: 0); further corruption events will be suppressed
+ read failed: Input/output error
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864
++wrote 65536/65536 bytes at offset 0
++64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++qcow2: Marking image as corrupt: L2 table offset 0x42a00 unaligned (L1 index: 0); further corruption events will be suppressed
++qemu-img: Error while amending options: Input/output error
+ 
+ === Testing unaligned L2 entry ===
+ 
+@@ -124,6 +129,14 @@ wrote 65536/65536 bytes at offset 0
+ qcow2: Marking image as corrupt: Data cluster offset 0x52a00 unaligned (L2 offset: 0x40000, L2 index: 0); further corruption events will be suppressed
+ read failed: Input/output error
+ 
++=== Testing unaligned pre-allocated zero cluster ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864
++wrote 65536/65536 bytes at offset 0
++64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++qcow2: Marking image as corrupt: Data cluster offset 0x52a00 unaligned (L2 offset: 0x40000, L2 index: 0); further corruption events will be suppressed
++qemu-img: Error while amending options: Input/output error
++
+ === Testing unaligned reftable entry ===
+ 
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
+-- 
+1.8.3.1
+

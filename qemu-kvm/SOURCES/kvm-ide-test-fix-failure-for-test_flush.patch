@@ -1,0 +1,113 @@
+From 31ce74359a069be69af0f6ba2f7867ed2083317a Mon Sep 17 00:00:00 2001
+From: John Snow <jsnow@redhat.com>
+Date: Tue, 8 Dec 2015 20:30:59 +0100
+Subject: [PATCH 21/27] ide-test: fix failure for test_flush
+
+RH-Author: John Snow <jsnow@redhat.com>
+Message-id: <1449606659-23710-1-git-send-email-jsnow@redhat.com>
+Patchwork-id: 68521
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v3 21/21] ide-test: fix failure for test_flush
+Bugzilla: 1272523
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+This patch is a combination of two patches:
+
+(1) Revert "qtest/ide-test: disable flush-test"
+(2) ide-test: fix failure for test_flush
+
+First, the downstream-only revert:
+This reverts commit 228e49fabffa644ab7a6a03e98205f293115dc89.
+
+Second, the backported fix:
+
+bd07684aacfb61668ae2c25b7dd00b64f3d7c7f3 added a test to ensure BSY
+flag is set when a flush request is in flight. It does this by setting
+a blkdebug breakpoint on flush_to_os before issuing a CMD_FLUSH_CACHE.
+It then resumes CMD_FLUSH_CACHE operation and checks that BSY is unset.
+
+The actual unsetting of BSY does not occur until ide_flush_cb gets
+called in a bh, however, so in some cases this check will race with
+the actual completion.
+
+Fix this by polling the ide status register until BSY flag gets unset
+before we do our final sanity checks. According to
+f68ec8379e88502b4841a110c070e9b118d3151c this is in line with how a guest
+would determine whether or not the device is still busy.
+
+Signed-off-by: Michael Roth <mdroth@linux.vnet.ibm.com>
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit 22bfa16ed3d4c9d534dcfe6f2381a654f32296b9)
+Signed-off-by: John Snow <jsnow@redhat.com>
+---
+ tests/ide-test.c | 41 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 41 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/ide-test.c | 41 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 41 insertions(+)
+
+diff --git a/tests/ide-test.c b/tests/ide-test.c
+index 43b7fd6..92dd0e5 100644
+--- a/tests/ide-test.c
++++ b/tests/ide-test.c
+@@ -425,6 +425,46 @@ static void test_identify(void)
+     ide_test_quit();
+ }
+ 
++static void test_flush(void)
++{
++    uint8_t data;
++
++    ide_test_start(
++        "-vnc none "
++        "-drive file=blkdebug::%s,if=ide,cache=writeback",
++        tmp_path);
++
++    /* Delay the completion of the flush request until we explicitly do it */
++    qmp("{'execute':'human-monitor-command', 'arguments': { "
++        "'command-line': 'qemu-io ide0-hd0 \"break flush_to_os A\"'} }");
++
++    /* FLUSH CACHE command on device 0*/
++    outb(IDE_BASE + reg_device, 0);
++    outb(IDE_BASE + reg_command, CMD_FLUSH_CACHE);
++
++    /* Check status while request is in flight*/
++    data = inb(IDE_BASE + reg_status);
++    assert_bit_set(data, BSY | DRDY);
++    assert_bit_clear(data, DF | ERR | DRQ);
++
++    /* Complete the command */
++    qmp("{'execute':'human-monitor-command', 'arguments': { "
++        "'command-line': 'qemu-io ide0-hd0 \"resume A\"'} }");
++
++    /* Check registers */
++    data = inb(IDE_BASE + reg_device);
++    g_assert_cmpint(data & DEV, ==, 0);
++
++    do {
++        data = inb(IDE_BASE + reg_status);
++    } while (data & BSY);
++
++    assert_bit_set(data, DRDY);
++    assert_bit_clear(data, BSY | DF | ERR | DRQ);
++
++    ide_test_quit();
++}
++
+ static void test_flush_nodev(void)
+ {
+     ide_test_start("");
+@@ -468,6 +508,7 @@ int main(int argc, char **argv)
+     qtest_add_func("/ide/bmdma/long_prdt", test_bmdma_long_prdt);
+     qtest_add_func("/ide/bmdma/teardown", test_bmdma_teardown);
+ 
++    qtest_add_func("/ide/flush", test_flush);
+     qtest_add_func("/ide/flush_nodev", test_flush_nodev);
+ 
+     ret = g_test_run();
+-- 
+1.8.3.1
+

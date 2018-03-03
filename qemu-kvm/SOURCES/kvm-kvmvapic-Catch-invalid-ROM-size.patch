@@ -1,0 +1,80 @@
+From ae31d75c7c2872dfc2172921422bf6b1c8bb6b03 Mon Sep 17 00:00:00 2001
+From: Bandan Das <bsd@redhat.com>
+Date: Wed, 6 Nov 2013 02:11:01 +0100
+Subject: [PATCH 54/81] kvmvapic: Catch invalid ROM size
+
+RH-Author: Bandan Das <bsd@redhat.com>
+Message-id: <1383703863-4840-1-git-send-email-bsd@redhat.com>
+Patchwork-id: 55471
+O-Subject: [PATCH RHEL-7.0 qemu-kvm 1/3] kvmvapic: Catch invalid ROM size
+Bugzilla: 920021
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+From: Jan Kiszka <jan.kiszka@siemens.com>
+
+If not caught early, a zero-length ROM will cause a NULL-pointer access
+later on in patch_hypercalls when allocating a zero-length ROM copy and
+trying to read from it.
+
+Signed-off-by: Jan Kiszka <jan.kiszka@siemens.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 18e5eec4db96a00907eb588a2b803401637c7f67)
+
+Conflicts:
+	hw/i386/kvmvapic.c
+---
+ hw/i386/kvmvapic.c | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/kvmvapic.c |   11 +++++++++--
+ 1 files changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/hw/i386/kvmvapic.c b/hw/i386/kvmvapic.c
+index a7db94d..a2c7e8f 100644
+--- a/hw/i386/kvmvapic.c
++++ b/hw/i386/kvmvapic.c
+@@ -572,7 +572,7 @@ static int patch_hypercalls(VAPICROMState *s)
+  * enable write access to the option ROM so that variables can be updated by
+  * the guest.
+  */
+-static void vapic_map_rom_writable(VAPICROMState *s)
++static int vapic_map_rom_writable(VAPICROMState *s)
+ {
+     hwaddr rom_paddr = s->rom_state_paddr & ROM_BLOCK_MASK;
+     MemoryRegionSection section;
+@@ -593,6 +593,9 @@ static void vapic_map_rom_writable(VAPICROMState *s)
+     /* read ROM size from RAM region */
+     ram = memory_region_get_ram_ptr(section.mr);
+     rom_size = ram[rom_paddr + 2] * ROM_BLOCK_SIZE;
++    if (rom_size == 0) {
++        return -1;
++    }
+     s->rom_size = rom_size;
+ 
+     /* We need to round to avoid creating subpages
+@@ -605,11 +608,15 @@ static void vapic_map_rom_writable(VAPICROMState *s)
+                              rom_size);
+     memory_region_add_subregion_overlap(as, rom_paddr, &s->rom, 1000);
+     s->rom_mapped_writable = true;
++
++    return 0;
+ }
+ 
+ static int vapic_prepare(VAPICROMState *s)
+ {
+-    vapic_map_rom_writable(s);
++    if (vapic_map_rom_writable(s) < 0) {
++        return -1;
++    }
+ 
+     if (patch_hypercalls(s) < 0) {
+         return -1;
+-- 
+1.7.1
+

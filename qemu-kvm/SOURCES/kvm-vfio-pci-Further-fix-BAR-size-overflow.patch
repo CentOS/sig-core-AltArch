@@ -1,0 +1,59 @@
+From 46edd2ae852e19ee3a1b473be949691c6ce5694d Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Fri, 1 May 2015 18:09:33 +0200
+Subject: [PATCH 09/14] vfio-pci: Further fix BAR size overflow
+
+Message-id: <20150501180733.31334.63326.stgit@gimli.home>
+Patchwork-id: 64972
+O-Subject: [RHEL7.2 qemu-kvm PATCH 9/8] vfio-pci: Further fix BAR size overflow
+Bugzilla: 1181267
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Bugzilla: 1181267
+Upstream: 07ceaf98800519ef9c5dc893af00f1fe1f9144e4
+
+In an analysis by Laszlo, the resulting type of our calculation for
+the end of the MSI-X table, and thus the start of memory after the
+table, is uint32_t.  We're therefore not correctly preventing the
+corner case overflow that we intended to fix here where a BAR >=4G
+could place the MSI-X table to end exactly at the 4G boundary.  The
+MSI-X table offset is defined by the hardware spec to 32bits, so we
+simply use a cast rather than changing data structure types.  This
+scenario is purely theoretically, typically the MSI-X table is located
+at the front of the BAR.
+
+Reported-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+---
+
+Brew for series including 9 & 10:
+
+http://brewweb.devel.redhat.com/brew/taskinfo?taskID=9082147
+
+ hw/misc/vfio.c |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index cbc9d8a..e6f96db 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -2634,7 +2634,7 @@ static void vfio_map_bar(VFIODevice *vdev, int nr)
+     if (vdev->msix && vdev->msix->table_bar == nr) {
+         uint64_t start;
+ 
+-        start = TARGET_PAGE_ALIGN(vdev->msix->table_offset +
++        start = TARGET_PAGE_ALIGN((uint64_t)vdev->msix->table_offset +
+                                   (vdev->msix->entries * PCI_MSIX_ENTRY_SIZE));
+ 
+         size = start < bar->size ? bar->size - start : 0;
+-- 
+1.8.3.1
+

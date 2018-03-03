@@ -1,0 +1,62 @@
+From 77824d3e0c00074d30f345be594d4ca941585edd Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 1 Jun 2015 08:23:51 +0200
+Subject: [PATCH 01/30] vmdk: Fix overflow if l1_size is 0x20000000
+
+Message-id: <1433147031-14770-1-git-send-email-famz@redhat.com>
+Patchwork-id: 65160
+O-Subject: [RHEL-7.2 qemu-kvm PATCH] vmdk: Fix overflow if l1_size is 0x20000000
+Bugzilla: 1217351
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Richard Jones caught this bug with afl fuzzer.
+
+In fact, that's the only possible value to overflow (extent->l1_size =
+0x20000000) l1_size:
+
+l1_size = extent->l1_size * sizeof(long) => 0x80000000;
+
+g_try_malloc returns NULL because l1_size is interpreted as negative
+during type casting from 'int' to 'gsize', which yields a enormous
+value. Hence, by coincidence, we get a "not too bad" behavior:
+
+qemu-img: Could not open '/tmp/afl6.img': Could not open
+'/tmp/afl6.img': Cannot allocate memory
+
+Values larger than 0x20000000 will be refused by the validation in
+vmdk_add_extent.
+
+Values smaller than 0x20000000 will not overflow l1_size.
+
+Cc: qemu-stable@nongnu.org
+Reported-by: Richard W.M. Jones <rjones@redhat.com>
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Tested-by: Richard W.M. Jones <rjones@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 13c4941cdd8685d28c7e3a09e393a5579b58db46)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vmdk.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 24e9458..6b015ab 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -451,7 +451,8 @@ static int vmdk_init_tables(BlockDriverState *bs, VmdkExtent *extent,
+                             Error **errp)
+ {
+     int ret;
+-    int l1_size, i;
++    size_t l1_size;
++    int i;
+ 
+     /* read the L1 table */
+     l1_size = extent->l1_size * sizeof(uint32_t);
+-- 
+1.8.3.1
+

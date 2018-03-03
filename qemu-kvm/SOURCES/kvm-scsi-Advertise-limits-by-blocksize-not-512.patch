@@ -1,0 +1,54 @@
+From c8644154fb4b460f00c9d24ed9090edc40fef067 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 11 Jul 2016 05:33:39 +0200
+Subject: [PATCH 6/7] scsi: Advertise limits by blocksize, not 512
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1468215219-30793-7-git-send-email-famz@redhat.com>
+Patchwork-id: 71110
+O-Subject: [RHEL-7.3 qemu-kvm PATCH 6/6] scsi: Advertise limits by blocksize, not 512
+Bugzilla: 1318199
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: Eric Blake <eblake@redhat.com>
+
+s->blocksize may be larger than 512, in which case our
+tweaks to max_xfer_len and opt_xfer_len must be scaled
+appropriately.
+
+CC: qemu-stable@nongnu.org
+Reported-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit efaf4781a995aacd22b1dd521b14e4644bafae14)
+
+ Conflicts:
+	hw/scsi/scsi-generic.c
+Downstream uses bdrv_get_max_transfer_length().
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/scsi/scsi-generic.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/hw/scsi/scsi-generic.c b/hw/scsi/scsi-generic.c
+index 6b0c1fe..ced92f7 100644
+--- a/hw/scsi/scsi-generic.c
++++ b/hw/scsi/scsi-generic.c
+@@ -210,7 +210,8 @@ static void scsi_read_complete(void * opaque, int ret)
+         } else if (s->type == TYPE_DISK &&
+             r->req.cmd.buf[0] == INQUIRY &&
+             r->req.cmd.buf[2] == 0xb0) {
+-            uint32_t max_xfer_len = bdrv_get_max_transfer_length(s->conf.bs);
++            uint32_t max_xfer_len = bdrv_get_max_transfer_length(s->conf.bs) /
++                (s->blocksize / BDRV_SECTOR_SIZE);
+             if (max_xfer_len) {
+                 stl_be_p(&r->buf[8], max_xfer_len);
+                 /* Also take care of the opt xfer len. */
+-- 
+1.8.3.1
+

@@ -1,0 +1,65 @@
+From 32791762f04b3342e9b10d1f553326cd01ea451f Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 15 Feb 2016 09:28:26 +0100
+Subject: [PATCH 13/18] vmdk: Fix index_in_cluster calculation in
+ vmdk_co_get_block_status
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1455528511-9357-14-git-send-email-famz@redhat.com>
+Patchwork-id: 69179
+O-Subject: [RHEL-7.3 qemu-kvm PATCH 13/18] vmdk: Fix index_in_cluster calculation in vmdk_co_get_block_status
+Bugzilla: 1299250
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+BZ: https://bugzilla.redhat.com/show_bug.cgi?id=1299250
+
+It has the similar issue with b1649fae49a8. Since the calculation
+is repeated for a few times already, introduce a function so it can be
+reused.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 61f0ed1d54601b91b8195c1a30d7046f83283b40)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vmdk.c | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index dd8b638..10c08f3 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -1242,6 +1242,17 @@ static VmdkExtent *find_extent(BDRVVmdkState *s,
+     return NULL;
+ }
+ 
++static inline uint64_t vmdk_find_index_in_cluster(VmdkExtent *extent,
++                                                  int64_t sector_num)
++{
++    uint64_t index_in_cluster, extent_begin_sector, extent_relative_sector_num;
++
++    extent_begin_sector = extent->end_sector - extent->sectors;
++    extent_relative_sector_num = sector_num - extent_begin_sector;
++    index_in_cluster = extent_relative_sector_num % extent->cluster_sectors;
++    return index_in_cluster;
++}
++
+ static int64_t coroutine_fn vmdk_co_get_block_status(BlockDriverState *bs,
+         int64_t sector_num, int nb_sectors, int *pnum)
+ {
+@@ -1279,7 +1290,7 @@ static int64_t coroutine_fn vmdk_co_get_block_status(BlockDriverState *bs,
+         break;
+     }
+ 
+-    index_in_cluster = sector_num % extent->cluster_sectors;
++    index_in_cluster = vmdk_find_index_in_cluster(extent, sector_num);
+     n = extent->cluster_sectors - index_in_cluster;
+     if (n > nb_sectors) {
+         n = nb_sectors;
+-- 
+1.8.3.1
+

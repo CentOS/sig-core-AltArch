@@ -1,0 +1,62 @@
+From 66f0fbb6a54ab1110afd12eb9a25d8966b60c7fa Mon Sep 17 00:00:00 2001
+From: Michael S. Tsirkin <mst@redhat.com>
+Date: Wed, 14 May 2014 08:36:01 +0200
+Subject: [PATCH 19/31] usb: sanity check setup_index+setup_len in post_load
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1400056525-6869-2-git-send-email-mst@redhat.com>
+Patchwork-id: 58865
+O-Subject: [PATCH qemu-kvm RHEL7.1 2/2] usb: sanity check setup_index+setup_len in post_load
+Bugzilla: 1095747
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+
+CVE-2013-4541
+
+s->setup_len and s->setup_index are fed into usb_packet_copy as
+size/offset into s->data_buf, it's possible for invalid state to exploit
+this to load arbitrary data.
+
+setup_len and setup_index should be checked to make sure
+they are not negative.
+
+Cc: Gerd Hoffmann <kraxel@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Reviewed-by: Gerd Hoffmann <kraxel@redhat.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit 9f8e9895c504149d7048e9fc5eb5cbb34b16e49a)
+
+Brew build: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7452039
+Tested: lightly on developer's box
+Bugzilla: 1095743
+
+Note: the fix isn't complete upstream. there's a separate bugzilla to
+fix more issues upstream and in rhel.
+---
+ hw/usb/bus.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/bus.c |    4 +++-
+ 1 files changed, 3 insertions(+), 1 deletions(-)
+
+diff --git a/hw/usb/bus.c b/hw/usb/bus.c
+index e0c3a77..9766b7f 100644
+--- a/hw/usb/bus.c
++++ b/hw/usb/bus.c
+@@ -49,7 +49,9 @@ static int usb_device_post_load(void *opaque, int version_id)
+     } else {
+         dev->attached = 1;
+     }
+-    if (dev->setup_index >= sizeof(dev->data_buf) ||
++    if (dev->setup_index < 0 ||
++        dev->setup_len < 0 ||
++        dev->setup_index >= sizeof(dev->data_buf) ||
+         dev->setup_len >= sizeof(dev->data_buf)) {
+         return -EINVAL;
+     }
+-- 
+1.7.1
+

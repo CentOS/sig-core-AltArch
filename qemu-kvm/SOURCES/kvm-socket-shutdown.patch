@@ -1,0 +1,151 @@
+From da3039bc7ec4fda6719be3bdd10f4b0fdaceb17a Mon Sep 17 00:00:00 2001
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+Date: Fri, 16 Jan 2015 17:35:35 +0100
+Subject: [PATCH 03/16] socket shutdown
+
+Message-id: <1421429737-23581-2-git-send-email-dgilbert@redhat.com>
+Patchwork-id: 63332
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 1/3] socket shutdown
+Bugzilla: 1086168
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+
+Add QEMUFile interface to allow a socket to be 'shut down' - i.e. any
+reads/writes will fail (and any blocking read/write will be woken).
+
+Signed-off-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Amit Shah <amit.shah@redhat.com>
+Signed-off-by: Amit Shah <amit.shah@redhat.com>
+(cherry picked from commit e1a8c9b67fc97d293211773edcae9e8e2f3367ab)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	include/migration/qemu-file.h
+	migration/qemu-file-unix.c
+	migration/qemu-file.c
+
+   Because we split qemu-file.c out of savevm and moved it
+---
+ include/migration/qemu-file.h | 10 ++++++++++
+ include/qemu/sockets.h        |  7 +++++++
+ savevm.c                      | 33 +++++++++++++++++++++++++++++----
+ 3 files changed, 46 insertions(+), 4 deletions(-)
+
+diff --git a/include/migration/qemu-file.h b/include/migration/qemu-file.h
+index 0f757fb..032de47 100644
+--- a/include/migration/qemu-file.h
++++ b/include/migration/qemu-file.h
+@@ -82,6 +82,14 @@ typedef size_t (QEMURamSaveFunc)(QEMUFile *f, void *opaque,
+                                size_t size,
+                                int *bytes_sent);
+ 
++/*
++ * Stop any read or write (depending on flags) on the underlying
++ * transport on the QEMUFile.
++ * Existing blocking reads/writes must be woken
++ * Returns 0 on success, -err on error
++ */
++typedef int (QEMUFileShutdownFunc)(void *opaque, bool rd, bool wr);
++
+ typedef struct QEMUFileOps {
+     QEMUFilePutBufferFunc *put_buffer;
+     QEMUFileGetBufferFunc *get_buffer;
+@@ -92,6 +100,7 @@ typedef struct QEMUFileOps {
+     QEMURamHookFunc *after_ram_iterate;
+     QEMURamHookFunc *hook_ram_load;
+     QEMURamSaveFunc *save_page;
++    QEMUFileShutdownFunc *shut_down;
+ } QEMUFileOps;
+ 
+ QEMUFile *qemu_fopen_ops(void *opaque, const QEMUFileOps *ops);
+@@ -141,6 +150,7 @@ void qemu_file_reset_rate_limit(QEMUFile *f);
+ void qemu_file_set_rate_limit(QEMUFile *f, int64_t new_rate);
+ int64_t qemu_file_get_rate_limit(QEMUFile *f);
+ int qemu_file_get_error(QEMUFile *f);
++int qemu_file_shutdown(QEMUFile *f);
+ void qemu_fflush(QEMUFile *f);
+ 
+ static inline void qemu_put_be64s(QEMUFile *f, const uint64_t *pv)
+diff --git a/include/qemu/sockets.h b/include/qemu/sockets.h
+index c5174d7..729ff52 100644
+--- a/include/qemu/sockets.h
++++ b/include/qemu/sockets.h
+@@ -42,6 +42,13 @@ void qemu_set_nonblock(int fd);
+ int send_all(int fd, const void *buf, int len1);
+ int recv_all(int fd, void *buf, int len1, bool single_read);
+ 
++#ifdef WIN32
++/* Windows has different names for the same constants with the same values */
++#define SHUT_RD   0
++#define SHUT_WR   1
++#define SHUT_RDWR 2
++#endif
++
+ /* callback function for nonblocking connect
+  * valid fd on success, negative error code on failure
+  */
+diff --git a/savevm.c b/savevm.c
+index 963dc7d..731d5c0 100644
+--- a/savevm.c
++++ b/savevm.c
+@@ -204,6 +204,17 @@ static int socket_close(void *opaque)
+     return 0;
+ }
+ 
++static int socket_shutdown(void *opaque, bool rd, bool wr)
++{
++    QEMUFileSocket *s = opaque;
++
++    if (shutdown(s->fd, rd ? (wr ? SHUT_RDWR : SHUT_RD) : SHUT_WR)) {
++        return -errno;
++    } else {
++        return 0;
++    }
++}
++
+ static int stdio_get_fd(void *opaque)
+ {
+     QEMUFileStdio *s = opaque;
+@@ -448,17 +459,31 @@ QEMUFile *qemu_fdopen(int fd, const char *mode)
+ }
+ 
+ static const QEMUFileOps socket_read_ops = {
+-    .get_fd =     socket_get_fd,
++    .get_fd     = socket_get_fd,
+     .get_buffer = socket_get_buffer,
+-    .close =      socket_close
++    .close      = socket_close,
++    .shut_down  = socket_shutdown
+ };
+ 
+ static const QEMUFileOps socket_write_ops = {
+-    .get_fd =     socket_get_fd,
++    .get_fd        = socket_get_fd,
+     .writev_buffer = socket_writev_buffer,
+-    .close =      socket_close
++    .close         = socket_close,
++    .shut_down     = socket_shutdown
+ };
+ 
++/*
++ * Stop a file from being read/written - not all backing files can do this
++ * typically only sockets can.
++ */
++int qemu_file_shutdown(QEMUFile *f)
++{
++    if (!f->ops->shut_down) {
++        return -ENOSYS;
++    }
++    return f->ops->shut_down(f->opaque, true, true);
++}
++
+ bool qemu_file_mode_is_not_valid(const char *mode)
+ {
+     if (mode == NULL ||
+-- 
+1.8.3.1
+

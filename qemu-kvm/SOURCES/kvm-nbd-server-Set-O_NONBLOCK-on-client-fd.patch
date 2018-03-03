@@ -1,0 +1,44 @@
+From e36a5a8613df42339773ebf48e07d063ad7484e8 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 5 Sep 2016 01:18:15 +0200
+Subject: [PATCH] nbd-server: Set O_NONBLOCK on client fd
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1473038295-7193-1-git-send-email-famz@redhat.com>
+Patchwork-id: 72141
+O-Subject: [RHEL-7.3 qemu-kvm PATCH] nbd-server: Set O_NONBLOCK on client fd
+Bugzilla: 1285453
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+Upstream: upstream uses IO channels that is not present in downstream.
+Backporting that deserves a separate and deliberate justification BZ,
+for 7.4.
+
+Even with 2a68d80 (nbd-server: Coroutine based negotiation), QEMU still
+hangs when client hangs, because recvmsg the socket fd is blocking. Set
+the O_NONBLOCK to fix this.
+
+Analyzed-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ nbd.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/nbd.c b/nbd.c
+index c20e57e..8a32e18 100644
+--- a/nbd.c
++++ b/nbd.c
+@@ -1281,6 +1281,7 @@ static coroutine_fn void nbd_co_client_start(void *opaque)
+     if (exp) {
+         nbd_export_get(exp);
+     }
++    qemu_set_nonblock(client->sock);
+     if (nbd_negotiate(data)) {
+         nbd_client_close(client);
+         goto out;
+-- 
+1.8.3.1
+

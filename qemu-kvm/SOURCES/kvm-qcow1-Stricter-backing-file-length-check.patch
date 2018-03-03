@@ -1,0 +1,116 @@
+From 4abd8ed02c277e6cd3202f61c2044a5cdff417de Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 2 Jun 2014 13:54:48 +0200
+Subject: [PATCH 31/31] qcow1: Stricter backing file length check
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1401717288-3918-7-git-send-email-kwolf@redhat.com>
+Patchwork-id: 59100
+O-Subject: [RHEL-7.1/7.0.z qemu-kvm PATCH 6/6] qcow1: Stricter backing file length check
+Bugzilla: 1097236 1097237
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1097237
+
+Like qcow2 since commit 6d33e8e7, error out on invalid lengths instead
+of silently truncating them to 1023.
+
+Also don't rely on bdrv_pread() catching integer overflows that make len
+negative, but use unsigned variables in the first place.
+
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+│(cherry picked from commit d66e5cee002c471b78139228a4e7012736b375f9)
+---
+ block/qcow.c               |  7 +++++--
+ tests/qemu-iotests/092     | 11 +++++++++++
+ tests/qemu-iotests/092.out |  7 +++++++
+ 3 files changed, 23 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow.c               |    7 +++++--
+ tests/qemu-iotests/092     |   11 +++++++++++
+ tests/qemu-iotests/092.out |    7 +++++++
+ 3 files changed, 23 insertions(+), 2 deletions(-)
+
+diff --git a/block/qcow.c b/block/qcow.c
+index 4fdc751..ad44f78 100644
+--- a/block/qcow.c
++++ b/block/qcow.c
+@@ -97,7 +97,8 @@ static int qcow_open(BlockDriverState *bs, QDict *options, int flags,
+                      Error **errp)
+ {
+     BDRVQcowState *s = bs->opaque;
+-    int len, i, shift, ret;
++    unsigned int len, i, shift;
++    int ret;
+     QCowHeader header;
+ 
+     ret = bdrv_pread(bs->file, 0, &header, sizeof(header));
+@@ -200,7 +201,9 @@ static int qcow_open(BlockDriverState *bs, QDict *options, int flags,
+     if (header.backing_file_offset != 0) {
+         len = header.backing_file_size;
+         if (len > 1023) {
+-            len = 1023;
++            error_setg(errp, "Backing file name too long");
++            ret = -EINVAL;
++            goto fail;
+         }
+         ret = bdrv_pread(bs->file, header.backing_file_offset,
+                    bs->backing_file, len);
+diff --git a/tests/qemu-iotests/092 b/tests/qemu-iotests/092
+index ae6ca76..a8c0c9c 100755
+--- a/tests/qemu-iotests/092
++++ b/tests/qemu-iotests/092
+@@ -43,6 +43,8 @@ _supported_fmt qcow
+ _supported_proto generic
+ _supported_os Linux
+ 
++offset_backing_file_offset=8
++offset_backing_file_size=16
+ offset_size=24
+ offset_cluster_bits=32
+ offset_l2_bits=33
+@@ -81,6 +83,15 @@ poke_file "$TEST_IMG" "$offset_size" "\xee\xee\xee\xee\xee\xee\xee\xee"
+ poke_file "$TEST_IMG" "$offset_size" "\x7f\xff\xff\xff\xff\xff\xff\xff"
+ { $QEMU_IO -c "write 0 64M" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
+ 
++echo
++echo "== Invalid backing file length =="
++_make_test_img 64M
++poke_file "$TEST_IMG" "$offset_backing_file_offset" "\x00\x00\x00\xff"
++poke_file "$TEST_IMG" "$offset_backing_file_size" "\xff\xff\xff\xff"
++{ $QEMU_IO -c "read 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
++poke_file "$TEST_IMG" "$offset_backing_file_size" "\x7f\xff\xff\xff"
++{ $QEMU_IO -c "read 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
++
+ # success, all done
+ echo "*** done"
+ rm -f $seq.full
+diff --git a/tests/qemu-iotests/092.out b/tests/qemu-iotests/092.out
+index ac03302..496d8f0 100644
+--- a/tests/qemu-iotests/092.out
++++ b/tests/qemu-iotests/092.out
+@@ -28,4 +28,11 @@ qemu-io: can't open device TEST_DIR/t.qcow: Image too large
+ no file open, try 'help open'
+ qemu-io: can't open device TEST_DIR/t.qcow: Image too large
+ no file open, try 'help open'
++
++== Invalid backing file length ==
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++qemu-io: can't open device TEST_DIR/t.qcow: Backing file name too long
++no file open, try 'help open'
++qemu-io: can't open device TEST_DIR/t.qcow: Backing file name too long
++no file open, try 'help open'
+ *** done
+-- 
+1.7.1
+

@@ -1,0 +1,308 @@
+From bfec9b88263e72c7425df04601bfcae5c06dca23 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Thu, 23 Oct 2014 10:10:06 +0200
+Subject: [PATCH 06/19] block: Add errp to bdrv_new()
+
+Message-id: <1414059011-15516-4-git-send-email-kwolf@redhat.com>
+Patchwork-id: 61837
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v2 3/8] block: Add errp to bdrv_new()
+Bugzilla: 1088176
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+This patch adds an errp parameter to bdrv_new() and updates all its
+callers. The next patches will make use of this in order to check for
+duplicate IDs. Most of the callers know that their ID is fine, so they
+can simply assert that there is no error.
+
+Behaviour doesn't change with this patch yet as bdrv_new() doesn't
+actually assign errors to errp.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit 98522f63f40adaebc412481e1d2e9170160d4539)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	block.c
+	qemu-img.c
+	qemu-io.c
+
+In RHEL 7, we have a different set of bdrv_new() callers. Fortunately,
+the additional ones compared to upstream are trivial: Either we know
+for sure that their name is unique  (e.g. fixed names used in qemu-img)
+and therefore bdrv_new() will never fail even after the final patch of
+this series ('block: Catch duplicate IDs in bdrv_new()'), or they use an
+empty name "" which can't conflict either.
+
+This patch leaks local_err in xen_disk, which was fixed in upstream
+commit cedccf13. Downstream, we don't care about Xen, so it will remain
+unfixed.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c               | 10 +++++-----
+ block/blkverify.c     |  2 +-
+ block/iscsi.c         |  2 +-
+ block/vmdk.c          |  2 +-
+ block/vvfat.c         |  4 ++--
+ blockdev.c            | 13 +++++++++----
+ hw/block/xen_disk.c   |  7 +++++--
+ include/block/block.h |  2 +-
+ qemu-img.c            |  6 +++---
+ qemu-io.c             |  2 +-
+ qemu-nbd.c            |  3 ++-
+ 11 files changed, 31 insertions(+), 22 deletions(-)
+
+diff --git a/block.c b/block.c
+index 496eb72..eb0810e 100644
+--- a/block.c
++++ b/block.c
+@@ -300,7 +300,7 @@ void bdrv_register(BlockDriver *bdrv)
+ }
+ 
+ /* create a new block device (by default it is empty) */
+-BlockDriverState *bdrv_new(const char *device_name)
++BlockDriverState *bdrv_new(const char *device_name, Error **errp)
+ {
+     BlockDriverState *bs;
+ 
+@@ -892,7 +892,7 @@ int bdrv_file_open(BlockDriverState **pbs, const char *filename,
+         options = qdict_new();
+     }
+ 
+-    bs = bdrv_new("");
++    bs = bdrv_new("", &error_abort);
+     bs->options = options;
+     options = qdict_clone_shallow(options);
+ 
+@@ -1014,7 +1014,7 @@ int bdrv_open_backing_file(BlockDriverState *bs, QDict *options, Error **errp)
+                                        sizeof(backing_filename));
+     }
+ 
+-    bs->backing_hd = bdrv_new("");
++    bs->backing_hd = bdrv_new("", &error_abort);
+ 
+     if (bs->backing_format[0] != '\0') {
+         back_drv = bdrv_find_format(bs->backing_format);
+@@ -1111,7 +1111,7 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+            instead of opening 'filename' directly */
+ 
+         /* if there is a backing file, use it */
+-        bs1 = bdrv_new("");
++        bs1 = bdrv_new("", &error_abort);
+         ret = bdrv_open(bs1, filename, NULL, 0, drv, &local_err);
+         if (ret < 0) {
+             bdrv_unref(bs1);
+@@ -5273,7 +5273,7 @@ void bdrv_img_create(const char *filename, const char *fmt,
+             back_flags =
+                 flags & ~(BDRV_O_RDWR | BDRV_O_SNAPSHOT | BDRV_O_NO_BACKING);
+ 
+-            bs = bdrv_new("");
++            bs = bdrv_new("", &error_abort);
+ 
+             ret = bdrv_open(bs, backing_file->value.s, NULL, back_flags,
+                             backing_drv, &local_err);
+diff --git a/block/blkverify.c b/block/blkverify.c
+index 4ff7688..e623f6e 100644
+--- a/block/blkverify.c
++++ b/block/blkverify.c
+@@ -155,7 +155,7 @@ static int blkverify_open(BlockDriverState *bs, QDict *options, int flags,
+         goto fail;
+     }
+ 
+-    s->test_file = bdrv_new("");
++    s->test_file = bdrv_new("", &error_abort);
+     ret = bdrv_open(s->test_file, filename, NULL, flags, NULL, &local_err);
+     if (ret < 0) {
+         error_propagate(errp, local_err);
+diff --git a/block/iscsi.c b/block/iscsi.c
+index 9fe3be8..4f42f29 100644
+--- a/block/iscsi.c
++++ b/block/iscsi.c
+@@ -1576,7 +1576,7 @@ static int iscsi_create(const char *filename, QEMUOptionParameter *options,
+     IscsiLun *iscsilun = NULL;
+     QDict *bs_options;
+ 
+-    bs = bdrv_new("");
++    bs = bdrv_new("", &error_abort);
+ 
+     /* Read out options */
+     while (options && options->name) {
+diff --git a/block/vmdk.c b/block/vmdk.c
+index eff0663..a5b1f1c 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -1745,7 +1745,7 @@ static int vmdk_create(const char *filename, QEMUOptionParameter *options,
+         goto exit;
+     }
+     if (backing_file) {
+-        BlockDriverState *bs = bdrv_new("");
++        BlockDriverState *bs = bdrv_new("", &error_abort);
+         ret = bdrv_open(bs, backing_file, NULL, 0, NULL, errp);
+         if (ret != 0) {
+             bdrv_unref(bs);
+diff --git a/block/vvfat.c b/block/vvfat.c
+index 3ddaa0b..6fd52df 100644
+--- a/block/vvfat.c
++++ b/block/vvfat.c
+@@ -2935,7 +2935,7 @@ static int enable_write_target(BDRVVVFATState *s)
+         goto err;
+     }
+ 
+-    s->qcow = bdrv_new("");
++    s->qcow = bdrv_new("", &error_abort);
+ 
+     ret = bdrv_open(s->qcow, s->qcow_filename, NULL,
+             BDRV_O_RDWR | BDRV_O_CACHE_WB | BDRV_O_NO_FLUSH, bdrv_qcow,
+@@ -2951,7 +2951,7 @@ static int enable_write_target(BDRVVVFATState *s)
+     unlink(s->qcow_filename);
+ #endif
+ 
+-    s->bs->backing_hd = bdrv_new("");
++    s->bs->backing_hd = bdrv_new("", &error_abort);
+     s->bs->backing_hd->drv = &vvfat_write_target;
+     s->bs->backing_hd->opaque = g_malloc(sizeof(void*));
+     *(void**)s->bs->backing_hd->opaque = s;
+diff --git a/blockdev.c b/blockdev.c
+index 1ac8804..b5792a2 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -471,7 +471,11 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+     /* init */
+     dinfo = g_malloc0(sizeof(*dinfo));
+     dinfo->id = g_strdup(qemu_opts_id(opts));
+-    dinfo->bdrv = bdrv_new(dinfo->id);
++    dinfo->bdrv = bdrv_new(dinfo->id, &error);
++    if (error) {
++        error_propagate(errp, error);
++        goto bdrv_new_err;
++    }
+     dinfo->bdrv->open_flags = snapshot ? BDRV_O_SNAPSHOT : 0;
+     dinfo->bdrv->read_only = ro;
+     dinfo->type = type;
+@@ -531,8 +535,9 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+ 
+ err:
+     bdrv_unref(dinfo->bdrv);
+-    g_free(dinfo->id);
+     QTAILQ_REMOVE(&drives, dinfo, next);
++bdrv_new_err:
++    g_free(dinfo->id);
+     g_free(dinfo);
+ early_err:
+     QDECREF(bs_opts);
+@@ -1056,7 +1061,7 @@ static void external_snapshot_prepare(BlkTransactionStates *common,
+     }
+ 
+     /* We will manually add the backing_hd field to the bs later */
+-    states->new_bs = bdrv_new("");
++    states->new_bs = bdrv_new("", &error_abort);
+     /* TODO Inherit bs->options or only take explicit options with an
+      * extended QMP command? */
+     ret = bdrv_open(states->new_bs, new_image_file, NULL,
+@@ -1678,7 +1683,7 @@ void qmp_drive_mirror(const char *device, const char *target,
+     /* Mirroring takes care of copy-on-write using the source's backing
+      * file.
+      */
+-    target_bs = bdrv_new("");
++    target_bs = bdrv_new("", &error_abort);
+     ret = bdrv_open(target_bs, target, NULL, flags | BDRV_O_NO_BACKING, drv,
+                     &local_err);
+     if (ret < 0) {
+diff --git a/hw/block/xen_disk.c b/hw/block/xen_disk.c
+index a2653b2..fc45f36 100644
+--- a/hw/block/xen_disk.c
++++ b/hw/block/xen_disk.c
+@@ -793,11 +793,14 @@ static int blk_connect(struct XenDevice *xendev)
+     index = (blkdev->xendev.dev - 202 * 256) / 16;
+     blkdev->dinfo = drive_get(IF_XEN, 0, index);
+     if (!blkdev->dinfo) {
++        Error *local_err = NULL;
+         /* setup via xenbus -> create new block driver instance */
+         xen_be_printf(&blkdev->xendev, 2, "create new bdrv (xenbus setup)\n");
+-        blkdev->bs = bdrv_new(blkdev->dev);
++        blkdev->bs = bdrv_new(blkdev->dev, &local_err);
++        if (local_err) {
++            blkdev->bs = NULL;
++        }
+         if (blkdev->bs) {
+-            Error *local_err = NULL;
+             BlockDriver *drv = bdrv_find_whitelisted_format(blkdev->fileproto,
+                                                            readonly);
+             if (bdrv_open(blkdev->bs,
+diff --git a/include/block/block.h b/include/block/block.h
+index 03b7960..3651bd9 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -178,7 +178,7 @@ int bdrv_create(BlockDriver *drv, const char* filename,
+     QEMUOptionParameter *options, Error **errp);
+ int bdrv_create_file(const char* filename, QEMUOptionParameter *options,
+                      Error **errp);
+-BlockDriverState *bdrv_new(const char *device_name);
++BlockDriverState *bdrv_new(const char *device_name, Error **errp);
+ void bdrv_make_anon(BlockDriverState *bs);
+ void bdrv_swap(BlockDriverState *bs_new, BlockDriverState *bs_old);
+ void bdrv_append(BlockDriverState *bs_new, BlockDriverState *bs_top);
+diff --git a/qemu-img.c b/qemu-img.c
+index ed1799c..5c2f36a 100644
+--- a/qemu-img.c
++++ b/qemu-img.c
+@@ -274,7 +274,7 @@ static BlockDriverState *bdrv_new_open(const char *filename,
+     Error *local_err = NULL;
+     int ret;
+ 
+-    bs = bdrv_new("image");
++    bs = bdrv_new("image", &error_abort);
+ 
+     if (fmt) {
+         drv = bdrv_find_format(fmt);
+@@ -2299,7 +2299,7 @@ static int img_rebase(int argc, char **argv)
+     } else {
+         char backing_name[1024];
+ 
+-        bs_old_backing = bdrv_new("old_backing");
++        bs_old_backing = bdrv_new("old_backing", &error_abort);
+         bdrv_get_backing_filename(bs, backing_name, sizeof(backing_name));
+         ret = bdrv_open(bs_old_backing, backing_name, NULL, BDRV_O_FLAGS,
+                         old_backing_drv, &local_err);
+@@ -2310,7 +2310,7 @@ static int img_rebase(int argc, char **argv)
+             goto out;
+         }
+         if (out_baseimg[0]) {
+-            bs_new_backing = bdrv_new("new_backing");
++            bs_new_backing = bdrv_new("new_backing", &error_abort);
+             ret = bdrv_open(bs_new_backing, out_baseimg, NULL, BDRV_O_FLAGS,
+                         new_backing_drv, &local_err);
+             if (ret) {
+diff --git a/qemu-io.c b/qemu-io.c
+index bbe2518..cc89947 100644
+--- a/qemu-io.c
++++ b/qemu-io.c
+@@ -1831,7 +1831,7 @@ static int openfile(char *name, int flags, int growable, QDict *opts)
+             return 1;
+         }
+     } else {
+-        bs = bdrv_new("hda");
++        bs = bdrv_new("hda", &error_abort);
+ 
+         if (bdrv_open(bs, name, opts, flags, NULL, &local_err) < 0) {
+             fprintf(stderr, "%s: can't open device %s: %s\n", progname, name,
+diff --git a/qemu-nbd.c b/qemu-nbd.c
+index 207a610..ff792ef 100644
+--- a/qemu-nbd.c
++++ b/qemu-nbd.c
+@@ -572,7 +572,8 @@ int main(int argc, char **argv)
+         drv = NULL;
+     }
+ 
+-    bs = bdrv_new("hda");
++    bs = bdrv_new("hda", &error_abort);
++
+     srcpath = argv[optind];
+     ret = bdrv_open(bs, srcpath, NULL, flags, drv, &local_err);
+     if (ret < 0) {
+-- 
+1.8.3.1
+

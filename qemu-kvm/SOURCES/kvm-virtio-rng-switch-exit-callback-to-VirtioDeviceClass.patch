@@ -1,0 +1,78 @@
+From 8c40efb1aad9861f12b958002c5cfae1d91aeae5 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Thu, 23 Jan 2014 14:03:39 +0100
+Subject: [PATCH 12/14] virtio-rng: switch exit callback to VirtioDeviceClass
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1390485820-7585-10-git-send-email-armbru@redhat.com>
+Patchwork-id: 56928
+O-Subject: [PATCH 7.0 qemu-kvm 09/10] virtio-rng: switch exit callback to VirtioDeviceClass
+Bugzilla: 983344
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+This ensures hot-unplug is handled properly by the proxy, and avoids
+leaking bus_name which is freed by virtio_device_exit.
+
+Cc: qemu-stable@nongnu.org
+Acked-by: Andreas Faerber <afaerber@suse.de>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 7bb6edb0e3dd78d74e0ac980cf6c0a07307f61bf)
+
+Conflicts:
+	hw/virtio/virtio-rng.c
+
+Trivially conflicts because we lack commit bc72ad6 "aio / timers:
+Switch entire codebase to the new timer API".
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+---
+ hw/virtio/virtio-rng.c | 10 ++++------
+ 1 file changed, 4 insertions(+), 6 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/virtio/virtio-rng.c |   10 ++++------
+ 1 files changed, 4 insertions(+), 6 deletions(-)
+
+diff --git a/hw/virtio/virtio-rng.c b/hw/virtio/virtio-rng.c
+index bac8421..6895146 100644
+--- a/hw/virtio/virtio-rng.c
++++ b/hw/virtio/virtio-rng.c
+@@ -184,16 +184,14 @@ static int virtio_rng_device_init(VirtIODevice *vdev)
+     return 0;
+ }
+ 
+-static int virtio_rng_device_exit(DeviceState *qdev)
++static void virtio_rng_device_exit(VirtIODevice *vdev)
+ {
+-    VirtIORNG *vrng = VIRTIO_RNG(qdev);
+-    VirtIODevice *vdev = VIRTIO_DEVICE(qdev);
++    VirtIORNG *vrng = VIRTIO_RNG(vdev);
+ 
+     qemu_del_timer(vrng->rate_limit_timer);
+     qemu_free_timer(vrng->rate_limit_timer);
+-    unregister_savevm(qdev, "virtio-rng", vrng);
++    unregister_savevm(DEVICE(vdev), "virtio-rng", vrng);
+     virtio_cleanup(vdev);
+-    return 0;
+ }
+ 
+ static Property virtio_rng_properties[] = {
+@@ -205,10 +203,10 @@ static void virtio_rng_class_init(ObjectClass *klass, void *data)
+ {
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     VirtioDeviceClass *vdc = VIRTIO_DEVICE_CLASS(klass);
+-    dc->exit = virtio_rng_device_exit;
+     dc->props = virtio_rng_properties;
+     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
+     vdc->init = virtio_rng_device_init;
++    vdc->exit = virtio_rng_device_exit;
+     vdc->get_features = get_features;
+ }
+ 
+-- 
+1.7.1
+

@@ -1,0 +1,146 @@
+From fa7ee2210a7da964b111b8d8e7a2639ad6219041 Mon Sep 17 00:00:00 2001
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+Date: Thu, 17 Aug 2017 09:45:36 +0200
+Subject: [PATCH 2/2] Workaround rhel6 ctrl_guest_offloads machine type
+ mismatch
+
+RH-Author: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Message-id: <20170817094536.12740-3-dgilbert@redhat.com>
+Patchwork-id: 76022
+O-Subject: [RHEL-7.5/7.4.z/7.3.z/7.2.z qemu-kvm PATCH v2 2/2] Workaround rhel6 ctrl_guest_offloads machine type mismatch
+Bugzilla: 1482468
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+
+RHEL6's 6.5 and 6.6 machine types enable the ctrl_guest_offloads
+feature on virtio-net-pci, unfortunately RHEL7's definition of the
+6.5 and 6.6 machine types are missing that flag.
+
+This works around it by allowing an incoming migration with the
+guest flag set (for the bad machine types).
+
+Fixing the machine type definitions would break migration from this
+version to an earlier 7.x.
+
+Note: Restarting the VM after this import will still keep the old
+(broken) machine type and turn the feature off.
+
+(cherry picked from commit 73fe1f6ffd03f49f4be4b0482fdd2611aa9a17ca)
+
+          Heavy conflicts from backport, mostly around structure
+          of properties
+
+Signed-off-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/pc_piix.c          |  9 +++++++++
+ hw/virtio/virtio.c         | 26 +++++++++++++++++++++++++-
+ include/hw/virtio/virtio.h |  1 +
+ 3 files changed, 35 insertions(+), 1 deletion(-)
+
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index f4cf2b5..b043124 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -908,8 +908,13 @@ static QEMUMachine pc_machine_rhel700 = {
+         .driver   = "virtio-net-pci",\
+         .property = "any_layout",\
+         .value    = "off",\
++    },{\
++        .driver = "virtio-net-device",\
++        .property = "__com.redhat_rhel6_ctrl_guest_workaround", \
++        .value = "on",\
+     }
+ 
++
+ static void pc_compat_rhel660(QEMUMachineInitArgs *args)
+ {
+     pc_compat_rhel700(args);
+@@ -1031,6 +1036,10 @@ static QEMUMachine pc_machine_rhel650 = {
+         .driver   = "virtio-net-pci",\
+         .property = "ctrl_mac_addr",\
+         .value    = "off",\
++    },{\
++        .driver   = "virtio-net-device",\
++        .property = "__com.redhat_rhel6_ctrl_guest_workaround", \
++        .value    = "off",\
+     }
+ 
+ static void pc_compat_rhel640(QEMUMachineInitArgs *args)
+diff --git a/hw/virtio/virtio.c b/hw/virtio/virtio.c
+index fe6b032..e3af5ae 100644
+--- a/hw/virtio/virtio.c
++++ b/hw/virtio/virtio.c
+@@ -18,6 +18,7 @@
+ #include "hw/virtio/virtio.h"
+ #include "qemu/atomic.h"
+ #include "hw/virtio/virtio-bus.h"
++#include "include/hw/virtio/virtio-net.h"
+ 
+ /* The alignment to use between consumer and producer parts of vring.
+  * x86 pagesize again. */
+@@ -888,8 +889,24 @@ int virtio_set_features(VirtIODevice *vdev, uint32_t val)
+     VirtioBusClass *vbusk = VIRTIO_BUS_GET_CLASS(qbus);
+     VirtioDeviceClass *k = VIRTIO_DEVICE_GET_CLASS(vdev);
+     uint32_t supported_features = vbusk->get_features(qbus->parent);
+-    bool bad = (val & ~supported_features) != 0;
++    bool bad;
++    uint64_t ctrl_guest_mask = 1ull << VIRTIO_NET_F_CTRL_GUEST_OFFLOADS;
++
++    if (vdev->rhel6_ctrl_guest_workaround && (val & ctrl_guest_mask) &&
++          !(supported_features & ctrl_guest_mask)) {
++        /*
++         * This works around a mistake in the definition of the rhel6.[56].0
++         * machinetypes, ctrl-guest-offload was not set in qemu-kvm for
++         * those machine types, but is set on the rhel6 qemu-kvm-rhev build.
++         * If an incoming rhel6 guest uses it then we need to allow it.
++         * Note: There's a small race where a guest read the flag but didn't
++         * declare it's useage yet.
++         */
++        fprintf(stderr, "RHEL6 ctrl_guest_offload workaround\n");
++        supported_features |= ctrl_guest_mask;
++    }
+ 
++    bad = (val & ~supported_features) != 0;
+     val &= supported_features;
+     if (k->set_features) {
+         k->set_features(vdev, val);
+@@ -1223,6 +1240,12 @@ static int virtio_device_exit(DeviceState *qdev)
+     return 0;
+ }
+ 
++static Property virtio_properties[] = {
++    DEFINE_PROP_BOOL("__com.redhat_rhel6_ctrl_guest_workaround", VirtIODevice,
++                     rhel6_ctrl_guest_workaround, false),
++    DEFINE_PROP_END_OF_LIST(),
++};
++
+ static void virtio_device_class_init(ObjectClass *klass, void *data)
+ {
+     /* Set the default value here. */
+@@ -1230,6 +1253,7 @@ static void virtio_device_class_init(ObjectClass *klass, void *data)
+     dc->init = virtio_device_init;
+     dc->exit = virtio_device_exit;
+     dc->bus_type = TYPE_VIRTIO_BUS;
++    dc->props = virtio_properties;
+ }
+ 
+ static const TypeInfo virtio_device_info = {
+diff --git a/include/hw/virtio/virtio.h b/include/hw/virtio/virtio.h
+index d9bfe4c..0c4e963 100644
+--- a/include/hw/virtio/virtio.h
++++ b/include/hw/virtio/virtio.h
+@@ -121,6 +121,7 @@ struct VirtIODevice
+     bool vm_running;
+     VMChangeStateEntry *vmstate;
+     char *bus_name;
++    bool rhel6_ctrl_guest_workaround;
+ };
+ 
+ typedef struct VirtioDeviceClass {
+-- 
+1.8.3.1
+

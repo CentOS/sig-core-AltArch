@@ -1,0 +1,385 @@
+From 8b91f65b26d0dd19fe47ba4ffea86081657fadf9 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Wed, 6 Nov 2013 14:41:16 +0100
+Subject: [PATCH 40/81] pci-host: Consistently set cannot_instantiate_with_device_add_yet
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383748882-22831-12-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55537
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 11/17] pci-host: Consistently set cannot_instantiate_with_device_add_yet
+Bugzilla: 1001216
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Many PCI host bridges consist of a sysbus device and a PCI device.
+You need both for the thing to work.  Arguably, these bridges should
+be modelled as a single, composite devices instead of pairs of
+seemingly independent devices you can only use together, but we're not
+there, yet.
+
+Since the sysbus part can't be instantiated with device_add, yet,
+permitting it with the PCI part is useless.  We shouldn't offer
+useless options to the user, so let's set
+cannot_instantiate_with_device_add_yet for them.
+
+It's already set for Bonito, grackle, i440FX, and raven.  Document
+why.
+
+Set it for the others: dec-21154, e500-host-bridge, gt64120_pci, mch,
+pbm-pci, ppc4xx-host-bridge, sh_pci_host, u3-agp, uni-north-agp,
+uni-north-internal-pci, uni-north-pci, and versatile_pci_host.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Marcel Apfelbaum <marcel.a@redhat.com>
+(cherry picked from pending upstream submission)
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ hw/mips/gt64xxx_pci.c   |  6 ++++++
+ hw/pci-host/apb.c       |  6 ++++++
+ hw/pci-host/bonito.c    |  6 +++++-
+ hw/pci-host/dec.c       |  6 ++++++
+ hw/pci-host/grackle.c   |  6 +++++-
+ hw/pci-host/piix.c      |  6 +++++-
+ hw/pci-host/ppce500.c   |  5 +++++
+ hw/pci-host/prep.c      |  6 +++++-
+ hw/pci-host/q35.c       |  5 +++++
+ hw/pci-host/uninorth.c  | 24 ++++++++++++++++++++++++
+ hw/pci-host/versatile.c |  6 ++++++
+ hw/ppc/ppc4xx_pci.c     |  5 +++++
+ hw/sh4/sh_pci.c         |  6 ++++++
+ 13 files changed, 89 insertions(+), 4 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/mips/gt64xxx_pci.c   |    6 ++++++
+ hw/pci-host/apb.c       |    6 ++++++
+ hw/pci-host/bonito.c    |    6 +++++-
+ hw/pci-host/dec.c       |    6 ++++++
+ hw/pci-host/grackle.c   |    6 +++++-
+ hw/pci-host/piix.c      |    6 +++++-
+ hw/pci-host/ppce500.c   |    5 +++++
+ hw/pci-host/prep.c      |    6 +++++-
+ hw/pci-host/q35.c       |    5 +++++
+ hw/pci-host/uninorth.c  |   24 ++++++++++++++++++++++++
+ hw/pci-host/versatile.c |    6 ++++++
+ hw/ppc/ppc4xx_pci.c     |    5 +++++
+ hw/sh4/sh_pci.c         |    6 ++++++
+ 13 files changed, 89 insertions(+), 4 deletions(-)
+
+diff --git a/hw/mips/gt64xxx_pci.c b/hw/mips/gt64xxx_pci.c
+index 189e865..3813495 100644
+--- a/hw/mips/gt64xxx_pci.c
++++ b/hw/mips/gt64xxx_pci.c
+@@ -1150,12 +1150,18 @@ static int gt64120_pci_init(PCIDevice *d)
+ static void gt64120_pci_class_init(ObjectClass *klass, void *data)
+ {
+     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
++    DeviceClass *dc = DEVICE_CLASS(klass);
+ 
+     k->init = gt64120_pci_init;
+     k->vendor_id = PCI_VENDOR_ID_MARVELL;
+     k->device_id = PCI_DEVICE_ID_MARVELL_GT6412X;
+     k->revision = 0x10;
+     k->class_id = PCI_CLASS_BRIDGE_HOST;
++    /*
++     * PCI-facing part of the host bridge, not usable without the
++     * host-facing part, which can't be device_add'ed, yet.
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo gt64120_pci_info = {
+diff --git a/hw/pci-host/apb.c b/hw/pci-host/apb.c
+index 5ac7556..a296dcf 100644
+--- a/hw/pci-host/apb.c
++++ b/hw/pci-host/apb.c
+@@ -557,11 +557,17 @@ static int pbm_pci_host_init(PCIDevice *d)
+ static void pbm_pci_host_class_init(ObjectClass *klass, void *data)
+ {
+     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
++    DeviceClass *dc = DEVICE_CLASS(klass);
+ 
+     k->init = pbm_pci_host_init;
+     k->vendor_id = PCI_VENDOR_ID_SUN;
+     k->device_id = PCI_DEVICE_ID_SUN_SABRE;
+     k->class_id = PCI_CLASS_BRIDGE_HOST;
++    /*
++     * PCI-facing part of the host bridge, not usable without the
++     * host-facing part, which can't be device_add'ed, yet.
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo pbm_pci_host_info = {
+diff --git a/hw/pci-host/bonito.c b/hw/pci-host/bonito.c
+index c2a056a..021e652 100644
+--- a/hw/pci-host/bonito.c
++++ b/hw/pci-host/bonito.c
+@@ -811,8 +811,12 @@ static void bonito_class_init(ObjectClass *klass, void *data)
+     k->revision = 0x01;
+     k->class_id = PCI_CLASS_BRIDGE_HOST;
+     dc->desc = "Host bridge";
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_bonito;
++    /*
++     * PCI-facing part of the host bridge, not usable without the
++     * host-facing part, which can't be device_add'ed, yet.
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo bonito_info = {
+diff --git a/hw/pci-host/dec.c b/hw/pci-host/dec.c
+index cff458b..aebb240 100644
+--- a/hw/pci-host/dec.c
++++ b/hw/pci-host/dec.c
+@@ -116,6 +116,7 @@ static int dec_21154_pci_host_init(PCIDevice *d)
+ static void dec_21154_pci_host_class_init(ObjectClass *klass, void *data)
+ {
+     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
++    DeviceClass *dc = DEVICE_CLASS(klass);
+ 
+     k->init = dec_21154_pci_host_init;
+     k->vendor_id = PCI_VENDOR_ID_DEC;
+@@ -123,6 +124,11 @@ static void dec_21154_pci_host_class_init(ObjectClass *klass, void *data)
+     k->revision = 0x02;
+     k->class_id = PCI_CLASS_BRIDGE_PCI;
+     k->is_bridge = 1;
++    /*
++     * PCI-facing part of the host bridge, not usable without the
++     * host-facing part, which can't be device_add'ed, yet.
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo dec_21154_pci_host_info = {
+diff --git a/hw/pci-host/grackle.c b/hw/pci-host/grackle.c
+index 4643beb..315965d 100644
+--- a/hw/pci-host/grackle.c
++++ b/hw/pci-host/grackle.c
+@@ -130,7 +130,11 @@ static void grackle_pci_class_init(ObjectClass *klass, void *data)
+     k->device_id = PCI_DEVICE_ID_MOTOROLA_MPC106;
+     k->revision  = 0x00;
+     k->class_id  = PCI_CLASS_BRIDGE_HOST;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
++    /*
++     * PCI-facing part of the host bridge, not usable without the
++     * host-facing part, which can't be device_add'ed, yet.
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo grackle_pci_info = {
+diff --git a/hw/pci-host/piix.c b/hw/pci-host/piix.c
+index 20cc682..56fc7be 100644
+--- a/hw/pci-host/piix.c
++++ b/hw/pci-host/piix.c
+@@ -618,8 +618,12 @@ static void i440fx_class_init(ObjectClass *klass, void *data)
+     k->revision = 0x02;
+     k->class_id = PCI_CLASS_BRIDGE_HOST;
+     dc->desc = "Host bridge";
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_i440fx;
++    /*
++     * PCI-facing part of the host bridge, not usable without the
++     * host-facing part, which can't be device_add'ed, yet.
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo i440fx_info = {
+diff --git a/hw/pci-host/ppce500.c b/hw/pci-host/ppce500.c
+index 0d0a001..2dcd668 100644
+--- a/hw/pci-host/ppce500.c
++++ b/hw/pci-host/ppce500.c
+@@ -387,6 +387,11 @@ static void e500_host_bridge_class_init(ObjectClass *klass, void *data)
+     k->device_id = PCI_DEVICE_ID_MPC8533E;
+     k->class_id = PCI_CLASS_PROCESSOR_POWERPC;
+     dc->desc = "Host bridge";
++    /*
++     * PCI-facing part of the host bridge, not usable without the
++     * host-facing part, which can't be device_add'ed, yet.
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo e500_host_bridge_info = {
+diff --git a/hw/pci-host/prep.c b/hw/pci-host/prep.c
+index cdb401f..3e94d07 100644
+--- a/hw/pci-host/prep.c
++++ b/hw/pci-host/prep.c
+@@ -196,7 +196,11 @@ static void raven_class_init(ObjectClass *klass, void *data)
+     k->class_id = PCI_CLASS_BRIDGE_HOST;
+     dc->desc = "PReP Host Bridge - Motorola Raven";
+     dc->vmsd = &vmstate_raven;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
++    /*
++     * PCI-facing part of the host bridge, not usable without the
++     * host-facing part, which can't be device_add'ed, yet.
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo raven_info = {
+diff --git a/hw/pci-host/q35.c b/hw/pci-host/q35.c
+index 5f8e7ff..ed934c3 100644
+--- a/hw/pci-host/q35.c
++++ b/hw/pci-host/q35.c
+@@ -295,6 +295,11 @@ static void mch_class_init(ObjectClass *klass, void *data)
+     k->device_id = PCI_DEVICE_ID_INTEL_Q35_MCH;
+     k->revision = MCH_HOST_BRIDGE_REVISION_DEFUALT;
+     k->class_id = PCI_CLASS_BRIDGE_HOST;
++    /*
++     * PCI-facing part of the host bridge, not usable without the
++     * host-facing part, which can't be device_add'ed, yet.
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo mch_info = {
+diff --git a/hw/pci-host/uninorth.c b/hw/pci-host/uninorth.c
+index fff235d..defdaa5 100644
+--- a/hw/pci-host/uninorth.c
++++ b/hw/pci-host/uninorth.c
+@@ -351,12 +351,18 @@ static int unin_internal_pci_host_init(PCIDevice *d)
+ static void unin_main_pci_host_class_init(ObjectClass *klass, void *data)
+ {
+     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
++    DeviceClass *dc = DEVICE_CLASS(klass);
+ 
+     k->init      = unin_main_pci_host_init;
+     k->vendor_id = PCI_VENDOR_ID_APPLE;
+     k->device_id = PCI_DEVICE_ID_APPLE_UNI_N_PCI;
+     k->revision  = 0x00;
+     k->class_id  = PCI_CLASS_BRIDGE_HOST;
++    /*
++     * PCI-facing part of the host bridge, not usable without the
++     * host-facing part, which can't be device_add'ed, yet.
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo unin_main_pci_host_info = {
+@@ -369,12 +375,18 @@ static const TypeInfo unin_main_pci_host_info = {
+ static void u3_agp_pci_host_class_init(ObjectClass *klass, void *data)
+ {
+     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
++    DeviceClass *dc = DEVICE_CLASS(klass);
+ 
+     k->init      = u3_agp_pci_host_init;
+     k->vendor_id = PCI_VENDOR_ID_APPLE;
+     k->device_id = PCI_DEVICE_ID_APPLE_U3_AGP;
+     k->revision  = 0x00;
+     k->class_id  = PCI_CLASS_BRIDGE_HOST;
++    /*
++     * PCI-facing part of the host bridge, not usable without the
++     * host-facing part, which can't be device_add'ed, yet.
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo u3_agp_pci_host_info = {
+@@ -387,12 +399,18 @@ static const TypeInfo u3_agp_pci_host_info = {
+ static void unin_agp_pci_host_class_init(ObjectClass *klass, void *data)
+ {
+     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
++    DeviceClass *dc = DEVICE_CLASS(klass);
+ 
+     k->init      = unin_agp_pci_host_init;
+     k->vendor_id = PCI_VENDOR_ID_APPLE;
+     k->device_id = PCI_DEVICE_ID_APPLE_UNI_N_AGP;
+     k->revision  = 0x00;
+     k->class_id  = PCI_CLASS_BRIDGE_HOST;
++    /*
++     * PCI-facing part of the host bridge, not usable without the
++     * host-facing part, which can't be device_add'ed, yet.
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo unin_agp_pci_host_info = {
+@@ -405,12 +423,18 @@ static const TypeInfo unin_agp_pci_host_info = {
+ static void unin_internal_pci_host_class_init(ObjectClass *klass, void *data)
+ {
+     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
++    DeviceClass *dc = DEVICE_CLASS(klass);
+ 
+     k->init      = unin_internal_pci_host_init;
+     k->vendor_id = PCI_VENDOR_ID_APPLE;
+     k->device_id = PCI_DEVICE_ID_APPLE_UNI_N_I_PCI;
+     k->revision  = 0x00;
+     k->class_id  = PCI_CLASS_BRIDGE_HOST;
++    /*
++     * PCI-facing part of the host bridge, not usable without the
++     * host-facing part, which can't be device_add'ed, yet.
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo unin_internal_pci_host_info = {
+diff --git a/hw/pci-host/versatile.c b/hw/pci-host/versatile.c
+index 2f996d9..76d6cce 100644
+--- a/hw/pci-host/versatile.c
++++ b/hw/pci-host/versatile.c
+@@ -467,11 +467,17 @@ static int versatile_pci_host_init(PCIDevice *d)
+ static void versatile_pci_host_class_init(ObjectClass *klass, void *data)
+ {
+     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
++    DeviceClass *dc = DEVICE_CLASS(klass);
+ 
+     k->init = versatile_pci_host_init;
+     k->vendor_id = PCI_VENDOR_ID_XILINX;
+     k->device_id = PCI_DEVICE_ID_XILINX_XC2VP30;
+     k->class_id = PCI_CLASS_PROCESSOR_CO;
++    /*
++     * PCI-facing part of the host bridge, not usable without the
++     * host-facing part, which can't be device_add'ed, yet.
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo versatile_pci_host_info = {
+diff --git a/hw/ppc/ppc4xx_pci.c b/hw/ppc/ppc4xx_pci.c
+index 599539b..ebe7efe 100644
+--- a/hw/ppc/ppc4xx_pci.c
++++ b/hw/ppc/ppc4xx_pci.c
+@@ -380,6 +380,11 @@ static void ppc4xx_host_bridge_class_init(ObjectClass *klass, void *data)
+     k->vendor_id    = PCI_VENDOR_ID_IBM;
+     k->device_id    = PCI_DEVICE_ID_IBM_440GX;
+     k->class_id     = PCI_CLASS_BRIDGE_OTHER;
++    /*
++     * PCI-facing part of the host bridge, not usable without the
++     * host-facing part, which can't be device_add'ed, yet.
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo ppc4xx_host_bridge_info = {
+diff --git a/hw/sh4/sh_pci.c b/hw/sh4/sh_pci.c
+index d213a90..f9c49c1 100644
+--- a/hw/sh4/sh_pci.c
++++ b/hw/sh4/sh_pci.c
+@@ -150,10 +150,16 @@ static int sh_pci_host_init(PCIDevice *d)
+ static void sh_pci_host_class_init(ObjectClass *klass, void *data)
+ {
+     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
++    DeviceClass *dc = DEVICE_CLASS(klass);
+ 
+     k->init = sh_pci_host_init;
+     k->vendor_id = PCI_VENDOR_ID_HITACHI;
+     k->device_id = PCI_DEVICE_ID_HITACHI_SH7751R;
++    /*
++     * PCI-facing part of the host bridge, not usable without the
++     * host-facing part, which can't be device_add'ed, yet.
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo sh_pci_host_info = {
+-- 
+1.7.1
+

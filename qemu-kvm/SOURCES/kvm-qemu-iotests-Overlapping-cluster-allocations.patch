@@ -1,0 +1,218 @@
+From fdd55f6fb66d89ff7d241395419de8615e2063a4 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Thu, 7 Nov 2013 12:16:30 +0100
+Subject: [PATCH 13/87] qemu-iotests: Overlapping cluster allocations
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-16-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55315
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 15/43] qemu-iotests: Overlapping cluster allocations
+Bugzilla: 1004347
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1004347
+
+A new test on corrupted images with overlapping cluster allocations.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit ca0eca91b65c34d6e5f5c77d5c18ed3de5b26139)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+
+Conflicts:
+	tests/qemu-iotests/group
+
+Conflicts because upstream contains more tests in the group file.
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/060     |  111 ++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/060.out |   44 +++++++++++++++++
+ tests/qemu-iotests/group   |    1 +
+ 3 files changed, 156 insertions(+), 0 deletions(-)
+ create mode 100644 tests/qemu-iotests/060
+ create mode 100644 tests/qemu-iotests/060.out
+
+diff --git a/tests/qemu-iotests/060 b/tests/qemu-iotests/060
+new file mode 100644
+index 0000000..65bb09f
+--- /dev/null
++++ b/tests/qemu-iotests/060
+@@ -0,0 +1,111 @@
++#!/bin/bash
++#
++# Test case for image corruption (overlapping data structures) in qcow2
++#
++# Copyright (C) 2013 Red Hat, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++
++# creator
++owner=mreitz@redhat.com
++
++seq=`basename $0`
++echo "QA output created by $seq"
++
++here=`pwd`
++tmp=/tmp/$$
++status=1	# failure is the default!
++
++_cleanup()
++{
++	_cleanup_test_img
++}
++trap "_cleanup; exit \$status" 0 1 2 3 15
++
++# get standard environment, filters and checks
++. ./common.rc
++. ./common.filter
++
++# This tests qocw2-specific low-level functionality
++_supported_fmt qcow2
++_supported_proto generic
++_supported_os Linux
++
++rt_offset=65536  # 0x10000 (XXX: just an assumption)
++rb_offset=131072 # 0x20000 (XXX: just an assumption)
++l1_offset=196608 # 0x30000 (XXX: just an assumption)
++l2_offset=262144 # 0x40000 (XXX: just an assumption)
++
++IMGOPTS="compat=1.1"
++
++echo
++echo "=== Testing L2 reference into L1 ==="
++echo
++_make_test_img 64M
++# Link first L1 entry (first L2 table) onto itself
++# (Note the MSb in the L1 entry is set, ensuring the refcount is one - else any
++# later write will result in a COW operation, effectively ruining this attempt
++# on image corruption)
++poke_file "$TEST_IMG" "$l1_offset" "\x80\x00\x00\x00\x00\x03\x00\x00"
++_check_test_img
++
++# The corrupt bit should not be set anyway
++./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
++
++# Try to write something, thereby forcing the corrupt bit to be set
++$QEMU_IO -c "write -P 0x2a 0 512" "$TEST_IMG" | _filter_qemu_io
++
++# The corrupt bit must now be set
++./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
++
++# Try to open the image R/W (which should fail)
++$QEMU_IO -c "read 0 512" "$TEST_IMG" 2>&1 | _filter_qemu_io | sed -e "s/can't open device .*$/can't open device/"
++
++# Try to open it RO (which should succeed)
++$QEMU_IO -c "read 0 512" -r "$TEST_IMG" | _filter_qemu_io
++
++# We could now try to fix the image, but this would probably fail (how should an
++# L2 table linked onto the L1 table be fixed?)
++
++echo
++echo "=== Testing cluster data reference into refcount block ==="
++echo
++_make_test_img 64M
++# Allocate L2 table
++truncate -s "$(($l2_offset+65536))" "$TEST_IMG"
++poke_file "$TEST_IMG" "$l1_offset" "\x80\x00\x00\x00\x00\x04\x00\x00"
++# Mark cluster as used
++poke_file "$TEST_IMG" "$(($rb_offset+8))" "\x00\x01"
++# Redirect new data cluster onto refcount block
++poke_file "$TEST_IMG" "$l2_offset" "\x80\x00\x00\x00\x00\x02\x00\x00"
++_check_test_img
++./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
++$QEMU_IO -c "write -P 0x2a 0 512" "$TEST_IMG" | _filter_qemu_io
++./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
++
++# Try to fix it
++_check_test_img -r all
++
++# The corrupt bit should be cleared
++./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
++
++# Look if it's really really fixed
++$QEMU_IO -c "write -P 0x2a 0 512" "$TEST_IMG" | _filter_qemu_io
++./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
++
++# success, all done
++echo "*** done"
++rm -f $seq.full
++status=0
+diff --git a/tests/qemu-iotests/060.out b/tests/qemu-iotests/060.out
+new file mode 100644
+index 0000000..ca4583a
+--- /dev/null
++++ b/tests/qemu-iotests/060.out
+@@ -0,0 +1,44 @@
++QA output created by 060
++
++=== Testing L2 reference into L1 ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++ERROR cluster 3 refcount=1 reference=3
++
++1 errors were found on the image.
++Data may be corrupted, or further writes to the image may corrupt it.
++incompatible_features     0x0
++qcow2: Preventing invalid write on metadata (overlaps with active L1 table); image marked as corrupt.
++write failed: Input/output error
++incompatible_features     0x2
++qcow2: Image is corrupt; cannot be opened read/write.
++qemu-io: can't open device
++no file open, try 'help open'
++read 512/512 bytes at offset 0
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++=== Testing cluster data reference into refcount block ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++ERROR refcount block 0 refcount=2
++ERROR cluster 2 refcount=1 reference=2
++
++2 errors were found on the image.
++Data may be corrupted, or further writes to the image may corrupt it.
++incompatible_features     0x0
++qcow2: Preventing invalid write on metadata (overlaps with refcount block); image marked as corrupt.
++write failed: Input/output error
++incompatible_features     0x2
++Repairing refcount block 0 refcount=2
++The following inconsistencies were found and repaired:
++
++    0 leaked clusters
++    1 corruptions
++
++Double checking the fixed image now...
++No errors were found on the image.
++incompatible_features     0x0
++wrote 512/512 bytes at offset 0
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++incompatible_features     0x0
++*** done
+diff --git a/tests/qemu-iotests/group b/tests/qemu-iotests/group
+index 1017a19..9c8826d 100644
+--- a/tests/qemu-iotests/group
++++ b/tests/qemu-iotests/group
+@@ -61,4 +61,5 @@
+ 052 rw auto backing
+ 053 rw auto
+ 059 rw auto
++060 rw auto
+ 068 rw auto
+-- 
+1.7.1
+

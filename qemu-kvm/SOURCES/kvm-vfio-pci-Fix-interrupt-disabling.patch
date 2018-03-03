@@ -1,0 +1,74 @@
+From fdad8c197b91f1010e4f61147f27513a4f061e40 Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Mon, 12 Jan 2015 04:52:17 +0100
+Subject: [PATCH 1/3] vfio-pci: Fix interrupt disabling
+
+Message-id: <20150112045144.9215.59820.stgit@gimli.home>
+Patchwork-id: 63242
+O-Subject: [RHEL7.1 qemu-kvm PATCH] vfio-pci: Fix interrupt disabling
+Bugzilla: 1180942
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Upstream: b3e27c3aee8f5a96debfe0346e9c0e3a641a8516
+
+When disabling MSI/X interrupts the disable functions will leave the
+device in INTx mode (when available).  This matches how hardware
+operates, INTx is enabled unless MSI/X is enabled (DisINTx is handled
+separately).  Therefore when we really want to disable all interrupts,
+such as when removing the device, and we start with the device in
+MSI/X mode, we need to pass through INTx on our way to being
+completely quiesced.
+
+In well behaved situations, the guest driver will have shutdown the
+device and it will start vfio_exitfn() in INTx mode, producing the
+desired result.  If hot-unplug causes the guest to crash, we may get
+the device in MSI/X state, which will leave QEMU with a bogus handler
+installed.
+
+Fix this by re-ordering our disable routine so that it should always
+finish in VFIO_INT_NONE state, which is what all callers expect.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c | 21 ++++++++++++---------
+ 1 file changed, 12 insertions(+), 9 deletions(-)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index abaa4c1..40b0923 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -2353,16 +2353,19 @@ static void vfio_listener_release(VFIOContainer *container)
+  */
+ static void vfio_disable_interrupts(VFIODevice *vdev)
+ {
+-    switch (vdev->interrupt) {
+-    case VFIO_INT_INTx:
+-        vfio_disable_intx(vdev);
+-        break;
+-    case VFIO_INT_MSI:
+-        vfio_disable_msi(vdev);
+-        break;
+-    case VFIO_INT_MSIX:
++    /*
++     * More complicated than it looks.  Disabling MSI/X transitions the
++     * device to INTx mode (if supported).  Therefore we need to first
++     * disable MSI/X and then cleanup by disabling INTx.
++     */
++    if (vdev->interrupt == VFIO_INT_MSIX) {
+         vfio_disable_msix(vdev);
+-        break;
++    } else if (vdev->interrupt == VFIO_INT_MSI) {
++        vfio_disable_msi(vdev);
++    }
++
++    if (vdev->interrupt == VFIO_INT_INTx) {
++        vfio_disable_intx(vdev);
+     }
+ }
+ 
+-- 
+1.8.3.1
+

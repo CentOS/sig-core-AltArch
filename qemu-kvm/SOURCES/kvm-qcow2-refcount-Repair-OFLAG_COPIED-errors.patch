@@ -1,0 +1,182 @@
+From 7f0500dff4d7da11bda309de3866851f382f6fe8 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 4 Nov 2013 22:32:03 +0100
+Subject: [PATCH 10/87] qcow2-refcount: Repair OFLAG_COPIED errors
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-13-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55312
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 12/43] qcow2-refcount: Repair OFLAG_COPIED errors
+Bugzilla: 1004347
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1004347
+
+Since the OFLAG_COPIED checks are now executed after the refcounts have
+been repaired (if repairing), it is safe to assume that they are correct
+but the OFLAG_COPIED flag may be not. Therefore, if its value differs
+from what it should be (considering the according refcount), that
+discrepancy can be repaired by correctly setting (or clearing that flag.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit e23e400ec62a03dea58ddb38479b4f1ef86f556d)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2-cluster.c  |  4 ++--
+ block/qcow2-refcount.c | 58 ++++++++++++++++++++++++++++++++++++++++++++------
+ block/qcow2.h          |  1 +
+ 3 files changed, 55 insertions(+), 8 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-cluster.c  |    4 +-
+ block/qcow2-refcount.c |   58 +++++++++++++++++++++++++++++++++++++++++++-----
+ block/qcow2.h          |    1 +
+ 3 files changed, 55 insertions(+), 8 deletions(-)
+
+diff --git a/block/qcow2-cluster.c b/block/qcow2-cluster.c
+index 7c248aa..2d5aa92 100644
+--- a/block/qcow2-cluster.c
++++ b/block/qcow2-cluster.c
+@@ -145,7 +145,7 @@ static int l2_load(BlockDriverState *bs, uint64_t l2_offset,
+  * and we really don't want bdrv_pread to perform a read-modify-write)
+  */
+ #define L1_ENTRIES_PER_SECTOR (512 / 8)
+-static int write_l1_entry(BlockDriverState *bs, int l1_index)
++int qcow2_write_l1_entry(BlockDriverState *bs, int l1_index)
+ {
+     BDRVQcowState *s = bs->opaque;
+     uint64_t buf[L1_ENTRIES_PER_SECTOR];
+@@ -254,7 +254,7 @@ static int l2_allocate(BlockDriverState *bs, int l1_index, uint64_t **table)
+     /* update the L1 entry */
+     trace_qcow2_l2_allocate_write_l1(bs, l1_index);
+     s->l1_table[l1_index] = l2_offset | QCOW_OFLAG_COPIED;
+-    ret = write_l1_entry(bs, l1_index);
++    ret = qcow2_write_l1_entry(bs, l1_index);
+     if (ret < 0) {
+         goto fail;
+     }
+diff --git a/block/qcow2-refcount.c b/block/qcow2-refcount.c
+index ddc3029..92ecc64 100644
+--- a/block/qcow2-refcount.c
++++ b/block/qcow2-refcount.c
+@@ -1207,7 +1207,8 @@ fail:
+  * been already detected and sufficiently signaled by the calling function
+  * (qcow2_check_refcounts) by the time this function is called).
+  */
+-static int check_oflag_copied(BlockDriverState *bs, BdrvCheckResult *res)
++static int check_oflag_copied(BlockDriverState *bs, BdrvCheckResult *res,
++                              BdrvCheckMode fix)
+ {
+     BDRVQcowState *s = bs->opaque;
+     uint64_t *l2_table = qemu_blockalign(bs, s->cluster_size);
+@@ -1218,6 +1219,7 @@ static int check_oflag_copied(BlockDriverState *bs, BdrvCheckResult *res)
+     for (i = 0; i < s->l1_size; i++) {
+         uint64_t l1_entry = s->l1_table[i];
+         uint64_t l2_offset = l1_entry & L1E_OFFSET_MASK;
++        bool l2_dirty = false;
+ 
+         if (!l2_offset) {
+             continue;
+@@ -1229,10 +1231,24 @@ static int check_oflag_copied(BlockDriverState *bs, BdrvCheckResult *res)
+             continue;
+         }
+         if ((refcount == 1) != ((l1_entry & QCOW_OFLAG_COPIED) != 0)) {
+-            fprintf(stderr, "ERROR OFLAG_COPIED L2 cluster: l1_index=%d "
++            fprintf(stderr, "%s OFLAG_COPIED L2 cluster: l1_index=%d "
+                     "l1_entry=%" PRIx64 " refcount=%d\n",
++                    fix & BDRV_FIX_ERRORS ? "Repairing" :
++                                            "ERROR",
+                     i, l1_entry, refcount);
+-            res->corruptions++;
++            if (fix & BDRV_FIX_ERRORS) {
++                s->l1_table[i] = refcount == 1
++                               ? l1_entry |  QCOW_OFLAG_COPIED
++                               : l1_entry & ~QCOW_OFLAG_COPIED;
++                ret = qcow2_write_l1_entry(bs, i);
++                if (ret < 0) {
++                    res->check_errors++;
++                    goto fail;
++                }
++                res->corruptions_fixed++;
++            } else {
++                res->corruptions++;
++            }
+         }
+ 
+         ret = bdrv_pread(bs->file, l2_offset, l2_table,
+@@ -1257,13 +1273,43 @@ static int check_oflag_copied(BlockDriverState *bs, BdrvCheckResult *res)
+                     continue;
+                 }
+                 if ((refcount == 1) != ((l2_entry & QCOW_OFLAG_COPIED) != 0)) {
+-                    fprintf(stderr, "ERROR OFLAG_COPIED data cluster: "
++                    fprintf(stderr, "%s OFLAG_COPIED data cluster: "
+                             "l2_entry=%" PRIx64 " refcount=%d\n",
++                            fix & BDRV_FIX_ERRORS ? "Repairing" :
++                                                    "ERROR",
+                             l2_entry, refcount);
+-                    res->corruptions++;
++                    if (fix & BDRV_FIX_ERRORS) {
++                        l2_table[j] = cpu_to_be64(refcount == 1
++                                    ? l2_entry |  QCOW_OFLAG_COPIED
++                                    : l2_entry & ~QCOW_OFLAG_COPIED);
++                        l2_dirty = true;
++                        res->corruptions_fixed++;
++                    } else {
++                        res->corruptions++;
++                    }
+                 }
+             }
+         }
++
++        if (l2_dirty) {
++            ret = qcow2_pre_write_overlap_check(bs,
++                    QCOW2_OL_DEFAULT & ~QCOW2_OL_ACTIVE_L2, l2_offset,
++                    s->cluster_size);
++            if (ret < 0) {
++                fprintf(stderr, "ERROR: Could not write L2 table; metadata "
++                        "overlap check failed: %s\n", strerror(-ret));
++                res->check_errors++;
++                goto fail;
++            }
++
++            ret = bdrv_pwrite(bs->file, l2_offset, l2_table, s->cluster_size);
++            if (ret < 0) {
++                fprintf(stderr, "ERROR: Could not write L2 table: %s\n",
++                        strerror(-ret));
++                res->check_errors++;
++                goto fail;
++            }
++        }
+     }
+ 
+     ret = 0;
+@@ -1409,7 +1455,7 @@ int qcow2_check_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
+     }
+ 
+     /* check OFLAG_COPIED */
+-    ret = check_oflag_copied(bs, res);
++    ret = check_oflag_copied(bs, res, fix);
+     if (ret < 0) {
+         goto fail;
+     }
+diff --git a/block/qcow2.h b/block/qcow2.h
+index 86ddb30..10b7bf4 100644
+--- a/block/qcow2.h
++++ b/block/qcow2.h
+@@ -432,6 +432,7 @@ int qcow2_pre_write_overlap_check(BlockDriverState *bs, int chk, int64_t offset,
+ /* qcow2-cluster.c functions */
+ int qcow2_grow_l1_table(BlockDriverState *bs, uint64_t min_size,
+                         bool exact_size);
++int qcow2_write_l1_entry(BlockDriverState *bs, int l1_index);
+ void qcow2_l2_cache_reset(BlockDriverState *bs);
+ int qcow2_decompress_cluster(BlockDriverState *bs, uint64_t cluster_offset);
+ void qcow2_encrypt_sectors(BDRVQcowState *s, int64_t sector_num,
+-- 
+1.7.1
+

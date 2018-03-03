@@ -1,0 +1,196 @@
+From f52b3a7ce94fb9a5e6feaac513940e6f4cb95fb0 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sun, 29 Dec 2013 22:06:56 +0100
+Subject: [PATCH 5/8] qemu-iotests: Add test for inactive L2 overlap
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1388354817-3013-5-git-send-email-mreitz@redhat.com>
+Patchwork-id: 56446
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 4/5] qemu-iotests: Add test for inactive L2 overlap
+Bugzilla: 1004347
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+BZ: 1004347
+
+Extend 060 by a test which creates a corrupted image with an active L2
+entry pointing to an inactive L2 table and writes to the corresponding
+guest offset.
+
+Also, use overlap-check=all for all tests in 060.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 34eeb82de65ce9f83081a3357b0afe80a6a1d86a)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ tests/qemu-iotests/060     | 47 +++++++++++++++++++++++++++++++++++++++-------
+ tests/qemu-iotests/060.out | 40 ++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 79 insertions(+), 8 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/060     |   47 +++++++++++++++++++++++++++++++++++++------
+ tests/qemu-iotests/060.out |   40 ++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 79 insertions(+), 8 deletions(-)
+
+diff --git a/tests/qemu-iotests/060 b/tests/qemu-iotests/060
+index 9bbc43b..bbb1909 100644
+--- a/tests/qemu-iotests/060
++++ b/tests/qemu-iotests/060
+@@ -21,10 +21,10 @@
+ # creator
+ owner=mreitz@redhat.com
+ 
+-seq=`basename $0`
++seq="$(basename $0)"
+ echo "QA output created by $seq"
+ 
+-here=`pwd`
++here="$PWD"
+ tmp=/tmp/$$
+ status=1	# failure is the default!
+ 
+@@ -47,9 +47,15 @@ rt_offset=65536  # 0x10000 (XXX: just an assumption)
+ rb_offset=131072 # 0x20000 (XXX: just an assumption)
+ l1_offset=196608 # 0x30000 (XXX: just an assumption)
+ l2_offset=262144 # 0x40000 (XXX: just an assumption)
++l2_offset_after_snapshot=524288 # 0x80000 (XXX: just an assumption)
+ 
+ IMGOPTS="compat=1.1"
+ 
++OPEN_RW="open -o overlap-check=all $TEST_IMG"
++# Overlap checks are done before write operations only, therefore opening an
++# image read-only makes the overlap-check option irrelevant
++OPEN_RO="open -r $TEST_IMG"
++
+ echo
+ echo "=== Testing L2 reference into L1 ==="
+ echo
+@@ -65,16 +71,18 @@ _check_test_img
+ ./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
+ 
+ # Try to write something, thereby forcing the corrupt bit to be set
+-$QEMU_IO -c "write -P 0x2a 0 512" "$TEST_IMG" | _filter_qemu_io
++$QEMU_IO -c "$OPEN_RW" -c "write -P 0x2a 0 512" | _filter_qemu_io
+ 
+ # The corrupt bit must now be set
+ ./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
+ 
+ # Try to open the image R/W (which should fail)
+-$QEMU_IO -c "read 0 512" "$TEST_IMG" 2>&1 | _filter_qemu_io | _filter_testdir | _filter_imgfmt
++$QEMU_IO -c "$OPEN_RW" -c "read 0 512" 2>&1 | _filter_qemu_io \
++                                            | _filter_testdir \
++                                            | _filter_imgfmt
+ 
+ # Try to open it RO (which should succeed)
+-$QEMU_IO -c "read 0 512" -r "$TEST_IMG" | _filter_qemu_io
++$QEMU_IO -c "$OPEN_RO" -c "read 0 512" | _filter_qemu_io
+ 
+ # We could now try to fix the image, but this would probably fail (how should an
+ # L2 table linked onto the L1 table be fixed?)
+@@ -92,7 +100,7 @@ poke_file "$TEST_IMG" "$(($rb_offset+8))" "\x00\x01"
+ poke_file "$TEST_IMG" "$l2_offset" "\x80\x00\x00\x00\x00\x02\x00\x00"
+ _check_test_img
+ ./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
+-$QEMU_IO -c "write -P 0x2a 0 512" "$TEST_IMG" | _filter_qemu_io
++$QEMU_IO -c "$OPEN_RW" -c "write -P 0x2a 0 512" | _filter_qemu_io
+ ./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
+ 
+ # Try to fix it
+@@ -102,8 +110,33 @@ _check_test_img -r all
+ ./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
+ 
+ # Look if it's really really fixed
+-$QEMU_IO -c "write -P 0x2a 0 512" "$TEST_IMG" | _filter_qemu_io
++$QEMU_IO -c "$OPEN_RW" -c "write -P 0x2a 0 512" | _filter_qemu_io
++./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
++
++echo
++echo "=== Testing cluster data reference into inactive L2 table ==="
++echo
++_make_test_img 64M
++$QEMU_IO -c "$OPEN_RW" -c "write -P 1 0 512" | _filter_qemu_io
++$QEMU_IMG snapshot -c foo "$TEST_IMG"
++$QEMU_IO -c "$OPEN_RW" -c "write -P 2 0 512" | _filter_qemu_io
++# The inactive L2 table remains at its old offset
++poke_file "$TEST_IMG" "$l2_offset_after_snapshot" \
++                      "\x80\x00\x00\x00\x00\x04\x00\x00"
++_check_test_img
+ ./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
++$QEMU_IO -c "$OPEN_RW" -c "write -P 3 0 512" | _filter_qemu_io
++./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
++_check_test_img -r all
++./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
++$QEMU_IO -c "$OPEN_RW" -c "write -P 4 0 512" | _filter_qemu_io
++./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
++
++# Check data
++$QEMU_IO -c "$OPEN_RO" -c "read -P 4 0 512" | _filter_qemu_io
++$QEMU_IMG snapshot -a foo "$TEST_IMG"
++_check_test_img
++$QEMU_IO -c "$OPEN_RO" -c "read -P 1 0 512" | _filter_qemu_io
+ 
+ # success, all done
+ echo "*** done"
+diff --git a/tests/qemu-iotests/060.out b/tests/qemu-iotests/060.out
+index 648f743..6c7bdbb 100644
+--- a/tests/qemu-iotests/060.out
++++ b/tests/qemu-iotests/060.out
+@@ -12,7 +12,6 @@ qcow2: Preventing invalid write on metadata (overlaps with active L1 table); ima
+ write failed: Input/output error
+ incompatible_features     0x2
+ qemu-io: can't open device TEST_DIR/t.IMGFMT: IMGFMT: Image is corrupt; cannot be opened read/write
+-no file open, try 'help open'
+ read 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ 
+@@ -40,4 +39,43 @@ incompatible_features     0x0
+ wrote 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ incompatible_features     0x0
++
++=== Testing cluster data reference into inactive L2 table ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++wrote 512/512 bytes at offset 0
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote 512/512 bytes at offset 0
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++ERROR cluster 4 refcount=1 reference=2
++Leaked cluster 9 refcount=1 reference=0
++
++1 errors were found on the image.
++Data may be corrupted, or further writes to the image may corrupt it.
++
++1 leaked clusters were found on the image.
++This means waste of disk space, but no harm to data.
++incompatible_features     0x0
++qcow2: Preventing invalid write on metadata (overlaps with inactive L2 table); image marked as corrupt.
++write failed: Input/output error
++incompatible_features     0x2
++Repairing cluster 4 refcount=1 reference=2
++Repairing cluster 9 refcount=1 reference=0
++Repairing OFLAG_COPIED data cluster: l2_entry=8000000000040000 refcount=2
++The following inconsistencies were found and repaired:
++
++    1 leaked clusters
++    2 corruptions
++
++Double checking the fixed image now...
++No errors were found on the image.
++incompatible_features     0x0
++wrote 512/512 bytes at offset 0
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++incompatible_features     0x0
++read 512/512 bytes at offset 0
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++No errors were found on the image.
++read 512/512 bytes at offset 0
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ *** done
+-- 
+1.7.1
+

@@ -1,0 +1,136 @@
+From 356cd0ad58931df9374324eeceff760a6310db27 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Fri, 11 Jul 2014 14:20:50 +0200
+Subject: [PATCH 16/43] usb-hcd-xhci: Report completion of active transfer with
+ CC_STOPPED on ep stop
+
+Message-id: <1405088470-24115-18-git-send-email-kraxel@redhat.com>
+Patchwork-id: 59832
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 17/37] usb-hcd-xhci: Report completion of active transfer with CC_STOPPED on ep stop
+Bugzilla: 980747
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Hans de Goede <hdegoede@redhat.com>
+
+As we should per the XHCI spec "4.6.9 Stop Endpoint".
+
+Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 582d6f4aba0ff24604a82b48aee2db17b100d4b4)
+---
+ hw/usb/hcd-xhci.c | 26 ++++++++++++++++++--------
+ 1 file changed, 18 insertions(+), 8 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/hcd-xhci.c | 26 ++++++++++++++++++--------
+ 1 file changed, 18 insertions(+), 8 deletions(-)
+
+diff --git a/hw/usb/hcd-xhci.c b/hw/usb/hcd-xhci.c
+index 3b4cd01..fc3b330 100644
+--- a/hw/usb/hcd-xhci.c
++++ b/hw/usb/hcd-xhci.c
+@@ -507,6 +507,7 @@ static void xhci_kick_ep(XHCIState *xhci, unsigned int slotid,
+                          unsigned int epid, unsigned int streamid);
+ static TRBCCode xhci_disable_ep(XHCIState *xhci, unsigned int slotid,
+                                 unsigned int epid);
++static void xhci_xfer_report(XHCITransfer *xfer);
+ static void xhci_event(XHCIState *xhci, XHCIEvent *event, int v);
+ static void xhci_write_event(XHCIState *xhci, XHCIEvent *event, int v);
+ static USBEndpoint *xhci_epid_to_usbep(XHCIState *xhci,
+@@ -1304,10 +1305,15 @@ static TRBCCode xhci_enable_ep(XHCIState *xhci, unsigned int slotid,
+     return CC_SUCCESS;
+ }
+ 
+-static int xhci_ep_nuke_one_xfer(XHCITransfer *t)
++static int xhci_ep_nuke_one_xfer(XHCITransfer *t, TRBCCode report)
+ {
+     int killed = 0;
+ 
++    if (report && (t->running_async || t->running_retry)) {
++        t->status = report;
++        xhci_xfer_report(t);
++    }
++
+     if (t->running_async) {
+         usb_cancel_packet(&t->packet);
+         t->running_async = 0;
+@@ -1320,6 +1326,7 @@ static int xhci_ep_nuke_one_xfer(XHCITransfer *t)
+             qemu_del_timer(epctx->kick_timer);
+         }
+         t->running_retry = 0;
++        killed = 1;
+     }
+     if (t->trbs) {
+         g_free(t->trbs);
+@@ -1332,7 +1339,7 @@ static int xhci_ep_nuke_one_xfer(XHCITransfer *t)
+ }
+ 
+ static int xhci_ep_nuke_xfers(XHCIState *xhci, unsigned int slotid,
+-                               unsigned int epid)
++                               unsigned int epid, TRBCCode report)
+ {
+     XHCISlot *slot;
+     XHCIEPContext *epctx;
+@@ -1353,7 +1360,10 @@ static int xhci_ep_nuke_xfers(XHCIState *xhci, unsigned int slotid,
+ 
+     xferi = epctx->next_xfer;
+     for (i = 0; i < TD_QUEUE; i++) {
+-        killed += xhci_ep_nuke_one_xfer(&epctx->transfers[xferi]);
++        killed += xhci_ep_nuke_one_xfer(&epctx->transfers[xferi], report);
++        if (killed) {
++            report = 0; /* Only report once */
++        }
+         epctx->transfers[xferi].packet.ep = NULL;
+         xferi = (xferi + 1) % TD_QUEUE;
+     }
+@@ -1383,7 +1393,7 @@ static TRBCCode xhci_disable_ep(XHCIState *xhci, unsigned int slotid,
+         return CC_SUCCESS;
+     }
+ 
+-    xhci_ep_nuke_xfers(xhci, slotid, epid);
++    xhci_ep_nuke_xfers(xhci, slotid, epid, 0);
+ 
+     epctx = slot->eps[epid-1];
+ 
+@@ -1425,7 +1435,7 @@ static TRBCCode xhci_stop_ep(XHCIState *xhci, unsigned int slotid,
+         return CC_EP_NOT_ENABLED_ERROR;
+     }
+ 
+-    if (xhci_ep_nuke_xfers(xhci, slotid, epid) > 0) {
++    if (xhci_ep_nuke_xfers(xhci, slotid, epid, CC_STOPPED) > 0) {
+         fprintf(stderr, "xhci: FIXME: endpoint stopped w/ xfers running, "
+                 "data might be lost\n");
+     }
+@@ -1470,7 +1480,7 @@ static TRBCCode xhci_reset_ep(XHCIState *xhci, unsigned int slotid,
+         return CC_CONTEXT_STATE_ERROR;
+     }
+ 
+-    if (xhci_ep_nuke_xfers(xhci, slotid, epid) > 0) {
++    if (xhci_ep_nuke_xfers(xhci, slotid, epid, 0) > 0) {
+         fprintf(stderr, "xhci: FIXME: endpoint reset w/ xfers running, "
+                 "data might be lost\n");
+     }
+@@ -2463,7 +2473,7 @@ static void xhci_detach_slot(XHCIState *xhci, USBPort *uport)
+ 
+     for (ep = 0; ep < 31; ep++) {
+         if (xhci->slots[slot].eps[ep]) {
+-            xhci_ep_nuke_xfers(xhci, slot+1, ep+1);
++            xhci_ep_nuke_xfers(xhci, slot + 1, ep + 1, 0);
+         }
+     }
+     xhci->slots[slot].uport = NULL;
+@@ -3286,7 +3296,7 @@ static void xhci_complete(USBPort *port, USBPacket *packet)
+     XHCITransfer *xfer = container_of(packet, XHCITransfer, packet);
+ 
+     if (packet->status == USB_RET_REMOVE_FROM_QUEUE) {
+-        xhci_ep_nuke_one_xfer(xfer);
++        xhci_ep_nuke_one_xfer(xfer, 0);
+         return;
+     }
+     xhci_complete_packet(xfer);
+-- 
+1.8.3.1
+

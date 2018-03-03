@@ -1,0 +1,53 @@
+From 3c47b10c7a3a86d6fb5fb15a0c41fe512ed44f87 Mon Sep 17 00:00:00 2001
+From: Xiao Wang <jasowang@redhat.com>
+Date: Thu, 14 Nov 2013 09:40:26 +0100
+Subject: [PATCH 02/14] virtio-net: only delete bh that existed
+
+RH-Author: Xiao Wang <jasowang@redhat.com>
+Message-id: <1384422026-7632-1-git-send-email-jasowang@redhat.com>
+Patchwork-id: 55681
+O-Subject: [RHEL7.0 qemu-kvm PATCH] virtio-net: only delete bh that existed
+Bugzilla: 922463
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Vlad Yasevich <vyasevic@redhat.com>
+
+bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=922463
+upstream: 6b9b8758c15f3bc2875dbd6e2d03c5362b8d6902
+brew build: https://brewweb.devel.redhat.com/taskinfo?taskID=6576713
+test status: tested by my self
+
+We delete without check whether it existed during exit. This will lead NULL
+pointer deference since it was created conditionally depends on guest driver
+status and features. So add a check of existence before trying to delete it.
+
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Jason Wang <jasowang@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+---
+ hw/net/virtio-net.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/net/virtio-net.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/hw/net/virtio-net.c b/hw/net/virtio-net.c
+index 19c5030..f889841 100644
+--- a/hw/net/virtio-net.c
++++ b/hw/net/virtio-net.c
+@@ -1532,7 +1532,7 @@ static int virtio_net_device_exit(DeviceState *qdev)
+         if (q->tx_timer) {
+             qemu_del_timer(q->tx_timer);
+             qemu_free_timer(q->tx_timer);
+-        } else {
++        } else if (q->tx_bh) {
+             qemu_bh_delete(q->tx_bh);
+         }
+     }
+-- 
+1.7.1
+

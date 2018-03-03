@@ -1,0 +1,101 @@
+From e9f800ec6e87d1fee21c59dc83236456ee7f91f8 Mon Sep 17 00:00:00 2001
+Message-Id: <e9f800ec6e87d1fee21c59dc83236456ee7f91f8.1387369730.git.minovotn@redhat.com>
+In-Reply-To: <091eecc4fa42754760dfff393dabcc2b444e9693.1387369730.git.minovotn@redhat.com>
+References: <091eecc4fa42754760dfff393dabcc2b444e9693.1387369730.git.minovotn@redhat.com>
+From: Markus Armbruster <armbru@redhat.com>
+Date: Tue, 10 Dec 2013 15:29:06 +0100
+Subject: [PATCH 06/21] qapi: fix visitor serialization tests for
+ numbers/doubles
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1386689361-30281-4-git-send-email-armbru@redhat.com>
+Patchwork-id: 56121
+O-Subject: [PATCH 7.0 qemu-kvm 03/18] qapi: fix visitor serialization tests for numbers/doubles
+Bugzilla: 997915
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+
+From: Michael Roth <mdroth@linux.vnet.ibm.com>
+
+We never actually stored the stringified double values into the strings
+before we did the comparisons. This left number/double values completely
+uncovered in test-visitor-serialization tests.
+
+Fixing this exposed a bug in our handling of large whole number values
+in QEMU's JSON parser which is now fixed.
+
+Simplify the code while we're at it by dropping the
+calc_float_string_storage() craziness in favor of GStrings.
+
+Signed-off-by: Michael Roth <mdroth@linux.vnet.ibm.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Amos Kong <akong@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit 089f26bb735fb414b79f5fa3753910d5339d2a1d)
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+---
+ tests/test-visitor-serialization.c | 25 ++++++++-----------------
+ 1 file changed, 8 insertions(+), 17 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ tests/test-visitor-serialization.c | 25 ++++++++-----------------
+ 1 file changed, 8 insertions(+), 17 deletions(-)
+
+diff --git a/tests/test-visitor-serialization.c b/tests/test-visitor-serialization.c
+index 8c8adac..fed6810 100644
+--- a/tests/test-visitor-serialization.c
++++ b/tests/test-visitor-serialization.c
+@@ -229,17 +229,6 @@ typedef struct TestArgs {
+     void *test_data;
+ } TestArgs;
+ 
+-#define FLOAT_STRING_PRECISION 6 /* corresponding to n in %.nf formatting */
+-static gsize calc_float_string_storage(double value)
+-{
+-    int whole_value = value;
+-    gsize i = 0;
+-    do {
+-        i++;
+-    } while (whole_value /= 10);
+-    return i + 2 + FLOAT_STRING_PRECISION;
+-}
+-
+ static void test_primitives(gconstpointer opaque)
+ {
+     TestArgs *args = (TestArgs *) opaque;
+@@ -248,7 +237,6 @@ static void test_primitives(gconstpointer opaque)
+     PrimitiveType *pt_copy = g_malloc0(sizeof(*pt_copy));
+     Error *err = NULL;
+     void *serialize_data;
+-    char *double1, *double2;
+ 
+     pt_copy->type = pt->type;
+     ops->serialize(pt, &serialize_data, visit_primitive_type, &err);
+@@ -260,14 +248,17 @@ static void test_primitives(gconstpointer opaque)
+         g_assert_cmpstr(pt->value.string, ==, pt_copy->value.string);
+         g_free((char *)pt_copy->value.string);
+     } else if (pt->type == PTYPE_NUMBER) {
++        GString *double_expected = g_string_new("");
++        GString *double_actual = g_string_new("");
+         /* we serialize with %f for our reference visitors, so rather than fuzzy
+          * floating math to test "equality", just compare the formatted values
+          */
+-        double1 = g_malloc0(calc_float_string_storage(pt->value.number));
+-        double2 = g_malloc0(calc_float_string_storage(pt_copy->value.number));
+-        g_assert_cmpstr(double1, ==, double2);
+-        g_free(double1);
+-        g_free(double2);
++        g_string_printf(double_expected, "%.6f", pt->value.number);
++        g_string_printf(double_actual, "%.6f", pt_copy->value.number);
++        g_assert_cmpstr(double_actual->str, ==, double_expected->str);
++
++        g_string_free(double_expected, true);
++        g_string_free(double_actual, true);
+     } else if (pt->type == PTYPE_BOOLEAN) {
+         g_assert_cmpint(!!pt->value.max, ==, !!pt->value.max);
+     } else {
+-- 
+1.7.11.7
+

@@ -1,0 +1,94 @@
+From 5f40ed9dd62b914f259c1b6a51298fedb6bb2a24 Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Thu, 25 Jun 2015 19:31:26 +0200
+Subject: [PATCH 06/10] target-i386: fix set of registers zeroed on reset
+
+Message-id: <1435260689-9556-6-git-send-email-ehabkost@redhat.com>
+Patchwork-id: 66505
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 5/8] target-i386: fix set of registers zeroed on reset
+Bugzilla: 1233350
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+BND0-3, BNDCFGU, BNDCFGS, BNDSTATUS were not zeroed on reset, but they
+should be (Intel Instruction Set Extensions Programming Reference
+319433-015, pages 9-4 and 9-6).  Same for YMM.
+
+XCR0 should be reset to 1.
+
+TSC and TSC_RESET were zeroed already by the memset, remove the explicit
+assignments.
+
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 05e7e819d7d159a75a46354aead95e1199b8f168)
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	target-i386/cpu.c
+
+Backport notes:
+ * The TSC and TSC_RESET reset lines were never added to the
+   qemu-kvm-1.5.3 tree
+---
+ target-i386/cpu.c |  2 ++
+ target-i386/cpu.h | 11 ++++++-----
+ 2 files changed, 8 insertions(+), 5 deletions(-)
+
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index 2eeff5c..96af1bf 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -2402,6 +2402,8 @@ static void x86_cpu_reset(CPUState *s)
+     cpu_breakpoint_remove_all(env, BP_CPU);
+     cpu_watchpoint_remove_all(env, BP_CPU);
+ 
++    env->xcr0 = 1;
++
+     /*
+      * SDM 11.11.5 requires:
+      *  - IA32_MTRR_DEF_TYPE MSR.E = 0
+diff --git a/target-i386/cpu.h b/target-i386/cpu.h
+index 7ebdbb3..715ba63 100644
+--- a/target-i386/cpu.h
++++ b/target-i386/cpu.h
+@@ -798,6 +798,10 @@ typedef struct CPUX86State {
+     target_ulong cr[5]; /* NOTE: cr1 is unused */
+     int32_t a20_mask;
+ 
++    BNDReg bnd_regs[4];
++    BNDCSReg bndcs_regs;
++    uint64_t msr_bndcfgs;
++
+     /* FPU state */
+     unsigned int fpstt; /* top of stack index */
+     uint16_t fpus;
+@@ -820,6 +824,8 @@ typedef struct CPUX86State {
+     XMMReg xmm_t0;
+     MMXReg mmx_t0;
+ 
++    XMMReg ymmh_regs[CPU_NB_REGS];
++
+     /* sysenter registers */
+     uint32_t sysenter_cs;
+     target_ulong sysenter_esp;
+@@ -931,12 +937,7 @@ typedef struct CPUX86State {
+     uint16_t fpus_vmstate;
+     uint16_t fptag_vmstate;
+     uint16_t fpregs_format_vmstate;
+-
+     uint64_t xstate_bv;
+-    XMMReg ymmh_regs[CPU_NB_REGS];
+-    BNDReg bnd_regs[4];
+-    BNDCSReg bndcs_regs;
+-    uint64_t msr_bndcfgs;
+ 
+     uint64_t xcr0;
+ 
+-- 
+1.8.3.1
+

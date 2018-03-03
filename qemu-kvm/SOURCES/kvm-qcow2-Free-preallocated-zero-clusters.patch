@@ -1,0 +1,57 @@
+From 2d939b5a9f5717aba21727f635c6da898123ad5b Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Fri, 2 May 2014 16:06:20 +0200
+Subject: [PATCH 02/31] qcow2: Free preallocated zero clusters
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1399046781-16359-2-git-send-email-mreitz@redhat.com>
+Patchwork-id: 58644
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 1/2] qcow2: Free preallocated zero clusters
+Bugzilla: 1052093
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+BZ: 1052093
+
+In qcow2_free_any_clusters, preallocated zero clusters should be freed
+just as normal clusters are.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 8f730dd24edd2576ecbd596de7ea4361296b129c)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2-refcount.c | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-refcount.c |    8 +++++---
+ 1 files changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/block/qcow2-refcount.c b/block/qcow2-refcount.c
+index 73ae4e3..429b01c 100644
+--- a/block/qcow2-refcount.c
++++ b/block/qcow2-refcount.c
+@@ -811,11 +811,13 @@ void qcow2_free_any_clusters(BlockDriverState *bs, uint64_t l2_entry,
+         }
+         break;
+     case QCOW2_CLUSTER_NORMAL:
+-        qcow2_free_clusters(bs, l2_entry & L2E_OFFSET_MASK,
+-                            nb_clusters << s->cluster_bits, type);
++    case QCOW2_CLUSTER_ZERO:
++        if (l2_entry & L2E_OFFSET_MASK) {
++            qcow2_free_clusters(bs, l2_entry & L2E_OFFSET_MASK,
++                                nb_clusters << s->cluster_bits, type);
++        }
+         break;
+     case QCOW2_CLUSTER_UNALLOCATED:
+-    case QCOW2_CLUSTER_ZERO:
+         break;
+     default:
+         abort();
+-- 
+1.7.1
+

@@ -1,0 +1,104 @@
+From 8c40036dd1ac888d9565d6d96c8478a00bce696b Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Thu, 6 Mar 2014 21:13:14 +0100
+Subject: [PATCH 04/16] block: gluster - code movements, state storage changes
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <8b4867e7eb4ab7db9f9e7900570daf718e62851d.1394129674.git.jcody@redhat.com>
+Patchwork-id: 58040
+O-Subject: [RHEL7 qemu-kvm PATCH 1/2] block: gluster - code movements, state storage changes
+Bugzilla: 1031526
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+In preparation for supporting reopen on gluster, move flag
+parsing out to a function.  Also, add a NULL check in the
+gconf cleanup.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 1b37b3442f78a77844fdaf7f53e5f04e4ce8f1d6)
+---
+ block/gluster.c | 41 ++++++++++++++++++++++++++---------------
+ 1 file changed, 26 insertions(+), 15 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/gluster.c |   41 ++++++++++++++++++++++++++---------------
+ 1 files changed, 26 insertions(+), 15 deletions(-)
+
+diff --git a/block/gluster.c b/block/gluster.c
+index bf39264..95cb05a 100644
+--- a/block/gluster.c
++++ b/block/gluster.c
+@@ -50,11 +50,13 @@ typedef struct GlusterConf {
+ 
+ static void qemu_gluster_gconf_free(GlusterConf *gconf)
+ {
+-    g_free(gconf->server);
+-    g_free(gconf->volname);
+-    g_free(gconf->image);
+-    g_free(gconf->transport);
+-    g_free(gconf);
++    if (gconf) {
++        g_free(gconf->server);
++        g_free(gconf->volname);
++        g_free(gconf->image);
++        g_free(gconf->transport);
++        g_free(gconf);
++    }
+ }
+ 
+ static int parse_volume_options(GlusterConf *gconf, char *path)
+@@ -296,11 +298,28 @@ static QemuOptsList runtime_opts = {
+     },
+ };
+ 
++static void qemu_gluster_parse_flags(int bdrv_flags, int *open_flags)
++{
++    assert(open_flags != NULL);
++
++    *open_flags |= O_BINARY;
++
++    if (bdrv_flags & BDRV_O_RDWR) {
++        *open_flags |= O_RDWR;
++    } else {
++        *open_flags |= O_RDONLY;
++    }
++
++    if ((bdrv_flags & BDRV_O_NOCACHE)) {
++        *open_flags |= O_DIRECT;
++    }
++}
++
+ static int qemu_gluster_open(BlockDriverState *bs,  QDict *options,
+                              int bdrv_flags, Error **errp)
+ {
+     BDRVGlusterState *s = bs->opaque;
+-    int open_flags = O_BINARY;
++    int open_flags = 0;
+     int ret = 0;
+     GlusterConf *gconf = g_malloc0(sizeof(GlusterConf));
+     QemuOpts *opts;
+@@ -325,15 +344,7 @@ static int qemu_gluster_open(BlockDriverState *bs,  QDict *options,
+         goto out;
+     }
+ 
+-    if (bdrv_flags & BDRV_O_RDWR) {
+-        open_flags |= O_RDWR;
+-    } else {
+-        open_flags |= O_RDONLY;
+-    }
+-
+-    if ((bdrv_flags & BDRV_O_NOCACHE)) {
+-        open_flags |= O_DIRECT;
+-    }
++    qemu_gluster_parse_flags(bdrv_flags, &open_flags);
+ 
+     s->fd = glfs_open(s->glfs, gconf->image, open_flags);
+     if (!s->fd) {
+-- 
+1.7.1
+

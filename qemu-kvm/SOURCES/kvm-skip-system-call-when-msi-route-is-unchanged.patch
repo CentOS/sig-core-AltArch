@@ -1,0 +1,51 @@
+From 34488aa0dd2c4c0a0dcc57a0557ec07750170f67 Mon Sep 17 00:00:00 2001
+From: Michael S. Tsirkin <mst@redhat.com>
+Date: Mon, 19 May 2014 09:57:40 +0200
+Subject: [PATCH 2/2] kvm: skip system call when msi route is unchanged
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1400493448-29146-3-git-send-email-mst@redhat.com>
+Patchwork-id: 58949
+O-Subject: [PATCH qemu-kvm RHEL7.1 2/2] kvm: skip system call when msi route is unchanged
+Bugzilla: 1098976
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+
+Some guests do a large number of mask/unmask
+calls which currently trigger expensive route update
+system calls.
+Detect that route in unchanged and skip the system call.
+
+Reported-by: "Zhanghaoyu (A)" <haoyu.zhang@huawei.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Gleb Natapov <gleb@redhat.com>
+(cherry picked from commit 40509f7f52672fe41c2cce895e187352fc09f53a)
+---
+ kvm-all.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ kvm-all.c |    4 ++++
+ 1 files changed, 4 insertions(+), 0 deletions(-)
+
+diff --git a/kvm-all.c b/kvm-all.c
+index 592301a..f7f621b 100644
+--- a/kvm-all.c
++++ b/kvm-all.c
+@@ -1008,6 +1008,10 @@ static int kvm_update_routing_entry(KVMState *s,
+             continue;
+         }
+ 
++        if(!memcmp(entry, new_entry, sizeof *entry)) {
++            return 0;
++        }
++
+         *entry = *new_entry;
+ 
+         kvm_irqchip_commit_routes(s);
+-- 
+1.7.1
+

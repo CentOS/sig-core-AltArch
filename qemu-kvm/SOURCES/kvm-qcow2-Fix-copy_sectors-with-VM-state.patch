@@ -1,0 +1,130 @@
+From c861019bd5799f76c3e2e42835b10baec1888293 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 25 Mar 2014 14:23:49 +0100
+Subject: [PATCH 42/49] qcow2: Fix copy_sectors() with VM state
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1395753835-7591-43-git-send-email-kwolf@redhat.com>
+Patchwork-id: n/a
+O-Subject: [virt-devel] [EMBARGOED RHEL-7.0 qemu-kvm PATCH 42/48] qcow2: Fix copy_sectors() with VM state
+Bugzilla: 1066691
+RH-Acked-by: Jeff Cody <jcody@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1066691
+Upstream status: Series embargoed
+
+bs->total_sectors is not the highest possible sector number that could
+be involved in a copy on write operation: VM state is after the end of
+the virtual disk. This resulted in wrong values for the number of
+sectors to be copied (n).
+
+The code that checks for the end of the image isn't required any more
+because the code hasn't been calling the block layer's bdrv_read() for a
+long time; instead, it directly calls qcow2_readv(), which doesn't error
+out on VM state sector numbers.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block/qcow2-cluster.c      |    9 ---------
+ tests/qemu-iotests/029     |   22 ++++++++++++++++++++--
+ tests/qemu-iotests/029.out |   13 +++++++++++++
+ 3 files changed, 33 insertions(+), 11 deletions(-)
+
+diff --git a/block/qcow2-cluster.c b/block/qcow2-cluster.c
+index 943e3c6..67f1393 100644
+--- a/block/qcow2-cluster.c
++++ b/block/qcow2-cluster.c
+@@ -349,15 +349,6 @@ static int coroutine_fn copy_sectors(BlockDriverState *bs,
+     struct iovec iov;
+     int n, ret;
+ 
+-    /*
+-     * If this is the last cluster and it is only partially used, we must only
+-     * copy until the end of the image, or bdrv_check_request will fail for the
+-     * bdrv_read/write calls below.
+-     */
+-    if (start_sect + n_end > bs->total_sectors) {
+-        n_end = bs->total_sectors - start_sect;
+-    }
+-
+     n = n_end - n_start;
+     if (n <= 0) {
+         return 0;
+diff --git a/tests/qemu-iotests/029 b/tests/qemu-iotests/029
+index b424726..567e071 100755
+--- a/tests/qemu-iotests/029
++++ b/tests/qemu-iotests/029
+@@ -1,7 +1,6 @@
+ #!/bin/bash
+ #
+-# Test loading internal snapshots where the L1 table of the snapshot
+-# is smaller than the current L1 table.
++# qcow2 internal snapshots/VM state tests
+ #
+ # Copyright (C) 2011 Red Hat, Inc.
+ #
+@@ -45,6 +44,11 @@ _supported_fmt qcow2
+ _supported_proto generic
+ _supported_os Linux
+ 
++echo
++echo Test loading internal snapshots where the L1 table of the snapshot
++echo is smaller than the current L1 table.
++echo
++
+ CLUSTER_SIZE=65536
+ _make_test_img 64M
+ $QEMU_IMG snapshot -c foo "$TEST_IMG"
+@@ -59,6 +63,20 @@ $QEMU_IO -c 'write -b 0 4M' "$TEST_IMG" | _filter_qemu_io
+ $QEMU_IMG snapshot -a foo "$TEST_IMG"
+ _check_test_img
+ 
++
++echo
++echo Try using a huge VM state
++echo
++
++CLUSTER_SIZE=65536
++_make_test_img 64M
++{ $QEMU_IO -c "write -b -P 0x11 1T 4k" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
++{ $QEMU_IMG snapshot -c foo $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
++{ $QEMU_IMG snapshot -a foo $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
++{ $QEMU_IO -c "read -b -P 0x11 1T 4k" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
++_check_test_img
++
++
+ # success, all done
+ echo "*** done"
+ rm -f $seq.full
+diff --git a/tests/qemu-iotests/029.out b/tests/qemu-iotests/029.out
+index 0eedb3a..9029698 100644
+--- a/tests/qemu-iotests/029.out
++++ b/tests/qemu-iotests/029.out
+@@ -1,4 +1,8 @@
+ QA output created by 029
++
++Test loading internal snapshots where the L1 table of the snapshot
++is smaller than the current L1 table.
++
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
+ wrote 4096/4096 bytes at offset 0
+ 4 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+@@ -7,4 +11,13 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=16777216
+ wrote 4194304/4194304 bytes at offset 0
+ 4 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ No errors were found on the image.
++
++Try using a huge VM state
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++wrote 4096/4096 bytes at offset 1099511627776
++4 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 4096/4096 bytes at offset 1099511627776
++4 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++No errors were found on the image.
+ *** done
+-- 
+1.7.1
+

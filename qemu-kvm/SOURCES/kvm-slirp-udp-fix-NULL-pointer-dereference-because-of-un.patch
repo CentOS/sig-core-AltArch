@@ -1,0 +1,55 @@
+From 00e16a0908803bf1e796864511862067a763e95e Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Thu, 23 Oct 2014 09:19:24 +0200
+Subject: [PATCH 1/9] slirp: udp: fix NULL pointer dereference because of
+ uninitialized socket
+
+Message-id: <1414055964-27479-1-git-send-email-mrezanin@redhat.com>
+Patchwork-id: 61832
+O-Subject: [RHEL-7.1 qemu-kvm PATCH] slirp: udp: fix NULL pointer dereference because of uninitialized socket
+Bugzilla: 1144820
+RH-Acked-by: Petr Matousek <pmatouse@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Amos Kong <akong@redhat.com>
+
+From: Petr Matousek <pmatouse@redhat.com>
+
+When guest sends udp packet with source port and source addr 0,
+uninitialized socket is picked up when looking for matching and already
+created udp sockets, and later passed to sosendto() where NULL pointer
+dereference is hit during so->slirp->vnetwork_mask.s_addr access.
+
+Fix this by checking that the socket is not just a socket stub.
+
+This is CVE-2014-3640.
+
+Signed-off-by: Petr Matousek <pmatouse@redhat.com>
+Reported-by: Xavier Mehrenberger <xavier.mehrenberger@airbus.com>
+Reported-by: Stephane Duverger <stephane.duverger@eads.net>
+Reviewed-by: Jan Kiszka <jan.kiszka@siemens.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Reviewed-by: Michael Tokarev <mjt@tls.msk.ru>
+Message-id: 20140918063537.GX9321@dhcp-25-225.brq.redhat.com
+Signed-off-by: Peter Maydell <peter.maydell@linaro.org>
+(cherry picked from commit 01f7cecf0037997cb0e58ec0d56bf9b5a6f7cb2a)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ slirp/udp.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/slirp/udp.c b/slirp/udp.c
+index b105f87..2188176 100644
+--- a/slirp/udp.c
++++ b/slirp/udp.c
+@@ -152,7 +152,7 @@ udp_input(register struct mbuf *m, int iphlen)
+ 	 * Locate pcb for datagram.
+ 	 */
+ 	so = slirp->udp_last_so;
+-	if (so->so_lport != uh->uh_sport ||
++	if (so == &slirp->udb || so->so_lport != uh->uh_sport ||
+ 	    so->so_laddr.s_addr != ip->ip_src.s_addr) {
+ 		struct socket *tmp;
+ 
+-- 
+1.8.3.1
+

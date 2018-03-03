@@ -1,0 +1,50 @@
+From c62e0877b191e5fba9b678bbd518a57c8fdf7099 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 10 Mar 2016 04:00:53 +0100
+Subject: [PATCH 4/5] nbd: client_close on error in nbd_co_client_start
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1457582453-13835-4-git-send-email-famz@redhat.com>
+Patchwork-id: 69759
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 3/3] nbd: client_close on error in nbd_co_client_start
+Bugzilla: 1285453
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+
+From: Max Reitz <mreitz@redhat.com>
+
+Use client_close() if an error in nbd_co_client_start() occurs instead
+of manually inlining parts of it. This fixes an assertion error on the
+server side if nbd_negotiate() fails.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit d3780c2dce2c452759ee9d94f9d824cf14cc3ab8)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+
+Downstream: client_close -> nbd_client_close.
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ nbd.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/nbd.c b/nbd.c
+index 97aeecb..c20e57e 100644
+--- a/nbd.c
++++ b/nbd.c
+@@ -1282,8 +1282,7 @@ static coroutine_fn void nbd_co_client_start(void *opaque)
+         nbd_export_get(exp);
+     }
+     if (nbd_negotiate(data)) {
+-        shutdown(client->sock, 2);
+-        client->close(client);
++        nbd_client_close(client);
+         goto out;
+     }
+     qemu_co_mutex_init(&client->send_lock);
+-- 
+1.8.3.1
+

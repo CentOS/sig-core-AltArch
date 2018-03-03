@@ -1,0 +1,217 @@
+From aaf2d00ea8cd6479c5dd15773660e0699472af1c Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Thu, 7 Nov 2013 12:37:40 +0100
+Subject: [PATCH 22/87] qemu-iotests: Adjustments due to error propagation
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-25-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55324
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 24/43] qemu-iotests: Adjustments due to error propagation
+Bugzilla: 1026524
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1026524
+
+When opening/creating images, propagating errors instead of immediately
+emitting them on occurrence results in errors generally being printed on
+a single line rather than being split up into multiple ones. This in
+turn requires adjustments to some test results.
+
+Also, test 060 used a sed to filter out the test image directory and
+format by removing everything from the affected line after a certain
+keyword; this now also removes the error message itself, which can be
+fixed by using _filter_testdir and _filter_imgfmt.
+
+Finally, _make_test_img in common.rc did not filter out the test image
+directory etc. from stderr. This has been fixed through a redirection of
+stderr to stdout (which is already done in _check_test_img and
+_img_info).
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit 2c78857bf6a9b5d06e17533b8f40fee14e087987)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+
+Conflicts:
+	tests/qemu-iotests/054.out
+	tests/qemu-iotests/060
+	tests/qemu-iotests/060.out
+
+Conflicts because these tests do not exist downstream.
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/049.out   |   18 +++++++-----------
+ tests/qemu-iotests/051.out   |   35 ++++++++++++-----------------------
+ tests/qemu-iotests/common.rc |    2 +-
+ 3 files changed, 20 insertions(+), 35 deletions(-)
+
+diff --git a/tests/qemu-iotests/049.out b/tests/qemu-iotests/049.out
+index 72db13f..96e83a4 100644
+--- a/tests/qemu-iotests/049.out
++++ b/tests/qemu-iotests/049.out
+@@ -96,7 +96,7 @@ qemu-img: Image size must be less than 8 EiB!
+ 
+ qemu-img create -f qcow2 -o size=-1024 TEST_DIR/t.qcow2
+ qemu-img: qcow2 doesn't support shrinking images yet
+-qemu-img: Formatting or formatting option not supported for file format 'qcow2'
++qemu-img: TEST_DIR/t.qcow2: Could not resize image: Operation not supported
+ Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=-1024 encryption=off cluster_size=65536 lazy_refcounts=off 
+ 
+ qemu-img create -f qcow2 TEST_DIR/t.qcow2 -- -1k
+@@ -104,7 +104,7 @@ qemu-img: Image size must be less than 8 EiB!
+ 
+ qemu-img create -f qcow2 -o size=-1k TEST_DIR/t.qcow2
+ qemu-img: qcow2 doesn't support shrinking images yet
+-qemu-img: Formatting or formatting option not supported for file format 'qcow2'
++qemu-img: TEST_DIR/t.qcow2: Could not resize image: Operation not supported
+ Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=-1024 encryption=off cluster_size=65536 lazy_refcounts=off 
+ 
+ qemu-img create -f qcow2 TEST_DIR/t.qcow2 -- 1kilobyte
+@@ -120,7 +120,7 @@ qemu-img: kilobytes, megabytes, gigabytes and terabytes.
+ 
+ qemu-img create -f qcow2 -o size=foobar TEST_DIR/t.qcow2
+ qemu-img: Parameter 'size' expects a size
+-qemu-img: Invalid options for file format 'qcow2'.
++qemu-img: TEST_DIR/t.qcow2: Invalid options for file format 'qcow2'.
+ 
+ == Check correct interpretation of suffixes for cluster size ==
+ 
+@@ -163,13 +163,11 @@ qemu-img create -f qcow2 -o compat=1.1 TEST_DIR/t.qcow2 64M
+ Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=67108864 compat='1.1' encryption=off cluster_size=65536 lazy_refcounts=off 
+ 
+ qemu-img create -f qcow2 -o compat=0.42 TEST_DIR/t.qcow2 64M
+-Invalid compatibility level: '0.42'
+-qemu-img: TEST_DIR/t.qcow2: error while creating qcow2: Invalid argument
++qemu-img: TEST_DIR/t.qcow2: Invalid compatibility level: '0.42'
+ Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=67108864 compat='0.42' encryption=off cluster_size=65536 lazy_refcounts=off 
+ 
+ qemu-img create -f qcow2 -o compat=foobar TEST_DIR/t.qcow2 64M
+-Invalid compatibility level: 'foobar'
+-qemu-img: TEST_DIR/t.qcow2: error while creating qcow2: Invalid argument
++qemu-img: TEST_DIR/t.qcow2: Invalid compatibility level: 'foobar'
+ Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=67108864 compat='foobar' encryption=off cluster_size=65536 lazy_refcounts=off 
+ 
+ == Check preallocation option ==
+@@ -181,8 +179,7 @@ qemu-img create -f qcow2 -o preallocation=metadata TEST_DIR/t.qcow2 64M
+ Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=67108864 encryption=off cluster_size=65536 preallocation='metadata' lazy_refcounts=off 
+ 
+ qemu-img create -f qcow2 -o preallocation=1234 TEST_DIR/t.qcow2 64M
+-Invalid preallocation mode: '1234'
+-qemu-img: TEST_DIR/t.qcow2: error while creating qcow2: Invalid argument
++qemu-img: TEST_DIR/t.qcow2: Invalid preallocation mode: '1234'
+ Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=67108864 encryption=off cluster_size=65536 preallocation='1234' lazy_refcounts=off 
+ 
+ == Check encryption option ==
+@@ -205,8 +202,7 @@ qemu-img create -f qcow2 -o compat=0.10,lazy_refcounts=off TEST_DIR/t.qcow2 64M
+ Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=67108864 compat='0.10' encryption=off cluster_size=65536 lazy_refcounts=off 
+ 
+ qemu-img create -f qcow2 -o compat=0.10,lazy_refcounts=on TEST_DIR/t.qcow2 64M
+-Lazy refcounts only supported with compatibility level 1.1 and above (use compat=1.1 or greater)
+-qemu-img: TEST_DIR/t.qcow2: error while creating qcow2: Invalid argument
++qemu-img: TEST_DIR/t.qcow2: Lazy refcounts only supported with compatibility level 1.1 and above (use compat=1.1 or greater)
+ Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=67108864 compat='0.10' encryption=off cluster_size=65536 lazy_refcounts=on 
+ 
+ *** done
+diff --git a/tests/qemu-iotests/051.out b/tests/qemu-iotests/051.out
+index e3cf244..fe0b347 100644
+--- a/tests/qemu-iotests/051.out
++++ b/tests/qemu-iotests/051.out
+@@ -4,20 +4,16 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=134217728
+ === Unknown option ===
+ 
+ Testing: -drive file=TEST_DIR/t.qcow2,format=qcow2,unknown_opt=
+-QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,unknown_opt=: Block format 'qcow2' used by device 'ide0-hd0' doesn't support the option 'unknown_opt'
+-QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,unknown_opt=: could not open disk image TEST_DIR/t.qcow2: Invalid argument
++QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,unknown_opt=: could not open disk image TEST_DIR/t.qcow2: Block format 'qcow2' used by device 'ide0-hd0' doesn't support the option 'unknown_opt'
+ 
+ Testing: -drive file=TEST_DIR/t.qcow2,format=qcow2,unknown_opt=on
+-QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,unknown_opt=on: Block format 'qcow2' used by device 'ide0-hd0' doesn't support the option 'unknown_opt'
+-QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,unknown_opt=on: could not open disk image TEST_DIR/t.qcow2: Invalid argument
++QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,unknown_opt=on: could not open disk image TEST_DIR/t.qcow2: Block format 'qcow2' used by device 'ide0-hd0' doesn't support the option 'unknown_opt'
+ 
+ Testing: -drive file=TEST_DIR/t.qcow2,format=qcow2,unknown_opt=1234
+-QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,unknown_opt=1234: Block format 'qcow2' used by device 'ide0-hd0' doesn't support the option 'unknown_opt'
+-QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,unknown_opt=1234: could not open disk image TEST_DIR/t.qcow2: Invalid argument
++QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,unknown_opt=1234: could not open disk image TEST_DIR/t.qcow2: Block format 'qcow2' used by device 'ide0-hd0' doesn't support the option 'unknown_opt'
+ 
+ Testing: -drive file=TEST_DIR/t.qcow2,format=qcow2,unknown_opt=foo
+-QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,unknown_opt=foo: Block format 'qcow2' used by device 'ide0-hd0' doesn't support the option 'unknown_opt'
+-QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,unknown_opt=foo: could not open disk image TEST_DIR/t.qcow2: Invalid argument
++QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,unknown_opt=foo: could not open disk image TEST_DIR/t.qcow2: Block format 'qcow2' used by device 'ide0-hd0' doesn't support the option 'unknown_opt'
+ 
+ 
+ === Enable and disable lazy refcounting on the command line, plus some invalid values ===
+@@ -31,24 +27,20 @@ QEMU X.Y.Z monitor - type 'help' for more information
+ (qemu) q[K[Dqu[K[D[Dqui[K[D[D[Dquit[K
+ 
+ Testing: -drive file=TEST_DIR/t.qcow2,format=qcow2,lazy-refcounts=
+-QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,lazy-refcounts=: Parameter 'lazy-refcounts' expects 'on' or 'off'
+-QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,lazy-refcounts=: could not open disk image TEST_DIR/t.qcow2: Invalid argument
++QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,lazy-refcounts=: could not open disk image TEST_DIR/t.qcow2: Parameter 'lazy-refcounts' expects 'on' or 'off'
+ 
+ Testing: -drive file=TEST_DIR/t.qcow2,format=qcow2,lazy-refcounts=42
+-QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,lazy-refcounts=42: Parameter 'lazy-refcounts' expects 'on' or 'off'
+-QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,lazy-refcounts=42: could not open disk image TEST_DIR/t.qcow2: Invalid argument
++QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,lazy-refcounts=42: could not open disk image TEST_DIR/t.qcow2: Parameter 'lazy-refcounts' expects 'on' or 'off'
+ 
+ Testing: -drive file=TEST_DIR/t.qcow2,format=qcow2,lazy-refcounts=foo
+-QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,lazy-refcounts=foo: Parameter 'lazy-refcounts' expects 'on' or 'off'
+-QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,lazy-refcounts=foo: could not open disk image TEST_DIR/t.qcow2: Invalid argument
++QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,lazy-refcounts=foo: could not open disk image TEST_DIR/t.qcow2: Parameter 'lazy-refcounts' expects 'on' or 'off'
+ 
+ 
+ === With version 2 images enabling lazy refcounts must fail ===
+ 
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=134217728 
+ Testing: -drive file=TEST_DIR/t.qcow2,format=qcow2,lazy-refcounts=on
+-QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,lazy-refcounts=on: Lazy refcounts require a qcow2 image with at least qemu 1.1 compatibility level
+-QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,lazy-refcounts=on: could not open disk image TEST_DIR/t.qcow2: Invalid argument
++QEMU_PROG: -drive file=TEST_DIR/t.qcow2,format=qcow2,lazy-refcounts=on: could not open disk image TEST_DIR/t.qcow2: Lazy refcounts require a qcow2 image with at least qemu 1.1 compatibility level
+ 
+ Testing: -drive file=TEST_DIR/t.qcow2,format=qcow2,lazy-refcounts=off
+ QEMU X.Y.Z monitor - type 'help' for more information
+@@ -162,21 +154,18 @@ QEMU X.Y.Z monitor - type 'help' for more information
+ (qemu) q[K[Dqu[K[D[Dqui[K[D[D[Dquit[K
+ 
+ Testing: -drive file=TEST_DIR/t.qcow2,file.driver=qcow2
+-QEMU_PROG: -drive file=TEST_DIR/t.qcow2,file.driver=qcow2: Can't use 'qcow2' as a block driver for the protocol level
+-QEMU_PROG: -drive file=TEST_DIR/t.qcow2,file.driver=qcow2: could not open disk image TEST_DIR/t.qcow2: Invalid argument
++QEMU_PROG: -drive file=TEST_DIR/t.qcow2,file.driver=qcow2: could not open disk image TEST_DIR/t.qcow2: Can't use 'qcow2' as a block driver for the protocol level
+ 
+ 
+ === Parsing protocol from file name ===
+ 
+ Testing: -hda foo:bar
+-QEMU_PROG: -hda foo:bar: Unknown protocol
+-QEMU_PROG: -hda foo:bar: could not open disk image foo:bar: No such file or directory
++QEMU_PROG: -hda foo:bar: could not open disk image foo:bar: Unknown protocol
+ 
+ Testing: -drive file=foo:bar
+-QEMU_PROG: -drive file=foo:bar: Unknown protocol
+-QEMU_PROG: -drive file=foo:bar: could not open disk image foo:bar: No such file or directory
++QEMU_PROG: -drive file=foo:bar: could not open disk image foo:bar: Unknown protocol
+ 
+ Testing: -drive file.filename=foo:bar
+-QEMU_PROG: -drive file.filename=foo:bar: could not open disk image ide0-hd0: No such file or directory
++QEMU_PROG: -drive file.filename=foo:bar: could not open disk image ide0-hd0: Could not open 'foo:bar': No such file or directory
+ 
+ *** done
+diff --git a/tests/qemu-iotests/common.rc b/tests/qemu-iotests/common.rc
+index 1187b86..764a3eb 100644
+--- a/tests/qemu-iotests/common.rc
++++ b/tests/qemu-iotests/common.rc
+@@ -123,7 +123,7 @@ _make_test_img()
+     fi
+ 
+     # XXX(hch): have global image options?
+-    $QEMU_IMG create -f $IMGFMT $extra_img_options $img_name $image_size | \
++    $QEMU_IMG create -f $IMGFMT $extra_img_options $img_name $image_size 2>&1 | \
+         sed -e "s#$IMGPROTO:$TEST_DIR#TEST_DIR#g" \
+             -e "s#$TEST_DIR#TEST_DIR#g" \
+             -e "s#$IMGFMT#IMGFMT#g" \
+-- 
+1.7.1
+

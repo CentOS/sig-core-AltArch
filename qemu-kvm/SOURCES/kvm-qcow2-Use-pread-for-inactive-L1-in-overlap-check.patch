@@ -1,0 +1,61 @@
+From 712a6ef0d0d3bbc91953305ad8e7e96f82f19cf0 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 4 Nov 2013 22:32:27 +0100
+Subject: [PATCH 34/87] qcow2: Use pread for inactive L1 in overlap check
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-37-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55336
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 36/43] qcow2: Use pread for inactive L1 in overlap check
+Bugzilla: 1004347
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1004347
+
+Currently, qcow2_check_metadata_overlap uses bdrv_read to read inactive
+L1 tables from disk. The number of sectors to read is calculated through
+a truncating integer division, therefore, if the L1 table size is not a
+multiple of the sector size, the final entries will not be read and
+their entries in memory remain undefined (from the g_malloc).
+Using bdrv_pread fixes this.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 998b959c1e59044f5d5f64c482f4ce8facc8e0bc)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2-refcount.c | 7 +++----
+ 1 file changed, 3 insertions(+), 4 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-refcount.c |    7 +++----
+ 1 files changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/block/qcow2-refcount.c b/block/qcow2-refcount.c
+index 34fcf2f..5c5683d 100644
+--- a/block/qcow2-refcount.c
++++ b/block/qcow2-refcount.c
+@@ -1701,12 +1701,11 @@ int qcow2_check_metadata_overlap(BlockDriverState *bs, int chk, int64_t offset,
+         for (i = 0; i < s->nb_snapshots; i++) {
+             uint64_t l1_ofs = s->snapshots[i].l1_table_offset;
+             uint32_t l1_sz  = s->snapshots[i].l1_size;
+-            uint64_t *l1 = g_malloc(l1_sz * sizeof(uint64_t));
++            uint64_t l1_sz2 = l1_sz * sizeof(uint64_t);
++            uint64_t *l1 = g_malloc(l1_sz2);
+             int ret;
+ 
+-            ret = bdrv_read(bs->file, l1_ofs / BDRV_SECTOR_SIZE, (uint8_t *)l1,
+-                            l1_sz * sizeof(uint64_t) / BDRV_SECTOR_SIZE);
+-
++            ret = bdrv_pread(bs->file, l1_ofs, l1, l1_sz2);
+             if (ret < 0) {
+                 g_free(l1);
+                 return ret;
+-- 
+1.7.1
+

@@ -1,0 +1,64 @@
+From ff6247a010ae1c37e400bbdd232df40ddcdf1bfc Mon Sep 17 00:00:00 2001
+From: Amos Kong <akong@redhat.com>
+Date: Mon, 4 Aug 2014 03:33:38 +0200
+Subject: [PATCH 4/4] qapi: treat all negative return of strtosz_suffix() as error
+
+Message-id: <1407123218-15659-1-git-send-email-akong@redhat.com>
+Patchwork-id: 60413
+O-Subject: [RHEL-7.1 qemu-kvm PATCH] qapi: treat all negative return of strtosz_suffix() as error
+Bugzilla: 1074403
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Bug: 1074403
+Brew: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7780802
+Test: tested by myself
+
+strtosz_suffix() might return negative error, this patch fixes
+the error handling.
+
+This patch also changes to handle error in the if statement
+rather than handle success specially, this will make this use
+of strtosz_suffix consistent with all other uses.
+
+Signed-off-by: Amos Kong <akong@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit cb45de6798956975c4b13a6233f7a00d2239b61a)
+---
+ qapi/opts-visitor.c |   11 ++++++-----
+ 1 files changed, 6 insertions(+), 5 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qapi/opts-visitor.c |   11 ++++++-----
+ 1 files changed, 6 insertions(+), 5 deletions(-)
+
+diff --git a/qapi/opts-visitor.c b/qapi/opts-visitor.c
+index 174bd8b..bbb99e9 100644
+--- a/qapi/opts-visitor.c
++++ b/qapi/opts-visitor.c
+@@ -348,13 +348,14 @@ opts_type_size(Visitor *v, uint64_t *obj, const char *name, Error **errp)
+ 
+     val = strtosz_suffix(opt->str ? opt->str : "", &endptr,
+                          STRTOSZ_DEFSUFFIX_B);
+-    if (val != -1 && *endptr == '\0') {
+-        *obj = val;
+-        processed(ov, name);
++    if (val < 0 || *endptr) {
++        error_set(errp, QERR_INVALID_PARAMETER_VALUE, opt->name,
++                  "a size value representible as a non-negative int64");
+         return;
+     }
+-    error_set(errp, QERR_INVALID_PARAMETER_VALUE, opt->name,
+-              "a size value representible as a non-negative int64");
++
++    *obj = val;
++    processed(ov, name);
+ }
+ 
+ 
+-- 
+1.7.1
+

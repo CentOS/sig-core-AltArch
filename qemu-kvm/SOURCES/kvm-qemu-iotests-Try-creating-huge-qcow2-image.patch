@@ -1,0 +1,157 @@
+From 72620f05ee7306dcdd209e0e527b7a4c92bcb98d Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Wed, 6 Nov 2013 16:53:24 +0100
+Subject: [PATCH 67/87] qemu-iotests: Try creating huge qcow2 image
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383756824-6921-2-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55556
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 01/21] qemu-iotests: Try creating huge qcow2 image
+Bugzilla: 980771
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+BZ: 980771
+
+It's supposed to fail gracefully instead of segfaulting.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit bd91ecbf5b43b52321c4d938e16a612b9c68bf06)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+
+Conflicts:
+	tests/qemu-iotests/group
+
+Conflicts because downstream contains more patches in the group file
+than upstream did at the time this patch was originally written.
+---
+ tests/qemu-iotests/054       | 58 ++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/054.out   | 10 ++++++++
+ tests/qemu-iotests/common.rc |  2 +-
+ tests/qemu-iotests/group     |  1 +
+ 4 files changed, 70 insertions(+), 1 deletion(-)
+ create mode 100755 tests/qemu-iotests/054
+ create mode 100644 tests/qemu-iotests/054.out
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/054       |   58 ++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/054.out   |   10 +++++++
+ tests/qemu-iotests/common.rc |    2 +-
+ tests/qemu-iotests/group     |    1 +
+ 4 files changed, 70 insertions(+), 1 deletions(-)
+ create mode 100755 tests/qemu-iotests/054
+ create mode 100644 tests/qemu-iotests/054.out
+
+diff --git a/tests/qemu-iotests/054 b/tests/qemu-iotests/054
+new file mode 100755
+index 0000000..b360429
+--- /dev/null
++++ b/tests/qemu-iotests/054
+@@ -0,0 +1,58 @@
++#!/bin/bash
++#
++# Test huge qcow2 images
++#
++# Copyright (C) 2013 Red Hat, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++
++# creator
++owner=kwolf@redhat.com
++
++seq=`basename $0`
++echo "QA output created by $seq"
++
++here=`pwd`
++tmp=/tmp/$$
++status=1	# failure is the default!
++
++_cleanup()
++{
++	_cleanup_test_img
++}
++trap "_cleanup; exit \$status" 0 1 2 3 15
++
++# get standard environment, filters and checks
++. ./common.rc
++. ./common.filter
++
++_supported_fmt qcow2
++_supported_proto generic
++_supported_os Linux
++
++echo
++echo "creating too large image (1 EB)"
++_make_test_img $((1024*1024))T
++
++echo
++echo "creating too large image (1 EB) using qcow2.py"
++_make_test_img 4G
++./qcow2.py $TEST_IMG set-header size $((1024 ** 6))
++_check_test_img
++
++# success, all done
++echo "*** done"
++rm -f $seq.full
++status=0
+diff --git a/tests/qemu-iotests/054.out b/tests/qemu-iotests/054.out
+new file mode 100644
+index 0000000..0b2fe30
+--- /dev/null
++++ b/tests/qemu-iotests/054.out
+@@ -0,0 +1,10 @@
++QA output created by 054
++
++creating too large image (1 EB)
++qemu-img: The image size is too large for file format 'qcow2'
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=1152921504606846976 
++
++creating too large image (1 EB) using qcow2.py
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=4294967296 
++qemu-img: Could not open 'TEST_DIR/t.qcow2': File too large
++*** done
+diff --git a/tests/qemu-iotests/common.rc b/tests/qemu-iotests/common.rc
+index 764a3eb..28b39e4 100644
+--- a/tests/qemu-iotests/common.rc
++++ b/tests/qemu-iotests/common.rc
+@@ -173,7 +173,7 @@ _cleanup_test_img()
+ 
+ _check_test_img()
+ {
+-    $QEMU_IMG check "$@" -f $IMGFMT $TEST_IMG 2>&1 | \
++    $QEMU_IMG check "$@" -f $IMGFMT $TEST_IMG 2>&1 | _filter_testdir | \
+         sed -e '/allocated.*fragmented.*compressed clusters/d' \
+             -e 's/qemu-img: This image format does not support checks/No errors were found on the image./' \
+             -e '/Image end offset: [0-9]\+/d'
+diff --git a/tests/qemu-iotests/group b/tests/qemu-iotests/group
+index c841c5e..d02ee96 100644
+--- a/tests/qemu-iotests/group
++++ b/tests/qemu-iotests/group
+@@ -60,6 +60,7 @@
+ 051 rw auto
+ 052 rw auto backing
+ 053 rw auto
++054 rw auto
+ 059 rw auto
+ 060 rw auto
+ 063 rw auto
+-- 
+1.7.1
+

@@ -1,0 +1,84 @@
+From 0cc9ce211d3b571e35b5440fc12a77195b7ee804 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Wed, 6 Nov 2013 16:53:41 +0100
+Subject: [PATCH 84/87] vmdk: refuse enabling zeroed grain with flat images
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383756824-6921-19-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55573
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 18/21] vmdk: refuse enabling zeroed grain with flat images
+Bugzilla: 980771
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+From: Fam Zheng <famz@redhat.com>
+
+BZ: 980771
+
+This is a header flag and we needs sparse for the header.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 52c8d629cac27ad16dd51507b4733d46fa4efc55)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/vmdk.c               | 4 ++++
+ tests/qemu-iotests/059     | 4 ++++
+ tests/qemu-iotests/059.out | 4 ++++
+ 3 files changed, 12 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vmdk.c               |    4 ++++
+ tests/qemu-iotests/059     |    4 ++++
+ tests/qemu-iotests/059.out |    4 ++++
+ 3 files changed, 12 insertions(+), 0 deletions(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 96f9415..ccbb0c9 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -1664,6 +1664,10 @@ static int vmdk_create(const char *filename, QEMUOptionParameter *options,
+         error_setg(errp, "Flat image can't have backing file");
+         return -ENOTSUP;
+     }
++    if (flat && zeroed_grain) {
++        error_setg(errp, "Flat image can't enable zeroed grain");
++        return -ENOTSUP;
++    }
+     if (backing_file) {
+         BlockDriverState *bs = bdrv_new("");
+         ret = bdrv_open(bs, backing_file, NULL, 0, NULL, errp);
+diff --git a/tests/qemu-iotests/059 b/tests/qemu-iotests/059
+index dd6addf..26d4538 100755
+--- a/tests/qemu-iotests/059
++++ b/tests/qemu-iotests/059
+@@ -71,6 +71,10 @@ echo
+ IMGOPTS="subformat=monolithicFlat" _make_test_img 2G
+ $QEMU_IMG info $TEST_IMG | _filter_testdir
+ 
++echo
++echo "=== Testing monolithicFlat with zeroed_grain ==="
++IMGOPTS="subformat=monolithicFlat,zeroed_grain=on" _make_test_img 2G
++
+ # success, all done
+ echo "*** done"
+ rm -f $seq.full
+diff --git a/tests/qemu-iotests/059.out b/tests/qemu-iotests/059.out
+index dc4f024..2b29ca9 100644
+--- a/tests/qemu-iotests/059.out
++++ b/tests/qemu-iotests/059.out
+@@ -22,4 +22,8 @@ image: TEST_DIR/t.vmdk
+ file format: vmdk
+ virtual size: 2.0G (2147483648 bytes)
+ disk size: 4.0K
++
++=== Testing monolithicFlat with zeroed_grain ===
++qemu-img: TEST_DIR/t.IMGFMT: Flat image can't enable zeroed grain
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=2147483648
+ *** done
+-- 
+1.7.1
+

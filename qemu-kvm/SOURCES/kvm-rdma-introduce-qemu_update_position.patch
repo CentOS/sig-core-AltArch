@@ -1,0 +1,120 @@
+From 2d15ce1f7898287ef50a658bb08aeb4bb22b8a0a Mon Sep 17 00:00:00 2001
+Message-Id: <2d15ce1f7898287ef50a658bb08aeb4bb22b8a0a.1387382496.git.minovotn@redhat.com>
+In-Reply-To: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+References: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+From: Nigel Croxon <ncroxon@redhat.com>
+Date: Thu, 14 Nov 2013 22:52:41 +0100
+Subject: [PATCH 05/46] rdma: introduce qemu_update_position()
+
+RH-Author: Nigel Croxon <ncroxon@redhat.com>
+Message-id: <1384469598-13137-6-git-send-email-ncroxon@redhat.com>
+Patchwork-id: 55689
+O-Subject: [RHEL7.0 PATCH 05/42] rdma: introduce qemu_update_position()
+Bugzilla: 1011720
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: 1011720
+https://bugzilla.redhat.com/show_bug.cgi?id=1011720
+
+>From commit ID:
+commit 2b0ce0797d6bfb13ebefe010da86abced0b7a9b3
+Author: Michael R. Hines <mrhines@us.ibm.com>
+Date:   Tue Jun 25 21:35:28 2013 -0400
+
+    rdma: introduce qemu_update_position()
+
+    RDMA writes happen asynchronously, and thus the performance accounting
+    also needs to be able to occur asynchronously. This allows anybody
+    to call into savevm.c to update both f->pos as well as into arch_init.c
+    to update the acct_info structure with up-to-date values when
+    the RDMA transfer actually completes.
+
+    Reviewed-by: Juan Quintela <quintela@redhat.com>
+    Tested-by: Chegu Vinod <chegu_vinod@hp.com>
+    Tested-by: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Juan Quintela <quintela@redhat.com>
+---
+ arch_init.c                   |   12 ++++++++++++
+ include/migration/migration.h |    2 ++
+ include/migration/qemu-file.h |    1 +
+ savevm.c                      |    5 +++++
+ 4 files changed, 20 insertions(+), 0 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ arch_init.c                   | 12 ++++++++++++
+ include/migration/migration.h |  2 ++
+ include/migration/qemu-file.h |  1 +
+ savevm.c                      |  5 +++++
+ 4 files changed, 20 insertions(+)
+
+diff --git a/arch_init.c b/arch_init.c
+index 2c0ea1b..e940ede 100644
+--- a/arch_init.c
++++ b/arch_init.c
+@@ -522,6 +522,18 @@ static int ram_save_block(QEMUFile *f, bool last_stage)
+ 
+ static uint64_t bytes_transferred;
+ 
++void acct_update_position(QEMUFile *f, size_t size, bool zero)
++{
++    uint64_t pages = size / TARGET_PAGE_SIZE;
++    if (zero) {
++        acct_info.dup_pages += pages;
++    } else {
++        acct_info.norm_pages += pages;
++        bytes_transferred += size;
++        qemu_update_position(f, size);
++    }
++}
++
+ static ram_addr_t ram_save_remaining(void)
+ {
+     return migration_dirty_pages;
+diff --git a/include/migration/migration.h b/include/migration/migration.h
+index f1519dd..2f3a3d9 100644
+--- a/include/migration/migration.h
++++ b/include/migration/migration.h
+@@ -92,6 +92,8 @@ uint64_t ram_bytes_remaining(void);
+ uint64_t ram_bytes_transferred(void);
+ uint64_t ram_bytes_total(void);
+ 
++void acct_update_position(QEMUFile *f, size_t size, bool zero);
++
+ extern SaveVMHandlers savevm_ram_handlers;
+ 
+ uint64_t dup_mig_bytes_transferred(void);
+diff --git a/include/migration/qemu-file.h b/include/migration/qemu-file.h
+index 8931e16..fb1cf40 100644
+--- a/include/migration/qemu-file.h
++++ b/include/migration/qemu-file.h
+@@ -93,6 +93,7 @@ void qemu_put_be32(QEMUFile *f, unsigned int v);
+ void qemu_put_be64(QEMUFile *f, uint64_t v);
+ int qemu_get_buffer(QEMUFile *f, uint8_t *buf, int size);
+ int qemu_get_byte(QEMUFile *f);
++void qemu_update_position(QEMUFile *f, size_t size);
+ 
+ static inline unsigned int qemu_get_ubyte(QEMUFile *f)
+ {
+diff --git a/savevm.c b/savevm.c
+index 4d898af..f68f7f2 100644
+--- a/savevm.c
++++ b/savevm.c
+@@ -671,6 +671,11 @@ int qemu_get_fd(QEMUFile *f)
+     return -1;
+ }
+ 
++void qemu_update_position(QEMUFile *f, size_t size)
++{
++    f->pos += size;
++}
++
+ /** Closes the file
+  *
+  * Returns negative error value if any error happened on previous operations or
+-- 
+1.7.11.7
+

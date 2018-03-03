@@ -1,0 +1,103 @@
+From 8a53023561ad1fdc87104ef15494803ae00e069b Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 14 Jul 2014 01:05:21 -0500
+Subject: [CHANGE 21/29] block: Improve driver whitelist checks
+To: rhvirt-patches@redhat.com,
+    jen@redhat.com
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1405299921-2619-1-git-send-email-famz@redhat.com>
+Patchwork-id: 59871
+O-Subject: [RHEL-7 qemu-kvm PATCH] block: Improve driver whitelist checks
+Bugzilla: 999789
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+Brew:     https://brewweb.devel.redhat.com/taskinfo?taskID=7695744
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=999789
+
+The main intent of this patch is to consolidate the whitelist checks to
+a single point in the code instead of spreading it everywhere. This adds
+a nicer error message for read-only whitelisting, too, in places where
+it was still missing.
+
+The patch also contains a bonus bug fix: By finding the format first in
+bdrv_open() and then independently checking against the whitelist only
+later, we avoid the case that use of a non-whitelisted format results in
+probing rather than an error message. Previously, this could happen when
+using the driver=... option.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+(cherry picked from commit 8f94a6e40e46cbc8e8014da825d25824b1803b34)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: jen <jen@redhat.com>
+
+Conflicts:
+	blockdev.c
+Error report is different.
+---
+ block.c    | 10 +++++++---
+ blockdev.c |  2 +-
+ 2 files changed, 8 insertions(+), 4 deletions(-)
+
+Signed-off-by: jen <jen@redhat.com>
+---
+ block.c    | 10 +++++++---
+ blockdev.c |  2 +-
+ 2 files changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/block.c b/block.c
+index 43e325e..a2e95f6 100644
+--- a/block.c
++++ b/block.c
+@@ -786,7 +786,11 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
+     bs->read_only = !(open_flags & BDRV_O_RDWR);
+ 
+     if (use_bdrv_whitelist && !bdrv_is_whitelisted(drv, bs->read_only)) {
+-        error_setg(errp, "Driver '%s' is not whitelisted", drv->format_name);
++        error_setg(errp,
++                   !bs->read_only && bdrv_is_whitelisted(drv, true)
++                        ? "Driver '%s' can only be used for read-only devices"
++                        : "Driver '%s' is not whitelisted",
++                   drv->format_name);
+         return -ENOTSUP;
+     }
+ 
+@@ -908,7 +912,7 @@ int bdrv_file_open(BlockDriverState **pbs, const char *filename,
+     /* Find the right block driver */
+     drvname = qdict_get_try_str(options, "driver");
+     if (drvname) {
+-        drv = bdrv_find_whitelisted_format(drvname, !(flags & BDRV_O_RDWR));
++        drv = bdrv_find_format(drvname);
+         if (!drv) {
+             error_setg(errp, "Unknown driver '%s'", drvname);
+         }
+@@ -1177,7 +1181,7 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+     /* Find the right image format driver */
+     drvname = qdict_get_try_str(options, "driver");
+     if (drvname) {
+-        drv = bdrv_find_whitelisted_format(drvname, !(flags & BDRV_O_RDWR));
++        drv = bdrv_find_format(drvname);
+         qdict_del(options, "driver");
+     }
+ 
+diff --git a/blockdev.c b/blockdev.c
+index e51203c..aa5d0a6 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -414,7 +414,7 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+             goto early_err;
+         }
+ 
+-        drv = bdrv_find_whitelisted_format(buf, ro);
++        drv = bdrv_find_format(buf);
+         if (!drv) {
+             error_setg(errp, "'%s' invalid format", buf);
+             goto early_err;
+-- 
+1.9.3
+

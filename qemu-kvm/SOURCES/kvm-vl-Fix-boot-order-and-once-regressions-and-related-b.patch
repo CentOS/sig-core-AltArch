@@ -1,0 +1,277 @@
+From a49a3e6984fdb8562003cff96a82b2ac7d9bcc0d Mon Sep 17 00:00:00 2001
+Message-Id: <a49a3e6984fdb8562003cff96a82b2ac7d9bcc0d.1383564115.git.minovotn@redhat.com>
+In-Reply-To: <5575e0aec51f40ebec46e98ec085cda053283aba.1383564115.git.minovotn@redhat.com>
+References: <5575e0aec51f40ebec46e98ec085cda053283aba.1383564115.git.minovotn@redhat.com>
+From: Markus Armbruster <armbru@redhat.com>
+Date: Fri, 27 Sep 2013 13:31:13 +0200
+Subject: [PATCH 03/14] vl: Fix -boot order and once regressions, and related
+ bugs
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1380288680-26645-4-git-send-email-armbru@redhat.com>
+Patchwork-id: 54567
+O-Subject: [PATCH 7.0 qemu-kvm 03/10] vl: Fix -boot order and once regressions, and related bugs
+Bugzilla: 997817
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Option "once" sets up a different boot order just for the initial
+boot.  Boot order reverts back to normal on reset.  Option "order"
+changes the normal boot order.
+
+The reversal is implemented by reset handler restore_boot_devices(),
+which takes the boot order to revert to as argument.
+restore_boot_devices() does nothing on its first call, because that
+must be the initial machine reset.  On its second call, it changes the
+boot order back, and unregisters itself.
+
+Because we register the handler right when -boot gets parsed, we can
+revert to an incorrect normal boot order, and multiple -boot can
+interact in funny ways.
+
+Here's how things work without -boot once or order:
+
+* boot_devices is "".
+
+* main() passes machine->boot_order to to machine->init(), because
+  boot_devices is "".  machine->init() configures firmware
+  accordingly.  For PC machines, machine->boot_order is "cad", and
+  pc_cmos_init() writes it to RTC CMOS, where SeaBIOS picks it up.
+
+Now consider -boot order=:
+
+* boot_devices is "".
+
+* -boot order= sets boot_devices to "" (no change).
+
+* main() passes machine->boot_order to to machine->init(), because
+  boot_devices is "", as above.
+
+  Bug: -boot order= has no effect.  Broken in commit e4ada29e.
+
+Next, consider -boot once=a:
+
+* boot_devices is "".
+
+* -boot once=a registers restore_boot_devices() with argument "", and
+  sets boot_devices to "a".
+
+* main() passes boot_devices "a" to machine->init(), which configures
+  firmware accordingly.  For PC machines, pc_cmos_init() writes the
+  boot order to RTC CMOS.
+
+* main() calls qemu_system_reset().  This runs reset handlers.
+
+  - restore_boot_devices() gets called with argument "".  Does
+    nothing, because it's the first call.
+
+* Machine boots, boot order is "a".
+
+* Machine resets (e.g. monitor command).  Reset handlers run.
+
+  - restore_boot_devices() gets called with argument "".  Calls
+    qemu_boot_set("") to reconfigure firmware.  For PC machines,
+    pc_boot_set() writes it into RTC CMOS.  Reset handler
+    unregistered.
+
+    Bug: boot order reverts to "" instead of machine->boot_order.  The
+    actual boot order depends on how firmware interprets "".  Broken
+    in commit e4ada29e.
+
+Next, consider -boot once=a -boot order=c:
+
+* boot_devices is "".
+
+* -boot once=a registers restore_boot_devices() with argument "", and
+  sets boot_devices to "a".
+
+* -boot order=c sets boot_devices to "c".
+
+* main() passes boot_devices "c" to machine->init(), which configures
+  firmware accordingly.  For PC machines, pc_cmos_init() writes the
+  boot order to RTC CMOS.
+
+* main() calls qemu_system_reset().  This runs reset handlers.
+
+  - restore_boot_devices() gets called with argument "".  Does
+    nothing, because it's the first call.
+
+* Machine boots, boot order is "c".
+
+  Bug: it should be "a".  I figure this has always been broken.
+
+* Machine resets (e.g. monitor command).  Reset handlers run.
+
+  - restore_boot_devices() gets called with argument "".  Calls
+    qemu_boot_set("") to reconfigure firmware.  For PC machines,
+    pc_boot_set() writes it into RTC CMOS.  Reset handler
+    unregistered.
+
+    Bug: boot order reverts to "" instead of "c".  I figure this has
+    always been broken, just differently broken before commit
+    e4ada29e.
+
+Next, consider -boot once=a -boot once=b -boot once=c:
+
+* boot_devices is "".
+
+* -boot once=a registers restore_boot_devices() with argument "", and
+  sets boot_devices to "a".
+
+* -boot once=b registers restore_boot_devices() with argument "a", and
+  sets boot_devices to "b".
+
+* -boot once=c registers restore_boot_devices() with argument "b", and
+  sets boot_devices to "c".
+
+* main() passes boot_devices "c" to machine->init(), which configures
+  firmware accordingly.  For PC machines, pc_cmos_init() writes the
+  boot order to RTC CMOS.
+
+* main() calls qemu_system_reset().  This runs reset handlers.
+
+  - restore_boot_devices() gets called with argument "".  Does
+    nothing, because it's the first call.
+
+  - restore_boot_devices() gets called with argument "a".  Calls
+    qemu_boot_set("a") to reconfigure firmware.  For PC machines,
+    pc_boot_set() writes it into RTC CMOS.  Reset handler
+    unregistered.
+
+  - restore_boot_devices() gets called with argument "b".  Calls
+    qemu_boot_set("b") to reconfigure firmware.  For PC machines,
+    pc_boot_set() writes it into RTC CMOS.  Reset handler
+    unregistered.
+
+* Machine boots, boot order is "b".
+
+  Bug: should really be "c", because that came last, and for all other
+  -boot options, the last one wins.  I figure this was broken some
+  time before commit 37905d6a, and fixed there only for a single
+  occurence of "once".
+
+* Machine resets (e.g. monitor command).  Reset handlers run.
+
+  - restore_boot_devices() gets called with argument "".  Calls
+    qemu_boot_set("") to reconfigure firmware.  For PC machines,
+    pc_boot_set() writes it into RTC CMOS.  Reset handler
+    unregistered.
+
+    Same bug as above: boot order reverts to "" instead of
+    machine->boot_order.
+
+Fix by acting upon -boot options order, once and menu only after
+option parsing is complete, and the machine is known.  This is how the
+other -boot options work already.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Anthony Liguori <aliguori@us.ibm.com>
+Message-id: 1371208516-7857-4-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit 8281abd548d840d84223e66812491918c713e56c)
+---
+ vl.c | 59 ++++++++++++++++++++++++++++++-----------------------------
+ 1 file changed, 30 insertions(+), 29 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ vl.c | 59 ++++++++++++++++++++++++++++++-----------------------------
+ 1 file changed, 30 insertions(+), 29 deletions(-)
+
+diff --git a/vl.c b/vl.c
+index a5663ad..1c3236c 100644
+--- a/vl.c
++++ b/vl.c
+@@ -2795,7 +2795,7 @@ int main(int argc, char **argv, char **envp)
+     const char *icount_option = NULL;
+     const char *initrd_filename;
+     const char *kernel_filename, *kernel_cmdline;
+-    char boot_devices[33] = "";
++    const char *boot_order = NULL;
+     DisplayState *ds;
+     int cyls, heads, secs, translation;
+     QemuOpts *hda_opts = NULL, *opts, *machine_opts;
+@@ -3086,31 +3086,9 @@ int main(int argc, char **argv, char **envp)
+                 drive_add(IF_DEFAULT, 2, optarg, CDROM_OPTS);
+                 break;
+             case QEMU_OPTION_boot:
+-                {
+-                    char *standard_boot_devices;
+-                    const char *order, *once;
+-
+-                    opts = qemu_opts_parse(qemu_find_opts("boot-opts"),
+-                                           optarg, 1);
+-                    if (!opts) {
+-                        exit(1);
+-                    }
+-
+-                    order = qemu_opt_get(opts, "order");
+-                    if (order) {
+-                        validate_bootdevices(order);
+-                        pstrcpy(boot_devices, sizeof(boot_devices), order);
+-                    }
+-
+-                    once = qemu_opt_get(opts, "once");
+-                    if (once) {
+-                        validate_bootdevices(once);
+-                        standard_boot_devices = g_strdup(boot_devices);
+-                        pstrcpy(boot_devices, sizeof(boot_devices), once);
+-                        qemu_register_reset(restore_boot_devices,
+-                                            standard_boot_devices);
+-                    }
+-                    boot_menu = qemu_opt_get_bool(opts, "menu", boot_menu);
++                opts = qemu_opts_parse(qemu_find_opts("boot-opts"), optarg, 1);
++                if (!opts) {
++                    exit(1);
+                 }
+                 break;
+             case QEMU_OPTION_fda:
+@@ -4049,6 +4027,31 @@ int main(int argc, char **argv, char **envp)
+     initrd_filename = qemu_opt_get(machine_opts, "initrd");
+     kernel_cmdline = qemu_opt_get(machine_opts, "append");
+ 
++    if (!boot_order) {
++        boot_order = machine->boot_order;
++    }
++    opts = qemu_opts_find(qemu_find_opts("boot-opts"), NULL);
++    if (opts) {
++        char *normal_boot_order;
++        const char *order, *once;
++
++        order = qemu_opt_get(opts, "order");
++        if (order) {
++            validate_bootdevices(order);
++            boot_order = order;
++        }
++
++        once = qemu_opt_get(opts, "once");
++        if (once) {
++            validate_bootdevices(once);
++            normal_boot_order = g_strdup(boot_order);
++            boot_order = once;
++            qemu_register_reset(restore_boot_devices, normal_boot_order);
++        }
++
++        boot_menu = qemu_opt_get_bool(opts, "menu", boot_menu);
++    }
++
+     if (!kernel_cmdline) {
+         kernel_cmdline = "";
+     }
+@@ -4213,9 +4216,7 @@ int main(int argc, char **argv, char **envp)
+     qdev_machine_init();
+ 
+     QEMUMachineInitArgs args = { .ram_size = ram_size,
+-                                 .boot_device = (boot_devices[0] == '\0') ?
+-                                                machine->boot_order :
+-                                                boot_devices,
++                                 .boot_device = boot_order,
+                                  .kernel_filename = kernel_filename,
+                                  .kernel_cmdline = kernel_cmdline,
+                                  .initrd_filename = initrd_filename,
+-- 
+1.7.11.7
+

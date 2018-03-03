@@ -1,0 +1,104 @@
+From ef6f26bb4a43131a7a3de4109aa9aeb145ad139a Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Wed, 16 Jul 2014 02:20:27 -0500
+Subject: [CHANGE 27/29] rules.mak: allow per object cflags and libs
+To: rhvirt-patches@redhat.com,
+    jen@redhat.com
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1405477228-11490-4-git-send-email-famz@redhat.com>
+Patchwork-id: 59917
+O-Subject: [RHEL-7 qemu-kvm PATCH 3/4] rules.mak: allow per object cflags and libs
+Bugzilla: 1017685
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Adds extract-libs in LINK to expand any "per object libs", the syntax to define
+such a libs options is like:
+
+        foo.o-libs := $(CURL_LIBS)
+
+in block/Makefile.objs.
+
+Similarly,
+
+        foo.o-cflags := $(FOO_CFLAGS)
+
+is also supported.
+
+"foo.o" must be listed in a nested var (e.g. common-obj-y) to make the
+option variables effective.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 5c0d52bcd3aada33e274ea7dad75955f98bc2636)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ rules.mak | 19 ++++++++++++++++---
+ 1 file changed, 16 insertions(+), 3 deletions(-)
+
+Signed-off-by: jen <jen@redhat.com>
+---
+ rules.mak | 19 ++++++++++++++++---
+ 1 file changed, 16 insertions(+), 3 deletions(-)
+
+diff --git a/rules.mak b/rules.mak
+index 0c5125d..355c275 100644
+--- a/rules.mak
++++ b/rules.mak
+@@ -17,15 +17,17 @@ QEMU_DGFLAGS += -MMD -MP -MT $@ -MF $(*D)/$(*F).d
+ # Same as -I$(SRC_PATH) -I., but for the nested source/object directories
+ QEMU_INCLUDES += -I$(<D) -I$(@D)
+ 
++extract-libs = $(strip $(foreach o,$1,$($o-libs)))
++
+ %.o: %.c
+-	$(call quiet-command,$(CC) $(QEMU_INCLUDES) $(QEMU_CFLAGS) $(QEMU_DGFLAGS) $(CFLAGS) -c -o $@ $<,"  CC    $(TARGET_DIR)$@")
++	$(call quiet-command,$(CC) $(QEMU_INCLUDES) $(QEMU_CFLAGS) $(QEMU_DGFLAGS) $(CFLAGS) $($@-cflags) -c -o $@ $<,"  CC    $(TARGET_DIR)$@")
+ %.o: %.rc
+ 	$(call quiet-command,$(WINDRES) -I. -o $@ $<,"  RC    $(TARGET_DIR)$@")
+ 
+ ifeq ($(LIBTOOL),)
+ LINK = $(call quiet-command,$(CC) $(QEMU_CFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ \
+        $(sort $(filter %.o, $1)) $(filter-out %.o, $1) $(version-obj-y) \
+-       $(LIBS),"  LINK  $(TARGET_DIR)$@")
++       $(call extract-libs,$^) $(LIBS),"  LINK  $(TARGET_DIR)$@")
+ else
+ LIBTOOL += $(if $(V),,--quiet)
+ %.lo: %.c
+@@ -41,7 +43,7 @@ LINK = $(call quiet-command,\
+        $(sort $(filter %.o, $1)) $(filter-out %.o, $1) \
+        $(if $(filter %.lo %.la,$^),$(version-lobj-y),$(version-obj-y)) \
+        $(if $(filter %.lo %.la,$^),$(LIBTOOLFLAGS)) \
+-       $(LIBS),$(if $(filter %.lo %.la,$^),"lt LINK ", "  LINK  ")"$(TARGET_DIR)$@")
++       $(call extract-libs,$^) $(LIBS),$(if $(filter %.lo %.la,$^),"lt LINK ", "  LINK  ")"$(TARGET_DIR)$@")
+ endif
+ 
+ %.asm: %.S
+@@ -114,11 +116,22 @@ $(eval $1 = $(value save-$2-$1) $$(subdir-$2-$1))
+ $(eval save-$2-$1 :=)
+ endef
+ 
++define fix-obj-vars
++$(foreach v,$($1), \
++	$(if $($v-cflags), \
++		$(eval $2$v-cflags := $($v-cflags)) \
++		$(eval $v-cflags := )) \
++	$(if $($v-libs), \
++		$(eval $2$v-libs := $($v-libs)) \
++		$(eval $v-libs := )))
++endef
++
+ define unnest-dir
+ $(foreach var,$(nested-vars),$(call push-var,$(var),$1/))
+ $(eval obj-parent-$1 := $(obj))
+ $(eval obj := $(if $(obj),$(obj)/$1,$1))
+ $(eval include $(SRC_PATH)/$1/Makefile.objs)
++$(foreach v,$(nested-vars),$(call fix-obj-vars,$v,$(if $(obj),$(obj)/)))
+ $(eval obj := $(obj-parent-$1))
+ $(eval obj-parent-$1 := )
+ $(foreach var,$(nested-vars),$(call pop-var,$(var),$1/))
+-- 
+1.9.3
+

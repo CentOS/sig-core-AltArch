@@ -1,0 +1,61 @@
+From 1ae5408c46e940c7a993ba59c7e31163d78dd81a Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:22:36 +0200
+Subject: [PATCH 42/42] qcow2: Flush pending discards before allocating cluster
+
+Message-id: <1434212556-3927-43-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66061
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 42/42] qcow2: Flush pending discards before allocating cluster
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+BZ: 1129893
+
+Before a freed cluster can be reused, pending discards for this cluster
+must be processed.
+
+The original assumption was that this was not a problem because discards
+are only cached during discard/write zeroes operations, which are
+synchronous so that no concurrent write requests can cause cluster
+allocations.
+
+However, the discard/write zeroes operation itself can allocate a new L2
+table (and it has to in order to put zero flags there), so make sure we
+can cope with the situation.
+
+This fixes https://bugs.launchpad.net/bugs/1349972.
+
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit ecbda7a22576591a84f44de1be0150faf6001f1c)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-refcount.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/block/qcow2-refcount.c b/block/qcow2-refcount.c
+index cee5b1f..848fd31 100644
+--- a/block/qcow2-refcount.c
++++ b/block/qcow2-refcount.c
+@@ -663,6 +663,11 @@ static int64_t alloc_clusters_noref(BlockDriverState *bs, uint64_t size)
+     uint64_t i, nb_clusters;
+     int refcount;
+ 
++    /* We can't allocate clusters if they may still be queued for discard. */
++    if (s->cache_discards) {
++        qcow2_process_discards(bs, 0);
++    }
++
+     nb_clusters = size_to_clusters(s, size);
+ retry:
+     for(i = 0; i < nb_clusters; i++) {
+-- 
+1.8.3.1
+

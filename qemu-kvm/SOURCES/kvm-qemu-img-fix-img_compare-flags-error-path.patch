@@ -1,0 +1,57 @@
+From 43c5d1b9be611a87ca71b75f5a7e1d4ec3056117 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Tue, 11 Nov 2014 16:27:43 +0100
+Subject: [PATCH 13/19] qemu-img: fix img_compare() flags error path
+
+Message-id: <1415723263-31710-1-git-send-email-mreitz@redhat.com>
+Patchwork-id: 62277
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v2 5/4] qemu-img: fix img_compare() flags error path
+Bugzilla: 1138691
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Stefan Hajnoczi <stefanha@redhat.com>
+
+If img_compare() fails to parse the cache flags the goto out3 code path
+will call qemu_progress_end().  Make sure we actually call
+qemu_progress_init() first.
+
+Reported-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit cbda016d94017fad3be1c657f0ad98f88395c12a)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qemu-img.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/qemu-img.c b/qemu-img.c
+index 39d7e05..f14890f 100644
+--- a/qemu-img.c
++++ b/qemu-img.c
+@@ -983,6 +983,9 @@ static int img_compare(int argc, char **argv)
+     filename1 = argv[optind++];
+     filename2 = argv[optind++];
+ 
++    /* Initialize before goto out */
++    qemu_progress_init(progress, 2.0);
++
+     flags = BDRV_O_FLAGS;
+     ret = bdrv_parse_cache_flags(cache, &flags);
+     if (ret < 0) {
+@@ -991,9 +994,6 @@ static int img_compare(int argc, char **argv)
+         goto out3;
+     }
+ 
+-    /* Initialize before goto out */
+-    qemu_progress_init(progress, 2.0);
+-
+     bs1 = bdrv_new_open("image 1", filename1, fmt1, flags, true, quiet);
+     if (!bs1) {
+         error_report("Can't open file %s", filename1);
+-- 
+1.8.3.1
+

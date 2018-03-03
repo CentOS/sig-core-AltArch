@@ -1,0 +1,73 @@
+From 86a622181cfcb4205877595fa53b3bbc87cf9431 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Wed, 6 Nov 2013 14:41:19 +0100
+Subject: [PATCH 43/81] vt82c686: Clean up use of cannot_instantiate_with_device_add_yet
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383748882-22831-15-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55540
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 14/17] vt82c686: Clean up use of cannot_instantiate_with_device_add_yet
+Bugzilla: 1001216
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+A VT82C686B southbridge has multiple functions.  We model each
+function as a separate qdev.  One of them need some special wiring set
+up in mips_fulong2e_init() to work: the ISA bridge at 05.0.
+
+The IDE controller at 05.1 (via-ide) has always had
+cannot_instantiate_with_device_add_yet set, but there is no obvious
+reason why device_add could not work for them.  Drop it.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Peter Maydell <peter.maydell@linaro.org>
+(cherry picked from pending upstream submission)
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ hw/ide/via.c      | 1 -
+ hw/isa/vt82c686.c | 6 +++++-
+ 2 files changed, 5 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/ide/via.c      |    1 -
+ hw/isa/vt82c686.c |    6 +++++-
+ 2 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/hw/ide/via.c b/hw/ide/via.c
+index 6ba99c8..326722c 100644
+--- a/hw/ide/via.c
++++ b/hw/ide/via.c
+@@ -224,7 +224,6 @@ static void via_ide_class_init(ObjectClass *klass, void *data)
+     k->revision = 0x06;
+     k->class_id = PCI_CLASS_STORAGE_IDE;
+     set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo via_ide_info = {
+diff --git a/hw/isa/vt82c686.c b/hw/isa/vt82c686.c
+index 563e154..bb84414 100644
+--- a/hw/isa/vt82c686.c
++++ b/hw/isa/vt82c686.c
+@@ -468,8 +468,12 @@ static void via_class_init(ObjectClass *klass, void *data)
+     k->class_id = PCI_CLASS_BRIDGE_ISA;
+     k->revision = 0x40;
+     dc->desc = "ISA bridge";
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_via;
++    /*
++     * Reason: part of VIA VT82C686 southbridge, needs to be wired up,
++     * e.g. by mips_fulong2e_init()
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo via_info = {
+-- 
+1.7.1
+

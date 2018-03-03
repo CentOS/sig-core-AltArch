@@ -1,0 +1,147 @@
+From 374f2dab9cd7bd26bca73ef93cf75ed919d278f4 Mon Sep 17 00:00:00 2001
+Message-Id: <374f2dab9cd7bd26bca73ef93cf75ed919d278f4.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:09:11 +0100
+Subject: [PATCH 23/50] block: generalize BlockLimits handling to cover
+ bdrv_aio_discard too
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-26-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56062
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 25/52] block: generalize BlockLimits handling to cover bdrv_aio_discard too
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+bdrv_co_discard is only covering drivers which have a .bdrv_co_discard()
+implementation, but not those with .bdrv_aio_discard(). Not very nice,
+and easy to avoid.
+
+Suggested-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit d51e9fe505f7c7b97762100dd0e42cef43c90524)
+---
+ block.c | 80 +++++++++++++++++++++++++++++++++--------------------------------
+ 1 file changed, 41 insertions(+), 39 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ block.c | 80 +++++++++++++++++++++++++++++++++--------------------------------
+ 1 file changed, 41 insertions(+), 39 deletions(-)
+
+diff --git a/block.c b/block.c
+index 60484a6..8dfc207 100644
+--- a/block.c
++++ b/block.c
+@@ -4469,6 +4469,8 @@ static void coroutine_fn bdrv_discard_co_entry(void *opaque)
+ int coroutine_fn bdrv_co_discard(BlockDriverState *bs, int64_t sector_num,
+                                  int nb_sectors)
+ {
++    int max_discard;
++
+     if (!bs->drv) {
+         return -ENOMEDIUM;
+     } else if (bdrv_check_request(bs, sector_num, nb_sectors)) {
+@@ -4486,55 +4488,55 @@ int coroutine_fn bdrv_co_discard(BlockDriverState *bs, int64_t sector_num,
+         return 0;
+     }
+ 
+-    if (bs->drv->bdrv_co_discard) {
+-        int max_discard = bs->bl.max_discard ?
+-                          bs->bl.max_discard : MAX_DISCARD_DEFAULT;
++    if (!bs->drv->bdrv_co_discard && !bs->drv->bdrv_aio_discard) {
++        return 0;
++    }
+ 
+-        while (nb_sectors > 0) {
+-            int ret;
+-            int num = nb_sectors;
++    max_discard = bs->bl.max_discard ?  bs->bl.max_discard : MAX_DISCARD_DEFAULT;
++    while (nb_sectors > 0) {
++        int ret;
++        int num = nb_sectors;
+ 
+-            /* align request */
+-            if (bs->bl.discard_alignment &&
+-                num >= bs->bl.discard_alignment &&
+-                sector_num % bs->bl.discard_alignment) {
+-                if (num > bs->bl.discard_alignment) {
+-                    num = bs->bl.discard_alignment;
+-                }
+-                num -= sector_num % bs->bl.discard_alignment;
++        /* align request */
++        if (bs->bl.discard_alignment &&
++            num >= bs->bl.discard_alignment &&
++            sector_num % bs->bl.discard_alignment) {
++            if (num > bs->bl.discard_alignment) {
++                num = bs->bl.discard_alignment;
+             }
++            num -= sector_num % bs->bl.discard_alignment;
++        }
+ 
+-            /* limit request size */
+-            if (num > max_discard) {
+-                num = max_discard;
+-            }
++        /* limit request size */
++        if (num > max_discard) {
++            num = max_discard;
++        }
+ 
++        if (bs->drv->bdrv_co_discard) {
+             ret = bs->drv->bdrv_co_discard(bs, sector_num, num);
+-            if (ret) {
+-                return ret;
++        } else {
++            BlockDriverAIOCB *acb;
++            CoroutineIOCompletion co = {
++                .coroutine = qemu_coroutine_self(),
++            };
++
++            acb = bs->drv->bdrv_aio_discard(bs, sector_num, nb_sectors,
++                                            bdrv_co_io_em_complete, &co);
++            if (acb == NULL) {
++                return -EIO;
++            } else {
++                qemu_coroutine_yield();
++                ret = co.ret;
+             }
+-
+-            sector_num += num;
+-            nb_sectors -= num;
+         }
+-        return 0;
+-    } else if (bs->drv->bdrv_aio_discard) {
+-        BlockDriverAIOCB *acb;
+-        CoroutineIOCompletion co = {
+-            .coroutine = qemu_coroutine_self(),
+-        };
+-
+-        acb = bs->drv->bdrv_aio_discard(bs, sector_num, nb_sectors,
+-                                        bdrv_co_io_em_complete, &co);
+-        if (acb == NULL) {
+-            return -EIO;
+-        } else {
+-            qemu_coroutine_yield();
+-            return co.ret;
++        if (ret) {
++            return ret;
+         }
+-    } else {
+-        return 0;
++
++        sector_num += num;
++        nb_sectors -= num;
+     }
++    return 0;
+ }
+ 
+ int bdrv_discard(BlockDriverState *bs, int64_t sector_num, int nb_sectors)
+-- 
+1.7.11.7
+

@@ -1,0 +1,102 @@
+From 8497b21c6dabe117b27d76f3bdbd86d80b0dd1d7 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 18 May 2017 09:21:30 +0200
+Subject: [PATCH 17/18] serial: separate serial_xmit and serial_watch_cb
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <20170518092131.16571-18-famz@redhat.com>
+Patchwork-id: 75309
+O-Subject: [RHEL-7.4 qemu-kvm PATCH v3 17/18] serial: separate serial_xmit and serial_watch_cb
+Bugzilla: 1451470
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+serial_xmit starts transmission of whatever is in the transmitter
+register, THR or FIFO; serial_watch_cb is a wrapper around it and is
+only used as a qemu_chr_fe_add_watch callback.
+
+Tested-by: Bret Ketchum <bcketchum@gmail.com>
+Reviewed-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit b0585e7e07982daa578c3bfef7f6843c89f110a8)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	hw/char/serial.c
+
+Contextual conflict because the surrounding migration code around the
+touched functions is different.
+---
+ hw/char/serial.c | 18 +++++++++++-------
+ 1 file changed, 11 insertions(+), 7 deletions(-)
+
+diff --git a/hw/char/serial.c b/hw/char/serial.c
+index fdda802..69fefb2 100644
+--- a/hw/char/serial.c
++++ b/hw/char/serial.c
+@@ -104,6 +104,7 @@ do {} while (0)
+ #endif
+ 
+ static void serial_receive1(void *opaque, const uint8_t *buf, int size);
++static void serial_xmit(SerialState *s);
+ 
+ static inline void recv_fifo_put(SerialState *s, uint8_t chr)
+ {
+@@ -219,10 +220,16 @@ static void serial_update_msl(SerialState *s)
+         qemu_mod_timer(s->modem_status_poll, qemu_get_clock_ns(vm_clock) + get_ticks_per_sec() / 100);
+ }
+ 
+-static gboolean serial_xmit(GIOChannel *chan, GIOCondition cond, void *opaque)
++static gboolean serial_watch_cb(GIOChannel *chan, GIOCondition cond,
++                                void *opaque)
+ {
+     SerialState *s = opaque;
++    serial_xmit(s);
++    return FALSE;
++}
+ 
++static void serial_xmit(SerialState *s)
++{
+     do {
+         assert(!(s->lsr & UART_LSR_TEMT));
+         if (s->tsr_retry == 0) {
+@@ -250,9 +257,9 @@ static gboolean serial_xmit(GIOChannel *chan, GIOCondition cond, void *opaque)
+         } else if (qemu_chr_fe_write(s->chr, &s->tsr, 1) != 1) {
+             if (s->tsr_retry < MAX_XMIT_RETRY &&
+                 qemu_chr_fe_add_watch(s->chr, G_IO_OUT|G_IO_HUP,
+-                                      serial_xmit, s) > 0) {
++                                      serial_watch_cb, s) > 0) {
+                 s->tsr_retry++;
+-                return FALSE;
++                return;
+             }
+         }
+         s->tsr_retry = 0;
+@@ -263,11 +270,8 @@ static gboolean serial_xmit(GIOChannel *chan, GIOCondition cond, void *opaque)
+ 
+     s->last_xmit_ts = qemu_get_clock_ns(vm_clock);
+     s->lsr |= UART_LSR_TEMT;
+-
+-    return FALSE;
+ }
+ 
+-
+ static void serial_ioport_write(void *opaque, hwaddr addr, uint64_t val,
+                                 unsigned size)
+ {
+@@ -295,7 +299,7 @@ static void serial_ioport_write(void *opaque, hwaddr addr, uint64_t val,
+             s->lsr &= ~UART_LSR_TEMT;
+             serial_update_irq(s);
+             if (s->tsr_retry == 0) {
+-                serial_xmit(NULL, G_IO_OUT, s);
++                serial_xmit(s);
+             }
+         }
+         break;
+-- 
+1.8.3.1
+

@@ -1,0 +1,285 @@
+From 90d033044f22ff96e5fc7c409934f7318d03f103 Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Fri, 18 Oct 2013 08:14:39 +0200
+Subject: [PATCH 14/81] block: return get_block_status data and flags for formats
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1382084091-16636-15-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 54996
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 14/26] block: return get_block_status data and flags for formats
+Bugzilla: 989646
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 4bc74be997a72922170f4f272fd5e8074a3ecc27)
+---
+ block/cow.c      |  8 +++++++-
+ block/qcow.c     |  9 ++++++++-
+ block/qcow2.c    | 16 ++++++++++++++--
+ block/qed.c      | 35 ++++++++++++++++++++++++++++-------
+ block/sheepdog.c |  2 +-
+ block/vdi.c      | 13 ++++++++++++-
+ block/vmdk.c     | 19 ++++++++++++++++++-
+ block/vvfat.c    | 11 ++++++-----
+ 8 files changed, 94 insertions(+), 19 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/cow.c      |    8 +++++++-
+ block/qcow.c     |    9 ++++++++-
+ block/qcow2.c    |   16 ++++++++++++++--
+ block/qed.c      |   35 ++++++++++++++++++++++++++++-------
+ block/sheepdog.c |    2 +-
+ block/vdi.c      |   13 ++++++++++++-
+ block/vmdk.c     |   19 ++++++++++++++++++-
+ block/vvfat.c    |   11 ++++++-----
+ 8 files changed, 94 insertions(+), 19 deletions(-)
+
+diff --git a/block/cow.c b/block/cow.c
+index 5e71c76..6958808 100644
+--- a/block/cow.c
++++ b/block/cow.c
+@@ -191,7 +191,13 @@ static int coroutine_fn cow_co_is_allocated(BlockDriverState *bs,
+ static int64_t coroutine_fn cow_co_get_block_status(BlockDriverState *bs,
+         int64_t sector_num, int nb_sectors, int *num_same)
+ {
+-    return cow_co_is_allocated(bs, sector_num, nb_sectors, num_same);
++    BDRVCowState *s = bs->opaque;
++    int ret = cow_co_is_allocated(bs, sector_num, nb_sectors, num_same);
++    int64_t offset = s->cow_sectors_offset + (sector_num << BDRV_SECTOR_BITS);
++    if (ret < 0) {
++        return ret;
++    }
++    return (ret ? BDRV_BLOCK_DATA : 0) | offset | BDRV_BLOCK_OFFSET_VALID;
+ }
+ 
+ static int cow_update_bitmap(BlockDriverState *bs, int64_t sector_num,
+diff --git a/block/qcow.c b/block/qcow.c
+index 05af25c..4ab552e 100644
+--- a/block/qcow.c
++++ b/block/qcow.c
+@@ -410,7 +410,14 @@ static int64_t coroutine_fn qcow_co_get_block_status(BlockDriverState *bs,
+     if (n > nb_sectors)
+         n = nb_sectors;
+     *pnum = n;
+-    return (cluster_offset != 0);
++    if (!cluster_offset) {
++        return 0;
++    }
++    if ((cluster_offset & QCOW_OFLAG_COMPRESSED) || s->crypt_method) {
++        return BDRV_BLOCK_DATA;
++    }
++    cluster_offset |= (index_in_cluster << BDRV_SECTOR_BITS);
++    return BDRV_BLOCK_DATA | BDRV_BLOCK_OFFSET_VALID | cluster_offset;
+ }
+ 
+ static int decompress_buffer(uint8_t *out_buf, int out_buf_size,
+diff --git a/block/qcow2.c b/block/qcow2.c
+index 8d3bf5d..8e894b9 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -645,7 +645,8 @@ static int64_t coroutine_fn qcow2_co_get_block_status(BlockDriverState *bs,
+ {
+     BDRVQcowState *s = bs->opaque;
+     uint64_t cluster_offset;
+-    int ret;
++    int index_in_cluster, ret;
++    int64_t status = 0;
+ 
+     *pnum = nb_sectors;
+     qemu_co_mutex_lock(&s->lock);
+@@ -655,7 +656,18 @@ static int64_t coroutine_fn qcow2_co_get_block_status(BlockDriverState *bs,
+         return ret;
+     }
+ 
+-    return (cluster_offset != 0) || (ret == QCOW2_CLUSTER_ZERO);
++    if (cluster_offset != 0 && ret != QCOW2_CLUSTER_COMPRESSED &&
++        !s->crypt_method) {
++        index_in_cluster = sector_num & (s->cluster_sectors - 1);
++        cluster_offset |= (index_in_cluster << BDRV_SECTOR_BITS);
++        status |= BDRV_BLOCK_OFFSET_VALID | cluster_offset;
++    }
++    if (ret == QCOW2_CLUSTER_ZERO) {
++        status |= BDRV_BLOCK_ZERO;
++    } else if (ret != QCOW2_CLUSTER_UNALLOCATED) {
++        status |= BDRV_BLOCK_DATA;
++    }
++    return status;
+ }
+ 
+ /* handle reading after the end of the backing file */
+diff --git a/block/qed.c b/block/qed.c
+index a573039..815ee1c 100644
+--- a/block/qed.c
++++ b/block/qed.c
+@@ -652,16 +652,36 @@ static int bdrv_qed_create(const char *filename, QEMUOptionParameter *options)
+ }
+ 
+ typedef struct {
++    BlockDriverState *bs;
+     Coroutine *co;
+-    int is_allocated;
++    uint64_t pos;
++    int64_t status;
+     int *pnum;
+ } QEDIsAllocatedCB;
+ 
+ static void qed_is_allocated_cb(void *opaque, int ret, uint64_t offset, size_t len)
+ {
+     QEDIsAllocatedCB *cb = opaque;
++    BDRVQEDState *s = cb->bs->opaque;
+     *cb->pnum = len / BDRV_SECTOR_SIZE;
+-    cb->is_allocated = (ret == QED_CLUSTER_FOUND || ret == QED_CLUSTER_ZERO);
++    switch (ret) {
++    case QED_CLUSTER_FOUND:
++        offset |= qed_offset_into_cluster(s, cb->pos);
++        cb->status = BDRV_BLOCK_DATA | BDRV_BLOCK_OFFSET_VALID | offset;
++        break;
++    case QED_CLUSTER_ZERO:
++        cb->status = BDRV_BLOCK_ZERO;
++        break;
++    case QED_CLUSTER_L2:
++    case QED_CLUSTER_L1:
++        cb->status = 0;
++        break;
++    default:
++        assert(ret < 0);
++        cb->status = ret;
++        break;
++    }
++
+     if (cb->co) {
+         qemu_coroutine_enter(cb->co, NULL);
+     }
+@@ -672,25 +692,26 @@ static int64_t coroutine_fn bdrv_qed_co_get_block_status(BlockDriverState *bs,
+                                                  int nb_sectors, int *pnum)
+ {
+     BDRVQEDState *s = bs->opaque;
+-    uint64_t pos = (uint64_t)sector_num * BDRV_SECTOR_SIZE;
+     size_t len = (size_t)nb_sectors * BDRV_SECTOR_SIZE;
+     QEDIsAllocatedCB cb = {
+-        .is_allocated = -1,
++        .bs = bs,
++        .pos = (uint64_t)sector_num * BDRV_SECTOR_SIZE,
++        .status = BDRV_BLOCK_OFFSET_MASK,
+         .pnum = pnum,
+     };
+     QEDRequest request = { .l2_table = NULL };
+ 
+-    qed_find_cluster(s, &request, pos, len, qed_is_allocated_cb, &cb);
++    qed_find_cluster(s, &request, cb.pos, len, qed_is_allocated_cb, &cb);
+ 
+     /* Now sleep if the callback wasn't invoked immediately */
+-    while (cb.is_allocated == -1) {
++    while (cb.status == BDRV_BLOCK_OFFSET_MASK) {
+         cb.co = qemu_coroutine_self();
+         qemu_coroutine_yield();
+     }
+ 
+     qed_unref_l2_cache_entry(request.l2_table);
+ 
+-    return cb.is_allocated;
++    return cb.status;
+ }
+ 
+ static int bdrv_qed_make_empty(BlockDriverState *bs)
+diff --git a/block/sheepdog.c b/block/sheepdog.c
+index e5398bb..f7cc76e 100644
+--- a/block/sheepdog.c
++++ b/block/sheepdog.c
+@@ -2299,7 +2299,7 @@ sd_co_get_block_status(BlockDriverState *bs, int64_t sector_num, int nb_sectors,
+                   end = DIV_ROUND_UP((sector_num + nb_sectors) *
+                                      BDRV_SECTOR_SIZE, SD_DATA_OBJ_SIZE);
+     unsigned long idx;
+-    int ret = 1;
++    int64_t ret = BDRV_BLOCK_DATA;
+ 
+     for (idx = start; idx < end; idx++) {
+         if (inode->data_vdi_id[idx] == 0) {
+diff --git a/block/vdi.c b/block/vdi.c
+index 1252ad4..bc97c39 100644
+--- a/block/vdi.c
++++ b/block/vdi.c
+@@ -479,12 +479,23 @@ static int64_t coroutine_fn vdi_co_get_block_status(BlockDriverState *bs,
+     size_t sector_in_block = sector_num % s->block_sectors;
+     int n_sectors = s->block_sectors - sector_in_block;
+     uint32_t bmap_entry = le32_to_cpu(s->bmap[bmap_index]);
++    uint64_t offset;
++    int result;
++
+     logout("%p, %" PRId64 ", %d, %p\n", bs, sector_num, nb_sectors, pnum);
+     if (n_sectors > nb_sectors) {
+         n_sectors = nb_sectors;
+     }
+     *pnum = n_sectors;
+-    return VDI_IS_ALLOCATED(bmap_entry);
++    result = VDI_IS_ALLOCATED(bmap_entry);
++    if (!result) {
++        return 0;
++    }
++
++    offset = s->header.offset_data +
++                              (uint64_t)bmap_entry * s->block_size +
++                              sector_in_block * SECTOR_SIZE;
++    return BDRV_BLOCK_DATA | BDRV_BLOCK_OFFSET_VALID | offset;
+ }
+ 
+ static int vdi_co_read(BlockDriverState *bs,
+diff --git a/block/vmdk.c b/block/vmdk.c
+index a30c3b9..7456f9b 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -1059,7 +1059,24 @@ static int64_t coroutine_fn vmdk_co_get_block_status(BlockDriverState *bs,
+                             sector_num * 512, 0, &offset);
+     qemu_co_mutex_unlock(&s->lock);
+ 
+-    ret = (ret == VMDK_OK || ret == VMDK_ZEROED);
++    switch (ret) {
++    case VMDK_ERROR:
++        ret = -EIO;
++        break;
++    case VMDK_UNALLOC:
++        ret = 0;
++        break;
++    case VMDK_ZEROED:
++        ret = BDRV_BLOCK_ZERO;
++        break;
++    case VMDK_OK:
++        ret = BDRV_BLOCK_DATA;
++        if (extent->file == bs->file) {
++            ret |= BDRV_BLOCK_OFFSET_VALID | offset;
++        }
++
++        break;
++    }
+ 
+     index_in_cluster = sector_num % extent->cluster_sectors;
+     n = extent->cluster_sectors - index_in_cluster;
+diff --git a/block/vvfat.c b/block/vvfat.c
+index 510a559..415fba3 100644
+--- a/block/vvfat.c
++++ b/block/vvfat.c
+@@ -2879,11 +2879,12 @@ static int64_t coroutine_fn vvfat_co_get_block_status(BlockDriverState *bs,
+ {
+     BDRVVVFATState* s = bs->opaque;
+     *n = s->sector_count - sector_num;
+-    if (*n > nb_sectors)
+-	*n = nb_sectors;
+-    else if (*n < 0)
+-	return 0;
+-    return 1;
++    if (*n > nb_sectors) {
++        *n = nb_sectors;
++    } else if (*n < 0) {
++        return 0;
++    }
++    return BDRV_BLOCK_DATA;
+ }
+ 
+ static int write_target_commit(BlockDriverState *bs, int64_t sector_num,
+-- 
+1.7.1
+

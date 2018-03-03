@@ -1,0 +1,52 @@
+From 0ebce8809c6cf12e4df5fe9fdf441b280176412e Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Tue, 18 Nov 2014 11:42:20 +0100
+Subject: [PATCH 1/5] xhci: add sanity checks to xhci_lookup_uport
+
+Message-id: <1416310940-10391-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 62418
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v2 1/1] xhci: add sanity checks to xhci_lookup_uport
+Bugzilla: 1074219
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+Also catch xhci_lookup_uport failures in post_load.
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit f2ad97ff81da51c064b9e87720ff48a0874f45d4)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/hcd-xhci.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/hw/usb/hcd-xhci.c b/hw/usb/hcd-xhci.c
+index 32568cb..ce81632 100644
+--- a/hw/usb/hcd-xhci.c
++++ b/hw/usb/hcd-xhci.c
+@@ -2254,6 +2254,9 @@ static USBPort *xhci_lookup_uport(XHCIState *xhci, uint32_t *slot_ctx)
+     int i, pos, port;
+ 
+     port = (slot_ctx[1]>>16) & 0xFF;
++    if (port < 1 || port > xhci->numports) {
++        return NULL;
++    }
+     port = xhci->ports[port-1].uport->index+1;
+     pos = snprintf(path, sizeof(path), "%d", port);
+     for (i = 0; i < 5; i++) {
+@@ -3637,6 +3640,12 @@ static int usb_xhci_post_load(void *opaque, int version_id)
+             xhci_mask64(ldq_le_pci_dma(pci_dev, dcbaap + 8 * slotid));
+         xhci_dma_read_u32s(xhci, slot->ctx, slot_ctx, sizeof(slot_ctx));
+         slot->uport = xhci_lookup_uport(xhci, slot_ctx);
++        if (!slot->uport) {
++            /* should not happen, but may trigger on guest bugs */
++            slot->enabled = 0;
++            slot->addressed = 0;
++            continue;
++        }
+         assert(slot->uport && slot->uport->dev);
+ 
+         for (epid = 1; epid <= 31; epid++) {
+-- 
+1.8.3.1
+

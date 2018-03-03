@@ -1,0 +1,130 @@
+From 05d14f4ff759eed41146cc17688db92656388552 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Wed, 6 Nov 2013 16:53:31 +0100
+Subject: [PATCH 74/87] qemu-iotests: Add basic ability to use binary sample images
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383756824-6921-9-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55563
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 08/21] qemu-iotests: Add basic ability to use binary sample images
+Bugzilla: 980771
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+From: Jeff Cody <jcody@redhat.com>
+
+BZ: 980771
+
+For image formats that are not "QEMU native", but supported for
+compatibility, it is useful to verify that an image created with
+the 'gold standard' native tool can be read / written to successfully
+by QEMU.
+
+In addition to testing non-native images, this could also be useful to
+test against image files created by older versions of QEMU.
+
+This provides a directory to store small sample images, for use by
+scripts in tests/qemu-iotests.
+
+Image files should be compressed with bzip2.
+
+To use a sample image from a bash script, the _use_sample_img function
+will copy and decompress the image into $TEST_DIR, and set $TEST_IMG to
+be the decompressed sample image copy.  To cleanup, call
+_cleanup_test_img as normal.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 85edbd375b9ab451c6769011cb6b3e0287dc71e4)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ tests/qemu-iotests/common.config        | 11 +++++++++++
+ tests/qemu-iotests/common.rc            | 16 ++++++++++++++++
+ tests/qemu-iotests/sample_images/README |  8 ++++++++
+ 3 files changed, 35 insertions(+)
+ create mode 100644 tests/qemu-iotests/sample_images/README
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/common.config        |   11 +++++++++++
+ tests/qemu-iotests/common.rc            |   16 ++++++++++++++++
+ tests/qemu-iotests/sample_images/README |    8 ++++++++
+ 3 files changed, 35 insertions(+), 0 deletions(-)
+ create mode 100644 tests/qemu-iotests/sample_images/README
+
+diff --git a/tests/qemu-iotests/common.config b/tests/qemu-iotests/common.config
+index d794e62..d90a8bc 100644
+--- a/tests/qemu-iotests/common.config
++++ b/tests/qemu-iotests/common.config
+@@ -125,6 +125,17 @@ fi
+ 
+ export TEST_DIR
+ 
++if [ -z "$SAMPLE_IMG_DIR" ]; then
++        SAMPLE_IMG_DIR=`pwd`/sample_images
++fi
++
++if [ ! -d "$SAMPLE_IMG_DIR" ]; then
++    echo "common.config: Error: \$SAMPLE_IMG_DIR ($SAMPLE_IMG_DIR) is not a directory"
++    exit 1
++fi
++
++export SAMPLE_IMG_DIR
++
+ _readlink()
+ {
+     if [ $# -ne 1 ]; then
+diff --git a/tests/qemu-iotests/common.rc b/tests/qemu-iotests/common.rc
+index 28b39e4..6730955 100644
+--- a/tests/qemu-iotests/common.rc
++++ b/tests/qemu-iotests/common.rc
+@@ -91,6 +91,18 @@ _set_default_imgopts()
+     fi
+ }
+ 
++_use_sample_img()
++{
++    SAMPLE_IMG_FILE="${1%\.bz2}"
++    TEST_IMG="$TEST_DIR/$SAMPLE_IMG_FILE"
++    bzcat "$SAMPLE_IMG_DIR/$1" > "$TEST_IMG"
++    if [ $? -ne 0 ]
++    then
++        echo "_use_sample_img error, cannot extract '$SAMPLE_IMG_DIR/$1'"
++        exit 1
++    fi
++}
++
+ _make_test_img()
+ {
+     # extra qemu-img options can be added by tests
+@@ -158,6 +170,10 @@ _cleanup_test_img()
+             rm -f $TEST_DIR/t.$IMGFMT
+             rm -f $TEST_DIR/t.$IMGFMT.orig
+             rm -f $TEST_DIR/t.$IMGFMT.base
++            if [ -n "$SAMPLE_IMG_FILE" ]
++            then
++                rm -f "$TEST_DIR/$SAMPLE_IMG_FILE"
++            fi
+             ;;
+ 
+         rbd)
+diff --git a/tests/qemu-iotests/sample_images/README b/tests/qemu-iotests/sample_images/README
+new file mode 100644
+index 0000000..507af5f
+--- /dev/null
++++ b/tests/qemu-iotests/sample_images/README
+@@ -0,0 +1,8 @@
++This is for small sample images to be used with qemu-iotests, intended for
++non-native formats that QEMU supports for compatibility.  The idea is to use
++the native tool to create the sample image.
++
++For instance, a VHDX image in this directory would be an image created not by
++QEMU itself, but rather created by Hyper-V.
++
++Sample images added here must be compressed with bzip2.
+-- 
+1.7.1
+

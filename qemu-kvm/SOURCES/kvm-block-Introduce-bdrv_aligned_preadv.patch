@@ -1,0 +1,131 @@
+From d5b3c858d7d2d96cf89495c95c2f07eb246b6730 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 2 Dec 2013 15:07:48 +0100
+Subject: [PATCH 11/37] block: Introduce bdrv_aligned_preadv()
+
+Message-id: <1392117622-28812-12-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57176
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 11/37] block: Introduce bdrv_aligned_preadv()
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+This separates the part of bdrv_co_do_readv() that needs to happen
+before the request is modified to match the backend alignment, and a
+part that needs to be executed afterwards and passes the request to the
+BlockDriver.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Wenchao Xia <xiawenc@linux.vnet.ibm.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit d0c7f642f5eb2cb21d0c3acf766cb375eaaf4666)
+
+Conflicts:
+	block.c
+
+Conflicts because RHEL 7 still has the old I/O throttling code.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c | 59 ++++++++++++++++++++++++++++++++++++++++++-----------------
+ 1 file changed, 42 insertions(+), 17 deletions(-)
+---
+ block.c |   59 ++++++++++++++++++++++++++++++++++++++++++-----------------
+ 1 files changed, 42 insertions(+), 17 deletions(-)
+
+diff --git a/block.c b/block.c
+index 40a4a34..1787ab0 100644
+--- a/block.c
++++ b/block.c
+@@ -2723,31 +2723,24 @@ err:
+ }
+ 
+ /*
+- * Handle a read request in coroutine context
++ * Forwards an already correctly aligned request to the BlockDriver. This
++ * handles copy on read and zeroing after EOF; any other features must be
++ * implemented by the caller.
+  */
+-static int coroutine_fn bdrv_co_do_readv(BlockDriverState *bs,
+-    int64_t sector_num, int nb_sectors, QEMUIOVector *qiov,
+-    BdrvRequestFlags flags)
++static int coroutine_fn bdrv_aligned_preadv(BlockDriverState *bs,
++    int64_t offset, unsigned int bytes, QEMUIOVector *qiov, int flags)
+ {
+     BlockDriver *drv = bs->drv;
+     BdrvTrackedRequest req;
+     int ret;
+ 
+-    if (!drv) {
+-        return -ENOMEDIUM;
+-    }
+-    if (bdrv_check_request(bs, sector_num, nb_sectors)) {
+-        return -EIO;
+-    }
++    int64_t sector_num = offset >> BDRV_SECTOR_BITS;
++    unsigned int nb_sectors = bytes >> BDRV_SECTOR_BITS;
+ 
+-    /* throttling disk read I/O */
+-    if (bs->io_limits_enabled) {
+-        bdrv_io_limits_intercept(bs, false, nb_sectors);
+-    }
++    assert((offset & (BDRV_SECTOR_SIZE - 1)) == 0);
++    assert((bytes & (BDRV_SECTOR_SIZE - 1)) == 0);
+ 
+-    if (bs->copy_on_read) {
+-        flags |= BDRV_REQ_COPY_ON_READ;
+-    }
++    /* Handle Copy on Read and associated serialisation */
+     if (flags & BDRV_REQ_COPY_ON_READ) {
+         bs->copy_on_read_in_flight++;
+     }
+@@ -2772,6 +2765,7 @@ static int coroutine_fn bdrv_co_do_readv(BlockDriverState *bs,
+         }
+     }
+ 
++    /* Forward the request to the BlockDriver */
+     if (!(bs->zero_beyond_eof && bs->growable)) {
+         ret = drv->bdrv_co_readv(bs, sector_num, nb_sectors, qiov);
+     } else {
+@@ -2812,6 +2806,37 @@ out:
+     return ret;
+ }
+ 
++/*
++ * Handle a read request in coroutine context
++ */
++static int coroutine_fn bdrv_co_do_readv(BlockDriverState *bs,
++    int64_t sector_num, int nb_sectors, QEMUIOVector *qiov,
++    BdrvRequestFlags flags)
++{
++    BlockDriver *drv = bs->drv;
++    int ret;
++
++    if (!drv) {
++        return -ENOMEDIUM;
++    }
++    if (bdrv_check_request(bs, sector_num, nb_sectors)) {
++        return -EIO;
++    }
++
++    if (bs->copy_on_read) {
++        flags |= BDRV_REQ_COPY_ON_READ;
++    }
++
++    /* throttling disk I/O */
++    if (bs->io_limits_enabled) {
++        bdrv_io_limits_intercept(bs, false, nb_sectors);
++    }
++
++    ret = bdrv_aligned_preadv(bs, sector_num << BDRV_SECTOR_BITS,
++                             nb_sectors << BDRV_SECTOR_BITS, qiov, flags);
++    return ret;
++}
++
+ int coroutine_fn bdrv_co_readv(BlockDriverState *bs, int64_t sector_num,
+     int nb_sectors, QEMUIOVector *qiov)
+ {
+-- 
+1.7.1
+

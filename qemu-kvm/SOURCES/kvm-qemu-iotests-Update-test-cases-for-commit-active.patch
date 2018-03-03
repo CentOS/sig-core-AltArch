@@ -1,0 +1,162 @@
+From 823ad14cd80063cf09ca5efc2c1d7c584f44a1be Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Fri, 17 Jan 2014 03:08:02 +0100
+Subject: [PATCH 19/34] qemu-iotests: Update test cases for commit active
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1389928083-8921-18-git-send-email-famz@redhat.com>
+Patchwork-id: 56779
+O-Subject: [RHEL-7 qemu-kvm PATCH 17/18] qemu-iotests: Update test cases for commit active
+Bugzilla: 1041301
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Factor out commit test common logic into super class, and update test
+of committing the active image.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 4de43470f2f35762b4b3e6a59b4aed55e239024a)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+
+Conflicts:
+	tests/qemu-iotests/040
+
+Conflict because "b59b3d5 qemu-iotests: Make test case 030, 040 and 055
+deterministic" and "2499a09 qemu-iotests: make create_image() common"
+are not backported yet.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ tests/qemu-iotests/040 | 74 ++++++++++++++++++++++----------------------------
+ 1 file changed, 32 insertions(+), 42 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/040 |   74 ++++++++++++++++++++---------------------------
+ 1 files changed, 32 insertions(+), 42 deletions(-)
+
+diff --git a/tests/qemu-iotests/040 b/tests/qemu-iotests/040
+index aad535a..f210fb7 100755
+--- a/tests/qemu-iotests/040
++++ b/tests/qemu-iotests/040
+@@ -63,6 +63,28 @@ class ImageCommitTestCase(iotests.QMPTestCase):
+             i = i + 512
+         file.close()
+ 
++    def run_commit_test(self, top, base):
++        self.assert_no_active_commit()
++        result = self.vm.qmp('block-commit', device='drive0', top=top, base=base)
++        self.assert_qmp(result, 'return', {})
++
++        completed = False
++        while not completed:
++            for event in self.vm.get_qmp_events(wait=True):
++                if event['event'] == 'BLOCK_JOB_COMPLETED':
++                    self.assert_qmp(event, 'data/type', 'commit')
++                    self.assert_qmp(event, 'data/device', 'drive0')
++                    self.assert_qmp(event, 'data/offset', self.image_len)
++                    self.assert_qmp(event, 'data/len', self.image_len)
++                    completed = True
++                elif event['event'] == 'BLOCK_JOB_READY':
++                    self.assert_qmp(event, 'data/type', 'commit')
++                    self.assert_qmp(event, 'data/device', 'drive0')
++                    self.assert_qmp(event, 'data/len', self.image_len)
++                    self.vm.qmp('block-job-complete', device='drive0')
++
++        self.assert_no_active_commit()
++        self.vm.shutdown()
+ 
+ class TestSingleDrive(ImageCommitTestCase):
+     image_len = 1 * 1024 * 1024
+@@ -84,23 +106,7 @@ class TestSingleDrive(ImageCommitTestCase):
+         os.remove(backing_img)
+ 
+     def test_commit(self):
+-        self.assert_no_active_commit()
+-        result = self.vm.qmp('block-commit', device='drive0', top='%s' % mid_img)
+-        self.assert_qmp(result, 'return', {})
+-
+-        completed = False
+-        while not completed:
+-            for event in self.vm.get_qmp_events(wait=True):
+-                if event['event'] == 'BLOCK_JOB_COMPLETED':
+-                    self.assert_qmp(event, 'data/type', 'commit')
+-                    self.assert_qmp(event, 'data/device', 'drive0')
+-                    self.assert_qmp(event, 'data/offset', self.image_len)
+-                    self.assert_qmp(event, 'data/len', self.image_len)
+-                    completed = True
+-
+-        self.assert_no_active_commit()
+-        self.vm.shutdown()
+-
++        self.run_commit_test(mid_img, backing_img)
+         self.assertEqual(-1, qemu_io('-c', 'read -P 0xab 0 524288', backing_img).find("verification failed"))
+         self.assertEqual(-1, qemu_io('-c', 'read -P 0xef 524288 524288', backing_img).find("verification failed"))
+ 
+@@ -127,10 +133,9 @@ class TestSingleDrive(ImageCommitTestCase):
+         self.assert_qmp(result, 'error/desc', 'Base \'badfile\' not found')
+ 
+     def test_top_is_active(self):
+-        self.assert_no_active_commit()
+-        result = self.vm.qmp('block-commit', device='drive0', top='%s' % test_img, base='%s' % backing_img)
+-        self.assert_qmp(result, 'error/class', 'GenericError')
+-        self.assert_qmp(result, 'error/desc', 'Top image as the active layer is currently unsupported')
++        self.run_commit_test(test_img, backing_img)
++        self.assertEqual(-1, qemu_io('-c', 'read -P 0xab 0 524288', backing_img).find("verification failed"))
++        self.assertEqual(-1, qemu_io('-c', 'read -P 0xef 524288 524288', backing_img).find("verification failed"))
+ 
+     def test_top_and_base_reversed(self):
+         self.assert_no_active_commit()
+@@ -191,23 +196,7 @@ class TestRelativePaths(ImageCommitTestCase):
+                 raise
+ 
+     def test_commit(self):
+-        self.assert_no_active_commit()
+-        result = self.vm.qmp('block-commit', device='drive0', top='%s' % self.mid_img)
+-        self.assert_qmp(result, 'return', {})
+-
+-        completed = False
+-        while not completed:
+-            for event in self.vm.get_qmp_events(wait=True):
+-                if event['event'] == 'BLOCK_JOB_COMPLETED':
+-                    self.assert_qmp(event, 'data/type', 'commit')
+-                    self.assert_qmp(event, 'data/device', 'drive0')
+-                    self.assert_qmp(event, 'data/offset', self.image_len)
+-                    self.assert_qmp(event, 'data/len', self.image_len)
+-                    completed = True
+-
+-        self.assert_no_active_commit()
+-        self.vm.shutdown()
+-
++        self.run_commit_test(self.mid_img, self.backing_img)
+         self.assertEqual(-1, qemu_io('-c', 'read -P 0xab 0 524288', self.backing_img_abs).find("verification failed"))
+         self.assertEqual(-1, qemu_io('-c', 'read -P 0xef 524288 524288', self.backing_img_abs).find("verification failed"))
+ 
+@@ -234,10 +223,9 @@ class TestRelativePaths(ImageCommitTestCase):
+         self.assert_qmp(result, 'error/desc', 'Base \'badfile\' not found')
+ 
+     def test_top_is_active(self):
+-        self.assert_no_active_commit()
+-        result = self.vm.qmp('block-commit', device='drive0', top='%s' % self.test_img, base='%s' % self.backing_img)
+-        self.assert_qmp(result, 'error/class', 'GenericError')
+-        self.assert_qmp(result, 'error/desc', 'Top image as the active layer is currently unsupported')
++        self.run_commit_test(self.test_img, self.backing_img)
++        self.assertEqual(-1, qemu_io('-c', 'read -P 0xab 0 524288', self.backing_img_abs).find("verification failed"))
++        self.assertEqual(-1, qemu_io('-c', 'read -P 0xef 524288 524288', self.backing_img_abs).find("verification failed"))
+ 
+     def test_top_and_base_reversed(self):
+         self.assert_no_active_commit()
+@@ -253,6 +241,8 @@ class TestSetSpeed(ImageCommitTestCase):
+         qemu_img('create', backing_img, str(TestSetSpeed.image_len))
+         qemu_img('create', '-f', iotests.imgfmt, '-o', 'backing_file=%s' % backing_img, mid_img)
+         qemu_img('create', '-f', iotests.imgfmt, '-o', 'backing_file=%s' % mid_img, test_img)
++        qemu_io('-c', 'write -P 0x1 0 512', test_img)
++        qemu_io('-c', 'write -P 0xef 524288 524288', mid_img)
+         self.vm = iotests.VM().add_drive(test_img)
+         self.vm.launch()
+ 
+-- 
+1.7.1
+

@@ -1,0 +1,174 @@
+From 22db646a6d358e08c4c11f12e3dcf96f25525bf8 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 25 May 2015 04:45:56 +0200
+Subject: [PATCH 4/6] block: Fix NULL deference for unaligned write if qiov is
+ NULL
+
+Message-id: <1432529157-20381-3-git-send-email-famz@redhat.com>
+Patchwork-id: 65120
+O-Subject: [RHEL-7.2 qemu-kvm PATCH v2 2/3] block: Fix NULL deference for unaligned write if qiov is NULL
+Bugzilla: 1200295
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+For zero write, callers pass in NULL qiov (qemu-io "write -z" or
+scsi-disk "write same").
+
+Commit fc3959e466 fixed bdrv_co_write_zeroes which is the common case
+for this bug, but it still exists in bdrv_aio_write_zeroes. A simpler
+fix would be in bdrv_co_do_pwritev which is the NULL dereference point
+and covers both cases.
+
+So don't access it in bdrv_co_do_pwritev in this case, use three aligned
+writes.
+
+[Initialize ret to 0 in bdrv_co_do_zero_pwritev() to avoid uninitialized
+variable warning with gcc 4.9.2.
+--Stefan]
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Message-id: 1431522721-3266-3-git-send-email-famz@redhat.com
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 9eeb6dd1b27bd57eb4e3869290e87feac8e8b226)
+
+We don't have block/io.c in downstream, applied the change to
+block.c
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c | 97 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 95 insertions(+), 2 deletions(-)
+
+diff --git a/block.c b/block.c
+index 89ab829..45543d5 100644
+--- a/block.c
++++ b/block.c
+@@ -3069,6 +3069,94 @@ static int coroutine_fn bdrv_aligned_pwritev(BlockDriverState *bs,
+     return ret;
+ }
+ 
++static int coroutine_fn bdrv_co_do_zero_pwritev(BlockDriverState *bs,
++                                                int64_t offset,
++                                                unsigned int bytes,
++                                                BdrvRequestFlags flags,
++                                                BdrvTrackedRequest *req)
++{
++    uint8_t *buf = NULL;
++    QEMUIOVector local_qiov;
++    struct iovec iov;
++    uint64_t align = MAX(BDRV_SECTOR_SIZE, bs->request_alignment);
++    unsigned int head_padding_bytes, tail_padding_bytes;
++    int ret = 0;
++
++    head_padding_bytes = offset & (align - 1);
++    tail_padding_bytes = align - ((offset + bytes) & (align - 1));
++
++
++    assert(flags & BDRV_REQ_ZERO_WRITE);
++    if (head_padding_bytes || tail_padding_bytes) {
++        buf = qemu_blockalign(bs, align);
++        iov = (struct iovec) {
++            .iov_base   = buf,
++            .iov_len    = align,
++        };
++        qemu_iovec_init_external(&local_qiov, &iov, 1);
++    }
++    if (head_padding_bytes) {
++        uint64_t zero_bytes = MIN(bytes, align - head_padding_bytes);
++
++        /* RMW the unaligned part before head. */
++        mark_request_serialising(req, align);
++        wait_serialising_requests(req);
++        BLKDBG_EVENT(bs, BLKDBG_PWRITEV_RMW_HEAD);
++        ret = bdrv_aligned_preadv(bs, req, offset & ~(align - 1), align,
++                                  align, &local_qiov, 0);
++        if (ret < 0) {
++            goto fail;
++        }
++        BLKDBG_EVENT(bs, BLKDBG_PWRITEV_RMW_AFTER_HEAD);
++
++        memset(buf + head_padding_bytes, 0, zero_bytes);
++        ret = bdrv_aligned_pwritev(bs, req, offset & ~(align - 1), align,
++                                   &local_qiov,
++                                   flags & ~BDRV_REQ_ZERO_WRITE);
++        if (ret < 0) {
++            goto fail;
++        }
++        offset += zero_bytes;
++        bytes -= zero_bytes;
++    }
++
++    assert(!bytes || (offset & (align - 1)) == 0);
++    if (bytes >= align) {
++        /* Write the aligned part in the middle. */
++        uint64_t aligned_bytes = bytes & ~(align - 1);
++        ret = bdrv_aligned_pwritev(bs, req, offset, aligned_bytes,
++                                   NULL, flags);
++        if (ret < 0) {
++            goto fail;
++        }
++        bytes -= aligned_bytes;
++        offset += aligned_bytes;
++    }
++
++    assert(!bytes || (offset & (align - 1)) == 0);
++    if (bytes) {
++        assert(align == tail_padding_bytes + bytes);
++        /* RMW the unaligned part after tail. */
++        mark_request_serialising(req, align);
++        wait_serialising_requests(req);
++        BLKDBG_EVENT(bs, BLKDBG_PWRITEV_RMW_TAIL);
++        ret = bdrv_aligned_preadv(bs, req, offset, align,
++                                  align, &local_qiov, 0);
++        if (ret < 0) {
++            goto fail;
++        }
++        BLKDBG_EVENT(bs, BLKDBG_PWRITEV_RMW_AFTER_TAIL);
++
++        memset(buf, 0, bytes);
++        ret = bdrv_aligned_pwritev(bs, req, offset, align,
++                                   &local_qiov, flags & ~BDRV_REQ_ZERO_WRITE);
++    }
++fail:
++    qemu_vfree(buf);
++    return ret;
++
++}
++
+ /*
+  * Handle a write request in coroutine context
+  */
+@@ -3108,6 +3196,11 @@ static int coroutine_fn bdrv_co_do_pwritev(BlockDriverState *bs,
+      */
+     tracked_request_begin(&req, bs, offset, bytes, true);
+ 
++    if (!qiov) {
++        ret = bdrv_co_do_zero_pwritev(bs, offset, bytes, flags, &req);
++        goto out;
++    }
++
+     if (offset & (align - 1)) {
+         QEMUIOVector head_qiov;
+         struct iovec head_iov;
+@@ -3181,14 +3274,14 @@ static int coroutine_fn bdrv_co_do_pwritev(BlockDriverState *bs,
+                                flags);
+ 
+ fail:
+-    tracked_request_end(&req);
+ 
+     if (use_local_qiov) {
+         qemu_iovec_destroy(&local_qiov);
+     }
+     qemu_vfree(head_buf);
+     qemu_vfree(tail_buf);
+-
++out:
++    tracked_request_end(&req);
+     return ret;
+ }
+ 
+-- 
+1.8.3.1
+

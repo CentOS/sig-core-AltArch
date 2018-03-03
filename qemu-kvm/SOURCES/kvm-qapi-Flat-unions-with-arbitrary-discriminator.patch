@@ -1,0 +1,284 @@
+From e25370368e98e6d8766e50b7f13e3543e1c3ef9b Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 9 Sep 2013 14:28:12 +0200
+Subject: [PATCH 21/38] qapi: Flat unions with arbitrary discriminator
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1378736903-18489-22-git-send-email-kwolf@redhat.com>
+Patchwork-id: 54208
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 21/32] qapi: Flat unions with arbitrary discriminator
+Bugzilla: 1005818
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Bugzilla: 1005818
+
+Instead of the rather verbose syntax that distinguishes base and
+subclass fields...
+
+  { "type": "file",
+    "read-only": true,
+    "data": {
+        "filename": "test"
+    } }
+
+...we can now have both in the same namespace, allowing a more direct
+mapping of the command line, and moving fields between the common base
+and subclasses without breaking the API:
+
+  { "driver": "file",
+    "read-only": true,
+    "filename": "test" }
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit 50f2bdc75c5ee00617ad874c9ceac2cea660aa1e)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ docs/qapi-code-gen.txt | 22 ++++++++++++
+ scripts/qapi-types.py  | 11 ++++--
+ scripts/qapi-visit.py  | 90 +++++++++++++++++++++++++++++++++++++-------------
+ 3 files changed, 98 insertions(+), 25 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ docs/qapi-code-gen.txt |   22 ++++++++++++
+ scripts/qapi-types.py  |   11 +++++-
+ scripts/qapi-visit.py  |   90 +++++++++++++++++++++++++++++++++++------------
+ 3 files changed, 98 insertions(+), 25 deletions(-)
+
+diff --git a/docs/qapi-code-gen.txt b/docs/qapi-code-gen.txt
+index f6f8d33..11f19cf 100644
+--- a/docs/qapi-code-gen.txt
++++ b/docs/qapi-code-gen.txt
+@@ -103,6 +103,28 @@ And it looks like this on the wire:
+    "data" : { "backing-file": "/some/place/my-image",
+               "lazy-refcounts": true } }
+ 
++
++Flat union types avoid the nesting on the wire. They are used whenever a
++specific field of the base type is declared as the discriminator ('type' is
++then no longer generated). The discriminator must always be a string field.
++The above example can then be modified as follows:
++
++ { 'type': 'BlockdevCommonOptions',
++   'data': { 'driver': 'str', 'readonly': 'bool' } }
++ { 'union': 'BlockdevOptions',
++   'base': 'BlockdevCommonOptions',
++   'discriminator': 'driver',
++   'data': { 'raw': 'RawOptions',
++             'qcow2': 'Qcow2Options' } }
++
++Resulting in this JSON object:
++
++ { "driver": "qcow2",
++   "readonly": false,
++   "backing-file": "/some/place/my-image",
++   "lazy-refcounts": true }
++
++
+ === Commands ===
+ 
+ Commands are defined by using a list containing three members.  The first
+diff --git a/scripts/qapi-types.py b/scripts/qapi-types.py
+index c0684a7..f139bfe 100644
+--- a/scripts/qapi-types.py
++++ b/scripts/qapi-types.py
+@@ -135,7 +135,9 @@ def generate_union(expr):
+ 
+     name = expr['union']
+     typeinfo = expr['data']
++
+     base = expr.get('base')
++    discriminator = expr.get('discriminator')
+ 
+     ret = mcgen('''
+ struct %(name)s
+@@ -158,8 +160,13 @@ struct %(name)s
+ ''')
+ 
+     if base:
+-        struct = find_struct(base)
+-        ret += generate_struct_fields(struct['data'])
++        base_fields = find_struct(base)['data']
++        if discriminator:
++            base_fields = base_fields.copy()
++            del base_fields[discriminator]
++        ret += generate_struct_fields(base_fields)
++    else:
++        assert not discriminator
+ 
+     ret += mcgen('''
+ };
+diff --git a/scripts/qapi-visit.py b/scripts/qapi-visit.py
+index be56ba4..b1c1ad6 100644
+--- a/scripts/qapi-visit.py
++++ b/scripts/qapi-visit.py
+@@ -17,8 +17,30 @@ import os
+ import getopt
+ import errno
+ 
+-def generate_visit_struct_fields(field_prefix, members):
++def generate_visit_struct_fields(name, field_prefix, fn_prefix, members):
++    substructs = []
+     ret = ''
++    full_name = name if not fn_prefix else "%s_%s" % (name, fn_prefix)
++
++    for argname, argentry, optional, structured in parse_args(members):
++        if structured:
++            if not fn_prefix:
++                nested_fn_prefix = argname
++            else:
++                nested_fn_prefix = "%s_%s" % (fn_prefix, argname)
++
++            nested_field_prefix = "%s%s." % (field_prefix, argname)
++            ret += generate_visit_struct_fields(name, nested_field_prefix,
++                                                nested_fn_prefix, argentry)
++
++    ret += mcgen('''
++
++static void visit_type_%(full_name)s_fields(Visitor *m, %(name)s ** obj, Error **errp)
++{
++    Error *err = NULL;
++''',
++        name=name, full_name=full_name)
++    push_indent()
+ 
+     for argname, argentry, optional, structured in parse_args(members):
+         if optional:
+@@ -31,7 +53,7 @@ if (obj && (*obj)->%(prefix)shas_%(c_name)s) {
+             push_indent()
+ 
+         if structured:
+-            ret += generate_visit_struct_body(field_prefix + argname, argname, argentry)
++            ret += generate_visit_struct_body(full_name, argname, argentry)
+         else:
+             ret += mcgen('''
+ visit_type_%(type)s(m, obj ? &(*obj)->%(c_prefix)s%(c_name)s : NULL, "%(name)s", &err);
+@@ -47,6 +69,12 @@ visit_type_%(type)s(m, obj ? &(*obj)->%(c_prefix)s%(c_name)s : NULL, "%(name)s",
+ visit_end_optional(m, &err);
+ ''')
+ 
++    pop_indent()
++    ret += mcgen('''
++
++    error_propagate(errp, err);
++}
++''')
+     return ret
+ 
+ 
+@@ -56,8 +84,9 @@ if (!error_is_set(errp)) {
+ ''')
+     push_indent()
+ 
++    full_name = name if not field_prefix else "%s_%s" % (field_prefix, name)
++
+     if len(field_prefix):
+-        field_prefix = field_prefix + "."
+         ret += mcgen('''
+ Error **errp = &err; /* from outer scope */
+ Error *err = NULL;
+@@ -74,20 +103,14 @@ visit_start_struct(m, (void **)obj, "%(name)s", name, sizeof(%(name)s), &err);
+     ret += mcgen('''
+ if (!err) {
+     if (!obj || *obj) {
+-''')
+-    push_indent()
+-    push_indent()
+-
+-    ret += generate_visit_struct_fields(field_prefix, members)
+-    pop_indent()
+-    ret += mcgen('''
+-    error_propagate(errp, err);
+-    err = NULL;
+-}
+-''')
++        visit_type_%(name)s_fields(m, obj, &err);
++        error_propagate(errp, err);
++        err = NULL;
++    }
++''',
++        name=full_name)
+ 
+     pop_indent()
+-    pop_indent()
+     ret += mcgen('''
+         /* Always call end_struct if start_struct succeeded.  */
+         visit_end_struct(m, &err);
+@@ -98,7 +121,9 @@ if (!err) {
+     return ret
+ 
+ def generate_visit_struct(name, members):
+-    ret = mcgen('''
++    ret = generate_visit_struct_fields(name, "", "", members)
++
++    ret += mcgen('''
+ 
+ void visit_type_%(name)s(Visitor *m, %(name)s ** obj, const char *name, Error **errp)
+ {
+@@ -157,9 +182,17 @@ def generate_visit_union(expr):
+     members = expr['data']
+ 
+     base = expr.get('base')
++    discriminator = expr.get('discriminator')
+ 
+     ret = generate_visit_enum('%sKind' % name, members.keys())
+ 
++    if base:
++        base_fields = find_struct(base)['data']
++        if discriminator:
++            base_fields = base_fields.copy()
++            del base_fields[discriminator]
++        ret += generate_visit_struct_fields(name, "", "", base_fields)
++
+     ret += mcgen('''
+ 
+ void visit_type_%(name)s(Visitor *m, %(name)s ** obj, const char *name, Error **errp)
+@@ -179,23 +212,34 @@ void visit_type_%(name)s(Visitor *m, %(name)s ** obj, const char *name, Error **
+     push_indent()
+ 
+     if base:
+-        struct = find_struct(base)
+-        push_indent()
+-        ret += generate_visit_struct_fields("", struct['data'])
+-        pop_indent()
++        ret += mcgen('''
++    visit_type_%(name)s_fields(m, obj, &err);
++''',
++            name=name)
+ 
+     pop_indent()
+     ret += mcgen('''
+-        visit_type_%(name)sKind(m, &(*obj)->kind, "type", &err);
++        visit_type_%(name)sKind(m, &(*obj)->kind, "%(type)s", &err);
+         if (!err) {
+             switch ((*obj)->kind) {
+ ''',
+-                 name=name)
++                 name=name, type="type" if not discriminator else discriminator)
+ 
+     for key in members:
++        if not discriminator:
++            fmt = 'visit_type_%(c_type)s(m, &(*obj)->%(c_name)s, "data", &err);'
++        else:
++            fmt = '''visit_start_implicit_struct(m, (void**) &(*obj)->%(c_name)s, sizeof(%(c_type)s), &err);
++                if (!err) {
++                    visit_type_%(c_type)s_fields(m, &(*obj)->%(c_name)s, &err);
++                    error_propagate(errp, err);
++                    err = NULL;
++                    visit_end_implicit_struct(m, &err);
++                }'''
++
+         ret += mcgen('''
+             case %(abbrev)s_KIND_%(enum)s:
+-                visit_type_%(c_type)s(m, &(*obj)->%(c_name)s, "data", &err);
++                ''' + fmt + '''
+                 break;
+ ''',
+                 abbrev = de_camel_case(name).upper(),
+-- 
+1.7.1
+

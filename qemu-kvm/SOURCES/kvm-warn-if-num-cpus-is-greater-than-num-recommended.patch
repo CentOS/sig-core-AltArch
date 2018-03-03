@@ -1,0 +1,146 @@
+From 453a94cf85a041792086990022d182bcc4f939cb Mon Sep 17 00:00:00 2001
+From: Andrew Jones <drjones@redhat.com>
+Date: Tue, 24 Sep 2013 13:29:36 +0200
+Subject: [PATCH 05/11] kvm: warn if num cpus is greater than num recommended
+
+RH-Author: Andrew Jones <drjones@redhat.com>
+Message-id: <1380029376-20391-1-git-send-email-drjones@redhat.com>
+Patchwork-id: 54526
+O-Subject: [RHEL7.0 qemu-kvm PATCH] kvm: warn if num cpus is greater than num recommended
+Bugzilla: 1010881
+RH-Acked-by: Radim Krcmar <rkrcmar@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1010881
+Brewing: https://brewweb.devel.redhat.com/taskinfo?taskID=6322066
+
+(cherry picked from commit 670436ced08738802e15764039d03ab0dbab2bf3
+ of uq/master)
+
+===
+
+The comment in kvm_max_vcpus() states that it's using the recommended
+procedure from the kernel API documentation to get the max number
+of vcpus that kvm supports. It is, but by always returning the
+maximum number supported. The maximum number should only be used
+for development purposes. qemu should check KVM_CAP_NR_VCPUS for
+the recommended number of vcpus. This patch adds a warning if a user
+specifies a number of cpus between the recommended and max.
+
+Signed-off-by: Andrew Jones <drjones@redhat.com>
+Acked-by: Marcelo Tosatti <mtosatti@redhat.com>
+Signed-off-by: Gleb Natapov <gleb@redhat.com>
+---
+ kvm-all.c | 69 ++++++++++++++++++++++++++++++++++++---------------------------
+ 1 file changed, 40 insertions(+), 29 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ kvm-all.c |   69 +++++++++++++++++++++++++++++++++++-------------------------
+ 1 files changed, 40 insertions(+), 29 deletions(-)
+
+diff --git a/kvm-all.c b/kvm-all.c
+index d0a7c21..f2f68d6 100644
+--- a/kvm-all.c
++++ b/kvm-all.c
+@@ -1280,24 +1280,20 @@ static int kvm_irqchip_create(KVMState *s)
+     return 0;
+ }
+ 
+-static int kvm_max_vcpus(KVMState *s)
++/* Find number of supported CPUs using the recommended
++ * procedure from the kernel API documentation to cope with
++ * older kernels that may be missing capabilities.
++ */
++static int kvm_recommended_vcpus(KVMState *s)
+ {
+-    int ret;
+-
+-    /* Find number of supported CPUs using the recommended
+-     * procedure from the kernel API documentation to cope with
+-     * older kernels that may be missing capabilities.
+-     */
+-    ret = kvm_check_extension(s, KVM_CAP_MAX_VCPUS);
+-    if (ret) {
+-        return ret;
+-    }
+-    ret = kvm_check_extension(s, KVM_CAP_NR_VCPUS);
+-    if (ret) {
+-        return ret;
+-    }
++    int ret = kvm_check_extension(s, KVM_CAP_NR_VCPUS);
++    return (ret) ? ret : 4;
++}
+ 
+-    return 4;
++static int kvm_max_vcpus(KVMState *s)
++{
++    int ret = kvm_check_extension(s, KVM_CAP_MAX_VCPUS);
++    return (ret) ? ret : kvm_recommended_vcpus(s);
+ }
+ 
+ int kvm_init(void)
+@@ -1305,11 +1301,19 @@ int kvm_init(void)
+     static const char upgrade_note[] =
+         "Please upgrade to at least kernel 2.6.29 or recent kvm-kmod\n"
+         "(see http://sourceforge.net/projects/kvm).\n";
++    struct {
++        const char *name;
++        int num;
++    } num_cpus[] = {
++        { "SMP",          smp_cpus },
++        { "hotpluggable", max_cpus },
++        { NULL, }
++    }, *nc = num_cpus;
++    int soft_vcpus_limit, hard_vcpus_limit;
+     KVMState *s;
+     const KVMCapabilityInfo *missing_cap;
+     int ret;
+     int i;
+-    int max_vcpus;
+ 
+     s = g_malloc0(sizeof(KVMState));
+ 
+@@ -1350,19 +1354,26 @@ int kvm_init(void)
+         goto err;
+     }
+ 
+-    max_vcpus = kvm_max_vcpus(s);
+-    if (smp_cpus > max_vcpus) {
+-        ret = -EINVAL;
+-        fprintf(stderr, "Number of SMP cpus requested (%d) exceeds max cpus "
+-                "supported by KVM (%d)\n", smp_cpus, max_vcpus);
+-        goto err;
+-    }
++    /* check the vcpu limits */
++    soft_vcpus_limit = kvm_recommended_vcpus(s);
++    hard_vcpus_limit = kvm_max_vcpus(s);
+ 
+-    if (max_cpus > max_vcpus) {
+-        ret = -EINVAL;
+-        fprintf(stderr, "Number of hotpluggable cpus requested (%d) exceeds max cpus "
+-                "supported by KVM (%d)\n", max_cpus, max_vcpus);
+-        goto err;
++    while (nc->name) {
++        if (nc->num > soft_vcpus_limit) {
++            fprintf(stderr,
++                    "Warning: Number of %s cpus requested (%d) exceeds "
++                    "the recommended cpus supported by KVM (%d)\n",
++                    nc->name, nc->num, soft_vcpus_limit);
++
++            if (nc->num > hard_vcpus_limit) {
++                ret = -EINVAL;
++                fprintf(stderr, "Number of %s cpus requested (%d) exceeds "
++                        "the maximum cpus supported by KVM (%d)\n",
++                        nc->name, nc->num, hard_vcpus_limit);
++                goto err;
++            }
++        }
++        nc++;
+     }
+ 
+     s->vmfd = kvm_ioctl(s, KVM_CREATE_VM, 0);
+-- 
+1.7.1
+

@@ -1,0 +1,46 @@
+From 4c3960c0fdeb57a5cb74a9de3883b6e6109bf946 Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Fri, 12 Sep 2014 11:56:30 +0200
+Subject: [PATCH] scsi-disk: fix bug in scsi_block_new_request() introduced by commit 137745c
+
+Message-id: <1410522991-11612-1-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 61021
+O-Subject: [RHEL 7.1/7.0.z qemu-kvm PATCH] scsi-disk: fix bug in scsi_block_new_request() introduced by commit 137745c
+Bugzilla: 1105880
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+From: Ulrich Obergfell <uobergfe@redhat.com>
+
+This patch fixes a bug in scsi_block_new_request() that was introduced
+by commit 137745c5c60f083ec982fe9e861e8c16ebca1ba8. If the host cache
+is used - i.e. if BDRV_O_NOCACHE is _not_ set - the 'break' statement
+needs to be executed to 'fall back' to SG_IO.
+
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Ulrich Obergfell <uobergfe@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 2fe5a9f73b3446690db2cae8a58473b0b4beaa32)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/scsi/scsi-disk.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/hw/scsi/scsi-disk.c b/hw/scsi/scsi-disk.c
+index 1d41db2..50b7910 100644
+--- a/hw/scsi/scsi-disk.c
++++ b/hw/scsi/scsi-disk.c
+@@ -2502,7 +2502,7 @@ static SCSIRequest *scsi_block_new_request(SCSIDevice *d, uint32_t tag,
+ 	 * ones (such as WRITE SAME or EXTENDED COPY, etc.).  So, without
+ 	 * O_DIRECT everything must go through SG_IO.
+          */
+-        if (bdrv_get_flags(s->qdev.conf.bs) & BDRV_O_NOCACHE) {
++        if (!(bdrv_get_flags(s->qdev.conf.bs) & BDRV_O_NOCACHE)) {
+             break;
+         }
+ 
+-- 
+1.7.1
+

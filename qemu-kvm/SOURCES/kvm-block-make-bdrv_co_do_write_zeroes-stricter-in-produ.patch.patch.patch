@@ -1,0 +1,100 @@
+From 4a1e019ac51460ce6329892cc99fc11d518d2eb2 Mon Sep 17 00:00:00 2001
+Message-Id: <4a1e019ac51460ce6329892cc99fc11d518d2eb2.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:09:16 +0100
+Subject: [PATCH 28/50] block: make bdrv_co_do_write_zeroes stricter in
+ producing aligned requests
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-31-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56067
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 30/52] block: make bdrv_co_do_write_zeroes stricter in producing aligned requests
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Right now, bdrv_co_do_write_zeroes will only try to align the
+beginning of the request.  However, it is simpler for many
+formats to expect the block layer to separate both the head *and*
+the tail.  This makes sure that the format's bdrv_co_write_zeroes
+function will be called with aligned sector_num and nb_sectors for
+the bulk of the request.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit b8d71c09f31a9cae248d167dddc75c66d5135ff2)
+---
+ block.c | 35 +++++++++++++++++++++++------------
+ 1 file changed, 23 insertions(+), 12 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ block.c | 35 +++++++++++++++++++++++------------
+ 1 file changed, 23 insertions(+), 12 deletions(-)
+
+diff --git a/block.c b/block.c
+index c9e65b4..1ac1ab3 100644
+--- a/block.c
++++ b/block.c
+@@ -2781,14 +2781,21 @@ static int coroutine_fn bdrv_co_do_write_zeroes(BlockDriverState *bs,
+     while (nb_sectors > 0 && !ret) {
+         int num = nb_sectors;
+ 
+-        /* align request */
+-        if (bs->bl.write_zeroes_alignment &&
+-            num >= bs->bl.write_zeroes_alignment &&
+-            sector_num % bs->bl.write_zeroes_alignment) {
+-            if (num > bs->bl.write_zeroes_alignment) {
++        /* Align request.  Block drivers can expect the "bulk" of the request
++         * to be aligned.
++         */
++        if (bs->bl.write_zeroes_alignment
++            && num > bs->bl.write_zeroes_alignment) {
++            if (sector_num % bs->bl.write_zeroes_alignment != 0) {
++                /* Make a small request up to the first aligned sector.  */
+                 num = bs->bl.write_zeroes_alignment;
++                num -= sector_num % bs->bl.write_zeroes_alignment;
++            } else if ((sector_num + num) % bs->bl.write_zeroes_alignment != 0) {
++                /* Shorten the request to the last aligned sector.  num cannot
++                 * underflow because num > bs->bl.write_zeroes_alignment.
++                 */
++                num -= (sector_num + num) % bs->bl.write_zeroes_alignment;
+             }
+-            num -= sector_num % bs->bl.write_zeroes_alignment;
+         }
+ 
+         /* limit request size */
+@@ -2806,16 +2813,20 @@ static int coroutine_fn bdrv_co_do_write_zeroes(BlockDriverState *bs,
+             /* Fall back to bounce buffer if write zeroes is unsupported */
+             iov.iov_len = num * BDRV_SECTOR_SIZE;
+             if (iov.iov_base == NULL) {
+-                /* allocate bounce buffer only once and ensure that it
+-                 * is big enough for this and all future requests.
+-                 */
+-                size_t bufsize = num <= nb_sectors ? num : max_write_zeroes;
+-                iov.iov_base = qemu_blockalign(bs, bufsize * BDRV_SECTOR_SIZE);
+-                memset(iov.iov_base, 0, bufsize * BDRV_SECTOR_SIZE);
++                iov.iov_base = qemu_blockalign(bs, num * BDRV_SECTOR_SIZE);
++                memset(iov.iov_base, 0, num * BDRV_SECTOR_SIZE);
+             }
+             qemu_iovec_init_external(&qiov, &iov, 1);
+ 
+             ret = drv->bdrv_co_writev(bs, sector_num, num, &qiov);
++
++            /* Keep bounce buffer around if it is big enough for all
++             * all future requests.
++             */
++            if (num < max_write_zeroes) {
++                qemu_vfree(iov.iov_base);
++                iov.iov_base = NULL;
++            }
+         }
+ 
+         sector_num += num;
+-- 
+1.7.11.7
+

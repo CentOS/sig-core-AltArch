@@ -1,0 +1,80 @@
+From 984faac66812652082fc9aa46eceb21669c1131b Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Tue, 10 Feb 2015 19:41:34 +0100
+Subject: [PATCH 11/16] build: reenable local builds to pass --enable-debug
+ (RHEL only)
+
+Message-id: <1423597294-16022-2-git-send-email-lersek@redhat.com>
+Patchwork-id: 63788
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 1/1] build: reenable local builds to pass --enable-debug (RHEL only)
+Bugzilla:
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+RHEL-7 commit f6852e27 dropped the "isa-ide" device, and observed:
+
+  Unresolved extern symbols pose no real danger, because they fail safely
+  at link time.  Note for the curious: the optimizer gets rid of the
+  reference to isa_ide_init() in hw/i386/pc_piix.c.
+
+For local builds it is sometimes useful to pass --enable-debug to the
+configure script. However that flag disables the optimizer, and the
+isa_ide_init() call is not eliminated during compilation; it reaches the
+linker. The linker then barfs
+
+    LINK  x86_64-softmmu/qemu-system-x86_64
+  hw/i386/pc_piix.o: In function `pc_init1':
+  .../hw/i386/pc_piix.c:221: undefined reference to `isa_ide_init'
+  collect2: error: ld returned 1 exit status
+
+Provide a stub implementation for isa_ide_init(), reenabling local debug
+builds.
+
+No copyright notice is added to the top of the new file, following the
+pattern set by other stub files.
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+---
+ stubs/Makefile.objs |  1 +
+ stubs/ide-isa.c     | 12 ++++++++++++
+ 2 files changed, 13 insertions(+)
+ create mode 100644 stubs/ide-isa.c
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ stubs/Makefile.objs |  1 +
+ stubs/ide-isa.c     | 12 ++++++++++++
+ 2 files changed, 13 insertions(+)
+ create mode 100644 stubs/ide-isa.c
+
+diff --git a/stubs/Makefile.objs b/stubs/Makefile.objs
+index 4b2cb7d..590008e 100644
+--- a/stubs/Makefile.objs
++++ b/stubs/Makefile.objs
+@@ -26,3 +26,4 @@ stub-obj-y += vm-stop.o
+ stub-obj-y += vmstate.o
+ stub-obj-$(CONFIG_WIN32) += fd-register.o
+ stub-obj-y += cpus.o
++stub-obj-y += ide-isa.o
+diff --git a/stubs/ide-isa.c b/stubs/ide-isa.c
+new file mode 100644
+index 0000000..4074aff
+--- /dev/null
++++ b/stubs/ide-isa.c
+@@ -0,0 +1,12 @@
++#include <hw/ide.h>
++#include <stdlib.h>
++
++ISADevice *isa_ide_init(ISABus *bus, int iobase, int iobase2, int isairq,
++                        DriveInfo *hd0, DriveInfo *hd1)
++{
++    /*
++     * In theory the real isa_ide_init() function can return NULL, but no
++     * caller actually checks for that. Make sure we go out with a clear bang.
++     */
++    abort();
++}
+-- 
+1.8.3.1
+

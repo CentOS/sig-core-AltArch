@@ -1,0 +1,66 @@
+From 5a4f3ccc420f7b6cdce3fc1065119a33e5b0b997 Mon Sep 17 00:00:00 2001
+Message-Id: <5a4f3ccc420f7b6cdce3fc1065119a33e5b0b997.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:19:18 +0100
+Subject: [PATCH 52/56] acpi-build: fix build on glib < 2.22
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-53-git-send-email-mst@redhat.com>
+Patchwork-id: 56358
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 52/57] acpi-build: fix build on glib < 2.22
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+g_string_vprintf was only introduced in 2.24 so switch to vsnprintf
+instead.  A bit uglier but name size is fixed at 4 bytes here so it's
+easy.
+
+Reported-by: Richard Henderson <rth@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: 1385036128-8753-1-git-send-email-mst@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@amazon.com>
+(cherry picked from commit 542da88f0013ebb2b2d8ca10becbfebd9948abba)
+---
+ hw/i386/acpi-build.c | 11 ++++++-----
+ 1 file changed, 6 insertions(+), 5 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/i386/acpi-build.c | 11 ++++++-----
+ 1 file changed, 6 insertions(+), 5 deletions(-)
+
+diff --git a/hw/i386/acpi-build.c b/hw/i386/acpi-build.c
+index 6cfa044..4e2d709 100644
+--- a/hw/i386/acpi-build.c
++++ b/hw/i386/acpi-build.c
+@@ -287,16 +287,17 @@ static inline void build_append_array(GArray *array, GArray *val)
+ 
+ static void build_append_nameseg(GArray *array, const char *format, ...)
+ {
+-    GString *s = g_string_new("");
++    /* It would be nicer to use g_string_vprintf but it's only there in 2.22 */
++    char s[] = "XXXX";
++    int len;
+     va_list args;
+ 
+     va_start(args, format);
+-    g_string_vprintf(s, format, args);
++    len = vsnprintf(s, sizeof s, format, args);
+     va_end(args);
+ 
+-    assert(s->len == 4);
+-    g_array_append_vals(array, s->str, s->len);
+-    g_string_free(s, true);
++    assert(len == 4);
++    g_array_append_vals(array, s, len);
+ }
+ 
+ /* 5.4 Definition Block Encoding */
+-- 
+1.7.11.7
+

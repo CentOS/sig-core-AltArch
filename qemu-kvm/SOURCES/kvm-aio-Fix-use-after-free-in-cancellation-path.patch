@@ -1,0 +1,96 @@
+From 4283e6a300b8b05f8fb32dc27dfe0bd774ef16db Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Fri, 30 May 2014 03:46:55 +0200
+Subject: [PATCH 08/13] aio: Fix use-after-free in cancellation path
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1401421615-17300-1-git-send-email-famz@redhat.com>
+Patchwork-id: 59078
+O-Subject: [RHEL-7 qemu-kvm PATCH] aio: Fix use-after-free in cancellation path
+Bugzilla: 1095877
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1095877
+Brew:     https://brewweb.devel.redhat.com/taskinfo?taskID=7519118 (RHEL)
+          https://brewweb.devel.redhat.com/taskinfo?taskID=7519129 (RHEV)
+
+The current flow of canceling a thread from THREAD_ACTIVE state is:
+
+  1) Caller wants to cancel a request, so it calls thread_pool_cancel.
+
+  2) thread_pool_cancel waits on the conditional variable
+     elem->check_cancel.
+
+  3) The worker thread changes state to THREAD_DONE once the task is
+     done, and notifies elem->check_cancel to allow thread_pool_cancel
+     to continue execution, and signals the notifier (pool->notifier) to
+     allow callback function to be called later. But because of the
+     global mutex, the notifier won't get processed until step 4) and 5)
+     are done.
+
+  4) thread_pool_cancel continues, leaving the notifier signaled, it
+     just returns to caller.
+
+  5) Caller thinks the request is already canceled successfully, so it
+     releases any related data, such as freeing elem->common.opaque.
+
+  6) In the next main loop iteration, the notifier handler,
+     event_notifier_ready, is called. It finds the canceled thread in
+     THREAD_DONE state, so calls elem->common.cb, with an (likely)
+     dangling opaque pointer. This is a use-after-free.
+
+Fix it by calling event_notifier_ready before leaving
+thread_pool_cancel.
+
+Test case update: This change will let cancel complete earlier than
+test-thread-pool.c expects, so update the code to check this case: if
+it's already done, done_cb sets .aiocb to NULL, skip calling
+bdrv_aio_cancel on them.
+
+Reported-by: Ulrich Obergfell <uobergfe@redhat.com>
+Suggested-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 271c0f68b4eae72691721243a1c37f46a3232d61)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ tests/test-thread-pool.c | 2 +-
+ thread-pool.c            | 1 +
+ 2 files changed, 2 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/test-thread-pool.c |    2 +-
+ thread-pool.c            |    1 +
+ 2 files changed, 2 insertions(+), 1 deletions(-)
+
+diff --git a/tests/test-thread-pool.c b/tests/test-thread-pool.c
+index b62338f..1be970d 100644
+--- a/tests/test-thread-pool.c
++++ b/tests/test-thread-pool.c
+@@ -181,7 +181,7 @@ static void test_cancel(void)
+ 
+     /* Canceling the others will be a blocking operation.  */
+     for (i = 0; i < 100; i++) {
+-        if (data[i].n != 3) {
++        if (data[i].aiocb && data[i].n != 3) {
+             bdrv_aio_cancel(data[i].aiocb);
+         }
+     }
+diff --git a/thread-pool.c b/thread-pool.c
+index 0ebd4c2..fc6a33b 100644
+--- a/thread-pool.c
++++ b/thread-pool.c
+@@ -229,6 +229,7 @@ static void thread_pool_cancel(BlockDriverAIOCB *acb)
+         pool->pending_cancellations--;
+     }
+     qemu_mutex_unlock(&pool->lock);
++    event_notifier_ready(&pool->notifier);
+ }
+ 
+ static const AIOCBInfo thread_pool_aiocb_info = {
+-- 
+1.7.1
+

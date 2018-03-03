@@ -1,0 +1,114 @@
+From 983dc94f2937e8f19732f205711348b0a170e604 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Fri, 31 Oct 2014 14:11:31 +0100
+Subject: [PATCH 3/9] rhel: Drop machine type pc-q35-rhel7.0.0
+
+Message-id: <1414764691-31603-2-git-send-email-armbru@redhat.com>
+Patchwork-id: 62013
+O-Subject: [PATCH RHEL-7.1 qemu-kvm 1/1] rhel: Drop machine type pc-q35-rhel7.0.0
+Bugzilla: 1111107
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+
+Q35 is tech preview in RHEL 7.0.  From 7.1 on, we want to support it,
+but only in qemu-kvm-rhev.  We don't intend to support it in qemu-kvm.
+So as to not mislead customers, drop the machine type from qemu-kvm,
+by removing pc_q35.c from the build.  Remove RHEL-specific code from
+pc_q35.c just to avoid confusion.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/Makefile.objs |  2 +-
+ hw/i386/pc_q35.c      | 58 ---------------------------------------------------
+ 2 files changed, 1 insertion(+), 59 deletions(-)
+
+diff --git a/hw/i386/Makefile.objs b/hw/i386/Makefile.objs
+index 09ac433..f2bcdcb 100644
+--- a/hw/i386/Makefile.objs
++++ b/hw/i386/Makefile.objs
+@@ -1,6 +1,6 @@
+ obj-$(CONFIG_KVM) += kvm/
+ obj-y += multiboot.o smbios.o
+-obj-y += pc.o pc_piix.o pc_q35.o
++obj-y += pc.o pc_piix.o
+ obj-y += pc_sysfw.o
+ obj-$(CONFIG_XEN) += xen_domainbuild.o xen_machine_pv.o
+ 
+diff --git a/hw/i386/pc_q35.c b/hw/i386/pc_q35.c
+index 4534539..850a25a 100644
+--- a/hw/i386/pc_q35.c
++++ b/hw/i386/pc_q35.c
+@@ -218,8 +218,6 @@ static void pc_q35_init(QEMUMachineInitArgs *args)
+     }
+ }
+ 
+-#if 0 /* Disabled for Red Hat Enterprise Linux */
+-
+ static void pc_q35_init_1_5(QEMUMachineInitArgs *args)
+ {
+     has_pci_info = false;
+@@ -266,59 +264,3 @@ static void pc_q35_machine_init(void)
+ }
+ 
+ machine_init(pc_q35_machine_init);
+-
+-#endif  /* Disabled for Red Hat Enterprise Linux */
+-
+-/* Red Hat Enterprise Linux machine types */
+-
+-static void pc_q35_compat_rhel700(QEMUMachineInitArgs *args)
+-{
+-    x86_cpu_compat_set_features("Conroe", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+-    x86_cpu_compat_set_features("Penryn", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+-    x86_cpu_compat_set_features("Nehalem", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+-    x86_cpu_compat_set_features("Westmere", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+-    /* SandyBridge and Haswell already have x2apic enabled */
+-    x86_cpu_compat_set_features("Opteron_G1", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+-    x86_cpu_compat_set_features("Opteron_G2", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+-    x86_cpu_compat_set_features("Opteron_G3", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+-    x86_cpu_compat_set_features("Opteron_G4", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+-    x86_cpu_compat_set_features("Opteron_G5", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+-
+-    /* KVM can't expose RDTSCP on AMD CPUs, so there's no point in enabling it
+-     * on AMD CPU models.
+-     */
+-    x86_cpu_compat_set_features("phenom", FEAT_8000_0001_EDX, 0,
+-                                CPUID_EXT2_RDTSCP);
+-    x86_cpu_compat_set_features("Opteron_G2", FEAT_8000_0001_EDX, 0,
+-                                CPUID_EXT2_RDTSCP);
+-    x86_cpu_compat_set_features("Opteron_G3", FEAT_8000_0001_EDX, 0,
+-                                CPUID_EXT2_RDTSCP);
+-    x86_cpu_compat_set_features("Opteron_G4", FEAT_8000_0001_EDX, 0,
+-                                CPUID_EXT2_RDTSCP);
+-    x86_cpu_compat_set_features("Opteron_G5", FEAT_8000_0001_EDX, 0,
+-                                CPUID_EXT2_RDTSCP);
+-}
+-
+-static void pc_q35_init_rhel700(QEMUMachineInitArgs *args)
+-{
+-    pc_q35_compat_rhel700(args);
+-    pc_q35_init(args);
+-}
+-
+-static QEMUMachine pc_q35_machine_rhel700 = {
+-    .name = "pc-q35-rhel7.0.0",
+-    .alias = "q35",
+-    .desc = "RHEL-7.0.0 PC (Q35 + ICH9, 2009)",
+-    .init = pc_q35_init_rhel700,
+-    .hot_add_cpu = pc_hot_add_cpu,
+-    .max_cpus = RHEL_MAX_CPUS,
+-    .default_machine_opts = "firmware=bios-256k.bin",
+-    DEFAULT_MACHINE_OPTIONS,
+-};
+-
+-static void rhel_pc_q35_machine_init(void)
+-{
+-    qemu_register_machine(&pc_q35_machine_rhel700);
+-}
+-
+-machine_init(rhel_pc_q35_machine_init);
+-- 
+1.8.3.1
+

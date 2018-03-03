@@ -1,0 +1,79 @@
+From 34f122742b3b75db66c9f2a022179136dbc534e4 Mon Sep 17 00:00:00 2001
+From: Orit Wasserman <owasserm@redhat.com>
+Date: Tue, 11 Feb 2014 15:20:47 +0100
+Subject: [PATCH 13/28] Add check for cache size smaller than page size
+
+RH-Author: Orit Wasserman <owasserm@redhat.com>
+Message-id: <1392132047-5103-1-git-send-email-owasserm@redhat.com>
+Patchwork-id: 57207
+O-Subject: [RHEL7 qemu-kvm PATCH] Add check for cache size smaller than page size
+Bugzilla: 1017096
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+Bugzilla: 1017096
+Upstream: merged
+Brew:http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7028464
+
+Signed-off-by: Orit Wasserman <owasserm@redhat.com>
+Reviewed-by: Juan Quintela <quintela@redhat.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit c91e681a558fc21073ffc491b5a022d5f340fa0b)
+---
+ arch_init.c |  4 ++++
+ migration.c | 10 +++++++++-
+ 2 files changed, 13 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ arch_init.c |    4 ++++
+ migration.c |   10 +++++++++-
+ 2 files changed, 13 insertions(+), 1 deletions(-)
+
+diff --git a/arch_init.c b/arch_init.c
+index 31aac84..c3207bf 100644
+--- a/arch_init.c
++++ b/arch_init.c
+@@ -178,6 +178,10 @@ static struct {
+ 
+ int64_t xbzrle_cache_resize(int64_t new_size)
+ {
++    if (new_size < TARGET_PAGE_SIZE) {
++        return -1;
++    }
++
+     if (XBZRLE.cache != NULL) {
+         return cache_resize(XBZRLE.cache, new_size / TARGET_PAGE_SIZE) *
+             TARGET_PAGE_SIZE;
+diff --git a/migration.c b/migration.c
+index 21f7247..6487fe2 100644
+--- a/migration.c
++++ b/migration.c
+@@ -474,6 +474,7 @@ void qmp_migrate_cancel(Error **errp)
+ void qmp_migrate_set_cache_size(int64_t value, Error **errp)
+ {
+     MigrationState *s = migrate_get_current();
++    int64_t new_size;
+ 
+     /* Check for truncation */
+     if (value != (size_t)value) {
+@@ -482,7 +483,14 @@ void qmp_migrate_set_cache_size(int64_t value, Error **errp)
+         return;
+     }
+ 
+-    s->xbzrle_cache_size = xbzrle_cache_resize(value);
++    new_size = xbzrle_cache_resize(value);
++    if (new_size < 0) {
++        error_set(errp, QERR_INVALID_PARAMETER_VALUE, "cache size",
++                  "is smaller than page size");
++        return;
++    }
++
++    s->xbzrle_cache_size = new_size;
+ }
+ 
+ int64_t qmp_query_migrate_cache_size(Error **errp)
+-- 
+1.7.1
+

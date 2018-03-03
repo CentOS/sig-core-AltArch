@@ -1,0 +1,128 @@
+From 829a4521369f93923f4787cc1e45f1a0d432d71b Mon Sep 17 00:00:00 2001
+Message-Id: <829a4521369f93923f4787cc1e45f1a0d432d71b.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:17:59 +0100
+Subject: [PATCH 27/56] loader: support for unmapped ROM blobs
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-28-git-send-email-mst@redhat.com>
+Patchwork-id: 56333
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 27/57] loader: support for unmapped ROM blobs
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Support ROM blobs not mapped into guest memory:
+same as ROM files really but use caller's buffer.
+
+Support invoking callback on access and
+return memory pointer making it easier
+for caller to update memory if necessary.
+
+Reviewed-by: Gerd Hoffmann <kraxel@redhat.com>
+Tested-by: Gerd Hoffmann <kraxel@redhat.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Igor Mammedov <imammedo@redhat.com>
+Tested-by: Igor Mammedov <imammedo@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 48354cc5a3744c9a56462e5053e1f267a0ce69de)
+---
+ hw/lm32/lm32_hwsetup.h |  2 +-
+ include/hw/loader.h    |  7 ++++---
+ hw/core/loader.c       | 23 ++++++++++++++++++++---
+ 3 files changed, 25 insertions(+), 7 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/core/loader.c       | 23 ++++++++++++++++++++---
+ hw/lm32/lm32_hwsetup.h |  2 +-
+ include/hw/loader.h    |  7 ++++---
+ 3 files changed, 25 insertions(+), 7 deletions(-)
+
+diff --git a/hw/core/loader.c b/hw/core/loader.c
+index 6bdbd15..2bfff48 100644
+--- a/hw/core/loader.c
++++ b/hw/core/loader.c
+@@ -666,10 +666,12 @@ err:
+     return -1;
+ }
+ 
+-int rom_add_blob(const char *name, const void *blob, size_t len,
+-                 hwaddr addr)
++void *rom_add_blob(const char *name, const void *blob, size_t len,
++                   hwaddr addr, const char *fw_file_name,
++                   FWCfgReadCallback fw_callback, void *callback_opaque)
+ {
+     Rom *rom;
++    void *data = NULL;
+ 
+     rom           = g_malloc0(sizeof(*rom));
+     rom->name     = g_strdup(name);
+@@ -679,7 +681,22 @@ int rom_add_blob(const char *name, const void *blob, size_t len,
+     rom->data     = g_malloc0(rom->datasize);
+     memcpy(rom->data, blob, len);
+     rom_insert(rom);
+-    return 0;
++    if (fw_file_name && fw_cfg) {
++        char devpath[100];
++
++        snprintf(devpath, sizeof(devpath), "/rom@%s", fw_file_name);
++
++        if (rom_file_in_ram) {
++            data = rom_set_mr(rom, devpath);
++        } else {
++            data = rom->data;
++        }
++
++        fw_cfg_add_file_callback(fw_cfg, fw_file_name,
++                                 fw_callback, callback_opaque,
++                                 data, rom->romsize);
++    }
++    return data;
+ }
+ 
+ /* This function is specific for elf program because we don't need to allocate
+diff --git a/hw/lm32/lm32_hwsetup.h b/hw/lm32/lm32_hwsetup.h
+index 3449bd8..9fd5e69 100644
+--- a/hw/lm32/lm32_hwsetup.h
++++ b/hw/lm32/lm32_hwsetup.h
+@@ -73,7 +73,7 @@ static inline void hwsetup_free(HWSetup *hw)
+ static inline void hwsetup_create_rom(HWSetup *hw,
+         hwaddr base)
+ {
+-    rom_add_blob("hwsetup", hw->data, TARGET_PAGE_SIZE, base);
++    rom_add_blob("hwsetup", hw->data, TARGET_PAGE_SIZE, base, NULL, NULL, NULL);
+ }
+ 
+ static inline void hwsetup_add_u8(HWSetup *hw, uint8_t u)
+diff --git a/include/hw/loader.h b/include/hw/loader.h
+index 19e11ea..1381a1d 100644
+--- a/include/hw/loader.h
++++ b/include/hw/loader.h
+@@ -27,8 +27,9 @@ extern bool rom_file_in_ram;
+ 
+ int rom_add_file(const char *file, const char *fw_dir,
+                  hwaddr addr, int32_t bootindex);
+-int rom_add_blob(const char *name, const void *blob, size_t len,
+-                 hwaddr addr);
++void *rom_add_blob(const char *name, const void *blob, size_t len,
++                   hwaddr addr, const char *fw_file_name,
++                   FWCfgReadCallback fw_callback, void *callback_opaque);
+ int rom_add_elf_program(const char *name, void *data, size_t datasize,
+                         size_t romsize, hwaddr addr);
+ int rom_load_all(void);
+@@ -40,7 +41,7 @@ void do_info_roms(Monitor *mon, const QDict *qdict);
+ #define rom_add_file_fixed(_f, _a, _i)          \
+     rom_add_file(_f, NULL, _a, _i)
+ #define rom_add_blob_fixed(_f, _b, _l, _a)      \
+-    rom_add_blob(_f, _b, _l, _a)
++    (rom_add_blob(_f, _b, _l, _a, NULL, NULL, NULL) ? 0 : -1)
+ 
+ #define PC_ROM_MIN_VGA     0xc0000
+ #define PC_ROM_MIN_OPTION  0xc8000
+-- 
+1.7.11.7
+

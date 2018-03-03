@@ -1,0 +1,50 @@
+From d6d48e0a9ce4dfc91085e450f2a9a334b1ece89b Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Fri, 10 Apr 2015 16:33:51 +0200
+Subject: [PATCH 03/14] vfio: Correction in vfio_rom_read when attempting rom
+ loading
+
+Message-id: <20150410163351.15324.30965.stgit@gimli.home>
+Patchwork-id: 64785
+O-Subject: [RHEL7.2 qemu-kvm PATCH 3/8] vfio: Correction in vfio_rom_read when attempting rom loading
+Bugzilla: 1210503
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+
+From: Bandan Das <bsd@redhat.com>
+
+Upstream: db01eedb6d883a1fed5b4079f8a6ff048b9c1217
+
+commit e638073c569e801ce9de added a flag to track whether
+a previous rom read had failed. Accidentally, the code
+ended up adding vfio_load_option_rom twice. (Thanks to Alex
+for spotting it)
+
+Signed-off-by: Bandan Das <bsd@redhat.com>
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c | 5 +----
+ 1 file changed, 1 insertion(+), 4 deletions(-)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index f3bf491..57bc974 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -1235,11 +1235,8 @@ static uint64_t vfio_rom_read(void *opaque, hwaddr addr, unsigned size)
+     uint64_t val = ((uint64_t)1 << (size * 8)) - 1;
+ 
+     /* Load the ROM lazily when the guest tries to read it */
+-    if (unlikely(!vdev->rom)) {
++    if (unlikely(!vdev->rom && !vdev->rom_read_failed)) {
+         vfio_pci_load_rom(vdev);
+-        if (unlikely(!vdev->rom && !vdev->rom_read_failed)) {
+-            vfio_pci_load_rom(vdev);
+-        }
+     }
+ 
+     memcpy(&val, vdev->rom + addr,
+-- 
+1.8.3.1
+

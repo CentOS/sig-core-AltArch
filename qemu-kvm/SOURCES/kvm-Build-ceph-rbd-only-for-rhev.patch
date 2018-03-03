@@ -1,0 +1,100 @@
+From 5d5af5b18e07ef4c97a45feeaad3fe493d38f427 Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Wed, 6 Nov 2013 15:43:26 +0100
+Subject: [PATCH 60/81] Build ceph/rbd only for rhev
+
+RH-Author: Miroslav Rezanina <mrezanin@redhat.com>
+Message-id: <58854c39ceb485b1ea685c02398db4462493dd35.1383752552.git.mrezanin@redhat.com>
+Patchwork-id: 55544
+O-Subject: [RHEL7 qemu-kvm PATCH] Build ceph/rbd only for rhev
+Bugzilla: 987583
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Miroslav Rezanina <mrezanin@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=987583
+Brewbuild: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=6536646 (RHEL)
+Brewbuild: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=6536615 (RHEV)
+
+We support ceph/rbd only for rhev qemu-kvm so it has to be disabled for rhel
+qemu-kvm. This patch forwardport RHEL-6 way of disabling rbd but use new
+way of handling introduced by Jeff Cody.
+
+This patch is based on Jeff's "RHEL Storage Differentiation" series and should be
+applied with it. Both brew build include all 4 differentiation patches.
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/Makefile.objs           |  2 +-
+ configure                     | 11 +++++++++++
+ redhat/qemu-kvm.spec.template |  6 ++++++
+ 3 files changed, 18 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/Makefile.objs           |    2 +-
+ configure                     |   11 +++++++++++
+ redhat/qemu-kvm.spec.template |    6 ++++++
+ 3 files changed, 18 insertions(+), 1 deletions(-)
+
+diff --git a/block/Makefile.objs b/block/Makefile.objs
+index f355271..41a284b 100644
+--- a/block/Makefile.objs
++++ b/block/Makefile.objs
+@@ -12,7 +12,7 @@ ifeq ($(CONFIG_POSIX),y)
+ block-obj-y += nbd.o sheepdog.o
+ block-obj-$(CONFIG_LIBISCSI) += iscsi.o
+ block-obj-$(CONFIG_CURL) += curl.o
+-block-obj-y += rbd.o
++block-obj-$(CONFIG_CEPH_SUPPORT) += rbd.o
+ block-obj-$(CONFIG_GLUSTERFS) += gluster.o
+ block-obj-$(CONFIG_LIBSSH2) += ssh.o
+ endif
+diff --git a/configure b/configure
+index d658434..1af1079 100755
+--- a/configure
++++ b/configure
+@@ -242,6 +242,7 @@ tpm="no"
+ libssh2=""
+ live_block_ops="yes"
+ live_block_migration="no"
++ceph_support="yes"
+ 
+ # parse CC options first
+ for opt do
+@@ -937,6 +938,10 @@ for opt do
+   ;;
+   --enable-live-block-migration) live_block_migration="yes"
+   ;;
++  --disable-ceph-support) ceph_support=="no"
++  ;;
++  --enable-ceph-support) ceph_support=="yes"
++  ;;
+ *) echo "ERROR: unknown option $opt"; show_help="yes"
+   ;;
+   esac
+@@ -1209,6 +1214,8 @@ echo "  --disable-live-block-ops disable live block operations support"
+ echo "  --enable-live-block-ops  enable live block operations support"
+ echo "  --disable-live-block-migration disable live block migration"
+ echo "  --enable-live-block-migration  enable live block migration"
++echo "  --disable-ceph-support   disable support for rbd block driver support"
++echo "  --enable-ceph-support    enable support for rbd block driver support"
+ echo ""
+ echo "NOTE: The object files are built at the place where configure is launched"
+ exit 1
+@@ -3964,6 +3971,10 @@ if test "$live_block_migration" = "yes" ; then
+   echo "CONFIG_LIVE_BLOCK_MIGRATION=y" >> $config_host_mak
+ fi
+ 
++if test "ceph_support" = "yes"; then
++  echo "CONFIG_CEPH_SUPPORT=y" >> $config_host_mak
++fi
++
+ # USB host support
+ if test "$libusb" = "yes"; then
+   echo "HOST_USB=libusb legacy" >> $config_host_mak
+-- 
+1.7.1
+

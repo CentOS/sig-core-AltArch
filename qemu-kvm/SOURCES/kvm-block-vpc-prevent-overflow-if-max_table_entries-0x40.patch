@@ -1,0 +1,94 @@
+From aab4d4ef24bf36c65e4d33cf817903118061ad85 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Wed, 29 Jul 2015 16:59:54 +0200
+Subject: [PATCH 03/13] block: vpc - prevent overflow if max_table_entries >=
+ 0x40000000
+
+Message-id: <6ed83012cdee022f7015ed8fc7bc93abc3a8ef76.1438188988.git.jcody@redhat.com>
+Patchwork-id: 67199
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 2/3] block: vpc - prevent overflow if max_table_entries >= 0x40000000
+Bugzilla: 1217349
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+When we allocate the pagetable based on max_table_entries, we multiply
+the max table entry value by 4 to accomodate a table of 32-bit integers.
+However, max_table_entries is a uint32_t, and the VPC driver accepts
+ranges for that entry over 0x40000000.  So during this allocation:
+
+s->pagetable = qemu_try_blockalign(bs->file, s->max_table_entries * 4);
+
+The size arg overflows, allocating significantly less memory than
+expected.
+
+Since qemu_try_blockalign() size argument is size_t, cast the
+multiplication correctly to prevent overflow.
+
+The value of "max_table_entries * 4" is used elsewhere in the code as
+well, so store the correct value for use in all those cases.
+
+We also check the Max Tables Entries value, to make sure that it is <
+SIZE_MAX / 4, so we know the pagetable size will fit in size_t.
+
+Cc: qemu-stable@nongnu.org
+Reported-by: Richard W.M. Jones <rjones@redhat.com>
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit b15deac79530d818092cb49a8021bcce83d71b5b)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vpc.c | 18 ++++++++++++++----
+ 1 file changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/block/vpc.c b/block/vpc.c
+index 6fdce40..1ded510 100644
+--- a/block/vpc.c
++++ b/block/vpc.c
+@@ -167,6 +167,7 @@ static int vpc_open(BlockDriverState *bs, QDict *options, int flags,
+     uint8_t buf[HEADER_SIZE];
+     uint32_t checksum;
+     uint64_t computed_size;
++    uint64_t pagetable_size;
+     int disk_type = VHD_DYNAMIC;
+     int ret;
+ 
+@@ -260,7 +261,17 @@ static int vpc_open(BlockDriverState *bs, QDict *options, int flags,
+             goto fail;
+         }
+ 
+-        s->pagetable = qemu_try_blockalign(bs->file, s->max_table_entries * 4);
++        if (s->max_table_entries > SIZE_MAX / 4 ||
++            s->max_table_entries > (int) INT_MAX / 4) {
++            error_setg(errp, "Max Table Entries too large (%" PRId32 ")",
++                        s->max_table_entries);
++            ret = -EINVAL;
++            goto fail;
++        }
++
++        pagetable_size = (uint64_t) s->max_table_entries * 4;
++
++        s->pagetable = qemu_try_blockalign(bs->file, pagetable_size);
+         if (s->pagetable == NULL) {
+             ret = -ENOMEM;
+             goto fail;
+@@ -268,14 +279,13 @@ static int vpc_open(BlockDriverState *bs, QDict *options, int flags,
+ 
+         s->bat_offset = be64_to_cpu(dyndisk_header->table_offset);
+ 
+-        ret = bdrv_pread(bs->file, s->bat_offset, s->pagetable,
+-                         s->max_table_entries * 4);
++        ret = bdrv_pread(bs->file, s->bat_offset, s->pagetable, pagetable_size);
+         if (ret < 0) {
+             goto fail;
+         }
+ 
+         s->free_data_block_offset =
+-            (s->bat_offset + (s->max_table_entries * 4) + 511) & ~511;
++            ROUND_UP(s->bat_offset + pagetable_size, 512);
+ 
+         for (i = 0; i < s->max_table_entries; i++) {
+             be32_to_cpus(&s->pagetable[i]);
+-- 
+1.8.3.1
+

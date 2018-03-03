@@ -1,0 +1,54 @@
+From cd4c45ef3c5323053d76057a0435759ce84ede90 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Fri, 6 Jun 2014 04:11:38 +0200
+Subject: [PATCH 09/13] scsi-disk: Improve error messager if can't get version number
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1402027899-1917-2-git-send-email-famz@redhat.com>
+Patchwork-id: 59163
+O-Subject: [RHEL-7 qemu-kvm PATCH 1/2] scsi-disk: Improve error messager if can't get version number
+Bugzilla: 1021788
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+More often it is that bdrv_ioctl fails due to not supported by driver or
+whatever reason, in this case we should be specific, because "interface
+too old" is very confusing.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 4bbeb8b173e8116851d5ececb93189ae34c68309)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ hw/scsi/scsi-disk.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/scsi/scsi-disk.c |    9 +++++++--
+ 1 files changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/hw/scsi/scsi-disk.c b/hw/scsi/scsi-disk.c
+index 6491091..5a6384e 100644
+--- a/hw/scsi/scsi-disk.c
++++ b/hw/scsi/scsi-disk.c
+@@ -2439,8 +2439,13 @@ static int scsi_block_initfn(SCSIDevice *dev)
+     }
+ 
+     /* check we are using a driver managing SG_IO (version 3 and after) */
+-    if (bdrv_ioctl(s->qdev.conf.bs, SG_GET_VERSION_NUM, &sg_version) < 0 ||
+-        sg_version < 30000) {
++    rc =  bdrv_ioctl(s->qdev.conf.bs, SG_GET_VERSION_NUM, &sg_version);
++    if (rc < 0) {
++        error_report("scsi-block: can not get version number: %s",
++                     strerror(-rc));
++        return -1;
++    }
++    if (sg_version < 30000) {
+         error_report("scsi-block: scsi generic interface too old");
+         return -1;
+     }
+-- 
+1.7.1
+

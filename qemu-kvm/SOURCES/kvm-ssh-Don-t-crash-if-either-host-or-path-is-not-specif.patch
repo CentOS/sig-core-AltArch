@@ -1,0 +1,70 @@
+From 566d5a879e639f0dd5beacf49e5fcb03691aac09 Mon Sep 17 00:00:00 2001
+From: Richard Jones <rjones@redhat.com>
+Date: Mon, 8 Jun 2015 11:57:00 +0200
+Subject: [PATCH 07/30] ssh: Don't crash if either host or path is not
+ specified.
+
+Message-id: <1433764620-20506-7-git-send-email-rjones@redhat.com>
+Patchwork-id: 65481
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 6/6] ssh: Don't crash if either host or path is not specified.
+Bugzilla: 1226683
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: "Richard W.M. Jones" <rjones@redhat.com>
+
+$ ./qemu-img create -f qcow2 overlay \
+    -b 'json: { "file.driver":"ssh",
+                "file.host":"localhost",
+                "file.host_key_check":"no" }'
+qemu-img: qobject/qdict.c:193: qdict_get_obj: Assertion `obj != ((void *)0)' failed.
+Aborted
+
+A similar crash also happens if the file.host field is omitted.
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1147343
+
+Bug found and reported by Jun Li.
+
+Signed-off-by: Richard W.M. Jones <rjones@redhat.com>
+Reviewed-by: Gonglei <arei.gonglei@huawei.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Upstream-status: 18fe46d79a6de61cb2c379fb610d834ef658d84b
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/ssh.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/block/ssh.c b/block/ssh.c
+index 3b4d9e7..b00ff7f 100644
+--- a/block/ssh.c
++++ b/block/ssh.c
+@@ -517,6 +517,11 @@ static int connect_to_ssh(BDRVSSHState *s, QDict *options,
+     const char *host, *user, *path, *host_key_check;
+     int port;
+ 
++    if (!qdict_haskey(options, "host")) {
++        ret = -EINVAL;
++        error_setg(errp, "No hostname was specified");
++        goto err;
++    }
+     host = qdict_get_str(options, "host");
+ 
+     if (qdict_haskey(options, "port")) {
+@@ -525,6 +530,11 @@ static int connect_to_ssh(BDRVSSHState *s, QDict *options,
+         port = 22;
+     }
+ 
++    if (!qdict_haskey(options, "path")) {
++        ret = -EINVAL;
++        error_setg(errp, "No path was specified");
++        goto err;
++    }
+     path = qdict_get_str(options, "path");
+ 
+     if (qdict_haskey(options, "user")) {
+-- 
+1.8.3.1
+

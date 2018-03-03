@@ -1,0 +1,61 @@
+From 464ceecd1e9c070e613624fb896df54b7e4a3e38 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Wed, 11 May 2016 12:33:42 +0200
+Subject: [PATCH 03/10] acpi: strip compiler info in built-in DSDT
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1462970028-10959-2-git-send-email-lersek@redhat.com>
+Patchwork-id: 70378
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 1/7] acpi: strip compiler info in built-in DSDT
+Bugzilla: 1330969
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+
+From: "Michael S. Tsirkin" <mst@redhat.com>
+
+IASL stores it's revision in each table header it generates.
+That's not nice since guests will see a change each time they move
+between hypervisors.  We generally fill our own info for tables, but we
+(and seabios) forgot to do this for the built-in DSDT.
+
+Modifications in DSDT table:
+ OEM ID:            "BXPC" -> "BOCHS "
+ OEM Table ID:      "BXDSDT" -> "BXPCDSDT"
+ Compiler ID:       "INTL" -> "BXPC"
+ Compiler Version:  0x20130823 -> 0x00000001
+
+Tested-by: Marcel Apfelbaum <marcel.a@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 53db092ad1c81c30a617f44e83e8fb9e27c001ba)
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/acpi-build.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/hw/i386/acpi-build.c b/hw/i386/acpi-build.c
+index 8be1286..a3a4c3b 100644
+--- a/hw/i386/acpi-build.c
++++ b/hw/i386/acpi-build.c
+@@ -924,10 +924,16 @@ build_mcfg_q35(GArray *table_data, GArray *linker, AcpiMcfgInfo *info)
+ static void
+ build_dsdt(GArray *table_data, GArray *linker, AcpiMiscInfo *misc)
+ {
+-    void *dsdt;
++    AcpiTableHeader *dsdt;
++
+     assert(misc->dsdt_code && misc->dsdt_size);
++
+     dsdt = acpi_data_push(table_data, misc->dsdt_size);
+     memcpy(dsdt, misc->dsdt_code, misc->dsdt_size);
++
++    memset(dsdt, 0, sizeof *dsdt);
++    build_header(linker, table_data, dsdt, ACPI_DSDT_SIGNATURE,
++                 misc->dsdt_size, 1);
+ }
+ 
+ /* Build final rsdt table */
+-- 
+1.8.3.1
+

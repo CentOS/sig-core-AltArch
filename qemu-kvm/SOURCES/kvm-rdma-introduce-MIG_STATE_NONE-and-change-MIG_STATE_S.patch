@@ -1,0 +1,140 @@
+From 8495376b2f1376da64faa0a62a8ec06a4499d735 Mon Sep 17 00:00:00 2001
+Message-Id: <8495376b2f1376da64faa0a62a8ec06a4499d735.1387382496.git.minovotn@redhat.com>
+In-Reply-To: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+References: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+From: Nigel Croxon <ncroxon@redhat.com>
+Date: Thu, 14 Nov 2013 22:52:54 +0100
+Subject: [PATCH 18/46] rdma: introduce MIG_STATE_NONE and change
+ MIG_STATE_SETUP state transition
+
+RH-Author: Nigel Croxon <ncroxon@redhat.com>
+Message-id: <1384469598-13137-19-git-send-email-ncroxon@redhat.com>
+Patchwork-id: 55699
+O-Subject: [RHEL7.0 PATCH 18/42] rdma: introduce MIG_STATE_NONE and change MIG_STATE_SETUP state transition
+Bugzilla: 1011720
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: 1011720
+https://bugzilla.redhat.com/show_bug.cgi?id=1011720
+
+>From commit ID:
+commit 29ae8a4133082e16970c9d4be09f4b6a15034617
+Author: Michael R. Hines <mrhines@us.ibm.com>
+Date:   Mon Jul 22 10:01:57 2013 -0400
+
+    rdma: introduce MIG_STATE_NONE and change MIG_STATE_SETUP state transition
+
+    As described in the previous patch, until now, the MIG_STATE_SETUP
+    state was not really a 'formal' state. It has been used as a 'zero' state
+    (what we're calling 'NONE' here) and QEMU has been unconditionally transitioning
+    into this state when the QMP migration command was called. Instead we want to
+    introduce MIG_STATE_NONE, which is our starting state in the state machine, and
+    then immediately transition into the MIG_STATE_SETUP state when the QMP migrate
+    command is issued.
+
+    In order to do this, we must delay the transition into MIG_STATE_ACTIVE until
+    later in the migration_thread(). This is done to be able to timestamp the amount of
+    time spent in the SETUP state for proper accounting to the user during
+    an RDMA migration.
+
+    Furthermore, the management software, until now, has never been aware of the
+    existence of the SETUP state whatsoever. This must change, because, timing of this
+    state implies that the state actually exists.
+
+    These two patches cannot be separated because the 'query_migrate' QMP
+    switch statement needs to know how to handle this new state transition.
+
+    Reviewed-by: Juan Quintela <quintela@redhat.com>
+    Tested-by: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Juan Quintela <quintela@redhat.com>
+---
+ migration.c |   21 ++++++++++++++-------
+ 1 files changed, 14 insertions(+), 7 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ migration.c | 21 ++++++++++++++-------
+ 1 file changed, 14 insertions(+), 7 deletions(-)
+
+diff --git a/migration.c b/migration.c
+index e885bb7..ddbfd45 100644
+--- a/migration.c
++++ b/migration.c
+@@ -36,7 +36,8 @@
+ #endif
+ 
+ enum {
+-    MIG_STATE_ERROR,
++    MIG_STATE_ERROR = -1,
++    MIG_STATE_NONE,
+     MIG_STATE_SETUP,
+     MIG_STATE_CANCELLED,
+     MIG_STATE_ACTIVE,
+@@ -63,7 +64,7 @@ static NotifierList migration_state_notifiers =
+ MigrationState *migrate_get_current(void)
+ {
+     static MigrationState current_migration = {
+-        .state = MIG_STATE_SETUP,
++        .state = MIG_STATE_NONE,
+         .bandwidth_limit = MAX_THROTTLE,
+         .xbzrle_cache_size = DEFAULT_MIGRATE_CACHE_SIZE,
+         .mbps = -1,
+@@ -184,9 +185,13 @@ MigrationInfo *qmp_query_migrate(Error **errp)
+     MigrationState *s = migrate_get_current();
+ 
+     switch (s->state) {
+-    case MIG_STATE_SETUP:
++    case MIG_STATE_NONE:
+         /* no migration has happened ever */
+         break;
++    case MIG_STATE_SETUP:
++        info->has_status = true;
++        info->status = g_strdup("setup");
++        break;
+     case MIG_STATE_ACTIVE:
+         info->has_status = true;
+         info->status = g_strdup("active");
+@@ -258,7 +263,7 @@ void qmp_migrate_set_capabilities(MigrationCapabilityStatusList *params,
+     MigrationState *s = migrate_get_current();
+     MigrationCapabilityStatusList *cap;
+ 
+-    if (s->state == MIG_STATE_ACTIVE) {
++    if (s->state == MIG_STATE_ACTIVE || s->state == MIG_STATE_SETUP) {
+         error_set(errp, QERR_MIGRATION_ACTIVE);
+         return;
+     }
+@@ -401,7 +406,7 @@ void qmp_migrate(const char *uri, bool has_blk, bool blk,
+     }
+ #endif
+ 
+-    if (s->state == MIG_STATE_ACTIVE) {
++    if (s->state == MIG_STATE_ACTIVE || s->state == MIG_STATE_SETUP) {
+         error_set(errp, QERR_MIGRATION_ACTIVE);
+         return;
+     }
+@@ -551,6 +556,8 @@ static void *migration_thread(void *opaque)
+     DPRINTF("beginning savevm\n");
+     qemu_savevm_state_begin(s->file, &s->params);
+ 
++    migrate_set_state(s, MIG_STATE_SETUP, MIG_STATE_ACTIVE);
++
+     while (s->state == MIG_STATE_ACTIVE) {
+         int64_t current_time;
+         uint64_t pending_size;
+@@ -641,8 +648,8 @@ static void *migration_thread(void *opaque)
+ 
+ void migrate_fd_connect(MigrationState *s)
+ {
+-    s->state = MIG_STATE_ACTIVE;
+-    trace_migrate_set_state(MIG_STATE_ACTIVE);
++    s->state = MIG_STATE_SETUP;
++    trace_migrate_set_state(MIG_STATE_SETUP);
+ 
+     /* This is a best 1st approximation. ns to ms */
+     s->expected_downtime = max_downtime/1000000;
+-- 
+1.7.11.7
+

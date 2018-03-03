@@ -1,0 +1,89 @@
+From 6fa94ac455819e37a16ed8439be4bbf0b869884c Mon Sep 17 00:00:00 2001
+Message-Id: <6fa94ac455819e37a16ed8439be4bbf0b869884c.1387276076.git.minovotn@redhat.com>
+In-Reply-To: <e610718166120379517e80d1a7aa12d60294209b.1387276076.git.minovotn@redhat.com>
+References: <e610718166120379517e80d1a7aa12d60294209b.1387276076.git.minovotn@redhat.com>
+From: Vlad Yasevich <vyasevic@redhat.com>
+Date: Wed, 11 Dec 2013 21:40:06 +0100
+Subject: [PATCH 16/16] net: Update netdev peer on link change
+
+RH-Author: Vlad Yasevich <vyasevic@redhat.com>
+Message-id: <1386798006-31753-1-git-send-email-vyasevic@redhat.com>
+Patchwork-id: 56241
+O-Subject: [RHEL 7.0 qemu PATCH] net: Update netdev peer on link change
+Bugzilla: 1027571
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Xiao Wang <jasowang@redhat.com>
+
+BZ: https://bugzilla.redhat.com/show_bug.cgi?id=1027571
+Brew: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=6714640
+
+When a link change occurs on a backend (like tap), we currently do
+not propage such change to the nic.  As a result, when someone turns
+off a link on a tap device, for instance, then a guest doesn't see
+that change and continues to try to send traffic or run DHCP even
+though the lower-layer is disconnected.  This is OK when the network
+is set up as a HUB since the the guest may be connected to other HUB
+ports too, but when it's set up as a netdev, it makes thinkgs worse.
+
+The patch addresses this by setting the peers link down only when the
+peer is not a HUBPORT device.  With this patch, in the following config
+  -netdev tap,id=net0 -device e1000,mac=XXXXX,netdev=net0
+when net0 link is turned off, the guest e1000 shows lower-layer link
+down. This allows guests to boot much faster in such configurations.
+With windows guest, it also allows the network to recover properly
+since windows will not configure the link-local IPv4 address, and
+when the link is turned on, the proper address address is configured.
+
+Signed-off-by: Vlad Yasevich <vyasevic@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 02d38fcb2caa4454cf4ed728d5908c3cc9ba47be)
+---
+ net/net.c | 26 +++++++++++++++++---------
+ 1 file changed, 17 insertions(+), 9 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ net/net.c | 26 +++++++++++++++++---------
+ 1 file changed, 17 insertions(+), 9 deletions(-)
+
+diff --git a/net/net.c b/net/net.c
+index c0d61bf..a8c49fc 100644
+--- a/net/net.c
++++ b/net/net.c
+@@ -1059,15 +1059,23 @@ void qmp_set_link(const char *name, bool up, Error **errp)
+         nc->info->link_status_changed(nc);
+     }
+ 
+-    /* Notify peer. Don't update peer link status: this makes it possible to
+-     * disconnect from host network without notifying the guest.
+-     * FIXME: is disconnected link status change operation useful?
+-     *
+-     * Current behaviour is compatible with qemu vlans where there could be
+-     * multiple clients that can still communicate with each other in
+-     * disconnected mode. For now maintain this compatibility. */
+-    if (nc->peer && nc->peer->info->link_status_changed) {
+-        nc->peer->info->link_status_changed(nc->peer);
++    if (nc->peer) {
++        /* Change peer link only if the peer is NIC and then notify peer.
++         * If the peer is a HUBPORT or a backend, we do not change the
++         * link status.
++         *
++         * This behavior is compatible with qemu vlans where there could be
++         * multiple clients that can still communicate with each other in
++         * disconnected mode. For now maintain this compatibility.
++         */
++        if (nc->peer->info->type == NET_CLIENT_OPTIONS_KIND_NIC) {
++            for (i = 0; i < queues; i++) {
++                ncs[i]->peer->link_down = !up;
++            }
++        }
++        if (nc->peer->info->link_status_changed) {
++            nc->peer->info->link_status_changed(nc->peer);
++        }
+     }
+ }
+ 
+-- 
+1.7.11.7
+

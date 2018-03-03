@@ -1,0 +1,361 @@
+From f602774bca68ddc853f88cf90c62e1af94390731 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 6 Nov 2013 09:09:09 +0100
+Subject: [PATCH 23/29] smbios: Make multiple -smbios type= accumulate sanely
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1383386488-29789-7-git-send-email-armbru@redhat.com>
+Patchwork-id: 55244
+O-Subject: [PATCH 7.0 qemu-kvm 06/11] smbios: Make multiple -smbios type= accumulate sanely
+Bugzilla: 994490
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Currently, -smbios type=T,NAME=VAL,... adds one field (T,NAME) with
+value VAL to fw_cfg for each unique NAME.  If NAME occurs multiple
+times, the last one's VAL is used (before the QemuOpts conversion, the
+first one was used).
+
+Multiple -smbios can add multiple fields with the same (T, NAME).
+SeaBIOS reads all of them from fw_cfg, but uses only the first field
+(T, NAME).  The others are ignored.
+
+"First one wins, subsequent ones get ignored silently" isn't nice.  We
+commonly let the last option win.  Useful, because it lets you
+-readconfig first, then selectively override with command line
+options.
+
+Clean up -smbios to work the common way.  Accumulate the settings,
+with later ones overwriting earlier ones.  Put the result into fw_cfg
+(no more useless duplicates).
+
+Bonus cleanup: qemu_uuid_parse() no longer sets SMBIOS system uuid by
+side effect.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit fc3b32958a80bca13309e2695de07b43dd788421)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ arch_init.c              |    3 -
+ hw/i386/smbios.c         |  152 +++++++++++++++++++++++++++------------------
+ include/hw/i386/smbios.h |    1 -
+ include/sysemu/sysemu.h  |    1 +
+ vl.c                     |    2 +
+ 5 files changed, 94 insertions(+), 65 deletions(-)
+
+diff --git a/arch_init.c b/arch_init.c
+index d8c4e2e..5301cfd 100644
+--- a/arch_init.c
++++ b/arch_init.c
+@@ -1056,9 +1056,6 @@ int qemu_uuid_parse(const char *str, uint8_t *uuid)
+     if (ret != 16) {
+         return -1;
+     }
+-#ifdef TARGET_I386
+-    smbios_add_field(1, offsetof(struct smbios_type_1, uuid), uuid, 16);
+-#endif
+     return 0;
+ }
+ 
+diff --git a/hw/i386/smbios.c b/hw/i386/smbios.c
+index 4263551..d2dba6c 100644
+--- a/hw/i386/smbios.c
++++ b/hw/i386/smbios.c
+@@ -47,6 +47,7 @@ struct smbios_table {
+ static uint8_t *smbios_entries;
+ static size_t smbios_entries_len;
+ static int smbios_type4_count = 0;
++static bool smbios_immutable;
+ 
+ static struct {
+     bool seen;
+@@ -54,6 +55,17 @@ static struct {
+     Location loc;
+ } first_opt[2];
+ 
++static struct {
++    const char *vendor, *version, *date;
++    bool have_major_minor;
++    uint8_t major, minor;
++} type0;
++
++static struct {
++    const char *manufacturer, *product, *version, *serial, *sku, *family;
++    /* uuid is in qemu_uuid[] */
++} type1;
++
+ static QemuOptsList qemu_smbios_opts = {
+     .name = "smbios",
+     .head = QTAILQ_HEAD_INITIALIZER(qemu_smbios_opts.head),
+@@ -152,13 +164,6 @@ static void smbios_validate_table(void)
+     }
+ }
+ 
+-uint8_t *smbios_get_table(size_t *length)
+-{
+-    smbios_validate_table();
+-    *length = smbios_entries_len;
+-    return smbios_entries;
+-}
+-
+ /*
+  * To avoid unresolvable overlaps in data, don't allow both
+  * tables and fields for the same smbios type.
+@@ -182,12 +187,10 @@ static void smbios_check_collision(int type, int entry)
+     }
+ }
+ 
+-void smbios_add_field(int type, int offset, const void *data, size_t len)
++static void smbios_add_field(int type, int offset, const void *data, size_t len)
+ {
+     struct smbios_field *field;
+ 
+-    smbios_check_collision(type, SMBIOS_FIELD_ENTRY);
+-
+     if (!smbios_entries) {
+         smbios_entries_len = sizeof(uint16_t);
+         smbios_entries = g_malloc0(smbios_entries_len);
+@@ -207,82 +210,81 @@ void smbios_add_field(int type, int offset, const void *data, size_t len)
+             cpu_to_le16(le16_to_cpu(*(uint16_t *)smbios_entries) + 1);
+ }
+ 
+-static void smbios_build_type_0_fields(QemuOpts *opts)
++static void smbios_build_type_0_fields(void)
+ {
+-    const char *val;
+-    unsigned char major, minor;
+-
+-    val = qemu_opt_get(opts, "vendor");
+-    if (val) {
++    if (type0.vendor) {
+         smbios_add_field(0, offsetof(struct smbios_type_0, vendor_str),
+-                         val, strlen(val) + 1);
++                         type0.vendor, strlen(type0.vendor) + 1);
+     }
+-    val = qemu_opt_get(opts, "version");
+-    if (val) {
++    if (type0.version) {
+         smbios_add_field(0, offsetof(struct smbios_type_0, bios_version_str),
+-                         val, strlen(val) + 1);
++                         type0.version, strlen(type0.version) + 1);
+     }
+-    val = qemu_opt_get(opts, "date");
+-    if (val) {
++    if (type0.date) {
+         smbios_add_field(0, offsetof(struct smbios_type_0,
+                                      bios_release_date_str),
+-                         val, strlen(val) + 1);
++                         type0.date, strlen(type0.date) + 1);
+     }
+-    val = qemu_opt_get(opts, "release");
+-    if (val) {
+-        if (sscanf(val, "%hhu.%hhu", &major, &minor) != 2) {
+-            error_report("Invalid release");
+-            exit(1);
+-        }
++    if (type0.have_major_minor) {
+         smbios_add_field(0, offsetof(struct smbios_type_0,
+                                      system_bios_major_release),
+-                         &major, 1);
++                         &type0.major, 1);
+         smbios_add_field(0, offsetof(struct smbios_type_0,
+                                      system_bios_minor_release),
+-                         &minor, 1);
++                         &type0.minor, 1);
+     }
+ }
+ 
+-static void smbios_build_type_1_fields(QemuOpts *opts)
++static void smbios_build_type_1_fields(void)
+ {
+-    const char *val;
+-
+-    val = qemu_opt_get(opts, "manufacturer");
+-    if (val) {
++    if (type1.manufacturer) {
+         smbios_add_field(1, offsetof(struct smbios_type_1, manufacturer_str),
+-                         val, strlen(val) + 1);
++                         type1.manufacturer, strlen(type1.manufacturer) + 1);
+     }
+-    val = qemu_opt_get(opts, "product");
+-    if (val) {
++    if (type1.product) {
+         smbios_add_field(1, offsetof(struct smbios_type_1, product_name_str),
+-                         val, strlen(val) + 1);
++                         type1.product, strlen(type1.product) + 1);
+     }
+-    val = qemu_opt_get(opts, "version");
+-    if (val) {
++    if (type1.version) {
+         smbios_add_field(1, offsetof(struct smbios_type_1, version_str),
+-                         val, strlen(val) + 1);
++                         type1.version, strlen(type1.version) + 1);
+     }
+-    val = qemu_opt_get(opts, "serial");
+-    if (val) {
++    if (type1.serial) {
+         smbios_add_field(1, offsetof(struct smbios_type_1, serial_number_str),
+-                         val, strlen(val) + 1);
+-    }
+-    val = qemu_opt_get(opts, "uuid");
+-    if (val) {
+-        if (qemu_uuid_parse(val, qemu_uuid) != 0) {
+-            error_report("Invalid UUID");
+-            exit(1);
+-        }
++                         type1.serial, strlen(type1.serial) + 1);
+     }
+-    val = qemu_opt_get(opts, "sku");
+-    if (val) {
++    if (type1.sku) {
+         smbios_add_field(1, offsetof(struct smbios_type_1, sku_number_str),
+-                         val, strlen(val) + 1);
++                         type1.sku, strlen(type1.sku) + 1);
+     }
+-    val = qemu_opt_get(opts, "family");
+-    if (val) {
++    if (type1.family) {
+         smbios_add_field(1, offsetof(struct smbios_type_1, family_str),
+-                         val, strlen(val) + 1);
++                         type1.family, strlen(type1.family) + 1);
++    }
++    if (qemu_uuid_set) {
++        smbios_add_field(1, offsetof(struct smbios_type_1, uuid),
++                         qemu_uuid, 16);
++    }
++}
++
++uint8_t *smbios_get_table(size_t *length)
++{
++    if (!smbios_immutable) {
++        smbios_build_type_0_fields();
++        smbios_build_type_1_fields();
++        smbios_validate_table();
++        smbios_immutable = true;
++    }
++    *length = smbios_entries_len;
++    return smbios_entries;
++}
++
++static void save_opt(const char **dest, QemuOpts *opts, const char *name)
++{
++    const char *val = qemu_opt_get(opts, name);
++
++    if (val) {
++        *dest = val;
+     }
+ }
+ 
+@@ -291,6 +293,7 @@ void smbios_entry_add(QemuOpts *opts)
+     Error *local_err = NULL;
+     const char *val;
+ 
++    assert(!smbios_immutable);
+     val = qemu_opt_get(opts, "file");
+     if (val) {
+         struct smbios_structure_header *header;
+@@ -341,6 +344,8 @@ void smbios_entry_add(QemuOpts *opts)
+     if (val) {
+         unsigned long type = strtoul(val, NULL, 0);
+ 
++        smbios_check_collision(type, SMBIOS_FIELD_ENTRY);
++
+         switch (type) {
+         case 0:
+             qemu_opts_validate(opts, qemu_smbios_type0_opts, &local_err);
+@@ -348,7 +353,18 @@ void smbios_entry_add(QemuOpts *opts)
+                 error_report("%s", error_get_pretty(local_err));
+                 exit(1);
+             }
+-            smbios_build_type_0_fields(opts);
++            save_opt(&type0.vendor, opts, "vendor");
++            save_opt(&type0.version, opts, "version");
++            save_opt(&type0.date, opts, "date");
++
++            val = qemu_opt_get(opts, "release");
++            if (val) {
++                if (sscanf(val, "%hhu.%hhu", &type0.major, &type0.minor) != 2) {
++                    error_report("Invalid release");
++                    exit(1);
++                }
++                type0.have_major_minor = true;
++            }
+             return;
+         case 1:
+             qemu_opts_validate(opts, qemu_smbios_type1_opts, &local_err);
+@@ -356,7 +372,21 @@ void smbios_entry_add(QemuOpts *opts)
+                 error_report("%s", error_get_pretty(local_err));
+                 exit(1);
+             }
+-            smbios_build_type_1_fields(opts);
++            save_opt(&type1.manufacturer, opts, "manufacturer");
++            save_opt(&type1.product, opts, "product");
++            save_opt(&type1.version, opts, "version");
++            save_opt(&type1.serial, opts, "serial");
++            save_opt(&type1.sku, opts, "sku");
++            save_opt(&type1.family, opts, "family");
++
++            val = qemu_opt_get(opts, "uuid");
++            if (val) {
++                if (qemu_uuid_parse(val, qemu_uuid) != 0) {
++                    error_report("Invalid UUID");
++                    exit(1);
++                }
++                qemu_uuid_set = true;
++            }
+             return;
+         default:
+             error_report("Don't know how to build fields for SMBIOS type %ld",
+diff --git a/include/hw/i386/smbios.h b/include/hw/i386/smbios.h
+index d9f43b7..b08ec71 100644
+--- a/include/hw/i386/smbios.h
++++ b/include/hw/i386/smbios.h
+@@ -16,7 +16,6 @@
+ #include "qemu/option.h"
+ 
+ void smbios_entry_add(QemuOpts *opts);
+-void smbios_add_field(int type, int offset, const void *data, size_t len);
+ uint8_t *smbios_get_table(size_t *length);
+ 
+ /*
+diff --git a/include/sysemu/sysemu.h b/include/sysemu/sysemu.h
+index 76c5b64..8fbc818 100644
+--- a/include/sysemu/sysemu.h
++++ b/include/sysemu/sysemu.h
+@@ -16,6 +16,7 @@ extern const char *bios_name;
+ 
+ extern const char *qemu_name;
+ extern uint8_t qemu_uuid[];
++extern bool qemu_uuid_set;
+ int qemu_uuid_parse(const char *str, uint8_t *uuid);
+ 
+ #define UUID_FMT "%02hhx%02hhx%02hhx%02hhx-%02hhx%02hhx-%02hhx%02hhx-%02hhx%02hhx-%02hhx%02hhx%02hhx%02hhx%02hhx%02hhx"
+diff --git a/vl.c b/vl.c
+index e82eb1c..19cc3b2 100644
+--- a/vl.c
++++ b/vl.c
+@@ -256,6 +256,7 @@ uint64_t node_mem[MAX_NODES];
+ unsigned long *node_cpumask[MAX_NODES];
+ 
+ uint8_t qemu_uuid[16];
++bool qemu_uuid_set;
+ 
+ static QEMUBootSetHandler *boot_set_handler;
+ static void *boot_set_opaque;
+@@ -3573,6 +3574,7 @@ int main(int argc, char **argv, char **envp)
+                             " Wrong format.\n");
+                     exit(1);
+                 }
++                qemu_uuid_set = true;
+                 break;
+ 	    case QEMU_OPTION_option_rom:
+ 		if (nb_option_roms >= MAX_OPTION_ROMS) {
+-- 
+1.7.1
+

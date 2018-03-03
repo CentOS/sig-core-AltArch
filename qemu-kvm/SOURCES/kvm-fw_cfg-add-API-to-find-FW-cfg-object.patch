@@ -1,0 +1,113 @@
+From b33784c26d96c3c020f4b0245f77731af3f88b8e Mon Sep 17 00:00:00 2001
+From: Marcel Apfelbaum <marcel.a@redhat.com>
+Date: Wed, 6 Nov 2013 16:32:29 +0100
+Subject: [PATCH 70/81] fw_cfg: add API to find FW cfg object
+
+RH-Author: Marcel Apfelbaum <marcel.a@redhat.com>
+Message-id: <1383755557-21590-2-git-send-email-marcel.a@redhat.com>
+Patchwork-id: 55546
+O-Subject: [RHEL-7 qemu-kvm PATCH v3 1/9] fw_cfg: add API to find FW cfg object
+Bugzilla: 990601
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+
+From: "Michael S. Tsirkin" <mst@redhat.com>
+
+Remove some code duplication by adding a
+function to look up the fw cfg file.
+This way, we don't need to duplicate same strings everywhere.
+Use by both fw cfg and pvpanic device.
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 600c60b76d0682f6c39d19bfff79da9321e8cf86)
+Signed-off-by: Marcel Apfelbaum <marcel.a@redhat.com>
+---
+ hw/misc/pvpanic.c         |  2 +-
+ hw/nvram/fw_cfg.c         | 15 ++++++++++++---
+ include/hw/nvram/fw_cfg.h |  2 ++
+ 3 files changed, 15 insertions(+), 4 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/pvpanic.c         |    2 +-
+ hw/nvram/fw_cfg.c         |   15 ++++++++++++---
+ include/hw/nvram/fw_cfg.h |    2 ++
+ 3 files changed, 15 insertions(+), 4 deletions(-)
+
+diff --git a/hw/misc/pvpanic.c b/hw/misc/pvpanic.c
+index 439d636..d17c3c9 100644
+--- a/hw/misc/pvpanic.c
++++ b/hw/misc/pvpanic.c
+@@ -96,7 +96,7 @@ static int pvpanic_isa_initfn(ISADevice *dev)
+     isa_register_ioport(dev, &s->io, s->ioport);
+ 
+     if (!port_configured) {
+-        fw_cfg = object_resolve_path("/machine/fw_cfg", NULL);
++        fw_cfg = fw_cfg_find();
+         if (fw_cfg) {
+             fw_cfg_add_file(fw_cfg, "etc/pvpanic-port",
+                             g_memdup(&s->ioport, sizeof(s->ioport)),
+diff --git a/hw/nvram/fw_cfg.c b/hw/nvram/fw_cfg.c
+index 3fa1488..064344d 100644
+--- a/hw/nvram/fw_cfg.c
++++ b/hw/nvram/fw_cfg.c
+@@ -32,6 +32,9 @@
+ 
+ #define FW_CFG_SIZE 2
+ #define FW_CFG_DATA_SIZE 1
++#define TYPE_FW_CFG "fw_cfg"
++#define FW_CFG_NAME "fw_cfg"
++#define FW_CFG_PATH "/machine/" FW_CFG_NAME
+ 
+ typedef struct FWCfgEntry {
+     uint32_t len;
+@@ -493,8 +496,8 @@ FWCfgState *fw_cfg_init(uint32_t ctl_port, uint32_t data_port,
+ 
+     s = DO_UPCAST(FWCfgState, busdev.qdev, dev);
+ 
+-    if (!object_resolve_path("/machine/fw_cfg", NULL)) {
+-        object_property_add_child(qdev_get_machine(), "fw_cfg", OBJECT(s),
++    if (!object_resolve_path(FW_CFG_PATH, NULL)) {
++        object_property_add_child(qdev_get_machine(), FW_CFG_NAME, OBJECT(s),
+                                   NULL);
+     }
+ 
+@@ -553,6 +556,12 @@ static Property fw_cfg_properties[] = {
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
++FWCfgState *fw_cfg_find(void)
++{
++    return OBJECT_CHECK(FWCfgState, object_resolve_path(FW_CFG_PATH, NULL),
++                        TYPE_FW_CFG);
++}
++
+ static void fw_cfg_class_init(ObjectClass *klass, void *data)
+ {
+     DeviceClass *dc = DEVICE_CLASS(klass);
+@@ -565,7 +574,7 @@ static void fw_cfg_class_init(ObjectClass *klass, void *data)
+ }
+ 
+ static const TypeInfo fw_cfg_info = {
+-    .name          = "fw_cfg",
++    .name          = TYPE_FW_CFG,
+     .parent        = TYPE_SYS_BUS_DEVICE,
+     .instance_size = sizeof(FWCfgState),
+     .class_init    = fw_cfg_class_init,
+diff --git a/include/hw/nvram/fw_cfg.h b/include/hw/nvram/fw_cfg.h
+index 3e4a334..48a8aa4 100644
+--- a/include/hw/nvram/fw_cfg.h
++++ b/include/hw/nvram/fw_cfg.h
+@@ -73,6 +73,8 @@ void fw_cfg_add_file(FWCfgState *s, const char *filename, void *data,
+ FWCfgState *fw_cfg_init(uint32_t ctl_port, uint32_t data_port,
+                         hwaddr crl_addr, hwaddr data_addr);
+ 
++FWCfgState *fw_cfg_find(void);
++
+ #endif /* NO_QEMU_PROTOS */
+ 
+ #endif
+-- 
+1.7.1
+

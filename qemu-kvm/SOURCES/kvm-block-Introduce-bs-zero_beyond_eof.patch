@@ -1,0 +1,105 @@
+From 49b4262336e2875280d7d539851b5b318a86bc39 Mon Sep 17 00:00:00 2001
+From: Asias He <asias@redhat.com>
+Date: Thu, 12 Sep 2013 07:39:33 +0200
+Subject: [PATCH 13/29] block: Introduce bs->zero_beyond_eof
+
+RH-Author: Asias He <asias@redhat.com>
+Message-id: <1378971575-22416-3-git-send-email-asias@redhat.com>
+Patchwork-id: 54326
+O-Subject: [RHEL7.0 qemu-kvm PATCH 2/4] block: Introduce bs->zero_beyond_eof
+Bugzilla: 1007226
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+BZ: https://bugzilla.redhat.com/show_bug.cgi?id=1007226
+Brew: https://brewweb.devel.redhat.com/taskinfo?taskID=6275752
+
+In 4146b46c42e0989cb5842e04d88ab6ccb1713a48 (block: Produce zeros when
+protocols reading beyond end of file), we break qemu-iotests ./check
+-qcow2 022. This happens because qcow2 temporarily sets ->growable = 1
+for vmstate accesses (which are stored beyond the end of regular image
+data).
+
+We introduce the bs->zero_beyond_eof to allow qcow2_load_vmstate() to
+disable ->zero_beyond_eof temporarily in addition to enable ->growable.
+
+[Since the broken patch "block: Produce zeros when protocols reading
+beyond end of file" has not been merged yet, I have applied this fix
+*first* and will then apply the next patch to keep the tree bisectable.
+-- Stefan]
+
+Suggested-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Asias He <asias@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 0d51b4debee6fb322751a57097a1d675c7a7c38d)
+---
+ block.c                   | 2 ++
+ block/qcow2.c             | 3 +++
+ include/block/block_int.h | 3 +++
+ 3 files changed, 8 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c                   |    2 ++
+ block/qcow2.c             |    3 +++
+ include/block/block_int.h |    3 +++
+ 3 files changed, 8 insertions(+), 0 deletions(-)
+
+diff --git a/block.c b/block.c
+index f4a89b9..dbcad0e 100644
+--- a/block.c
++++ b/block.c
+@@ -708,6 +708,7 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
+ 
+     bs->open_flags = flags;
+     bs->buffer_alignment = 512;
++    bs->zero_beyond_eof = true;
+     open_flags = bdrv_open_flags(bs, flags);
+     bs->read_only = !(open_flags & BDRV_O_RDWR);
+ 
+@@ -1407,6 +1408,7 @@ void bdrv_close(BlockDriverState *bs)
+         bs->valid_key = 0;
+         bs->sg = 0;
+         bs->growable = 0;
++        bs->zero_beyond_eof = false;
+         QDECREF(bs->options);
+         bs->options = NULL;
+ 
+diff --git a/block/qcow2.c b/block/qcow2.c
+index abdc202..70da5bd 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -1722,12 +1722,15 @@ static int qcow2_load_vmstate(BlockDriverState *bs, uint8_t *buf,
+ {
+     BDRVQcowState *s = bs->opaque;
+     int growable = bs->growable;
++    bool zero_beyond_eof = bs->zero_beyond_eof;
+     int ret;
+ 
+     BLKDBG_EVENT(bs->file, BLKDBG_VMSTATE_LOAD);
+     bs->growable = 1;
++    bs->zero_beyond_eof = false;
+     ret = bdrv_pread(bs, qcow2_vm_state_offset(s) + pos, buf, size);
+     bs->growable = growable;
++    bs->zero_beyond_eof = zero_beyond_eof;
+ 
+     return ret;
+ }
+diff --git a/include/block/block_int.h b/include/block/block_int.h
+index 6078dd3..267be48 100644
+--- a/include/block/block_int.h
++++ b/include/block/block_int.h
+@@ -268,6 +268,9 @@ struct BlockDriverState {
+     /* Whether the disk can expand beyond total_sectors */
+     int growable;
+ 
++    /* Whether produces zeros when read beyond eof */
++    bool zero_beyond_eof;
++
+     /* the memory alignment required for the buffers handled by this driver */
+     int buffer_alignment;
+ 
+-- 
+1.7.1
+

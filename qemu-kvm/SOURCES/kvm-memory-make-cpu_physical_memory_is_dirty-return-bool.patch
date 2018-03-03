@@ -1,0 +1,80 @@
+From 478863d3d5428211d0d64a9928484e0b1f5be8a4 Mon Sep 17 00:00:00 2001
+From: Juan Quintela <quintela@redhat.com>
+Date: Tue, 14 Jan 2014 15:07:19 +0100
+Subject: [PATCH 08/40] memory: make cpu_physical_memory_is_dirty return bool
+
+RH-Author: Juan Quintela <quintela@redhat.com>
+Message-id: <1389712071-23303-9-git-send-email-quintela@redhat.com>
+Patchwork-id: 56664
+O-Subject: [RHEL7 qemu-kvm PATCH 08/40] memory: make cpu_physical_memory_is_dirty return bool
+Bugzilla: 997559
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Orit Wasserman <owasserm@redhat.com>
+(cherry picked from commit 4f08cabe9e6efe8a50abc30cfa59e8470ad434d7)
+Signed-off-by: Juan Quintela <quintela@trasno.org>
+---
+ exec.c                         | 7 ++-----
+ include/exec/memory-internal.h | 8 ++++++--
+ 2 files changed, 8 insertions(+), 7 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ exec.c                         |    7 ++-----
+ include/exec/memory-internal.h |    8 ++++++--
+ 2 files changed, 8 insertions(+), 7 deletions(-)
+
+diff --git a/exec.c b/exec.c
+index e993049..ea81329 100644
+--- a/exec.c
++++ b/exec.c
+@@ -1480,11 +1480,8 @@ static const MemoryRegionOps rom_mem_ops = {
+ static void notdirty_mem_write(void *opaque, hwaddr ram_addr,
+                                uint64_t val, unsigned size)
+ {
+-    int dirty_flags;
+-    dirty_flags = cpu_physical_memory_get_dirty_flags(ram_addr);
+     if (!cpu_physical_memory_get_dirty_flag(ram_addr, CODE_DIRTY_FLAG)) {
+         tb_invalidate_phys_page_fast(ram_addr, size);
+-        dirty_flags = cpu_physical_memory_get_dirty_flags(ram_addr);
+     }
+     switch (size) {
+     case 1:
+@@ -1499,8 +1496,8 @@ static void notdirty_mem_write(void *opaque, hwaddr ram_addr,
+     default:
+         abort();
+     }
+-    dirty_flags |= (0xff & ~CODE_DIRTY_FLAG);
+-    cpu_physical_memory_set_dirty_flags(ram_addr, dirty_flags);
++    cpu_physical_memory_set_dirty_flag(ram_addr, MIGRATION_DIRTY_FLAG);
++    cpu_physical_memory_set_dirty_flag(ram_addr, VGA_DIRTY_FLAG);
+     /* we remove the notdirty callback only if the code has been
+        flushed */
+     if (cpu_physical_memory_is_dirty(ram_addr))
+diff --git a/include/exec/memory-internal.h b/include/exec/memory-internal.h
+index 8872e36..dfc03e1 100644
+--- a/include/exec/memory-internal.h
++++ b/include/exec/memory-internal.h
+@@ -65,9 +65,13 @@ static inline bool cpu_physical_memory_get_dirty_flag(ram_addr_t addr,
+ }
+ 
+ /* read dirty bit (return 0 or 1) */
+-static inline int cpu_physical_memory_is_dirty(ram_addr_t addr)
++static inline bool cpu_physical_memory_is_dirty(ram_addr_t addr)
+ {
+-    return cpu_physical_memory_get_dirty_flags(addr) == 0xff;
++    bool vga = cpu_physical_memory_get_dirty_flag(addr, VGA_DIRTY_FLAG);
++    bool code = cpu_physical_memory_get_dirty_flag(addr, CODE_DIRTY_FLAG);
++    bool migration =
++        cpu_physical_memory_get_dirty_flag(addr, MIGRATION_DIRTY_FLAG);
++    return vga && code && migration;
+ }
+ 
+ static inline int cpu_physical_memory_get_dirty(ram_addr_t start,
+-- 
+1.7.1
+

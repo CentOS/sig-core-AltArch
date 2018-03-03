@@ -1,0 +1,146 @@
+From c75a52dd49f8b6f888a21952a30b5e3590093fd7 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 10 Mar 2014 10:33:23 +0100
+Subject: [PATCH 12/16] qemu-iotests: Test progress output for conversion
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1394447603-30527-3-git-send-email-kwolf@redhat.com>
+Patchwork-id: 58061
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 2/2] qemu-iotests: Test progress output for conversion
+Bugzilla: 1073728
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 2fa4c042bc55ec10b9ca16163697d02cddd2d768)
+
+Percentages in the output differ from upstream because RHEL 7 doesnt'
+have upstream commit 802c3d4c.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ tests/qemu-iotests/086     | 65 ++++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/086.out | 18 +++++++++++++
+ tests/qemu-iotests/group   |  1 +
+ 3 files changed, 84 insertions(+)
+ create mode 100755 tests/qemu-iotests/086
+ create mode 100644 tests/qemu-iotests/086.out
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/086     |   65 ++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/086.out |   18 ++++++++++++
+ tests/qemu-iotests/group   |    1 +
+ 3 files changed, 84 insertions(+), 0 deletions(-)
+ create mode 100755 tests/qemu-iotests/086
+ create mode 100644 tests/qemu-iotests/086.out
+
+diff --git a/tests/qemu-iotests/086 b/tests/qemu-iotests/086
+new file mode 100755
+index 0000000..48fe85b
+--- /dev/null
++++ b/tests/qemu-iotests/086
+@@ -0,0 +1,65 @@
++#!/bin/bash
++#
++# Test qemu-img progress output
++#
++# Copyright (C) 2014 Red Hat, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++
++# creator
++owner=kwolf@redhat.com
++
++seq=`basename $0`
++echo "QA output created by $seq"
++
++here=`pwd`
++tmp=/tmp/$$
++status=1	# failure is the default!
++
++_cleanup()
++{
++	_cleanup_test_img
++}
++trap "_cleanup; exit \$status" 0 1 2 3 15
++
++# get standard environment, filters and checks
++. ./common.rc
++. ./common.filter
++
++_supported_fmt qcow2
++_supported_proto file
++_supported_os Linux
++
++function run_qemu_img()
++{
++    echo
++    echo Testing: "$@" | _filter_testdir
++}
++
++size=128M
++
++_make_test_img $size
++$QEMU_IO -c 'write 0 1M' $TEST_IMG | _filter_qemu_io
++$QEMU_IO -c 'write 2M 1M' $TEST_IMG | _filter_qemu_io
++$QEMU_IO -c 'write 4M 1M' $TEST_IMG | _filter_qemu_io
++$QEMU_IO -c 'write 32M 1M' $TEST_IMG | _filter_qemu_io
++
++$QEMU_IMG convert -p -O $IMGFMT -f $IMGFMT "$TEST_IMG" "$TEST_IMG".base  2>&1 |\
++    _filter_testdir | sed -e 's/\r/\n/g'
++
++# success, all done
++echo "*** done"
++rm -f $seq.full
++status=0
+diff --git a/tests/qemu-iotests/086.out b/tests/qemu-iotests/086.out
+new file mode 100644
+index 0000000..fcf4425
+--- /dev/null
++++ b/tests/qemu-iotests/086.out
+@@ -0,0 +1,18 @@
++QA output created by 086
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=134217728 
++wrote 1048576/1048576 bytes at offset 0
++1 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote 1048576/1048576 bytes at offset 2097152
++1 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote 1048576/1048576 bytes at offset 4194304
++1 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote 1048576/1048576 bytes at offset 33554432
++1 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++    (0.00/100%)
++    (1.56/100%)
++    (3.12/100%)
++    (4.69/100%)
++    (26.56/100%)
++    (100.00/100%)
++
++*** done
+diff --git a/tests/qemu-iotests/group b/tests/qemu-iotests/group
+index ee95d6e..51e7f58 100644
+--- a/tests/qemu-iotests/group
++++ b/tests/qemu-iotests/group
+@@ -74,3 +74,4 @@
+ 077 rw auto
+ 079 rw auto
+ 082 rw auto quick
++086 rw auto quick
+-- 
+1.7.1
+

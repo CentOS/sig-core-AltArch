@@ -1,0 +1,379 @@
+From fafd52c6d2c32e24ae83b4d534c6e2f72f53795d Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 9 Sep 2013 14:28:16 +0200
+Subject: [PATCH 25/38] qapi: Anonymous unions
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1378736903-18489-26-git-send-email-kwolf@redhat.com>
+Patchwork-id: 54212
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 25/32] qapi: Anonymous unions
+Bugzilla: 1005818
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Bugzilla: 1005818
+
+The discriminator for anonymous unions is the data type. This allows to
+have a union type that allows both of these:
+
+    { 'file': 'my_existing_block_device_id' }
+    { 'file': { 'filename': '/tmp/mydisk.qcow2', 'read-only': true } }
+
+Unions like this are specified in the schema with an empty dict as
+discriminator. For this example you could take:
+
+    { 'union': 'BlockRef',
+      'discriminator': {},
+      'data': { 'definition': 'BlockOptions',
+                'reference': 'str' } }
+    { 'type': 'ExampleObject',
+      'data: { 'file': 'BlockRef' } }
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit 69dd62dfd60631ba69201d8a197fde1ece4b4df3)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ docs/qapi-code-gen.txt      | 25 ++++++++++++++++++++++++
+ include/qapi/qmp/qobject.h  |  1 +
+ include/qapi/visitor-impl.h |  2 ++
+ include/qapi/visitor.h      |  3 +++
+ qapi/qapi-visit-core.c      |  9 +++++++++
+ qapi/qmp-input-visitor.c    | 14 ++++++++++++++
+ qobject/qjson.c             |  2 ++
+ scripts/qapi-types.py       | 42 ++++++++++++++++++++++++++++++++++++++++
+ scripts/qapi-visit.py       | 47 +++++++++++++++++++++++++++++++++++++++++++++
+ scripts/qapi.py             | 15 +++++++++++++++
+ 10 files changed, 160 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ docs/qapi-code-gen.txt      |   25 ++++++++++++++++++++++
+ include/qapi/qmp/qobject.h  |    1 +
+ include/qapi/visitor-impl.h |    2 +
+ include/qapi/visitor.h      |    3 ++
+ qapi/qapi-visit-core.c      |    9 ++++++++
+ qapi/qmp-input-visitor.c    |   14 ++++++++++++
+ qobject/qjson.c             |    2 +
+ scripts/qapi-types.py       |   42 ++++++++++++++++++++++++++++++++++++++
+ scripts/qapi-visit.py       |   47 +++++++++++++++++++++++++++++++++++++++++++
+ scripts/qapi.py             |   15 +++++++++++++
+ 10 files changed, 160 insertions(+), 0 deletions(-)
+
+diff --git a/docs/qapi-code-gen.txt b/docs/qapi-code-gen.txt
+index 11f19cf..0ce045c 100644
+--- a/docs/qapi-code-gen.txt
++++ b/docs/qapi-code-gen.txt
+@@ -125,6 +125,31 @@ Resulting in this JSON object:
+    "lazy-refcounts": true }
+ 
+ 
++A special type of unions are anonymous unions. They don't form a dictionary in
++the wire format but allow the direct use of different types in their place. As
++they aren't structured, they don't have any explicit discriminator but use
++the (QObject) data type of their value as an implicit discriminator. This means
++that they are restricted to using only one discriminator value per QObject
++type. For example, you cannot have two different complex types in an anonymous
++union, or two different integer types.
++
++Anonymous unions are declared using an empty dictionary as their discriminator.
++The discriminator values never appear on the wire, they are only used in the
++generated C code. Anonymous unions cannot have a base type.
++
++ { 'union': 'BlockRef',
++   'discriminator': {},
++   'data': { 'definition': 'BlockdevOptions',
++             'reference': 'str' } }
++
++This example allows using both of the following example objects:
++
++ { "file": "my_existing_block_device_id" }
++ { "file": { "driver": "file",
++             "readonly": false,
++             'filename': "/tmp/mydisk.qcow2" } }
++
++
+ === Commands ===
+ 
+ Commands are defined by using a list containing three members.  The first
+diff --git a/include/qapi/qmp/qobject.h b/include/qapi/qmp/qobject.h
+index 9124649..d0bbc7c 100644
+--- a/include/qapi/qmp/qobject.h
++++ b/include/qapi/qmp/qobject.h
+@@ -44,6 +44,7 @@ typedef enum {
+     QTYPE_QFLOAT,
+     QTYPE_QBOOL,
+     QTYPE_QERROR,
++    QTYPE_MAX,
+ } qtype_code;
+ 
+ struct QObject;
+diff --git a/include/qapi/visitor-impl.h b/include/qapi/visitor-impl.h
+index 5c1297f..f3fa420 100644
+--- a/include/qapi/visitor-impl.h
++++ b/include/qapi/visitor-impl.h
+@@ -32,6 +32,8 @@ struct Visitor
+ 
+     void (*type_enum)(Visitor *v, int *obj, const char *strings[],
+                       const char *kind, const char *name, Error **errp);
++    void (*get_next_type)(Visitor *v, int *kind, const int *qobjects,
++                          const char *name, Error **errp);
+ 
+     void (*type_int)(Visitor *v, int64_t *obj, const char *name, Error **errp);
+     void (*type_bool)(Visitor *v, bool *obj, const char *name, Error **errp);
+diff --git a/include/qapi/visitor.h b/include/qapi/visitor.h
+index a1cdd81..aa9e771 100644
+--- a/include/qapi/visitor.h
++++ b/include/qapi/visitor.h
+@@ -13,6 +13,7 @@
+ #ifndef QAPI_VISITOR_CORE_H
+ #define QAPI_VISITOR_CORE_H
+ 
++#include "qapi/qmp/qobject.h"
+ #include "qapi/error.h"
+ #include <stdlib.h>
+ 
+@@ -39,6 +40,8 @@ void visit_end_list(Visitor *v, Error **errp);
+ void visit_start_optional(Visitor *v, bool *present, const char *name,
+                           Error **errp);
+ void visit_end_optional(Visitor *v, Error **errp);
++void visit_get_next_type(Visitor *v, int *obj, const int *qtypes,
++                         const char *name, Error **errp);
+ void visit_type_enum(Visitor *v, int *obj, const char *strings[],
+                      const char *kind, const char *name, Error **errp);
+ void visit_type_int(Visitor *v, int64_t *obj, const char *name, Error **errp);
+diff --git a/qapi/qapi-visit-core.c b/qapi/qapi-visit-core.c
+index 9b4d51b..d6a4012 100644
+--- a/qapi/qapi-visit-core.c
++++ b/qapi/qapi-visit-core.c
+@@ -12,6 +12,7 @@
+  */
+ 
+ #include "qemu-common.h"
++#include "qapi/qmp/qobject.h"
+ #include "qapi/qmp/qerror.h"
+ #include "qapi/visitor.h"
+ #include "qapi/visitor-impl.h"
+@@ -98,6 +99,14 @@ void visit_end_optional(Visitor *v, Error **errp)
+     }
+ }
+ 
++void visit_get_next_type(Visitor *v, int *obj, const int *qtypes,
++                         const char *name, Error **errp)
++{
++    if (!error_is_set(errp) && v->get_next_type) {
++        v->get_next_type(v, obj, qtypes, name, errp);
++    }
++}
++
+ void visit_type_enum(Visitor *v, int *obj, const char *strings[],
+                      const char *kind, const char *name, Error **errp)
+ {
+diff --git a/qapi/qmp-input-visitor.c b/qapi/qmp-input-visitor.c
+index 70864a1..bf42c04 100644
+--- a/qapi/qmp-input-visitor.c
++++ b/qapi/qmp-input-visitor.c
+@@ -208,6 +208,19 @@ static void qmp_input_end_list(Visitor *v, Error **errp)
+     qmp_input_pop(qiv, errp);
+ }
+ 
++static void qmp_input_get_next_type(Visitor *v, int *kind, const int *qobjects,
++                                    const char *name, Error **errp)
++{
++    QmpInputVisitor *qiv = to_qiv(v);
++    QObject *qobj = qmp_input_get_object(qiv, name, false);
++
++    if (!qobj) {
++        error_set(errp, QERR_MISSING_PARAMETER, name ? name : "null");
++        return;
++    }
++    *kind = qobjects[qobject_type(qobj)];
++}
++
+ static void qmp_input_type_int(Visitor *v, int64_t *obj, const char *name,
+                                Error **errp)
+ {
+@@ -317,6 +330,7 @@ QmpInputVisitor *qmp_input_visitor_new(QObject *obj)
+     v->visitor.type_str = qmp_input_type_str;
+     v->visitor.type_number = qmp_input_type_number;
+     v->visitor.start_optional = qmp_input_start_optional;
++    v->visitor.get_next_type = qmp_input_get_next_type;
+ 
+     qmp_input_push(v, obj, NULL);
+     qobject_incref(obj);
+diff --git a/qobject/qjson.c b/qobject/qjson.c
+index 19085a1..6cf2511 100644
+--- a/qobject/qjson.c
++++ b/qobject/qjson.c
+@@ -260,6 +260,8 @@ static void to_json(const QObject *obj, QString *str, int pretty, int indent)
+         /* XXX: should QError be emitted? */
+     case QTYPE_NONE:
+         break;
++    case QTYPE_MAX:
++        abort();
+     }
+ }
+ 
+diff --git a/scripts/qapi-types.py b/scripts/qapi-types.py
+index 3d9af3c..20f4bdf 100644
+--- a/scripts/qapi-types.py
++++ b/scripts/qapi-types.py
+@@ -144,6 +144,40 @@ typedef enum %(name)s
+ 
+     return lookup_decl + enum_decl
+ 
++def generate_anon_union_qtypes(expr):
++
++    name = expr['union']
++    members = expr['data']
++
++    ret = mcgen('''
++const int %(name)s_qtypes[QTYPE_MAX] = {
++''',
++    name=name)
++
++    for key in members:
++        qapi_type = members[key]
++        if builtin_type_qtypes.has_key(qapi_type):
++            qtype = builtin_type_qtypes[qapi_type]
++        elif find_struct(qapi_type):
++            qtype = "QTYPE_QDICT"
++        elif find_union(qapi_type):
++            qtype = "QTYPE_QDICT"
++        else:
++            assert False, "Invalid anonymous union member"
++
++        ret += mcgen('''
++    [ %(qtype)s ] = %(abbrev)s_KIND_%(enum)s,
++''',
++        qtype = qtype,
++        abbrev = de_camel_case(name).upper(),
++        enum = c_fun(de_camel_case(key),False).upper())
++
++    ret += mcgen('''
++};
++''')
++    return ret
++
++
+ def generate_union(expr):
+ 
+     name = expr['union']
+@@ -184,6 +218,12 @@ struct %(name)s
+     ret += mcgen('''
+ };
+ ''')
++    if discriminator == {}:
++        ret += mcgen('''
++extern const int %(name)s_qtypes[];
++''',
++            name=name)
++
+ 
+     return ret
+ 
+@@ -336,6 +376,8 @@ for expr in exprs:
+         ret += generate_fwd_struct(expr['union'], expr['data']) + "\n"
+         ret += generate_enum('%sKind' % expr['union'], expr['data'].keys())
+         fdef.write(generate_enum_lookup('%sKind' % expr['union'], expr['data'].keys()))
++        if expr.get('discriminator') == {}:
++            fdef.write(generate_anon_union_qtypes(expr))
+     else:
+         continue
+     fdecl.write(ret)
+diff --git a/scripts/qapi-visit.py b/scripts/qapi-visit.py
+index b1c1ad6..367cf7a 100644
+--- a/scripts/qapi-visit.py
++++ b/scripts/qapi-visit.py
+@@ -176,6 +176,49 @@ void visit_type_%(name)s(Visitor *m, %(name)s * obj, const char *name, Error **e
+ ''',
+                  name=name)
+ 
++def generate_visit_anon_union(name, members):
++    ret = mcgen('''
++
++void visit_type_%(name)s(Visitor *m, %(name)s ** obj, const char *name, Error **errp)
++{
++    Error *err = NULL;
++
++    if (!error_is_set(errp)) {
++        visit_start_implicit_struct(m, (void**) obj, sizeof(%(name)s), &err);
++        visit_get_next_type(m, (int*) &(*obj)->kind, %(name)s_qtypes, name, &err);
++        switch ((*obj)->kind) {
++''',
++    name=name)
++
++    for key in members:
++        assert (members[key] in builtin_types
++            or find_struct(members[key])
++            or find_union(members[key])), "Invalid anonymous union member"
++
++        ret += mcgen('''
++        case %(abbrev)s_KIND_%(enum)s:
++            visit_type_%(c_type)s(m, &(*obj)->%(c_name)s, name, &err);
++            break;
++''',
++                abbrev = de_camel_case(name).upper(),
++                enum = c_fun(de_camel_case(key),False).upper(),
++                c_type = type_name(members[key]),
++                c_name = c_fun(key))
++
++    ret += mcgen('''
++        default:
++            abort();
++        }
++        error_propagate(errp, err);
++        err = NULL;
++        visit_end_implicit_struct(m, &err);
++    }
++}
++''')
++
++    return ret
++
++
+ def generate_visit_union(expr):
+ 
+     name = expr['union']
+@@ -184,6 +227,10 @@ def generate_visit_union(expr):
+     base = expr.get('base')
+     discriminator = expr.get('discriminator')
+ 
++    if discriminator == {}:
++        assert not base
++        return generate_visit_anon_union(name, members)
++
+     ret = generate_visit_enum('%sKind' % name, members.keys())
+ 
+     if base:
+diff --git a/scripts/qapi.py b/scripts/qapi.py
+index 3a54c7f..38c808e 100644
+--- a/scripts/qapi.py
++++ b/scripts/qapi.py
+@@ -17,6 +17,21 @@ builtin_types = [
+     'uint8', 'uint16', 'uint32', 'uint64'
+ ]
+ 
++builtin_type_qtypes = {
++    'str':      'QTYPE_QSTRING',
++    'int':      'QTYPE_QINT',
++    'number':   'QTYPE_QFLOAT',
++    'bool':     'QTYPE_QBOOL',
++    'int8':     'QTYPE_QINT',
++    'int16':    'QTYPE_QINT',
++    'int32':    'QTYPE_QINT',
++    'int64':    'QTYPE_QINT',
++    'uint8':    'QTYPE_QINT',
++    'uint16':   'QTYPE_QINT',
++    'uint32':   'QTYPE_QINT',
++    'uint64':   'QTYPE_QINT',
++}
++
+ def tokenize(data):
+     while len(data):
+         ch = data[0]
+-- 
+1.7.1
+

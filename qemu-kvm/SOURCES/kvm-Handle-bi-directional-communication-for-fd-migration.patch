@@ -1,0 +1,89 @@
+From 24a9e4d46608ccdcec53eeccc40b7a5d3fb7c9c8 Mon Sep 17 00:00:00 2001
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+Date: Fri, 16 Jan 2015 17:35:36 +0100
+Subject: [PATCH 04/16] Handle bi-directional communication for fd migration
+
+Message-id: <1421429737-23581-3-git-send-email-dgilbert@redhat.com>
+Patchwork-id: 63333
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 2/3] Handle bi-directional communication for fd migration
+Bugzilla: 1086168
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Cristian Klein <cristian.klein@cs.umu.se>
+
+libvirt prefers opening the TCP connection itself, for two reasons.
+First, connection failed errors can be detected easier, without having
+to parse qemu's error output.
+Second, libvirt might be asked to secure the transfer by tunnelling the
+communication through an TLS layer.
+Therefore, libvirt opens the TCP connection itself and passes an FD to qemu
+using QMP and a POSIX-specific mechanism.
+
+Hence, in order to make the reverse-path work in such cases, qemu needs to
+distinguish if the transmitted FD is a socket (reverse-path available)
+or not (reverse-path might not be available) and use the corresponding
+abstraction.
+
+Signed-off-by: Cristian Klein <cristian.klein@cs.umu.se>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Amit Shah <amit.shah@redhat.com>
+Signed-off-by: Amit Shah <amit.shah@redhat.com>
+(cherry picked from commit 131fe9b843f9a1e55fcbf2457c9cb25c3711b9d8)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ migration-fd.c | 24 ++++++++++++++++++++++--
+ 1 file changed, 22 insertions(+), 2 deletions(-)
+
+diff --git a/migration-fd.c b/migration-fd.c
+index 3d4613c..3c98c3c 100644
+--- a/migration-fd.c
++++ b/migration-fd.c
+@@ -30,13 +30,29 @@
+     do { } while (0)
+ #endif
+ 
++static bool fd_is_socket(int fd)
++{
++    struct stat stat;
++    int ret = fstat(fd, &stat);
++    if (ret == -1) {
++        /* When in doubt say no */
++        return false;
++    }
++    return S_ISSOCK(stat.st_mode);
++}
++
+ void fd_start_outgoing_migration(MigrationState *s, const char *fdname, Error **errp)
+ {
+     int fd = monitor_get_fd(cur_mon, fdname, errp);
+     if (fd == -1) {
+         return;
+     }
+-    s->file = qemu_fdopen(fd, "wb");
++
++    if (fd_is_socket(fd)) {
++        s->file = qemu_fopen_socket(fd, "wb");
++    } else {
++        s->file = qemu_fdopen(fd, "wb");
++    }
+ 
+     migrate_fd_connect(s);
+ }
+@@ -57,7 +73,11 @@ void fd_start_incoming_migration(const char *infd, Error **errp)
+     DPRINTF("Attempting to start an incoming migration via fd\n");
+ 
+     fd = strtol(infd, NULL, 0);
+-    f = qemu_fdopen(fd, "rb");
++    if (fd_is_socket(fd)) {
++        f = qemu_fopen_socket(fd, "rb");
++    } else {
++        f = qemu_fdopen(fd, "rb");
++    }
+     if(f == NULL) {
+         error_setg_errno(errp, errno, "failed to open the source descriptor");
+         return;
+-- 
+1.8.3.1
+

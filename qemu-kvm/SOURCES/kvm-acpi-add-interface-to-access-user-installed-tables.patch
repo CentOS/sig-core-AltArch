@@ -1,0 +1,102 @@
+From 99ac82bfa364eef3e6aa27a12d4eb5e23c7ccfb1 Mon Sep 17 00:00:00 2001
+Message-Id: <99ac82bfa364eef3e6aa27a12d4eb5e23c7ccfb1.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:19:02 +0100
+Subject: [PATCH 46/56] acpi: add interface to access user-installed tables
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-47-git-send-email-mst@redhat.com>
+Patchwork-id: 56353
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 46/57] acpi: add interface to access user-installed tables
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Also add a new API to install builtin tables, so
+that we can distinguish between the two.
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 60de1163d5b5013fe964ac0792e9a64a823e73a3)
+---
+ include/hw/acpi/acpi.h |  4 ++++
+ hw/acpi/core.c         | 40 ++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 44 insertions(+)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/acpi/core.c         | 40 ++++++++++++++++++++++++++++++++++++++++
+ include/hw/acpi/acpi.h |  4 ++++
+ 2 files changed, 44 insertions(+)
+
+diff --git a/hw/acpi/core.c b/hw/acpi/core.c
+index 42eeace..3352d17 100644
+--- a/hw/acpi/core.c
++++ b/hw/acpi/core.c
+@@ -309,6 +309,46 @@ out:
+     error_propagate(errp, err);
+ }
+ 
++static bool acpi_table_builtin = false;
++
++void acpi_table_add_builtin(const QemuOpts *opts, Error **errp)
++{
++    acpi_table_builtin = true;
++    acpi_table_add(opts, errp);
++}
++
++unsigned acpi_table_len(void *current)
++{
++    struct acpi_table_header *hdr = current - sizeof(hdr->_length);
++    return hdr->_length;
++}
++
++static
++void *acpi_table_hdr(void *h)
++{
++    struct acpi_table_header *hdr = h;
++    return &hdr->sig;
++}
++
++uint8_t *acpi_table_first(void)
++{
++    if (acpi_table_builtin || !acpi_tables) {
++        return NULL;
++    }
++    return acpi_table_hdr(acpi_tables + ACPI_TABLE_PFX_SIZE);
++}
++
++uint8_t *acpi_table_next(uint8_t *current)
++{
++    uint8_t *next = current + acpi_table_len(current);
++
++    if (next - acpi_tables >= acpi_tables_len) {
++        return NULL;
++    } else {
++        return acpi_table_hdr(next);
++    }
++}
++
+ static void acpi_notify_wakeup(Notifier *notifier, void *data)
+ {
+     ACPIREGS *ar = container_of(notifier, ACPIREGS, wakeup);
+diff --git a/include/hw/acpi/acpi.h b/include/hw/acpi/acpi.h
+index 635be7b..bb7136d 100644
+--- a/include/hw/acpi/acpi.h
++++ b/include/hw/acpi/acpi.h
+@@ -165,6 +165,10 @@ extern int acpi_enabled;
+ extern char unsigned *acpi_tables;
+ extern size_t acpi_tables_len;
+ 
++uint8_t *acpi_table_first(void);
++uint8_t *acpi_table_next(uint8_t *current);
++unsigned acpi_table_len(void *current);
+ void acpi_table_add(const QemuOpts *opts, Error **errp);
++void acpi_table_add_builtin(const QemuOpts *opts, Error **errp);
+ 
+ #endif /* !QEMU_HW_ACPI_H */
+-- 
+1.7.11.7
+

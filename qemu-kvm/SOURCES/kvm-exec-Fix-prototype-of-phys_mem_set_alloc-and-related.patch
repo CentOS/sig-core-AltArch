@@ -1,0 +1,122 @@
+From 394423ac51f2b4f551bece834aa9c8586dc0a984 Mon Sep 17 00:00:00 2001
+Message-Id: <394423ac51f2b4f551bece834aa9c8586dc0a984.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:19:29 +0100
+Subject: [PATCH 56/56] exec: Fix prototype of phys_mem_set_alloc and related
+ functions
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-57-git-send-email-mst@redhat.com>
+Patchwork-id: 56362
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 56/57] exec: Fix prototype of phys_mem_set_alloc and related functions
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+
+From: Stefan Weil <sw@weilnetz.de>
+
+phys_mem_alloc and its assigned values qemu_anon_ram_alloc and
+legacy_s390_alloc must have identical argument lists.
+
+legacy_s390_alloc uses the size parameter to call mmap, so size_t is
+good enough for all of them.
+
+This patch fixes compiler errors on i686 Linux hosts:
+
+  CC    alpha-softmmu/exec.o
+exec.c:752:51: error:
+ initialization from incompatible pointer type [-Werror]
+exec.c: In function 'qemu_ram_alloc_from_ptr':
+exec.c:1139:32: error:
+ comparison of distinct pointer types lacks a cast [-Werror]
+exec.c: In function 'qemu_ram_remap':
+exec.c:1283:21: error:
+ comparison of distinct pointer types lacks a cast [-Werror]
+
+Signed-off-by: Stefan Weil <sw@weilnetz.de>
+Reviewed-by: Markus Armbruster <armbru@redhat.com>
+Message-id: 1380481005-32399-1-git-send-email-sw@weilnetz.de
+Signed-off-by: Anthony Liguori <aliguori@amazon.com>
+(cherry picked from commit 575ddeb459f622a114cbfe37d220c0519ec9c2a4)
+
+Note: not directly related to this change, and we don't have
+to support building on i686.
+However this is gratitious and ugly difference from upstream,
+and some machines I use to test ACPI are i686, so including
+this here was required for testing.
+---
+ include/exec/exec-all.h | 2 +-
+ exec.c                  | 4 ++--
+ target-s390x/kvm.c      | 4 ++--
+ 3 files changed, 5 insertions(+), 5 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ exec.c                  | 4 ++--
+ include/exec/exec-all.h | 2 +-
+ target-s390x/kvm.c      | 4 ++--
+ 3 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/exec.c b/exec.c
+index 9117a59..cb11571 100644
+--- a/exec.c
++++ b/exec.c
+@@ -680,14 +680,14 @@ static int subpage_register (subpage_t *mmio, uint32_t start, uint32_t end,
+                              uint16_t section);
+ static subpage_t *subpage_init(hwaddr base);
+ 
+-static void *(*phys_mem_alloc)(ram_addr_t size) = qemu_anon_ram_alloc;
++static void *(*phys_mem_alloc)(size_t size) = qemu_anon_ram_alloc;
+ 
+ /*
+  * Set a custom physical guest memory alloator.
+  * Accelerators with unusual needs may need this.  Hopefully, we can
+  * get rid of it eventually.
+  */
+-void phys_mem_set_alloc(void *(*alloc)(ram_addr_t))
++void phys_mem_set_alloc(void *(*alloc)(size_t))
+ {
+     phys_mem_alloc = alloc;
+ }
+diff --git a/include/exec/exec-all.h b/include/exec/exec-all.h
+index 993c655..3fddc3b 100644
+--- a/include/exec/exec-all.h
++++ b/include/exec/exec-all.h
+@@ -366,7 +366,7 @@ bool is_tcg_gen_code(uintptr_t pc_ptr);
+ 
+ #if !defined(CONFIG_USER_ONLY)
+ 
+-void phys_mem_set_alloc(void *(*alloc)(ram_addr_t));
++void phys_mem_set_alloc(void *(*alloc)(size_t));
+ 
+ struct MemoryRegion *iotlb_to_region(hwaddr index);
+ uint64_t io_mem_read(struct MemoryRegion *mr, hwaddr addr,
+diff --git a/target-s390x/kvm.c b/target-s390x/kvm.c
+index a106e62..3fd8be5 100644
+--- a/target-s390x/kvm.c
++++ b/target-s390x/kvm.c
+@@ -92,7 +92,7 @@ const KVMCapabilityInfo kvm_arch_required_capabilities[] = {
+ 
+ static int cap_sync_regs;
+ 
+-static void *legacy_s390_alloc(ram_addr_t size);
++static void *legacy_s390_alloc(size_t size);
+ 
+ int kvm_arch_init(KVMState *s)
+ {
+@@ -324,7 +324,7 @@ int kvm_s390_get_registers_partial(CPUState *cs)
+  * to grow. We also have to use MAP parameters that avoid
+  * read-only mapping of guest pages.
+  */
+-static void *legacy_s390_alloc(ram_addr_t size)
++static void *legacy_s390_alloc(size_t size)
+ {
+     void *mem;
+ 
+-- 
+1.7.11.7
+

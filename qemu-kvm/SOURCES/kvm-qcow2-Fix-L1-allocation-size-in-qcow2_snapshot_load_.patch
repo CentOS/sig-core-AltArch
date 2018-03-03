@@ -1,0 +1,101 @@
+From 1235b1580890e2a034bb24f89a89311d296d2622 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 25 Mar 2014 14:23:51 +0100
+Subject: [PATCH 44/49] qcow2: Fix L1 allocation size in qcow2_snapshot_load_tmp() (CVE-2014-0145)
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1395753835-7591-45-git-send-email-kwolf@redhat.com>
+Patchwork-id: n/a
+O-Subject: [virt-devel] [EMBARGOED RHEL-7.0 qemu-kvm PATCH 44/48] qcow2: Fix L1 allocation size in qcow2_snapshot_load_tmp() (CVE-2014-0145)
+Bugzilla: 1079325
+RH-Acked-by: Jeff Cody <jcody@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1079325
+Upstream status: Embargoed
+
+For the L1 table to loaded for an internal snapshot, the code allocated
+only enough memory to hold the currently active L1 table. If the
+snapshot's L1 table is actually larger than the current one, this leads
+to a buffer overflow.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block/qcow2-snapshot.c     |    2 +-
+ tests/qemu-iotests/029     |   18 +++++++++++++++++-
+ tests/qemu-iotests/029.out |    4 ++++
+ 3 files changed, 22 insertions(+), 2 deletions(-)
+
+diff --git a/block/qcow2-snapshot.c b/block/qcow2-snapshot.c
+index 5d73506..b29f7bd 100644
+--- a/block/qcow2-snapshot.c
++++ b/block/qcow2-snapshot.c
+@@ -635,7 +635,7 @@ int qcow2_snapshot_load_tmp(BlockDriverState *bs, const char *snapshot_name)
+     sn = &s->snapshots[snapshot_index];
+ 
+     /* Allocate and read in the snapshot's L1 table */
+-    new_l1_bytes = s->l1_size * sizeof(uint64_t);
++    new_l1_bytes = sn->l1_size * sizeof(uint64_t);
+     new_l1_table = g_malloc0(align_offset(new_l1_bytes, 512));
+ 
+     ret = bdrv_pread(bs->file, sn->l1_table_offset, new_l1_table, new_l1_bytes);
+diff --git a/tests/qemu-iotests/029 b/tests/qemu-iotests/029
+index 567e071..fa46ace 100755
+--- a/tests/qemu-iotests/029
++++ b/tests/qemu-iotests/029
+@@ -30,7 +30,8 @@ status=1	# failure is the default!
+ 
+ _cleanup()
+ {
+-	_cleanup_test_img
++    rm -f $TEST_IMG.snap
++    _cleanup_test_img
+ }
+ trap "_cleanup; exit \$status" 0 1 2 3 15
+ 
+@@ -44,6 +45,9 @@ _supported_fmt qcow2
+ _supported_proto generic
+ _supported_os Linux
+ 
++offset_size=24
++offset_l1_size=36
++
+ echo
+ echo Test loading internal snapshots where the L1 table of the snapshot
+ echo is smaller than the current L1 table.
+@@ -77,6 +81,18 @@ _make_test_img 64M
+ _check_test_img
+ 
+ 
++echo
++echo "qcow2_snapshot_load_tmp() should take the L1 size from the snapshot"
++echo
++
++CLUSTER_SIZE=512
++_make_test_img 64M
++{ $QEMU_IMG snapshot -c foo $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
++poke_file "$TEST_IMG" "$offset_size" "\x00\x00\x00\x00\x00\x00\x02\x00"
++poke_file "$TEST_IMG" "$offset_l1_size" "\x00\x00\x00\x01"
++{ $QEMU_IMG convert -s foo $TEST_IMG $TEST_IMG.snap; } 2>&1 | _filter_qemu_io | _filter_testdir
++
++
+ # success, all done
+ echo "*** done"
+ rm -f $seq.full
+diff --git a/tests/qemu-iotests/029.out b/tests/qemu-iotests/029.out
+index 9029698..ce0e64d 100644
+--- a/tests/qemu-iotests/029.out
++++ b/tests/qemu-iotests/029.out
+@@ -20,4 +20,8 @@ wrote 4096/4096 bytes at offset 1099511627776
+ read 4096/4096 bytes at offset 1099511627776
+ 4 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ No errors were found on the image.
++
++qcow2_snapshot_load_tmp() should take the L1 size from the snapshot
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
+ *** done
+-- 
+1.7.1
+

@@ -1,0 +1,135 @@
+From e8b11ccb96a0a6ddbb039631511c91652e4d0efc Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 5 Nov 2013 14:08:58 +0100
+Subject: [PATCH 45/87] qapi-types/visit.py: Inheritance for structs
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383660558-32096-5-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55383
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 04/24] qapi-types/visit.py: Inheritance for structs
+Bugzilla: 978402
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+This introduces a new 'base' key for struct definitions that refers to
+another struct type. On the JSON level, the fields of the base type are
+included directly into the same namespace as the fields of the defined
+type, like with unions. On the C level, a pointer to a struct of the
+base type is included.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit 622f557f5aaea1326c94ca4cddfa4eafeade3723)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ docs/qapi-code-gen.txt | 17 +++++++++++++++++
+ scripts/qapi-types.py  |  4 ++++
+ scripts/qapi-visit.py  | 18 ++++++++++++++++--
+ 3 files changed, 37 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ docs/qapi-code-gen.txt |   17 +++++++++++++++++
+ scripts/qapi-types.py  |    4 ++++
+ scripts/qapi-visit.py  |   18 ++++++++++++++++--
+ 3 files changed, 37 insertions(+), 2 deletions(-)
+
+diff --git a/docs/qapi-code-gen.txt b/docs/qapi-code-gen.txt
+index 0ce045c..91f44d0 100644
+--- a/docs/qapi-code-gen.txt
++++ b/docs/qapi-code-gen.txt
+@@ -53,6 +53,23 @@ The use of '*' as a prefix to the name means the member is optional.  Optional
+ members should always be added to the end of the dictionary to preserve
+ backwards compatibility.
+ 
++
++A complex type definition can specify another complex type as its base.
++In this case, the fields of the base type are included as top-level fields
++of the new complex type's dictionary in the QMP wire format. An example
++definition is:
++
++ { 'type': 'BlockdevOptionsGenericFormat', 'data': { 'file': 'str' } }
++ { 'type': 'BlockdevOptionsGenericCOWFormat',
++   'base': 'BlockdevOptionsGenericFormat',
++   'data': { '*backing': 'str' } }
++
++An example BlockdevOptionsGenericCOWFormat object on the wire could use
++both fields like this:
++
++ { "file": "/some/place/my-image",
++   "backing": "/some/place/my-backing-file" }
++
+ === Enumeration types ===
+ 
+ An enumeration type is a dictionary containing a single key whose value is a
+diff --git a/scripts/qapi-types.py b/scripts/qapi-types.py
+index ff60dfb..a0737a6 100644
+--- a/scripts/qapi-types.py
++++ b/scripts/qapi-types.py
+@@ -80,6 +80,7 @@ def generate_struct(expr):
+     structname = expr.get('type', "")
+     fieldname = expr.get('field', "")
+     members = expr['data']
++    base = expr.get('base')
+ 
+     ret = mcgen('''
+ struct %(name)s
+@@ -87,6 +88,9 @@ struct %(name)s
+ ''',
+           name=structname)
+ 
++    if base:
++        ret += generate_struct_fields({'base': base})
++
+     ret += generate_struct_fields(members)
+ 
+     if len(fieldname):
+diff --git a/scripts/qapi-visit.py b/scripts/qapi-visit.py
+index 43d902c..71004ae 100644
+--- a/scripts/qapi-visit.py
++++ b/scripts/qapi-visit.py
+@@ -17,7 +17,7 @@ import os
+ import getopt
+ import errno
+ 
+-def generate_visit_struct_fields(name, field_prefix, fn_prefix, members):
++def generate_visit_struct_fields(name, field_prefix, fn_prefix, members, base = None):
+     substructs = []
+     ret = ''
+     full_name = name if not fn_prefix else "%s_%s" % (name, fn_prefix)
+@@ -42,6 +42,19 @@ static void visit_type_%(full_name)s_fields(Visitor *m, %(name)s ** obj, Error *
+         name=name, full_name=full_name)
+     push_indent()
+ 
++    if base:
++        ret += mcgen('''
++visit_start_implicit_struct(m, obj ? (void**) &(*obj)->%(c_name)s : NULL, sizeof(%(type)s), &err);
++if (!err) {
++    visit_type_%(type)s_fields(m, obj ? &(*obj)->%(c_prefix)s%(c_name)s : NULL, &err);
++    error_propagate(errp, err);
++    err = NULL;
++    visit_end_implicit_struct(m, &err);
++}
++''',
++                     c_prefix=c_var(field_prefix),
++                     type=type_name(base), c_name=c_var('base'))
++
+     for argname, argentry, optional, structured in parse_args(members):
+         if optional:
+             ret += mcgen('''
+@@ -124,8 +137,9 @@ def generate_visit_struct(expr):
+ 
+     name = expr['type']
+     members = expr['data']
++    base = expr.get('base')
+ 
+-    ret = generate_visit_struct_fields(name, "", "", members)
++    ret = generate_visit_struct_fields(name, "", "", members, base)
+ 
+     ret += mcgen('''
+ 
+-- 
+1.7.1
+

@@ -1,0 +1,83 @@
+From 8f9887acd04e8db0bebd0ad3fe1cf5d7294abdfd Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Wed, 31 Jul 2013 08:06:25 +0200
+Subject: pc: Add machine type "rhel6.5.0"
+
+Message-id: <1375201922-6794-15-git-send-email-armbru@redhat.com>
+Patchwork-id: 52824
+O-Subject: [RHEL-7 PATCH v3 14/15] pc: Add machine type "rhel6.5.0"
+Bugzilla: 983991
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Match RHEL-6's virtio-scsi-pci.vectors.  Note: upstream commit 4c205d0
+"virtio-scsi: enable MSI-X support" changed vectors from 2 to
+DEV_NVECTORS_UNSPECIFIED.  The necessary compat_props to keep it at 2
+for old machine types were forgotten.  The RHEL-6 backport (commit
+0ef7672) added them.
+
+Match RHEL-6's has_pvpanic.
+
+RHEL-6's disable_kvm_sep() will be covered separately (bug 918907).
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index a922645..5ca2cc3 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -777,7 +777,7 @@ static QEMUMachine pc_machine_rhel700 = {
+     DEFAULT_MACHINE_OPTIONS,
+ };
+ 
+-#define PC_RHEL6_4_COMPAT \
++#define PC_RHEL6_5_COMPAT \
+     {\
+         .driver   = "scsi-hd",\
+         .property = "discard_granularity",\
+@@ -865,10 +865,35 @@ static QEMUMachine pc_machine_rhel700 = {
+         .value    = stringify(1),\
+     }
+ 
++static void pc_init_rhel650(QEMUMachineInitArgs *args)
++{
++    pc_init_rhel700(args);
++}
++
++static QEMUMachine pc_machine_rhel650 = {
++    .name = "rhel6.5.0",
++    .desc = "RHEL 6.5.0 PC",
++    .init = pc_init_rhel650,
++    .max_cpus = 255,
++    .compat_props = (GlobalProperty[]) {
++        PC_RHEL6_5_COMPAT,
++        { /* end of list */ }
++    },
++    DEFAULT_MACHINE_OPTIONS,
++};
++
++#define PC_RHEL6_4_COMPAT \
++    PC_RHEL6_5_COMPAT,\
++    {\
++        .driver   = "virtio-scsi-pci",\
++        .property = "vectors",\
++        .value    = stringify(2),\
++    }
++
+ static void pc_init_rhel640(QEMUMachineInitArgs *args)
+ {
+     has_pvpanic = false;
+-    pc_init_rhel700(args);
++    pc_init_rhel650(args);
+ }
+ 
+ static QEMUMachine pc_machine_rhel640 = {
+@@ -1051,6 +1076,7 @@ static QEMUMachine pc_machine_rhel600 = {
+ static void rhel_machine_init(void)
+ {
+     qemu_register_machine(&pc_machine_rhel700);
++    qemu_register_machine(&pc_machine_rhel650);
+     qemu_register_machine(&pc_machine_rhel640);
+     qemu_register_machine(&pc_machine_rhel630);
+     qemu_register_machine(&pc_machine_rhel620);

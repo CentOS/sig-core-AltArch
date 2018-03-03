@@ -1,0 +1,208 @@
+From 237c8da272492bbb2c5fdbcb0c96f8d4ace88b72 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Wed, 16 Jul 2014 02:20:26 -0500
+Subject: [CHANGE 26/29] rules.mak: fix $(obj) to a real relative path
+To: rhvirt-patches@redhat.com,
+    jen@redhat.com
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1405477228-11490-3-git-send-email-famz@redhat.com>
+Patchwork-id: 59921
+O-Subject: [RHEL-7 qemu-kvm PATCH 2/4] rules.mak: fix $(obj) to a real relative path
+Bugzilla: 1017685
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Miroslav Rezanina <mrezanin@redhat.com>
+
+Upstream: ba1183da9a10b94611cad88c44a5c6df005f9b55
+
+Makefile.target includes rule.mak and unnested common-obj-y, then prefix
+them with '../', this will ignore object specific QEMU_CFLAGS in subdir
+Makefile.objs:
+
+$(obj)/curl.o: QEMU_CFLAGS += $(CURL_CFLAGS)
+
+Because $(obj) here is './block', instead of '../block'. This doesn't
+hurt compiling because we basically build all .o from top Makefile,
+before entering Makefile.target, but it will affact arriving per-object
+libs support.
+
+The starting point of $(obj) is passed in as argument of unnest-vars, as
+well as nested variables, so that different Makefiles can pass in a
+right value.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+
+This is manual backport.
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ Makefile        | 14 ++++++++++++++
+ Makefile.objs   | 16 +---------------
+ Makefile.target | 17 +++++++++++++----
+ configure       |  1 +
+ rules.mak       | 14 +++++++++-----
+ 5 files changed, 38 insertions(+), 24 deletions(-)
+
+Signed-off-by: jen <jen@redhat.com>
+---
+ Makefile        | 14 ++++++++++++++
+ Makefile.objs   | 16 +---------------
+ Makefile.target | 17 +++++++++++++----
+ configure       |  1 +
+ rules.mak       | 14 +++++++++-----
+ 5 files changed, 38 insertions(+), 24 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index 66774de..f504754 100644
+--- a/Makefile
++++ b/Makefile
+@@ -120,6 +120,16 @@ defconfig:
+ 
+ ifneq ($(wildcard config-host.mak),)
+ include $(SRC_PATH)/Makefile.objs
++endif
++
++dummy := $(call unnest-vars,, \
++                stub-obj-y \
++                util-obj-y \
++                qga-obj-y \
++                block-obj-y \
++                common-obj-y)
++
++ifneq ($(wildcard config-host.mak),)
+ include $(SRC_PATH)/tests/Makefile
+ endif
+ ifeq ($(CONFIG_SMARTCARD_NSS),y)
+@@ -128,6 +138,10 @@ endif
+ 
+ all: $(DOCS) $(TOOLS) $(HELPERS-y) recurse-all
+ 
++vl.o: QEMU_CFLAGS+=$(GPROF_CFLAGS)
++
++vl.o: QEMU_CFLAGS+=$(SDL_CFLAGS)
++
+ config-host.h: config-host.h-timestamp
+ config-host.h-timestamp: config-host.mak
+ qemu-options.def: $(SRC_PATH)/qemu-options.hx
+diff --git a/Makefile.objs b/Makefile.objs
+index 67b4a28..f83a5b2 100644
+--- a/Makefile.objs
++++ b/Makefile.objs
+@@ -40,7 +40,7 @@ libcacard-y += libcacard/vcardt.o
+ # single QEMU executable should support all CPUs and machines.
+ 
+ ifeq ($(CONFIG_SOFTMMU),y)
+-common-obj-y = $(block-obj-y) blockdev.o blockdev-nbd.o block/
++common-obj-y = blockdev.o blockdev-nbd.o block/
+ common-obj-y += net/
+ common-obj-y += readline.o
+ common-obj-y += qdev-monitor.o device-hotplug.o
+@@ -103,17 +103,3 @@ common-obj-y += disas/
+ # FIXME: a few definitions from qapi-types.o/qapi-visit.o are needed
+ # by libqemuutil.a.  These should be moved to a separate .json schema.
+ qga-obj-y = qga/ qapi-types.o qapi-visit.o
+-
+-vl.o: QEMU_CFLAGS+=$(GPROF_CFLAGS)
+-
+-vl.o: QEMU_CFLAGS+=$(SDL_CFLAGS)
+-
+-QEMU_CFLAGS+=$(GLIB_CFLAGS)
+-
+-nested-vars += \
+-	stub-obj-y \
+-	util-obj-y \
+-	qga-obj-y \
+-	block-obj-y \
+-	common-obj-y
+-dummy := $(call unnest-vars)
+diff --git a/Makefile.target b/Makefile.target
+index 1cafb17..b871dda 100644
+--- a/Makefile.target
++++ b/Makefile.target
+@@ -135,13 +135,22 @@ endif # CONFIG_SOFTMMU
+ # Workaround for http://gcc.gnu.org/PR55489, see configure.
+ %/translate.o: QEMU_CFLAGS += $(TRANSLATE_OPT_CFLAGS)
+ 
+-nested-vars += obj-y
++dummy := $(call unnest-vars,,obj-y)
+ 
+-# This resolves all nested paths, so it must come last
++# we are making another call to unnest-vars with different vars, protect obj-y,
++# it can be overriden in subdir Makefile.objs
++obj-y-save := $(obj-y)
++
++block-obj-y :=
++common-obj-y :=
+ include $(SRC_PATH)/Makefile.objs
++dummy := $(call unnest-vars,..,block-obj-y common-obj-y)
+ 
+-all-obj-y = $(obj-y)
+-all-obj-y += $(addprefix ../, $(common-obj-y))
++# Now restore obj-y
++obj-y := $(obj-y-save)
++
++all-obj-y = $(obj-y) $(common-obj-y)
++all-obj-$(CONFIG_SOFTMMU) += $(block-obj-y)
+ 
+ ifndef CONFIG_HAIKU
+ LIBS+=-lm
+diff --git a/configure b/configure
+index 0ac437c..8c6f4e5 100755
+--- a/configure
++++ b/configure
+@@ -2333,6 +2333,7 @@ if $pkg_config --atleast-version=$glib_req_ver gthread-2.0 gmodule-2.0 > /dev/nu
+ then
+     glib_cflags=`$pkg_config --cflags gthread-2.0 gmodule-2.0 2>/dev/null`
+     glib_libs=`$pkg_config --libs gthread-2.0 gmodule-2.0 2>/dev/null`
++    CFLAGS="$glib_cflags $CFLAGS"
+     LIBS="$glib_libs $LIBS"
+     libs_qga="$glib_libs $libs_qga"
+ else
+diff --git a/rules.mak b/rules.mak
+index 4499745..0c5125d 100644
+--- a/rules.mak
++++ b/rules.mak
+@@ -103,9 +103,6 @@ clean: clean-timestamp
+ 
+ # magic to descend into other directories
+ 
+-obj := .
+-old-nested-dirs :=
+-
+ define push-var
+ $(eval save-$2-$1 = $(value $1))
+ $(eval $1 :=)
+@@ -119,9 +116,11 @@ endef
+ 
+ define unnest-dir
+ $(foreach var,$(nested-vars),$(call push-var,$(var),$1/))
+-$(eval obj := $(obj)/$1)
++$(eval obj-parent-$1 := $(obj))
++$(eval obj := $(if $(obj),$(obj)/$1,$1))
+ $(eval include $(SRC_PATH)/$1/Makefile.objs)
+-$(eval obj := $(patsubst %/$1,%,$(obj)))
++$(eval obj := $(obj-parent-$1))
++$(eval obj-parent-$1 := )
+ $(foreach var,$(nested-vars),$(call pop-var,$(var),$1/))
+ endef
+ 
+@@ -136,7 +135,12 @@ $(if $(nested-dirs),
+ endef
+ 
+ define unnest-vars
++$(eval obj := $1)
++$(eval nested-vars := $2)
++$(eval old-nested-dirs := )
+ $(call unnest-vars-1)
++$(if $1,$(foreach v,$(nested-vars),$(eval \
++	$v := $(addprefix $1/,$($v)))))
+ $(foreach var,$(nested-vars),$(eval $(var) := $(filter-out %/, $($(var)))))
+ $(shell mkdir -p $(sort $(foreach var,$(nested-vars),$(dir $($(var))))))
+ $(foreach var,$(nested-vars), $(eval \
+-- 
+1.9.3
+

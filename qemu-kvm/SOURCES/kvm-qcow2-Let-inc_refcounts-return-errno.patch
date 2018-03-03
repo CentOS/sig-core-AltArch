@@ -1,0 +1,222 @@
+From 65ad32342584a286190e2ce56b8a3688f38f6535 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:22:17 +0200
+Subject: [PATCH 23/42] qcow2: Let inc_refcounts() return -errno
+
+Message-id: <1434212556-3927-24-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66042
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 23/42] qcow2: Let inc_refcounts() return -errno
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1129893
+
+As of a future patch, inc_refcounts() will have to throw errors which
+are generally signaled by returning -errno. Therefore, let it return an
+integer which is either 0 for success or -errno and handle the -errno
+case in all callers.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit fef4d3d5644f984e9fa427dea4f7cfa15de9059c)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-refcount.c | 91 +++++++++++++++++++++++++++++++++-----------------
+ 1 file changed, 60 insertions(+), 31 deletions(-)
+
+diff --git a/block/qcow2-refcount.c b/block/qcow2-refcount.c
+index 0dac4c9..4655fa2 100644
+--- a/block/qcow2-refcount.c
++++ b/block/qcow2-refcount.c
+@@ -1053,17 +1053,18 @@ fail:
+  *
+  * Modifies the number of errors in res.
+  */
+-static void inc_refcounts(BlockDriverState *bs,
+-                          BdrvCheckResult *res,
+-                          uint16_t *refcount_table,
+-                          int64_t refcount_table_size,
+-                          int64_t offset, int64_t size)
++static int inc_refcounts(BlockDriverState *bs,
++                         BdrvCheckResult *res,
++                         uint16_t *refcount_table,
++                         int64_t refcount_table_size,
++                         int64_t offset, int64_t size)
+ {
+     BDRVQcowState *s = bs->opaque;
+     uint64_t start, last, cluster_offset, k;
+ 
+-    if (size <= 0)
+-        return;
++    if (size <= 0) {
++        return 0;
++    }
+ 
+     start = offset & ~(s->cluster_size - 1);
+     last = (offset + size - 1) & ~(s->cluster_size - 1);
+@@ -1083,6 +1084,8 @@ static void inc_refcounts(BlockDriverState *bs,
+             }
+         }
+     }
++
++    return 0;
+ }
+ 
+ /* Flags for check_refcounts_l1() and check_refcounts_l2() */
+@@ -1137,8 +1140,11 @@ static int check_refcounts_l2(BlockDriverState *bs, BdrvCheckResult *res,
+             nb_csectors = ((l2_entry >> s->csize_shift) &
+                            s->csize_mask) + 1;
+             l2_entry &= s->cluster_offset_mask;
+-            inc_refcounts(bs, res, refcount_table, refcount_table_size,
+-                l2_entry & ~511, nb_csectors * 512);
++            ret = inc_refcounts(bs, res, refcount_table, refcount_table_size,
++                                l2_entry & ~511, nb_csectors * 512);
++            if (ret < 0) {
++                goto fail;
++            }
+ 
+             if (flags & CHECK_FRAG_INFO) {
+                 res->bfi.allocated_clusters++;
+@@ -1173,8 +1179,11 @@ static int check_refcounts_l2(BlockDriverState *bs, BdrvCheckResult *res,
+             }
+ 
+             /* Mark cluster as used */
+-            inc_refcounts(bs, res, refcount_table,refcount_table_size,
+-                offset, s->cluster_size);
++            ret = inc_refcounts(bs, res, refcount_table, refcount_table_size,
++                                offset, s->cluster_size);
++            if (ret < 0) {
++                goto fail;
++            }
+ 
+             /* Correct offsets are cluster aligned */
+             if (offset & (s->cluster_size - 1)) {
+@@ -1217,19 +1226,20 @@ static int check_refcounts_l1(BlockDriverState *bs,
+                               int flags)
+ {
+     BDRVQcowState *s = bs->opaque;
+-    uint64_t *l1_table, l2_offset, l1_size2;
++    uint64_t *l1_table = NULL, l2_offset, l1_size2;
+     int i, ret;
+ 
+     l1_size2 = l1_size * sizeof(uint64_t);
+ 
+     /* Mark L1 table as used */
+-    inc_refcounts(bs, res, refcount_table, refcount_table_size,
+-        l1_table_offset, l1_size2);
++    ret = inc_refcounts(bs, res, refcount_table, refcount_table_size,
++                        l1_table_offset, l1_size2);
++    if (ret < 0) {
++        goto fail;
++    }
+ 
+     /* Read L1 table entries from disk */
+-    if (l1_size2 == 0) {
+-        l1_table = NULL;
+-    } else {
++    if (l1_size2 > 0) {
+         l1_table = g_try_malloc(l1_size2);
+         if (l1_table == NULL) {
+             ret = -ENOMEM;
+@@ -1252,8 +1262,11 @@ static int check_refcounts_l1(BlockDriverState *bs,
+         if (l2_offset) {
+             /* Mark L2 table as used */
+             l2_offset &= L1E_OFFSET_MASK;
+-            inc_refcounts(bs, res, refcount_table, refcount_table_size,
+-                l2_offset, s->cluster_size);
++            ret = inc_refcounts(bs, res, refcount_table, refcount_table_size,
++                                l2_offset, s->cluster_size);
++            if (ret < 0) {
++                goto fail;
++            }
+ 
+             /* L2 tables are cluster aligned */
+             if (l2_offset & (s->cluster_size - 1)) {
+@@ -1520,6 +1533,7 @@ static int check_refblocks(BlockDriverState *bs, BdrvCheckResult *res,
+ {
+     BDRVQcowState *s = bs->opaque;
+     int64_t i;
++    int ret;
+ 
+     for(i = 0; i < s->refcount_table_size; i++) {
+         uint64_t offset, cluster;
+@@ -1542,8 +1556,11 @@ static int check_refblocks(BlockDriverState *bs, BdrvCheckResult *res,
+         }
+ 
+         if (offset != 0) {
+-            inc_refcounts(bs, res, *refcount_table, *nb_clusters,
+-                offset, s->cluster_size);
++            ret = inc_refcounts(bs, res, *refcount_table, *nb_clusters,
++                                offset, s->cluster_size);
++            if (ret < 0) {
++                return ret;
++            }
+             if ((*refcount_table)[cluster] != 1) {
+                 fprintf(stderr, "%s refcount block %" PRId64
+                     " refcount=%d\n",
+@@ -1572,8 +1589,11 @@ static int check_refblocks(BlockDriverState *bs, BdrvCheckResult *res,
+                                sizeof(**refcount_table));
+                     }
+                     (*refcount_table)[cluster]--;
+-                    inc_refcounts(bs, res, *refcount_table, *nb_clusters,
+-                            new_offset, s->cluster_size);
++                    ret = inc_refcounts(bs, res, *refcount_table, *nb_clusters,
++                                        new_offset, s->cluster_size);
++                    if (ret < 0) {
++                        return ret;
++                    }
+ 
+                     res->corruptions_fixed++;
+                 } else {
+@@ -1605,8 +1625,11 @@ static int calculate_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
+     }
+ 
+     /* header */
+-    inc_refcounts(bs, res, *refcount_table, *nb_clusters,
+-        0, s->cluster_size);
++    ret = inc_refcounts(bs, res, *refcount_table, *nb_clusters,
++                        0, s->cluster_size);
++    if (ret < 0) {
++        return ret;
++    }
+ 
+     /* current L1 table */
+     ret = check_refcounts_l1(bs, res, *refcount_table, *nb_clusters,
+@@ -1619,18 +1642,24 @@ static int calculate_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
+     for (i = 0; i < s->nb_snapshots; i++) {
+         sn = s->snapshots + i;
+         ret = check_refcounts_l1(bs, res, *refcount_table, *nb_clusters,
+-            sn->l1_table_offset, sn->l1_size, 0);
++                                 sn->l1_table_offset, sn->l1_size, 0);
+         if (ret < 0) {
+             return ret;
+         }
+     }
+-    inc_refcounts(bs, res, *refcount_table, *nb_clusters,
+-        s->snapshots_offset, s->snapshots_size);
++    ret = inc_refcounts(bs, res, *refcount_table, *nb_clusters,
++                        s->snapshots_offset, s->snapshots_size);
++    if (ret < 0) {
++        return ret;
++    }
+ 
+     /* refcount data */
+-    inc_refcounts(bs, res, *refcount_table, *nb_clusters,
+-        s->refcount_table_offset,
+-        s->refcount_table_size * sizeof(uint64_t));
++    ret = inc_refcounts(bs, res, *refcount_table, *nb_clusters,
++                        s->refcount_table_offset,
++                        s->refcount_table_size * sizeof(uint64_t));
++    if (ret < 0) {
++        return ret;
++    }
+ 
+     return check_refblocks(bs, res, fix, refcount_table, nb_clusters);
+ }
+-- 
+1.8.3.1
+

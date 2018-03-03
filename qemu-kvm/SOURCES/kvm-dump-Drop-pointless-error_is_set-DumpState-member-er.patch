@@ -1,0 +1,69 @@
+From 5b83dc5c849412b09a7e54ba7223ce5de8a3fd70 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Fri, 7 Nov 2014 17:18:06 +0100
+Subject: [PATCH 19/41] dump: Drop pointless error_is_set(), DumpState member
+ errp
+
+Message-id: <1415380693-16593-20-git-send-email-lersek@redhat.com>
+Patchwork-id: 62205
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 19/26] dump: Drop pointless error_is_set(), DumpState member errp
+Bugzilla: 1157798
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: dgibson <dgibson@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+In qmp_dump_guest_memory(), the error must be clear on entry, and we
+always bail out after setting it, directly or via dump_init().
+Therefore, both error_is_set() are always false.  Drop them.
+
+DumpState member errp is now write-only.  Drop it, too.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit 66ef8bd9c16b547c985cbe7468dcf60280c993eb)
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c | 6 ++----
+ 1 file changed, 2 insertions(+), 4 deletions(-)
+
+diff --git a/dump.c b/dump.c
+index 25bf8e6..9250594 100644
+--- a/dump.c
++++ b/dump.c
+@@ -86,7 +86,6 @@ typedef struct DumpState {
+     bool has_filter;
+     int64_t begin;
+     int64_t length;
+-    Error **errp;
+ 
+     uint8_t *note_buf;          /* buffer for notes */
+     size_t note_buf_offset;     /* the writing place in note_buf */
+@@ -1576,7 +1575,6 @@ static int dump_init(DumpState *s, int fd, bool has_format,
+         nr_cpus++;
+     }
+ 
+-    s->errp = errp;
+     s->fd = fd;
+     s->has_filter = has_filter;
+     s->begin = begin;
+@@ -1786,11 +1784,11 @@ void qmp_dump_guest_memory(bool paging, const char *file, bool has_begin,
+     }
+ 
+     if (has_format && format != DUMP_GUEST_MEMORY_FORMAT_ELF) {
+-        if (create_kdump_vmcore(s) < 0 && !error_is_set(s->errp)) {
++        if (create_kdump_vmcore(s) < 0) {
+             error_set(errp, QERR_IO_ERROR);
+         }
+     } else {
+-        if (create_vmcore(s) < 0 && !error_is_set(s->errp)) {
++        if (create_vmcore(s) < 0) {
+             error_set(errp, QERR_IO_ERROR);
+         }
+     }
+-- 
+1.8.3.1
+

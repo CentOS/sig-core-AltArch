@@ -1,0 +1,86 @@
+From 6fb76589c86264784014d8b555dc9c479c534898 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Tue, 27 May 2014 19:05:11 +0200
+Subject: [PATCH 07/13] block: vhdx - account for identical header sections
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <6a956eaa23796489845aaf8b0ef8aa390014e98b.1401217451.git.jcody@redhat.com>
+Patchwork-id: 59040
+O-Subject: [PATCH qemu-kvm RHEL7.1] block: vhdx - account for identical header sections
+Bugzilla: 1097020
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+The VHDX spec v1.00 declares that "a header is current if it is the only
+valid header or if it is valid and its SequenceNumber field is greater
+than the other header’s SequenceNumber field. The parser must only use
+data from the current header. If there is no current header, then the
+VHDX file is corrupt."
+
+However, the Disk2VHD tool from Microsoft creates a VHDX image file that
+has 2 identical headers, including matching checksums and matching
+sequence numbers.  Likely, as a shortcut the tool is just writing the
+header twice, for the active and inactive headers, during the image
+creation.  Technically, this should be considered a corrupt VHDX file
+(at least per the 1.00 spec, and that is how we currently treat it).
+
+But in order to accomodate images created with Disk2VHD, we can safely
+create an exception for this case.  If we find identical sequence
+numbers, then we check the VHDXHeader-sized chunks of each 64KB header
+sections (we won't rely just on the crc32c to indicate the headers are
+the same).  If they are identical, then we go ahead and use the first
+one.
+
+Reported-by: Nerijus Baliūnas <nerijus@users.sourceforge.net>
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 6906046169ffa9d829beeeaafe1fadeba51669fb)
+
+Conflicts:
+	block/vhdx.c
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+---
+Brew: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7505809
+BZ: 1097020
+
+Conflict notes: the conflict was with the ret value; current upstream
+                removed that in favor of passing in errp to the function
+
+ block/vhdx.c | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vhdx.c |   11 +++++++++--
+ 1 files changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/block/vhdx.c b/block/vhdx.c
+index 66a25c9..21ad6ad 100644
+--- a/block/vhdx.c
++++ b/block/vhdx.c
+@@ -473,8 +473,15 @@ static int vhdx_parse_header(BlockDriverState *bs, BDRVVHDXState *s)
+         } else if (h2_seq > h1_seq) {
+             s->curr_header = 1;
+         } else {
+-            ret = -EINVAL;
+-            goto fail;
++            /* The Microsoft Disk2VHD tool will create 2 identical
++             * headers, with identical sequence numbers.  If the headers are
++             * identical, don't consider the file corrupt */
++            if (!memcmp(header1, header2, sizeof(VHDXHeader))) {
++                s->curr_header = 0;
++            } else {
++                ret = -EINVAL;
++                goto fail;
++            }
+         }
+     }
+ 
+-- 
+1.7.1
+

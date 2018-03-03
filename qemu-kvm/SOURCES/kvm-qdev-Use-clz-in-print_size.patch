@@ -1,0 +1,69 @@
+From 5a3112e24aa41c50703739ccf419bad6136eb797 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 22 Jan 2014 12:13:55 +0100
+Subject: [PATCH 4/4] qdev: Use clz in print_size
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1390392835-21809-3-git-send-email-armbru@redhat.com>
+Patchwork-id: 56888
+O-Subject: [PATCH 7.0 qemu-kvm 2/2] qdev: Use clz in print_size
+Bugzilla: 1034876
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+
+From: Richard Henderson <rth@twiddle.net>
+
+We can compute a floor log2 value with clz rather than a division loop.
+
+Signed-off-by: Richard Henderson <rth@twiddle.net>
+Message-id: 1375208443-17288-3-git-send-email-rth@twiddle.net
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit 1197cbb9eda1dc82e2fa1815ca62bc3de158353e)
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+---
+ hw/core/qdev-properties.c | 20 +++++++++++++-------
+ 1 file changed, 13 insertions(+), 7 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/core/qdev-properties.c |   20 +++++++++++++-------
+ 1 files changed, 13 insertions(+), 7 deletions(-)
+
+diff --git a/hw/core/qdev-properties.c b/hw/core/qdev-properties.c
+index d6d10c9..dc8ae69 100644
+--- a/hw/core/qdev-properties.c
++++ b/hw/core/qdev-properties.c
+@@ -1172,15 +1172,21 @@ static int parse_size(DeviceState *dev, Property *prop, const char *str)
+ 
+ static int print_size(DeviceState *dev, Property *prop, char *dest, size_t len)
+ {
+-    uint64_t *ptr = qdev_get_prop_ptr(dev, prop);
+-    char suffixes[] = {'T', 'G', 'M', 'K', 'B'};
+-    int i = 0;
+-    uint64_t div;
++    static const char suffixes[] = { 'B', 'K', 'M', 'G', 'T' };
++    uint64_t div, val = *(uint64_t *)qdev_get_prop_ptr(dev, prop);
++    int i;
+ 
+-    for (div = 1ULL << 40; !(*ptr / div) ; div >>= 10) {
+-        i++;
++    /* Compute floor(log2(val)).  */
++    i = 64 - clz64(val);
++
++    /* Find the power of 1024 that we'll display as the units.  */
++    i /= 10;
++    if (i >= ARRAY_SIZE(suffixes)) {
++        i = ARRAY_SIZE(suffixes) - 1;
+     }
+-    return snprintf(dest, len, "%0.03f%c", (double)*ptr/div, suffixes[i]);
++    div = 1ULL << (i * 10);
++
++    return snprintf(dest, len, "%0.03f%c", (double)val/div, suffixes[i]);
+ }
+ 
+ PropertyInfo qdev_prop_size = {
+-- 
+1.7.1
+

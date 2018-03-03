@@ -1,0 +1,57 @@
+From 27b471e574edcee7ac065a7a46f558dca0fd7bf0 Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Fri, 10 Apr 2015 16:34:08 +0200
+Subject: [PATCH 06/14] vfio-pci: Fix BAR size overflow
+
+Message-id: <20150410163408.15324.43004.stgit@gimli.home>
+Patchwork-id: 64792
+O-Subject: [RHEL7.2 qemu-kvm PATCH 6/8] vfio-pci: Fix BAR size overflow
+Bugzilla: 1181267
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+
+Upstream: 29c6e6df492d81b1843e5dd999171bb84c6effea
+
+We use an unsigned int when working with the PCI BAR size, which can
+obviously overflow if the BAR is 4GB or larger.  This needs to change
+to a fixed length uint64_t.  A similar issue is possible, though even
+more unlikely, when mapping the region above an MSI-X table.  The
+start of the MSI-X vector table must be below 4GB, but the end, and
+therefore the start of the next mapping region, could still land at
+4GB.
+
+Suggested-by: Nishank Trivedi <nishank.trivedi@netapp.com>
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+Reviewed-by: Don Slutz <dslutz@verizon.com>
+Tested-by: Alexey Kardashevskiy <aik@ozlabs.ru>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index f6e019c..607dbf4 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -2579,7 +2579,7 @@ empty_region:
+ static void vfio_map_bar(VFIODevice *vdev, int nr)
+ {
+     VFIOBAR *bar = &vdev->bars[nr];
+-    unsigned size = bar->size;
++    uint64_t size = bar->size;
+     char name[64];
+     uint32_t pci_bar;
+     uint8_t type;
+@@ -2628,7 +2628,7 @@ static void vfio_map_bar(VFIODevice *vdev, int nr)
+     }
+ 
+     if (vdev->msix && vdev->msix->table_bar == nr) {
+-        unsigned start;
++        uint64_t start;
+ 
+         start = TARGET_PAGE_ALIGN(vdev->msix->table_offset +
+                                   (vdev->msix->entries * PCI_MSIX_ENTRY_SIZE));
+-- 
+1.8.3.1
+

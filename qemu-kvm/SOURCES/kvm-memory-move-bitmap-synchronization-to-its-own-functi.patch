@@ -1,0 +1,129 @@
+From e484992052b63d94c3bcdce6f070eb55f635212b Mon Sep 17 00:00:00 2001
+From: Juan Quintela <quintela@redhat.com>
+Date: Tue, 14 Jan 2014 15:07:48 +0100
+Subject: [PATCH 37/40] memory: move bitmap synchronization to its own function
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Juan Quintela <quintela@redhat.com>
+Message-id: <1389712071-23303-38-git-send-email-quintela@redhat.com>
+Patchwork-id: 56692
+O-Subject: [RHEL7 qemu-kvm PATCH 37/40] memory: move bitmap synchronization to its own function
+Bugzilla: 997559
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+
+We want to have all the functions that handle directly the dirty
+bitmap near.  We will change it later.
+
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+Reviewed-by: Orit Wasserman <owasserm@redhat.com>
+(cherry picked from commit 5ff7fb77b3cee8e26648e4fdccb23a77c2a6d3c6)
+
+Conflicts:
+	kvm-all.c
+
+commit dd1750d7981cf9e38985c9dfa474dcdbbe236270
+Author: Andreas Färber <afaerber@suse.de>
+Date:   Wed May 1 13:45:44 2013 +0200
+
+    kvm: Change kvm_cpu_synchronize_state() argument to CPUState
+
+Signed-off-by: Juan Quintela <quintela@trasno.org>
+---
+ include/exec/ram_addr.h | 31 +++++++++++++++++++++++++++++++
+ kvm-all.c               | 26 ++------------------------
+ 2 files changed, 33 insertions(+), 24 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ include/exec/ram_addr.h |   31 +++++++++++++++++++++++++++++++
+ kvm-all.c               |   28 +++-------------------------
+ 2 files changed, 34 insertions(+), 25 deletions(-)
+
+diff --git a/include/exec/ram_addr.h b/include/exec/ram_addr.h
+index 0caa239..9962e12 100644
+--- a/include/exec/ram_addr.h
++++ b/include/exec/ram_addr.h
+@@ -78,6 +78,37 @@ static inline void cpu_physical_memory_set_dirty_range(ram_addr_t start,
+     xen_modified_memory(start, length);
+ }
+ 
++static inline void cpu_physical_memory_set_dirty_lebitmap(unsigned long *bitmap,
++                                                          ram_addr_t start,
++                                                          ram_addr_t pages)
++{
++    unsigned int i, j;
++    unsigned long page_number, c;
++    hwaddr addr;
++    ram_addr_t ram_addr;
++    unsigned int len = (pages + HOST_LONG_BITS - 1) / HOST_LONG_BITS;
++    unsigned long hpratio = getpagesize() / TARGET_PAGE_SIZE;
++
++    /*
++     * bitmap-traveling is faster than memory-traveling (for addr...)
++     * especially when most of the memory is not dirty.
++     */
++    for (i = 0; i < len; i++) {
++        if (bitmap[i] != 0) {
++            c = leul_to_cpu(bitmap[i]);
++            do {
++                j = ffsl(c) - 1;
++                c &= ~(1ul << j);
++                page_number = (i * HOST_LONG_BITS + j) * hpratio;
++                addr = page_number * TARGET_PAGE_SIZE;
++                ram_addr = start + addr;
++                cpu_physical_memory_set_dirty_range(ram_addr,
++                                                    TARGET_PAGE_SIZE * hpratio);
++            } while (c != 0);
++        }
++    }
++}
++
+ static inline void cpu_physical_memory_clear_dirty_range(ram_addr_t start,
+                                                          ram_addr_t length,
+                                                          unsigned client)
+diff --git a/kvm-all.c b/kvm-all.c
+index d3aa869..19acd58 100644
+--- a/kvm-all.c
++++ b/kvm-all.c
+@@ -365,32 +365,10 @@ static int kvm_set_migration_log(int enable)
+ static int kvm_get_dirty_pages_log_range(MemoryRegionSection *section,
+                                          unsigned long *bitmap)
+ {
+-    unsigned int i, j;
+-    unsigned long page_number, c;
+-    hwaddr addr;
+     ram_addr_t start = section->offset_within_region + section->mr->ram_addr;
+-    ram_addr_t ram_addr;
+-    unsigned int len = ((section->size / getpagesize()) + HOST_LONG_BITS - 1) / HOST_LONG_BITS;
+-    unsigned long hpratio = getpagesize() / TARGET_PAGE_SIZE;
++    ram_addr_t pages = section->size / getpagesize();
+ 
+-    /*
+-     * bitmap-traveling is faster than memory-traveling (for addr...)
+-     * especially when most of the memory is not dirty.
+-     */
+-    for (i = 0; i < len; i++) {
+-        if (bitmap[i] != 0) {
+-            c = leul_to_cpu(bitmap[i]);
+-            do {
+-                j = ffsl(c) - 1;
+-                c &= ~(1ul << j);
+-                page_number = (i * HOST_LONG_BITS + j) * hpratio;
+-                addr = page_number * TARGET_PAGE_SIZE;
+-                ram_addr = start + addr;
+-                cpu_physical_memory_set_dirty_range(ram_addr,
+-                                                    TARGET_PAGE_SIZE * hpratio);
+-            } while (c != 0);
+-        }
+-    }
++    cpu_physical_memory_set_dirty_lebitmap(bitmap, start, pages);
+     return 0;
+ }
+ 
+-- 
+1.7.1
+

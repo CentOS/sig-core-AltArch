@@ -1,0 +1,67 @@
+From c576ee9550d38273808c2055803f3a254655753e Mon Sep 17 00:00:00 2001
+From: Orit Wasserman <owasserm@redhat.com>
+Date: Wed, 9 Oct 2013 10:09:10 +0200
+Subject: [PATCH 15/25] Fix real mode guest migration
+
+RH-Author: Orit Wasserman <owasserm@redhat.com>
+Message-id: <1381313355-15641-6-git-send-email-owasserm@redhat.com>
+Patchwork-id: 54801
+O-Subject: [RHEL7.0 qemu-kvm v2 05/10] Fix real mode guest migration
+Bugzilla: 921465
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+
+Older KVM versions save CS dpl value to an invalid value for real mode guests
+(0x3). This patch detect this situation when loading CPU state and set all the
+segments dpl to zero.
+This will allow migration from older KVM on host without unrestricted guest
+to hosts with restricted guest support.
+For example migration from a Penryn host (with kernel 2.6.32) to
+a Westmere host (for real mode guest) will fail with "kvm: unhandled exit 80000021".
+
+Signed-off-by: Orit Wasserman <owasserm@redhat.com>
+Reviewed-by: Juan Quintela <quintela@redhat.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit 444ba6797ef6ef331fe9fd34309b1ec59caaede3)
+---
+ target-i386/machine.c | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/machine.c |   18 ++++++++++++++++++
+ 1 files changed, 18 insertions(+), 0 deletions(-)
+
+diff --git a/target-i386/machine.c b/target-i386/machine.c
+index ecf1617..079a132 100644
+--- a/target-i386/machine.c
++++ b/target-i386/machine.c
+@@ -260,6 +260,24 @@ static int cpu_post_load(void *opaque, int version_id)
+     CPUX86State *env = &cpu->env;
+     int i;
+ 
++    /*
++     * Real mode guest segments register DPL should be zero.
++     * Older KVM version were setting it wrongly.
++     * Fixing it will allow live migration from such host that don't have
++     * restricted guest support to a host with unrestricted guest support
++     * (otherwise the migration will fail with invalid guest state
++     * error).
++     */
++    if (!(env->cr[0] & CR0_PE_MASK) &&
++        (env->segs[R_CS].flags >> DESC_DPL_SHIFT & 3) != 0) {
++        env->segs[R_CS].flags &= ~(env->segs[R_CS].flags & DESC_DPL_MASK);
++        env->segs[R_DS].flags &= ~(env->segs[R_DS].flags & DESC_DPL_MASK);
++        env->segs[R_ES].flags &= ~(env->segs[R_ES].flags & DESC_DPL_MASK);
++        env->segs[R_FS].flags &= ~(env->segs[R_FS].flags & DESC_DPL_MASK);
++        env->segs[R_GS].flags &= ~(env->segs[R_GS].flags & DESC_DPL_MASK);
++        env->segs[R_SS].flags &= ~(env->segs[R_SS].flags & DESC_DPL_MASK);
++    }
++
+     /* XXX: restore FPU round state */
+     env->fpstt = (env->fpus_vmstate >> 11) & 7;
+     env->fpus = env->fpus_vmstate & ~0x3800;
+-- 
+1.7.1
+

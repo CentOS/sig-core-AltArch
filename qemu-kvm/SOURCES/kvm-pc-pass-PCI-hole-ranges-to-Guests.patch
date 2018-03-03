@@ -1,0 +1,234 @@
+From b70ff3a2191f959098f12965c4c7e5adb60be59e Mon Sep 17 00:00:00 2001
+Message-Id: <b70ff3a2191f959098f12965c4c7e5adb60be59e.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:17:24 +0100
+Subject: [PATCH 14/56] pc: pass PCI hole ranges to Guests
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-15-git-send-email-mst@redhat.com>
+Patchwork-id: 56320
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 14/57] pc: pass PCI hole ranges to Guests
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Guest currently has to jump through lots of hoops to guess the PCI hole
+ranges.  It's fragile, and makes us change BIOS each time we add a new
+chipset.  Let's report the window in a ROM file, to make BIOS do exactly
+what QEMU intends.
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit f8c457b88d72a48989f190bc3d7b79f4f3b7d11c)
+
+Conflicts:
+	hw/i386/pc_piix.c
+	hw/i386/pc_q35.c
+---
+ include/hw/i386/pc.h |  1 +
+ hw/i386/pc.c         | 26 ++++++++++++++++++++++++++
+ hw/i386/pc_piix.c    | 16 +++++++++++++++-
+ hw/i386/pc_q35.c     | 12 ++++++++++--
+ 4 files changed, 52 insertions(+), 3 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/i386/pc.c         | 26 ++++++++++++++++++++++++++
+ hw/i386/pc_piix.c    | 16 +++++++++++++++-
+ hw/i386/pc_q35.c     | 12 ++++++++++--
+ include/hw/i386/pc.h |  1 +
+ 4 files changed, 52 insertions(+), 3 deletions(-)
+
+diff --git a/hw/i386/pc.c b/hw/i386/pc.c
+index 68a8e1b..238f6a0 100644
+--- a/hw/i386/pc.c
++++ b/hw/i386/pc.c
+@@ -985,6 +985,31 @@ void pc_cpus_init(const char *cpu_model, DeviceState *icc_bridge)
+     }
+ }
+ 
++/* pci-info ROM file. Little endian format */
++typedef struct PcRomPciInfo {
++    uint64_t w32_min;
++    uint64_t w32_max;
++    uint64_t w64_min;
++    uint64_t w64_max;
++} PcRomPciInfo;
++
++static void pc_fw_cfg_guest_info(PcGuestInfo *guest_info)
++{
++    PcRomPciInfo *info;
++    if (!guest_info->has_pci_info) {
++        return;
++    }
++
++    info = g_malloc(sizeof *info);
++    info->w32_min = cpu_to_le64(guest_info->pci_info.w32.begin);
++    info->w32_max = cpu_to_le64(guest_info->pci_info.w32.end);
++    info->w64_min = cpu_to_le64(guest_info->pci_info.w64.begin);
++    info->w64_max = cpu_to_le64(guest_info->pci_info.w64.end);
++    /* Pass PCI hole info to guest via a side channel.
++     * Required so guest PCI enumeration does the right thing. */
++    fw_cfg_add_file(guest_info->fw_cfg, "etc/pci-info", info, sizeof *info);
++}
++
+ typedef struct PcGuestInfoState {
+     PcGuestInfo info;
+     Notifier machine_done;
+@@ -996,6 +1021,7 @@ void pc_guest_info_machine_done(Notifier *notifier, void *data)
+     PcGuestInfoState *guest_info_state = container_of(notifier,
+                                                       PcGuestInfoState,
+                                                       machine_done);
++    pc_fw_cfg_guest_info(&guest_info_state->info);
+ }
+ 
+ PcGuestInfo *pc_guest_info_init(ram_addr_t below_4g_mem_size,
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index 3a77998..6d50a4e 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -59,6 +59,7 @@ static const int ide_iobase2[MAX_IDE_BUS] = { 0x3f6, 0x376 };
+ static const int ide_irq[MAX_IDE_BUS] = { 14, 15 };
+ 
+ static bool smbios_type1_defaults = true;
++static bool has_pci_info = true;
+ 
+ /* PC hardware initialisation */
+ static void pc_init1(QEMUMachineInitArgs *args,
+@@ -122,6 +123,7 @@ static void pc_init1(QEMUMachineInitArgs *args,
+     }
+ 
+     guest_info = pc_guest_info_init(below_4g_mem_size, above_4g_mem_size);
++    guest_info->has_pci_info = has_pci_info;
+ 
+     /* Set PCI window size the way seabios has always done it. */
+     /* Power of 2 so bios can cover it with a single MTRR */
+@@ -248,8 +250,15 @@ static void pc_init_pci(QEMUMachineInitArgs *args)
+ 
+ #if 0 /* Disabled for Red Hat Enterprise Linux */
+ 
++static void pc_init_pci_1_5(QEMUMachineInitArgs *args)
++{
++    has_pci_info = false;
++    pc_init_pci(args);
++}
++
+ static void pc_init_pci_1_4(QEMUMachineInitArgs *args)
+ {
++    has_pci_info = false;
+     x86_cpu_compat_set_features("n270", FEAT_1_ECX, 0, CPUID_EXT_MOVBE);
+     x86_cpu_compat_set_features("Westmere", FEAT_1_ECX, 0, CPUID_EXT_PCLMULQDQ);
+     pc_init_pci(args);
+@@ -257,6 +266,7 @@ static void pc_init_pci_1_4(QEMUMachineInitArgs *args)
+ 
+ static void pc_init_pci_1_3(QEMUMachineInitArgs *args)
+ {
++    has_pci_info = false;
+     enable_compat_apic_id_mode();
+     pc_init_pci(args);
+ }
+@@ -264,6 +274,7 @@ static void pc_init_pci_1_3(QEMUMachineInitArgs *args)
+ /* PC machine init function for pc-1.1 to pc-1.2 */
+ static void pc_init_pci_1_2(QEMUMachineInitArgs *args)
+ {
++    has_pci_info = false;
+     disable_kvm_pv_eoi();
+     enable_compat_apic_id_mode();
+     pc_init_pci(args);
+@@ -272,6 +283,7 @@ static void pc_init_pci_1_2(QEMUMachineInitArgs *args)
+ /* PC machine init function for pc-0.14 to pc-1.0 */
+ static void pc_init_pci_1_0(QEMUMachineInitArgs *args)
+ {
++    has_pci_info = false;
+     disable_kvm_pv_eoi();
+     enable_compat_apic_id_mode();
+     pc_init_pci(args);
+@@ -280,6 +292,7 @@ static void pc_init_pci_1_0(QEMUMachineInitArgs *args)
+ /* PC init function for pc-0.10 to pc-0.13, and reused by xenfv */
+ static void pc_init_pci_no_kvmclock(QEMUMachineInitArgs *args)
+ {
++    has_pci_info = false;
+     disable_kvm_pv_eoi();
+     enable_compat_apic_id_mode();
+     pc_init1(args, get_system_memory(), get_system_io(), 1, 0);
+@@ -290,6 +303,7 @@ static void pc_init_isa(QEMUMachineInitArgs *args)
+     if (!args->cpu_model) {
+         args->cpu_model = "486";
+     }
++    has_pci_info = false;
+     disable_kvm_pv_eoi();
+     enable_compat_apic_id_mode();
+     pc_init1(args, get_system_memory(), get_system_io(), 0, 1);
+@@ -310,7 +324,7 @@ static QEMUMachine pc_i440fx_machine_v1_5 = {
+     .name = "pc-i440fx-1.5",
+     .alias = "pc",
+     .desc = "Standard PC (i440FX + PIIX, 1996)",
+-    .init = pc_init_pci,
++    .init = pc_init_pci_1_5,
+     .hot_add_cpu = pc_hot_add_cpu,
+     .max_cpus = 255,
+     .is_default = 1,
+diff --git a/hw/i386/pc_q35.c b/hw/i386/pc_q35.c
+index 9fab93c..7a58b61 100644
+--- a/hw/i386/pc_q35.c
++++ b/hw/i386/pc_q35.c
+@@ -49,6 +49,7 @@
+ #define MAX_SATA_PORTS     6
+ 
+ static bool smbios_type1_defaults = true;
++static bool has_pci_info = true;
+ 
+ /* PC hardware initialisation */
+ static void pc_q35_init(QEMUMachineInitArgs *args)
+@@ -108,6 +109,7 @@ static void pc_q35_init(QEMUMachineInitArgs *args)
+     }
+ 
+     guest_info = pc_guest_info_init(below_4g_mem_size, above_4g_mem_size);
++    guest_info->has_pci_info = has_pci_info;
+ 
+     /* allocate ram and load rom/bios */
+     if (!xen_enabled()) {
+@@ -213,18 +215,24 @@ static void pc_q35_init(QEMUMachineInitArgs *args)
+ 
+ #if 0 /* Disabled for Red Hat Enterprise Linux */
+ 
++static void pc_q35_init_1_5(QEMUMachineInitArgs *args)
++{
++    has_pci_info = false;
++    pc_q35_init(args);
++}
++
+ static void pc_q35_init_1_4(QEMUMachineInitArgs *args)
+ {
+     x86_cpu_compat_set_features("n270", FEAT_1_ECX, 0, CPUID_EXT_MOVBE);
+     x86_cpu_compat_set_features("Westmere", FEAT_1_ECX, 0, CPUID_EXT_PCLMULQDQ);
+-    pc_q35_init(args);
++    pc_q35_init_1_5(args);
+ }
+ 
+ static QEMUMachine pc_q35_machine_v1_5 = {
+     .name = "pc-q35-1.5",
+     .alias = "q35",
+     .desc = "Standard PC (Q35 + ICH9, 2009)",
+-    .init = pc_q35_init,
++    .init = pc_q35_init_1_5,
+     .hot_add_cpu = pc_hot_add_cpu,
+     .max_cpus = 255,
+     .compat_props = (GlobalProperty[]) {
+diff --git a/include/hw/i386/pc.h b/include/hw/i386/pc.h
+index 2518db6..2992464 100644
+--- a/include/hw/i386/pc.h
++++ b/include/hw/i386/pc.h
+@@ -21,6 +21,7 @@ typedef struct PcPciInfo {
+ 
+ struct PcGuestInfo {
+     PcPciInfo pci_info;
++    bool has_pci_info;
+     FWCfgState *fw_cfg;
+ };
+ 
+-- 
+1.7.11.7
+

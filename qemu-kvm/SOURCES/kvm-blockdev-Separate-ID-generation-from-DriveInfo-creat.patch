@@ -1,0 +1,114 @@
+From abc45043366f4031947a55c23ae0533d2409413e Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 5 Nov 2013 14:09:02 +0100
+Subject: [PATCH 49/87] blockdev: Separate ID generation from DriveInfo creation
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383660558-32096-9-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55387
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 08/24] blockdev: Separate ID generation from DriveInfo creation
+Bugzilla: 978402
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+blockdev-add shouldn't automatically generate IDs, but will keep most of
+the DriveInfo creation code.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Wenchao Xia <xiawenc@linux.vnet.ibm.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit 326642bc7f0ff95a0c08db527861a9a114a109da)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ blockdev.c            | 32 +++++++++++++++++---------------
+ include/qemu/option.h |  1 +
+ util/qemu-option.c    |  6 ++++++
+ 3 files changed, 24 insertions(+), 15 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev.c            |   32 +++++++++++++++++---------------
+ include/qemu/option.h |    1 +
+ util/qemu-option.c    |    6 ++++++
+ 3 files changed, 24 insertions(+), 15 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index d4f66db..03ee554 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -604,23 +604,25 @@ static DriveInfo *blockdev_init(QemuOpts *all_opts,
+         return NULL;
+     }
+ 
+-    /* init */
+-
+-    dinfo = g_malloc0(sizeof(*dinfo));
+-    if ((buf = qemu_opts_id(opts)) != NULL) {
+-        dinfo->id = g_strdup(buf);
+-    } else {
+-        /* no id supplied -> create one */
+-        dinfo->id = g_malloc0(32);
+-        if (type == IF_IDE || type == IF_SCSI)
++    /* no id supplied -> create one */
++    if (qemu_opts_id(opts) == NULL) {
++        char *new_id;
++        if (type == IF_IDE || type == IF_SCSI) {
+             mediastr = (media == MEDIA_CDROM) ? "-cd" : "-hd";
+-        if (max_devs)
+-            snprintf(dinfo->id, 32, "%s%i%s%i",
+-                     if_name[type], bus_id, mediastr, unit_id);
+-        else
+-            snprintf(dinfo->id, 32, "%s%s%i",
+-                     if_name[type], mediastr, unit_id);
++        }
++        if (max_devs) {
++            new_id = g_strdup_printf("%s%i%s%i", if_name[type], bus_id,
++                                     mediastr, unit_id);
++        } else {
++            new_id = g_strdup_printf("%s%s%i", if_name[type],
++                                     mediastr, unit_id);
++        }
++        qemu_opts_set_id(opts, new_id);
+     }
++
++    /* init */
++    dinfo = g_malloc0(sizeof(*dinfo));
++    dinfo->id = g_strdup(qemu_opts_id(opts));
+     dinfo->bdrv = bdrv_new(dinfo->id);
+     dinfo->bdrv->open_flags = snapshot ? BDRV_O_SNAPSHOT : 0;
+     dinfo->bdrv->read_only = ro;
+diff --git a/include/qemu/option.h b/include/qemu/option.h
+index 13f5e72..f5ebb05 100644
+--- a/include/qemu/option.h
++++ b/include/qemu/option.h
+@@ -139,6 +139,7 @@ void qemu_opts_loc_restore(QemuOpts *opts);
+ int qemu_opts_set(QemuOptsList *list, const char *id,
+                   const char *name, const char *value);
+ const char *qemu_opts_id(QemuOpts *opts);
++void qemu_opts_set_id(QemuOpts *opts, char *id);
+ void qemu_opts_del(QemuOpts *opts);
+ void qemu_opts_validate(QemuOpts *opts, const QemuOptDesc *desc, Error **errp);
+ int qemu_opts_do_parse(QemuOpts *opts, const char *params, const char *firstname);
+diff --git a/util/qemu-option.c b/util/qemu-option.c
+index 5d686c8..fcbd1b8 100644
+--- a/util/qemu-option.c
++++ b/util/qemu-option.c
+@@ -825,6 +825,12 @@ const char *qemu_opts_id(QemuOpts *opts)
+     return opts->id;
+ }
+ 
++/* The id string will be g_free()d by qemu_opts_del */
++void qemu_opts_set_id(QemuOpts *opts, char *id)
++{
++    opts->id = id;
++}
++
+ void qemu_opts_del(QemuOpts *opts)
+ {
+     QemuOpt *opt;
+-- 
+1.7.1
+

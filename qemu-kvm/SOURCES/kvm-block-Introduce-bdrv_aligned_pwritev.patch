@@ -1,0 +1,126 @@
+From d6a03733e6755d4b59f8009239af8f0a3e12c171 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 3 Dec 2013 14:02:23 +0100
+Subject: [PATCH 13/37] block: Introduce bdrv_aligned_pwritev()
+
+Message-id: <1392117622-28812-14-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57178
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 13/37] block: Introduce bdrv_aligned_pwritev()
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+This separates the part of bdrv_co_do_writev() that needs to happen
+before the request is modified to match the backend alignment, and a
+part that needs to be executed afterwards and passes the request to the
+BlockDriver.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+(cherry picked from commit b404f72036716ab8ace04b83a8f0a93be4739a6a)
+
+Conflicts:
+	block.c
+
+Conflict because RHEL 7 still has the old I/O throttling code.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c | 62 +++++++++++++++++++++++++++++++++++++++++---------------------
+ 1 file changed, 41 insertions(+), 21 deletions(-)
+---
+ block.c |   62 +++++++++++++++++++++++++++++++++++++++++---------------------
+ 1 files changed, 41 insertions(+), 21 deletions(-)
+
+diff --git a/block.c b/block.c
+index ce3edb0..e6b6ed4 100644
+--- a/block.c
++++ b/block.c
+@@ -2982,34 +2982,20 @@ static int coroutine_fn bdrv_co_do_write_zeroes(BlockDriverState *bs,
+ }
+ 
+ /*
+- * Handle a write request in coroutine context
++ * Forwards an already correctly aligned write request to the BlockDriver.
+  */
+-static int coroutine_fn bdrv_co_do_writev(BlockDriverState *bs,
+-    int64_t sector_num, int nb_sectors, QEMUIOVector *qiov,
+-    BdrvRequestFlags flags)
++static int coroutine_fn bdrv_aligned_pwritev(BlockDriverState *bs,
++    int64_t offset, unsigned int bytes, QEMUIOVector *qiov, int flags)
+ {
+     BlockDriver *drv = bs->drv;
+     BdrvTrackedRequest req;
+     int ret;
+ 
+-    if (!bs->drv) {
+-        return -ENOMEDIUM;
+-    }
+-    if (bs->read_only) {
+-        return -EACCES;
+-    }
+-    if (bdrv_check_request(bs, sector_num, nb_sectors)) {
+-        return -EIO;
+-    }
+-
+-    /* throttling disk write I/O */
+-    if (bs->io_limits_enabled) {
+-        bdrv_io_limits_intercept(bs, true, nb_sectors);
+-    }
++    int64_t sector_num = offset >> BDRV_SECTOR_BITS;
++    unsigned int nb_sectors = bytes >> BDRV_SECTOR_BITS;
+ 
+-    if (bs->copy_on_read_in_flight) {
+-        wait_for_overlapping_requests(bs, sector_num, nb_sectors);
+-    }
++    assert((offset & (BDRV_SECTOR_SIZE - 1)) == 0);
++    assert((bytes & (BDRV_SECTOR_SIZE - 1)) == 0);
+ 
+     tracked_request_begin(&req, bs, sector_num, nb_sectors, true);
+ 
+@@ -3039,6 +3025,40 @@ static int coroutine_fn bdrv_co_do_writev(BlockDriverState *bs,
+     return ret;
+ }
+ 
++/*
++ * Handle a write request in coroutine context
++ */
++static int coroutine_fn bdrv_co_do_writev(BlockDriverState *bs,
++    int64_t sector_num, int nb_sectors, QEMUIOVector *qiov,
++    BdrvRequestFlags flags)
++{
++    int ret;
++
++    if (!bs->drv) {
++        return -ENOMEDIUM;
++    }
++    if (bs->read_only) {
++        return -EACCES;
++    }
++    if (bdrv_check_request(bs, sector_num, nb_sectors)) {
++        return -EIO;
++    }
++
++    if (bs->copy_on_read_in_flight) {
++        wait_for_overlapping_requests(bs, sector_num, nb_sectors);
++    }
++
++    /* throttling disk I/O */
++    if (bs->io_limits_enabled) {
++        bdrv_io_limits_intercept(bs, true, nb_sectors);
++    }
++
++    ret = bdrv_aligned_pwritev(bs, sector_num << BDRV_SECTOR_BITS,
++                               nb_sectors << BDRV_SECTOR_BITS, qiov, flags);
++
++    return ret;
++}
++
+ int coroutine_fn bdrv_co_writev(BlockDriverState *bs, int64_t sector_num,
+     int nb_sectors, QEMUIOVector *qiov)
+ {
+-- 
+1.7.1
+

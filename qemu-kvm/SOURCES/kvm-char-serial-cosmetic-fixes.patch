@@ -1,0 +1,95 @@
+From 30482e796857e7d29877d93cc017aca5c844e4e1 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 18 May 2017 09:21:14 +0200
+Subject: [PATCH 01/18] char/serial: cosmetic fixes.
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <20170518092131.16571-2-famz@redhat.com>
+Patchwork-id: 75293
+O-Subject: [RHEL-7.4 qemu-kvm PATCH v3 01/18] char/serial: cosmetic fixes.
+Bugzilla: 1451470
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+From: Peter Crosthwaite <peter.crosthwaite@xilinx.com>
+
+Some cosmetic fixes to char/serial fixing some checkpatch errors.
+
+Cc: qemu-trivial@nongnu.org
+
+Signed-off-by: Peter Crosthwaite <peter.crosthwaite@xilinx.com>
+Reviewed-by: Andreas Färber <afaerber@suse.de>
+Signed-off-by: Michael Tokarev <mjt@tls.msk.ru>
+(cherry picked from commit 7f4f0a227fe0b24c35d0898f9ae7d5909fb51137)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/char/serial.c | 30 +++++++++++++++++++-----------
+ 1 file changed, 19 insertions(+), 11 deletions(-)
+
+diff --git a/hw/char/serial.c b/hw/char/serial.c
+index 2383c31..7866b0f 100644
+--- a/hw/char/serial.c
++++ b/hw/char/serial.c
+@@ -264,8 +264,9 @@ static gboolean serial_xmit(GIOChannel *chan, GIOCondition cond, void *opaque)
+     if (s->tsr_retry <= 0) {
+         if (s->fcr & UART_FCR_FE) {
+             s->tsr = fifo_get(s,XMIT_FIFO);
+-            if (!s->xmit_fifo.count)
++            if (!s->xmit_fifo.count) {
+                 s->lsr |= UART_LSR_THRE;
++            }
+         } else if ((s->lsr & UART_LSR_THRE)) {
+             return FALSE;
+         } else {
+@@ -462,10 +463,11 @@ static uint64_t serial_ioport_read(void *opaque, hwaddr addr, unsigned size)
+         } else {
+             if(s->fcr & UART_FCR_FE) {
+                 ret = fifo_get(s,RECV_FIFO);
+-                if (s->recv_fifo.count == 0)
++                if (s->recv_fifo.count == 0) {
+                     s->lsr &= ~(UART_LSR_DR | UART_LSR_BI);
+-                else
++                } else {
+                     qemu_mod_timer(s->fifo_timeout_timer, qemu_get_clock_ns (vm_clock) + s->char_transmit_time * 4);
++                }
+                 s->timeout_ipending = 0;
+             } else {
+                 ret = s->rbr;
+@@ -535,15 +537,21 @@ static uint64_t serial_ioport_read(void *opaque, hwaddr addr, unsigned size)
+ static int serial_can_receive(SerialState *s)
+ {
+     if(s->fcr & UART_FCR_FE) {
+-        if(s->recv_fifo.count < UART_FIFO_LENGTH)
+-        /* Advertise (fifo.itl - fifo.count) bytes when count < ITL, and 1 if above. If UART_FIFO_LENGTH - fifo.count is
+-        advertised the effect will be to almost always fill the fifo completely before the guest has a chance to respond,
+-        effectively overriding the ITL that the guest has set. */
+-             return (s->recv_fifo.count <= s->recv_fifo.itl) ? s->recv_fifo.itl - s->recv_fifo.count : 1;
+-        else
+-             return 0;
++        if (s->recv_fifo.count < UART_FIFO_LENGTH) {
++            /*
++             * Advertise (fifo.itl - fifo.count) bytes when count < ITL, and 1
++             * if above. If UART_FIFO_LENGTH - fifo.count is advertised the
++             * effect will be to almost always fill the fifo completely before
++             * the guest has a chance to respond, effectively overriding the ITL
++             * that the guest has set.
++             */
++            return (s->recv_fifo.count <= s->recv_fifo.itl) ?
++                        s->recv_fifo.itl - s->recv_fifo.count : 1;
++        } else {
++            return 0;
++        }
+     } else {
+-    return !(s->lsr & UART_LSR_DR);
++        return !(s->lsr & UART_LSR_DR);
+     }
+ }
+ 
+-- 
+1.8.3.1
+

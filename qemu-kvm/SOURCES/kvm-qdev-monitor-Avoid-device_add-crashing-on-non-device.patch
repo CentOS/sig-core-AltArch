@@ -1,0 +1,57 @@
+From d2b004602412ce65613b30f28d07ef8607e0d505 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Fri, 17 Jan 2014 17:07:58 +0100
+Subject: [PATCH 08/11] qdev-monitor: Avoid device_add crashing on non-device driver name
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1389978479-30595-9-git-send-email-armbru@redhat.com>
+Patchwork-id: 56795
+O-Subject: [PATCH 7.0 qemu-kvm 8/9] qdev-monitor: Avoid device_add crashing on non-device driver name
+Bugzilla: 669524
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+
+Watch this:
+
+    $ upstream-qemu -nodefaults -S -display none -monitor stdio
+    QEMU 1.7.50 monitor - type 'help' for more information
+    (qemu) device_add rng-egd
+    /work/armbru/qemu/qdev-monitor.c:491:qdev_device_add: Object 0x2089b00 is not an instance of type device
+    Aborted (core dumped)
+
+Crashes because "rng-egd" exists, but isn't a subtype of TYPE_DEVICE.
+Broken in commit 18b6dad.
+
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit 061e84f7a469ad1f94f3b5f6a5361b346ab990e8)
+---
+ qdev-monitor.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qdev-monitor.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/qdev-monitor.c b/qdev-monitor.c
+index da7fe0d..55a476b 100644
+--- a/qdev-monitor.c
++++ b/qdev-monitor.c
+@@ -478,7 +478,7 @@ DeviceState *qdev_device_add(QemuOpts *opts)
+         }
+     }
+ 
+-    if (!oc) {
++    if (!object_class_dynamic_cast(oc, TYPE_DEVICE)) {
+         qerror_report(QERR_INVALID_PARAMETER_VALUE, "driver", "device type");
+         return NULL;
+     }
+-- 
+1.7.1
+

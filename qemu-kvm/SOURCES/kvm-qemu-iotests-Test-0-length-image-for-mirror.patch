@@ -1,0 +1,93 @@
+From 54287567a2e235abe6967e15dd46eeebe8834f3b Mon Sep 17 00:00:00 2001
+From: Eric Blake <eblake@redhat.com>
+Date: Wed, 20 Aug 2014 16:40:13 +0200
+Subject: [PATCH 10/11] qemu-iotests: Test 0-length image for mirror
+
+Message-id: <1408552814-23031-7-git-send-email-eblake@redhat.com>
+Patchwork-id: 60648
+O-Subject: [qemu-kvm-rhev 7.0.z PATCH 6/7] qemu-iotests: Test 0-length image for mirror
+Bugzilla: 1130603
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Fam Zheng <famz@redhat.com>
+
+All behavior and invariant should hold for images with 0 length, so
+add a class to repeat all the tests in TestSingleDrive.
+
+Hide two unapplicable test methods that would fail with 0 image length
+because it's also used as cluster size.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 3b9f27d2b34cb8c5cc6cec993712c7e1943e9de9)
+
+Conflicts:
+	tests/qemu-iotests/041 - context due to no common event handling
+
+Signed-off-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/041     |   11 ++++++++---
+ tests/qemu-iotests/041.out |    4 ++--
+ 2 files changed, 10 insertions(+), 5 deletions(-)
+
+diff --git a/tests/qemu-iotests/041 b/tests/qemu-iotests/041
+index bcfb759..912e499 100755
+--- a/tests/qemu-iotests/041
++++ b/tests/qemu-iotests/041
+@@ -123,7 +123,7 @@ class TestSingleDrive(ImageMirroringTestCase):
+     image_len = 1 * 1024 * 1024 # MB
+ 
+     def setUp(self):
+-        self.create_image(backing_img, TestSingleDrive.image_len)
++        self.create_image(backing_img, self.image_len)
+         qemu_img('create', '-f', iotests.imgfmt, '-o', 'backing_file=%s' % backing_img, test_img)
+         self.vm = iotests.VM().add_drive(test_img)
+         self.vm.launch()
+@@ -222,7 +222,7 @@ class TestSingleDrive(ImageMirroringTestCase):
+         self.assert_no_active_block_jobs()
+ 
+         qemu_img('create', '-f', iotests.imgfmt, '-o', 'cluster_size=%d,size=%d'
+-                        % (TestSingleDrive.image_len, TestSingleDrive.image_len), target_img)
++                        % (self.image_len, self.image_len), target_img)
+         result = self.vm.qmp('drive-mirror', device='drive0', sync='full',
+                              buf_size=65536, mode='existing', target=target_img)
+         self.assert_qmp(result, 'return', {})
+@@ -238,7 +238,7 @@ class TestSingleDrive(ImageMirroringTestCase):
+         self.assert_no_active_block_jobs()
+ 
+         qemu_img('create', '-f', iotests.imgfmt, '-o', 'cluster_size=%d,backing_file=%s'
+-                        % (TestSingleDrive.image_len, backing_img), target_img)
++                        % (self.image_len, backing_img), target_img)
+         result = self.vm.qmp('drive-mirror', device='drive0', sync='full',
+                              mode='existing', target=target_img)
+         self.assert_qmp(result, 'return', {})
+@@ -265,6 +265,11 @@ class TestSingleDrive(ImageMirroringTestCase):
+                              target=target_img)
+         self.assert_qmp(result, 'error/class', 'DeviceNotFound')
+ 
++class TestSingleDriveZeroLength(TestSingleDrive):
++    image_len = 0
++    test_small_buffer2 = None
++    test_large_cluster = None
++
+ class TestMirrorNoBacking(ImageMirroringTestCase):
+     image_len = 2 * 1024 * 1024 # MB
+ 
+diff --git a/tests/qemu-iotests/041.out b/tests/qemu-iotests/041.out
+index 6d9bee1..cfa5c0d 100644
+--- a/tests/qemu-iotests/041.out
++++ b/tests/qemu-iotests/041.out
+@@ -1,5 +1,5 @@
+-...........................
++...................................
+ ----------------------------------------------------------------------
+-Ran 27 tests
++Ran 35 tests
+ 
+ OK
+-- 
+1.7.1
+

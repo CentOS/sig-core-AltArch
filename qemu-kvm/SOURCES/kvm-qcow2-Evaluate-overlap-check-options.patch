@@ -1,0 +1,84 @@
+From c5321890678045bf4de3b1845110aeed348203b9 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 4 Nov 2013 22:32:34 +0100
+Subject: [PATCH 41/87] qcow2: Evaluate overlap check options
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-44-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55343
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 43/43] qcow2: Evaluate overlap check options
+Bugzilla: 1004347
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1004347
+
+Evaluate the runtime overlap check options and set
+BDRVQcowState.overlap_check appropriately.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 1fa5cc839aa6068c9182ad8d611f844c58f95f42)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2.c | 29 ++++++++++++++++++++++++++++-
+ 1 file changed, 28 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2.c |   29 ++++++++++++++++++++++++++++-
+ 1 files changed, 28 insertions(+), 1 deletions(-)
+
+diff --git a/block/qcow2.c b/block/qcow2.c
+index b6f300d..01b535d 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -425,6 +425,8 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
+     Error *local_err = NULL;
+     uint64_t ext_end;
+     uint64_t l1_vm_state_index;
++    const char *opt_overlap_check;
++    int overlap_check_template = 0;
+ 
+     ret = bdrv_pread(bs->file, 0, &header, sizeof(header));
+     if (ret < 0) {
+@@ -687,7 +689,32 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
+     s->discard_passthrough[QCOW2_DISCARD_OTHER] =
+         qemu_opt_get_bool(opts, QCOW2_OPT_DISCARD_OTHER, false);
+ 
+-    s->overlap_check = QCOW2_OL_CACHED;
++    opt_overlap_check = qemu_opt_get(opts, "overlap-check") ?: "cached";
++    if (!strcmp(opt_overlap_check, "none")) {
++        overlap_check_template = 0;
++    } else if (!strcmp(opt_overlap_check, "constant")) {
++        overlap_check_template = QCOW2_OL_CONSTANT;
++    } else if (!strcmp(opt_overlap_check, "cached")) {
++        overlap_check_template = QCOW2_OL_CACHED;
++    } else if (!strcmp(opt_overlap_check, "all")) {
++        overlap_check_template = QCOW2_OL_ALL;
++    } else {
++        error_setg(errp, "Unsupported value '%s' for qcow2 option "
++                   "'overlap-check'. Allowed are either of the following: "
++                   "none, constant, cached, all", opt_overlap_check);
++        qemu_opts_del(opts);
++        ret = -EINVAL;
++        goto fail;
++    }
++
++    s->overlap_check = 0;
++    for (i = 0; i < QCOW2_OL_MAX_BITNR; i++) {
++        /* overlap-check defines a template bitmask, but every flag may be
++         * overwritten through the associated boolean option */
++        s->overlap_check |=
++            qemu_opt_get_bool(opts, overlap_bool_option_names[i],
++                              overlap_check_template & (1 << i)) << i;
++    }
+ 
+     qemu_opts_del(opts);
+ 
+-- 
+1.7.1
+

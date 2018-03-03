@@ -1,0 +1,65 @@
+From 4b6c9d80b06057886e35650b904fe332ae14d0bd Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Wed, 4 Dec 2013 12:13:10 +0100
+Subject: [PATCH 19/37] block: Make zero-after-EOF work with larger alignment
+
+Message-id: <1392117622-28812-20-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57184
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 19/37] block: Make zero-after-EOF work with larger alignment
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+Odd file sizes could make bdrv_aligned_preadv() shorten the request in
+non-aligned ways. Fix it by rounding to the required alignment instead
+of 512 bytes.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+(cherry picked from commit ec746e10cb2e6276a8d2e036454792fe0674864a)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+---
+ block.c |    7 ++++---
+ 1 files changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/block.c b/block.c
+index feeab4e..6317321 100644
+--- a/block.c
++++ b/block.c
+@@ -2748,7 +2748,7 @@ err:
+  */
+ static int coroutine_fn bdrv_aligned_preadv(BlockDriverState *bs,
+     BdrvTrackedRequest *req, int64_t offset, unsigned int bytes,
+-    QEMUIOVector *qiov, int flags)
++    int64_t align, QEMUIOVector *qiov, int flags)
+ {
+     BlockDriver *drv = bs->drv;
+     int ret;
+@@ -2796,7 +2796,8 @@ static int coroutine_fn bdrv_aligned_preadv(BlockDriverState *bs,
+         }
+ 
+         total_sectors = DIV_ROUND_UP(len, BDRV_SECTOR_SIZE);
+-        max_nb_sectors = MAX(0, total_sectors - sector_num);
++        max_nb_sectors = MAX(0, ROUND_UP(total_sectors - sector_num,
++                                         align >> BDRV_SECTOR_BITS));
+         if (max_nb_sectors > 0) {
+             ret = drv->bdrv_co_readv(bs, sector_num,
+                                      MIN(nb_sectors, max_nb_sectors), qiov);
+@@ -2882,7 +2883,7 @@ static int coroutine_fn bdrv_co_do_preadv(BlockDriverState *bs,
+     }
+ 
+     tracked_request_begin(&req, bs, offset, bytes, false);
+-    ret = bdrv_aligned_preadv(bs, &req, offset, bytes,
++    ret = bdrv_aligned_preadv(bs, &req, offset, bytes, align,
+                               use_local_qiov ? &local_qiov : qiov,
+                               flags);
+     tracked_request_end(&req);
+-- 
+1.7.1
+

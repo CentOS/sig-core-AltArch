@@ -1,0 +1,72 @@
+From 45958d24d6c9bcdc333844f69f47cacec29cfa0e Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 4 Nov 2013 22:32:26 +0100
+Subject: [PATCH 33/87] qcow2: Switch L1 table in a single sequence
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-36-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55335
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 35/43] qcow2: Switch L1 table in a single sequence
+Bugzilla: 1004347
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1004347
+
+Switching the L1 table in memory should be an atomic operation, as far
+as possible. Calling qcow2_free_clusters on the old L1 table on disk is
+not a good idea when the old L1 table is no longer valid and the address
+to the new one hasn't yet been written into the corresponding
+BDRVQcowState field. To be more specific, this can lead to segfaults due
+to qcow2_check_metadata_overlap trying to access the L1 table during the
+free operation.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit fda74f826baec78d685e5a87fd8a95bfb7bb2243)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2-cluster.c | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-cluster.c |    7 +++++--
+ 1 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/block/qcow2-cluster.c b/block/qcow2-cluster.c
+index 2d5aa92..c05f182 100644
+--- a/block/qcow2-cluster.c
++++ b/block/qcow2-cluster.c
+@@ -35,6 +35,7 @@ int qcow2_grow_l1_table(BlockDriverState *bs, uint64_t min_size,
+     BDRVQcowState *s = bs->opaque;
+     int new_l1_size2, ret, i;
+     uint64_t *new_l1_table;
++    int64_t old_l1_table_offset, old_l1_size;
+     int64_t new_l1_table_offset, new_l1_size;
+     uint8_t data[12];
+ 
+@@ -106,11 +107,13 @@ int qcow2_grow_l1_table(BlockDriverState *bs, uint64_t min_size,
+         goto fail;
+     }
+     g_free(s->l1_table);
+-    qcow2_free_clusters(bs, s->l1_table_offset, s->l1_size * sizeof(uint64_t),
+-                        QCOW2_DISCARD_OTHER);
++    old_l1_table_offset = s->l1_table_offset;
+     s->l1_table_offset = new_l1_table_offset;
+     s->l1_table = new_l1_table;
++    old_l1_size = s->l1_size;
+     s->l1_size = new_l1_size;
++    qcow2_free_clusters(bs, old_l1_table_offset, old_l1_size * sizeof(uint64_t),
++                        QCOW2_DISCARD_OTHER);
+     return 0;
+  fail:
+     g_free(new_l1_table);
+-- 
+1.7.1
+

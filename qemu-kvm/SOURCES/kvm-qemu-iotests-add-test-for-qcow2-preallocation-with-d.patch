@@ -1,0 +1,161 @@
+From a3a428e70ae71ec09d66cd405bf6a0ef7c42feb4 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 15 Feb 2014 16:03:50 +0100
+Subject: [PATCH 5/5] qemu-iotests: add test for qcow2 preallocation with different cluster sizes
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1392480230-24011-5-git-send-email-mreitz@redhat.com>
+Patchwork-id: 57295
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 4/4] qemu-iotests: add test for qcow2 preallocation with different cluster sizes
+Bugzilla: 1055848
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+From: Hu Tao <hutao@cn.fujitsu.com>
+
+BZ: 1049176
+BZ: 1055848
+
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Hu Tao <hutao@cn.fujitsu.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 693a50ade339e3ef9b042fd73a3b81405101ba3d)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ tests/qemu-iotests/079     | 63 ++++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/079.out | 32 +++++++++++++++++++++++
+ tests/qemu-iotests/group   |  1 +
+ 3 files changed, 96 insertions(+)
+ create mode 100755 tests/qemu-iotests/079
+ create mode 100644 tests/qemu-iotests/079.out
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/079     |   63 ++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/079.out |   32 ++++++++++++++++++++++
+ tests/qemu-iotests/group   |    1 +
+ 3 files changed, 96 insertions(+), 0 deletions(-)
+ create mode 100755 tests/qemu-iotests/079
+ create mode 100644 tests/qemu-iotests/079.out
+
+diff --git a/tests/qemu-iotests/079 b/tests/qemu-iotests/079
+new file mode 100755
+index 0000000..2142bbb
+--- /dev/null
++++ b/tests/qemu-iotests/079
+@@ -0,0 +1,63 @@
++#!/bin/bash
++#
++# Test qcow2 preallocation with different cluster_sizes
++#
++# Copyright (C) 2014 Fujitsu.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++
++# creator
++owner=hutao@cn.fujitsu.com
++
++seq=`basename $0`
++echo "QA output created by $seq"
++
++here=`pwd`
++tmp=/tmp/$$
++status=1	# failure is the default!
++
++_cleanup()
++{
++	_cleanup_test_img
++}
++trap "_cleanup; exit \$status" 0 1 2 3 15
++
++# get standard environment, filters and checks
++. ./common.rc
++. ./common.filter
++
++_supported_fmt qcow2
++_supported_proto file
++_supported_os Linux
++
++function test_qemu_img()
++{
++    echo qemu-img "$@" | _filter_testdir
++    $QEMU_IMG "$@" 2>&1 | _filter_testdir
++    echo
++}
++
++echo "=== Check option preallocation and cluster_size ==="
++echo
++cluster_sizes="16384 32768 65536 131072 262144 524288 1048576 2097152 4194304"
++
++for s in $cluster_sizes; do
++    test_qemu_img create -f $IMGFMT -o preallocation=metadata,cluster_size=$s "$TEST_IMG" 4G
++done
++
++# success, all done
++echo "*** done"
++rm -f $seq.full
++status=0
+diff --git a/tests/qemu-iotests/079.out b/tests/qemu-iotests/079.out
+new file mode 100644
+index 0000000..ef4b8c9
+--- /dev/null
++++ b/tests/qemu-iotests/079.out
+@@ -0,0 +1,32 @@
++QA output created by 079
++=== Check option preallocation and cluster_size ===
++
++qemu-img create -f qcow2 -o preallocation=metadata,cluster_size=16384 TEST_DIR/t.qcow2 4G
++Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=4294967296 encryption=off cluster_size=16384 preallocation='metadata' lazy_refcounts=off
++
++qemu-img create -f qcow2 -o preallocation=metadata,cluster_size=32768 TEST_DIR/t.qcow2 4G
++Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=4294967296 encryption=off cluster_size=32768 preallocation='metadata' lazy_refcounts=off
++
++qemu-img create -f qcow2 -o preallocation=metadata,cluster_size=65536 TEST_DIR/t.qcow2 4G
++Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=4294967296 encryption=off cluster_size=65536 preallocation='metadata' lazy_refcounts=off
++
++qemu-img create -f qcow2 -o preallocation=metadata,cluster_size=131072 TEST_DIR/t.qcow2 4G
++Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=4294967296 encryption=off cluster_size=131072 preallocation='metadata' lazy_refcounts=off
++
++qemu-img create -f qcow2 -o preallocation=metadata,cluster_size=262144 TEST_DIR/t.qcow2 4G
++Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=4294967296 encryption=off cluster_size=262144 preallocation='metadata' lazy_refcounts=off
++
++qemu-img create -f qcow2 -o preallocation=metadata,cluster_size=524288 TEST_DIR/t.qcow2 4G
++Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=4294967296 encryption=off cluster_size=524288 preallocation='metadata' lazy_refcounts=off
++
++qemu-img create -f qcow2 -o preallocation=metadata,cluster_size=1048576 TEST_DIR/t.qcow2 4G
++Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=4294967296 encryption=off cluster_size=1048576 preallocation='metadata' lazy_refcounts=off
++
++qemu-img create -f qcow2 -o preallocation=metadata,cluster_size=2097152 TEST_DIR/t.qcow2 4G
++Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=4294967296 encryption=off cluster_size=2097152 preallocation='metadata' lazy_refcounts=off
++
++qemu-img create -f qcow2 -o preallocation=metadata,cluster_size=4194304 TEST_DIR/t.qcow2 4G
++qemu-img: TEST_DIR/t.qcow2: Cluster size must be a power of two between 512 and 2048k
++Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=4294967296 encryption=off cluster_size=4194304 preallocation='metadata' lazy_refcounts=off
++
++*** done
+diff --git a/tests/qemu-iotests/group b/tests/qemu-iotests/group
+index dd70acb..fce6ca8 100644
+--- a/tests/qemu-iotests/group
++++ b/tests/qemu-iotests/group
+@@ -72,3 +72,4 @@
+ 068 rw auto
+ 070 rw auto
+ 077 rw auto
++079 rw auto
+-- 
+1.7.1
+

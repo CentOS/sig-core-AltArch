@@ -1,0 +1,142 @@
+From f69bd1c99d908b9de5ba4f335a55597a3e8fd947 Mon Sep 17 00:00:00 2001
+Message-Id: <f69bd1c99d908b9de5ba4f335a55597a3e8fd947.1387276076.git.minovotn@redhat.com>
+In-Reply-To: <e610718166120379517e80d1a7aa12d60294209b.1387276076.git.minovotn@redhat.com>
+References: <e610718166120379517e80d1a7aa12d60294209b.1387276076.git.minovotn@redhat.com>
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Mon, 9 Dec 2013 17:52:56 +0100
+Subject: [PATCH 07/16] kvm: Query KVM for available memory slots
+
+RH-Author: Alex Williamson <alex.williamson@redhat.com>
+Message-id: <20131209175223.22125.66085.stgit@bling.home>
+Patchwork-id: 56092
+O-Subject: [RHEL7 qemu-kvm PATCH] kvm: Query KVM for available memory slots
+Bugzilla: 921490
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Amos Kong <akong@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=921490
+Brew: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=6696277
+Upstream: fb541ca59c8b55911821c9f794c3dbe5de9ba9d8
+
+KVM reports the number of available memory slots (KVM_CAP_NR_MEMSLOTS)
+using the extension interface.  Both x86 and s390 implement this, ARM
+and powerpc do not yet enable it.  Convert the static slots array to
+be dynamically allocated, supporting more slots when available.
+Default to 32 when KVM_CAP_NR_MEMSLOTS is not implemented.  The
+motivation for this change is to support more assigned devices, where
+memory mapped PCI MMIO BARs typically take one slot each.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+Reviewed-by: Thomas Huth <thuth@linux.vnet.ibm.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ kvm-all.c |   30 +++++++++++++++++++++---------
+ 1 file changed, 21 insertions(+), 9 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ kvm-all.c | 30 +++++++++++++++++++++---------
+ 1 file changed, 21 insertions(+), 9 deletions(-)
+
+diff --git a/kvm-all.c b/kvm-all.c
+index f2f68d6..0e21494 100644
+--- a/kvm-all.c
++++ b/kvm-all.c
+@@ -72,7 +72,8 @@ typedef struct kvm_dirty_log KVMDirtyLog;
+ 
+ struct KVMState
+ {
+-    KVMSlot slots[32];
++    KVMSlot *slots;
++    int nr_slots;
+     int fd;
+     int vmfd;
+     int coalesced_mmio;
+@@ -122,7 +123,7 @@ static KVMSlot *kvm_alloc_slot(KVMState *s)
+ {
+     int i;
+ 
+-    for (i = 0; i < ARRAY_SIZE(s->slots); i++) {
++    for (i = 0; i < s->nr_slots; i++) {
+         if (s->slots[i].memory_size == 0) {
+             return &s->slots[i];
+         }
+@@ -138,7 +139,7 @@ static KVMSlot *kvm_lookup_matching_slot(KVMState *s,
+ {
+     int i;
+ 
+-    for (i = 0; i < ARRAY_SIZE(s->slots); i++) {
++    for (i = 0; i < s->nr_slots; i++) {
+         KVMSlot *mem = &s->slots[i];
+ 
+         if (start_addr == mem->start_addr &&
+@@ -160,7 +161,7 @@ static KVMSlot *kvm_lookup_overlapping_slot(KVMState *s,
+     KVMSlot *found = NULL;
+     int i;
+ 
+-    for (i = 0; i < ARRAY_SIZE(s->slots); i++) {
++    for (i = 0; i < s->nr_slots; i++) {
+         KVMSlot *mem = &s->slots[i];
+ 
+         if (mem->memory_size == 0 ||
+@@ -182,7 +183,7 @@ int kvm_physical_memory_addr_from_host(KVMState *s, void *ram,
+ {
+     int i;
+ 
+-    for (i = 0; i < ARRAY_SIZE(s->slots); i++) {
++    for (i = 0; i < s->nr_slots; i++) {
+         KVMSlot *mem = &s->slots[i];
+ 
+         if (ram >= mem->ram && ram < mem->ram + mem->memory_size) {
+@@ -342,7 +343,7 @@ static int kvm_set_migration_log(int enable)
+ 
+     s->migration_log = enable;
+ 
+-    for (i = 0; i < ARRAY_SIZE(s->slots); i++) {
++    for (i = 0; i < s->nr_slots; i++) {
+         mem = &s->slots[i];
+ 
+         if (!mem->memory_size) {
+@@ -1328,9 +1329,6 @@ int kvm_init(void)
+ #ifdef KVM_CAP_SET_GUEST_DEBUG
+     QTAILQ_INIT(&s->kvm_sw_breakpoints);
+ #endif
+-    for (i = 0; i < ARRAY_SIZE(s->slots); i++) {
+-        s->slots[i].slot = i;
+-    }
+     s->vmfd = -1;
+     s->fd = qemu_open("/dev/kvm", O_RDWR);
+     if (s->fd == -1) {
+@@ -1354,6 +1352,19 @@ int kvm_init(void)
+         goto err;
+     }
+ 
++    s->nr_slots = kvm_check_extension(s, KVM_CAP_NR_MEMSLOTS);
++
++    /* If unspecified, use the default value */
++    if (!s->nr_slots) {
++        s->nr_slots = 32;
++    }
++
++    s->slots = g_malloc0(s->nr_slots * sizeof(KVMSlot));
++
++    for (i = 0; i < s->nr_slots; i++) {
++        s->slots[i].slot = i;
++    }
++
+     /* check the vcpu limits */
+     soft_vcpus_limit = kvm_recommended_vcpus(s);
+     hard_vcpus_limit = kvm_max_vcpus(s);
+@@ -1467,6 +1478,7 @@ err:
+     if (s->fd != -1) {
+         close(s->fd);
+     }
++    g_free(s->slots);
+     g_free(s);
+ 
+     return ret;
+-- 
+1.7.11.7
+

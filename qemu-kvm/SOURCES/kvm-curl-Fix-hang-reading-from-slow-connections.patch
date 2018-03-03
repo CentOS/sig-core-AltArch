@@ -1,0 +1,49 @@
+From 188c4737c54787bbd734c628121f7f0e4f833cd1 Mon Sep 17 00:00:00 2001
+From: Richard Jones <rjones@redhat.com>
+Date: Thu, 11 Jun 2015 11:40:18 +0200
+Subject: [PATCH 18/30] curl: Fix hang reading from slow connections
+
+Message-id: <1434022828-13037-12-git-send-email-rjones@redhat.com>
+Patchwork-id: 65847
+O-Subject: [RHEL-7.2 qemu-kvm v3 PATCH 11/21] curl: Fix hang reading from slow connections
+Bugzilla: 1226684
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Matthew Booth <mbooth@redhat.com>
+
+When receiving a new aio read request, we first look for an existing
+transaction whose range will cover the read request by the time it
+completes. However, we weren't checking that the existing transaction
+was still active. If it had timed out, we were adding the request to a
+transaction which would never complete and had already been cancelled,
+resulting in a hang.
+
+Signed-off-by: Matthew Booth <mbooth@redhat.com>
+Tested-by: Richard W.M. Jones <rjones@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+
+Upstream-status: b7079df4100069959f4e9d90d5cb5ba7d4ebbf1a
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/curl.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/block/curl.c b/block/curl.c
+index 41cf015..1bff71a 100644
+--- a/block/curl.c
++++ b/block/curl.c
+@@ -220,7 +220,8 @@ static int curl_find_buf(BDRVCURLState *s, size_t start, size_t len,
+         }
+ 
+         // Wait for unfinished chunks
+-        if ((start >= state->buf_start) &&
++        if (state->in_use &&
++            (start >= state->buf_start) &&
+             (start <= buf_fend) &&
+             (end >= state->buf_start) &&
+             (end <= buf_fend))
+-- 
+1.8.3.1
+

@@ -1,0 +1,141 @@
+From d16c34d6dc39a159326efda97101aed3c1481812 Mon Sep 17 00:00:00 2001
+From: John Snow <jsnow@redhat.com>
+Date: Mon, 23 Nov 2015 17:38:20 +0100
+Subject: [PATCH 01/27] qemu-io: Remove unused args_command
+
+RH-Author: John Snow <jsnow@redhat.com>
+Message-id: <1448300320-7772-2-git-send-email-jsnow@redhat.com>
+Patchwork-id: 68429
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 01/21] qemu-io: Remove unused args_command
+Bugzilla: 1272523
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+The original intention seems to be something with handling multiple
+images at once, but this has never been implemented and the only
+function ever registered is implemented to make everything behave like a
+"global" command. Just do that unconditionally now.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit a23818f4ff3d7981f49453b739f589e4205930b5)
+Signed-off-by: John Snow <jsnow@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ cmd.c     | 28 ++--------------------------
+ cmd.h     |  2 --
+ qemu-io.c | 10 ----------
+ 3 files changed, 2 insertions(+), 38 deletions(-)
+
+diff --git a/cmd.c b/cmd.c
+index 10a8688..4e7579b 100644
+--- a/cmd.c
++++ b/cmd.c
+@@ -34,7 +34,6 @@
+ cmdinfo_t	*cmdtab;
+ int		ncmds;
+ 
+-static argsfunc_t	args_func;
+ static checkfunc_t	check_func;
+ static int		ncmdline;
+ static char		**cmdline;
+@@ -127,22 +126,6 @@ void add_user_command(char *optarg)
+     cmdline[ncmdline-1] = optarg;
+ }
+ 
+-static int
+-args_command(
+-	int	index)
+-{
+-	if (args_func)
+-		return args_func(index);
+-	return 0;
+-}
+-
+-void
+-add_args_command(
+-	argsfunc_t	af)
+-{
+-	args_func = af;
+-}
+-
+ static void prep_fetchline(void *opaque)
+ {
+     int *fetchable = opaque;
+@@ -155,7 +138,7 @@ static char *get_prompt(void);
+ 
+ void command_loop(void)
+ {
+-    int c, i, j = 0, done = 0, fetchable = 0, prompted = 0;
++    int c, i, done = 0, fetchable = 0, prompted = 0;
+     char *input;
+     char **v;
+     const cmdinfo_t *ct;
+@@ -171,14 +154,7 @@ void command_loop(void)
+         if (c) {
+             ct = find_command(v[0]);
+             if (ct) {
+-                if (ct->flags & CMD_FLAG_GLOBAL) {
+-                    done = command(ct, c, v);
+-                } else {
+-                    j = 0;
+-                    while (!done && (j = args_command(j))) {
+-                        done = command(ct, c, v);
+-                    }
+-                }
++                done = command(ct, c, v);
+             } else {
+                 fprintf(stderr, _("command \"%s\" not found\n"), v[0]);
+             }
+diff --git a/cmd.h b/cmd.h
+index b763b19..8e6f753 100644
+--- a/cmd.h
++++ b/cmd.h
+@@ -41,12 +41,10 @@ extern int		ncmds;
+ void help_init(void);
+ void quit_init(void);
+ 
+-typedef int (*argsfunc_t)(int index);
+ typedef int (*checkfunc_t)(const cmdinfo_t *ci);
+ 
+ void add_command(const cmdinfo_t *ci);
+ void add_user_command(char *optarg);
+-void add_args_command(argsfunc_t af);
+ void add_check_command(checkfunc_t cf);
+ 
+ const cmdinfo_t *find_command(const char *cmd);
+diff --git a/qemu-io.c b/qemu-io.c
+index cc89947..9f66a78 100644
+--- a/qemu-io.c
++++ b/qemu-io.c
+@@ -1935,15 +1935,6 @@ static int open_f(int argc, char **argv)
+     return openfile(argv[optind], flags, growable, opts);
+ }
+ 
+-static int init_args_command(int index)
+-{
+-    /* only one device allowed so far */
+-    if (index >= 1) {
+-        return 0;
+-    }
+-    return ++index;
+-}
+-
+ static int init_check_command(const cmdinfo_t *ct)
+ {
+     if (ct->flags & CMD_FLAG_GLOBAL) {
+@@ -2096,7 +2087,6 @@ int main(int argc, char **argv)
+     add_command(&abort_cmd);
+     add_command(&sleep_cmd);
+ 
+-    add_args_command(init_args_command);
+     add_check_command(init_check_command);
+ 
+     /* open the device */
+-- 
+1.8.3.1
+

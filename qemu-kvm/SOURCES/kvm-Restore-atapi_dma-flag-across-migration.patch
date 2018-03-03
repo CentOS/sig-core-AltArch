@@ -1,0 +1,47 @@
+From 26631da9bba6bcf000b4a87715cb3e8364afc373 Mon Sep 17 00:00:00 2001
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+Date: Tue, 10 Feb 2015 11:45:35 +0100
+Subject: [PATCH 09/16] Restore atapi_dma flag across migration
+
+Message-id: <1423568736-19538-2-git-send-email-dgilbert@redhat.com>
+Patchwork-id: 63778
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 1/2] Restore atapi_dma flag across migration
+Bugzilla: 892258
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+
+If a migration happens just after the guest has kicked
+off an ATAPI command and kicked off DMA, we lose the atapi_dma
+flag, and the destination tries to complete the command as PIO
+rather than DMA.  This upsets Linux; modern libata based kernels
+stumble and recover OK, older kernels end up passing bad data
+to userspace.
+
+Signed-off-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Reviewed-by: John Snow <jsnow@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 819fa276311ce328a8e38ad9306c1093961b3f4b)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/ide/core.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/hw/ide/core.c b/hw/ide/core.c
+index 24a1708..9a22425 100644
+--- a/hw/ide/core.c
++++ b/hw/ide/core.c
+@@ -2283,6 +2283,7 @@ static int ide_drive_pio_post_load(void *opaque, int version_id)
+     s->end_transfer_func = transfer_end_table[s->end_transfer_fn_idx];
+     s->data_ptr = s->io_buffer + s->cur_io_buffer_offset;
+     s->data_end = s->data_ptr + s->cur_io_buffer_len;
++    s->atapi_dma = s->feature & 1; /* as per cmd_packet */
+ 
+     return 0;
+ }
+-- 
+1.8.3.1
+

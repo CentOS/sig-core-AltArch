@@ -1,0 +1,201 @@
+From 2513477895b7fd9434a66be645dfeae5dc2eccb8 Mon Sep 17 00:00:00 2001
+From: Eric Blake <eblake@redhat.com>
+Date: Wed, 20 Aug 2014 16:40:12 +0200
+Subject: [PATCH 09/11] block: make 'top' argument to block-commit optional
+
+Message-id: <1408552814-23031-6-git-send-email-eblake@redhat.com>
+Patchwork-id: 60647
+O-Subject: [qemu-kvm-rhev 7.0.z PATCH 5/7] block: make 'top' argument to block-commit optional
+Bugzilla: 1130603
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Jeff Cody <jcody@redhat.com>
+
+Now that active layer block-commit is supported, the 'top' argument
+no longer needs to be mandatory.
+
+Change it to optional, with the default being the active layer in the
+device chain.
+
+[kwolf: Rebased and resolved conflict in tests/qemu-iotests/040]
+
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 7676e2c597000eff3a7233b40cca768b358f9bc9)
+
+Conflicts:
+	qapi/block-core.json - downstream in qapi-schema.json still
+	tests/qemu-iotests/040 - context due to no common event handling
+
+Signed-off-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev.c             |   16 ++++++++++++++--
+ qapi-schema.json       |    7 ++++---
+ qmp-commands.hx        |    5 +++--
+ tests/qemu-iotests/040 |   28 ++++++++++++++++++----------
+ 4 files changed, 39 insertions(+), 17 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index aa5d0a6..107e27e 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -1463,7 +1463,8 @@ void qmp_block_stream(const char *device, bool has_base,
+ }
+ 
+ void qmp_block_commit(const char *device,
+-                      bool has_base, const char *base, const char *top,
++                      bool has_base, const char *base,
++                      bool has_top, const char *top,
+                       bool has_speed, int64_t speed,
+                       Error **errp)
+ {
+@@ -1478,6 +1479,11 @@ void qmp_block_commit(const char *device,
+     /* drain all i/o before commits */
+     bdrv_drain_all();
+ 
++    /* Important Note:
++     *  libvirt relies on the DeviceNotFound error class in order to probe for
++     *  live commit feature versions; for this to work, we must make sure to
++     *  perform the device lookup before any generic errors that may occur in a
++     *  scenario in which all optional arguments are omitted. */
+     bs = bdrv_find(device);
+     if (!bs) {
+         error_set(errp, QERR_DEVICE_NOT_FOUND, device);
+@@ -1487,7 +1493,7 @@ void qmp_block_commit(const char *device,
+     /* default top_bs is the active layer */
+     top_bs = bs;
+ 
+-    if (top) {
++    if (has_top && top) {
+         if (strcmp(bs->filename, top) != 0) {
+             top_bs = bdrv_find_backing_image(bs, top);
+         }
+@@ -1509,6 +1515,12 @@ void qmp_block_commit(const char *device,
+         return;
+     }
+ 
++    /* Do not allow attempts to commit an image into itself */
++    if (top_bs == base_bs) {
++        error_setg(errp, "cannot commit an image into itself");
++        return;
++    }
++
+     if (top_bs == bs) {
+         commit_active_start(bs, base_bs, speed, on_error, block_job_cb,
+                             bs, &local_err);
+diff --git a/qapi-schema.json b/qapi-schema.json
+index 604ec69..18ab949 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -1844,8 +1844,9 @@
+ # @base:   #optional The file name of the backing image to write data into.
+ #                    If not specified, this is the deepest backing image
+ #
+-# @top:              The file name of the backing image within the image chain,
+-#                    which contains the topmost data to be committed down.
++# @top:    #optional The file name of the backing image within the image chain,
++#                    which contains the topmost data to be committed down. If
++#                    not specified, this is the active layer.
+ #
+ #                    If top == base, that is an error.
+ #                    If top == active, the job will not be completed by itself,
+@@ -1873,7 +1874,7 @@
+ #
+ ##
+ { 'command': 'block-commit',
+-  'data': { 'device': 'str', '*base': 'str', 'top': 'str',
++  'data': { 'device': 'str', '*base': 'str', '*top': 'str',
+             '*speed': 'int' } }
+ 
+ ##
+diff --git a/qmp-commands.hx b/qmp-commands.hx
+index 405275c..f67121a 100644
+--- a/qmp-commands.hx
++++ b/qmp-commands.hx
+@@ -1005,7 +1005,7 @@ EQMP
+ 
+     {
+         .name       = "block-commit",
+-        .args_type  = "device:B,base:s?,top:s,speed:o?",
++        .args_type  = "device:B,base:s?,top:s?,speed:o?",
+         .mhandler.cmd_new = qmp_marshal_input_block_commit,
+     },
+ 
+@@ -1023,7 +1023,8 @@ Arguments:
+           If not specified, this is the deepest backing image
+           (json-string, optional)
+ - "top":  The file name of the backing image within the image chain,
+-          which contains the topmost data to be committed down.
++          which contains the topmost data to be committed down. If
++          not specified, this is the active layer. (json-string, optional)
+ 
+           If top == base, that is an error.
+           If top == active, the job will not be completed by itself,
+diff --git a/tests/qemu-iotests/040 b/tests/qemu-iotests/040
+index cf80e0c..c5ab930 100755
+--- a/tests/qemu-iotests/040
++++ b/tests/qemu-iotests/040
+@@ -63,11 +63,7 @@ class ImageCommitTestCase(iotests.QMPTestCase):
+             i = i + 512
+         file.close()
+ 
+-    def run_commit_test(self, top, base, need_ready=False):
+-        self.assert_no_active_commit()
+-        result = self.vm.qmp('block-commit', device='drive0', top=top, base=base)
+-        self.assert_qmp(result, 'return', {})
+-
++    def wait_for_complete(self, need_ready=False):
+         completed = False
+         ready = False
+         while not completed:
+@@ -90,6 +86,18 @@ class ImageCommitTestCase(iotests.QMPTestCase):
+         self.assert_no_active_commit()
+         self.vm.shutdown()
+ 
++    def run_commit_test(self, top, base, need_ready=False):
++        self.assert_no_active_commit()
++        result = self.vm.qmp('block-commit', device='drive0', top=top, base=base)
++        self.assert_qmp(result, 'return', {})
++        self.wait_for_complete(need_ready)
++
++    def run_default_commit_test(self):
++        self.assert_no_active_commit()
++        result = self.vm.qmp('block-commit', device='drive0')
++        self.assert_qmp(result, 'return', {})
++        self.wait_for_complete()
++
+ class TestSingleDrive(ImageCommitTestCase):
+     image_len = 1 * 1024 * 1024
+     test_len = 1 * 1024 * 256
+@@ -141,17 +149,17 @@ class TestSingleDrive(ImageCommitTestCase):
+         self.assertEqual(-1, qemu_io('-c', 'read -P 0xab 0 524288', backing_img).find("verification failed"))
+         self.assertEqual(-1, qemu_io('-c', 'read -P 0xef 524288 524288', backing_img).find("verification failed"))
+ 
++    def test_top_is_default_active(self):
++        self.run_default_commit_test()
++        self.assertEqual(-1, qemu_io('-c', 'read -P 0xab 0 524288', backing_img).find("verification failed"))
++        self.assertEqual(-1, qemu_io('-c', 'read -P 0xef 524288 524288', backing_img).find("verification failed"))
++
+     def test_top_and_base_reversed(self):
+         self.assert_no_active_commit()
+         result = self.vm.qmp('block-commit', device='drive0', top='%s' % backing_img, base='%s' % mid_img)
+         self.assert_qmp(result, 'error/class', 'GenericError')
+         self.assert_qmp(result, 'error/desc', 'Base \'%s\' not found' % mid_img)
+ 
+-    def test_top_omitted(self):
+-        self.assert_no_active_commit()
+-        result = self.vm.qmp('block-commit', device='drive0')
+-        self.assert_qmp(result, 'error/class', 'GenericError')
+-        self.assert_qmp(result, 'error/desc', "Parameter 'top' is missing")
+ 
+ class TestRelativePaths(ImageCommitTestCase):
+     image_len = 1 * 1024 * 1024
+-- 
+1.7.1
+

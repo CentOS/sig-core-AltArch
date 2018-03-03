@@ -1,0 +1,98 @@
+From ee2c4c17b2bf7a0f1b420096460d33d87792ef78 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Tue, 16 Sep 2014 20:11:42 +0200
+Subject: [PATCH 04/20] vdi: say why an image is bad
+
+Message-id: <3fcc4a3635f7e4e2da9110df47e59d9727327707.1410897407.git.jcody@redhat.com>
+Patchwork-id: 61208
+O-Subject: [PATCH qemu-kvm-rhel RHEL7.1 03/15] vdi: say why an image is bad
+Bugzilla: 1098086
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+Instead of just putting it in debugging output, we can now put the
+value in an Error.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 5b7aa9b56d1bfc79916262f380c3fc7961becb50)
+
+Conflicts:
+	block/vdi.c
+
+RHEL7 Conflict Notes:  Conflict due to different patch order, from
+                       a CVE commit.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vdi.c |   25 ++++++++++++++++---------
+ 1 files changed, 16 insertions(+), 9 deletions(-)
+
+diff --git a/block/vdi.c b/block/vdi.c
+index 5e2fad5..b095bee 100644
+--- a/block/vdi.c
++++ b/block/vdi.c
+@@ -412,39 +412,46 @@ static int vdi_open(BlockDriverState *bs, QDict *options, int flags,
+         ret = -EMEDIUMTYPE;
+         goto fail;
+     } else if (header.version != VDI_VERSION_1_1) {
+-        logout("unsupported version %u.%u\n",
+-               header.version >> 16, header.version & 0xffff);
++        error_setg(errp, "unsupported VDI image (version %u.%u)",
++                   header.version >> 16, header.version & 0xffff);
+         ret = -ENOTSUP;
+         goto fail;
+     } else if (header.offset_bmap % SECTOR_SIZE != 0) {
+         /* We only support block maps which start on a sector boundary. */
+-        logout("unsupported block map offset 0x%x B\n", header.offset_bmap);
++        error_setg(errp, "unsupported VDI image (unaligned block map offset "
++                   "0x%x)", header.offset_bmap);
+         ret = -ENOTSUP;
+         goto fail;
+     } else if (header.offset_data % SECTOR_SIZE != 0) {
+         /* We only support data blocks which start on a sector boundary. */
+-        logout("unsupported data offset 0x%x B\n", header.offset_data);
++        error_setg(errp, "unsupported VDI image (unaligned data offset 0x%x)",
++                   header.offset_data);
+         ret = -ENOTSUP;
+         goto fail;
+     } else if (header.sector_size != SECTOR_SIZE) {
+-        logout("unsupported sector size %u B\n", header.sector_size);
++        error_setg(errp, "unsupported VDI image (sector size %u is not %u)",
++                   header.sector_size, SECTOR_SIZE);
+         ret = -ENOTSUP;
+         goto fail;
+     } else if (header.block_size != DEFAULT_CLUSTER_SIZE) {
+-        logout("unsupported block size %u B\n", header.block_size);
++        error_setg(errp, "unsupported VDI image (sector size %u is not %u)",
++                   header.block_size, DEFAULT_CLUSTER_SIZE);
+         ret = -ENOTSUP;
+         goto fail;
+     } else if (header.disk_size >
+                (uint64_t)header.blocks_in_image * header.block_size) {
+-        logout("unsupported disk size %" PRIu64 " B\n", header.disk_size);
++        error_setg(errp, "unsupported VDI image (disk size %" PRIu64 ", "
++                   "image bitmap has room for %" PRIu64 ")",
++                   header.disk_size,
++                   (uint64_t)header.blocks_in_image * header.block_size);
+         ret = -ENOTSUP;
+         goto fail;
+     } else if (!uuid_is_null(header.uuid_link)) {
+-        logout("link uuid != 0, unsupported\n");
++        error_setg(errp, "unsupported VDI image (non-NULL link UUID)");
+         ret = -ENOTSUP;
+         goto fail;
+     } else if (!uuid_is_null(header.uuid_parent)) {
+-        logout("parent uuid != 0, unsupported\n");
++        error_setg(errp, "unsupported VDI image (non-NULL parent UUID)");
+         ret = -ENOTSUP;
+         goto fail;
+     } else if (header.blocks_in_image > VDI_BLOCKS_IN_IMAGE_MAX) {
+-- 
+1.7.1
+

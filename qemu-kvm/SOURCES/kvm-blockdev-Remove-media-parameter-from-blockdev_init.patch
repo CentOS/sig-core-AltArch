@@ -1,0 +1,132 @@
+From 0c82774abd19c0f11b5cca29be188176d6f447ef Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 5 Nov 2013 14:09:12 +0100
+Subject: [PATCH 59/87] blockdev: Remove 'media' parameter from blockdev_init()
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383660558-32096-19-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55396
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 18/24] blockdev: Remove 'media' parameter from blockdev_init()
+Bugzilla: 978402
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+The remaining users shouldn't be there with blockdev-add and are easy to
+move to drive_init().
+
+Bonus bug fix: As a side effect, CD-ROM drives can now use block drivers
+on the read-only whitelist without explicitly specifying read-only=on,
+even if a format is explicitly specified.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit e34ef046412431acf5b4e30762390b4048187bb8)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ blockdev.c | 40 +++++++++++++++-------------------------
+ 1 file changed, 15 insertions(+), 25 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev.c |   40 +++++++++++++++-------------------------
+ 1 files changed, 15 insertions(+), 25 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index 680ba22..d4b18c5 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -328,8 +328,7 @@ typedef enum { MEDIA_DISK, MEDIA_CDROM } DriveMediaType;
+ 
+ /* Takes the ownership of bs_opts */
+ static DriveInfo *blockdev_init(QDict *bs_opts,
+-                                BlockInterfaceType type,
+-                                DriveMediaType media)
++                                BlockInterfaceType type)
+ {
+     const char *buf;
+     const char *file = NULL;
+@@ -489,22 +488,6 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+     /* disk I/O throttling */
+     bdrv_set_io_limits(dinfo->bdrv, &io_limits);
+ 
+-    switch(type) {
+-    case IF_IDE:
+-    case IF_SCSI:
+-    case IF_XEN:
+-    case IF_NONE:
+-        dinfo->media_cd = media == MEDIA_CDROM;
+-        break;
+-    case IF_SD:
+-    case IF_FLOPPY:
+-    case IF_PFLASH:
+-    case IF_MTD:
+-    case IF_VIRTIO:
+-        break;
+-    default:
+-        abort();
+-    }
+     if (!file || !*file) {
+         if (has_driver_specific_opts) {
+             file = NULL;
+@@ -526,11 +509,6 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+         bdrv_flags |= BDRV_O_INCOMING;
+     }
+ 
+-    if (media == MEDIA_CDROM) {
+-        /* CDROM is fine for any interface, don't check.  */
+-        ro = 1;
+-    }
+-
+     bdrv_flags |= ro ? 0 : BDRV_O_RDWR;
+ 
+     if (ro && copy_on_read) {
+@@ -703,6 +681,7 @@ DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
+             media = MEDIA_DISK;
+         } else if (!strcmp(value, "cdrom")) {
+             media = MEDIA_CDROM;
++            qdict_put(bs_opts, "read-only", qstring_from_str("on"));
+         } else {
+             error_report("'%s' invalid media", value);
+             goto fail;
+@@ -850,7 +829,7 @@ DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
+     }
+ 
+     /* Actual block device init: Functionality shared with blockdev-add */
+-    dinfo = blockdev_init(bs_opts, type, media);
++    dinfo = blockdev_init(bs_opts, type);
+     if (dinfo == NULL) {
+         goto fail;
+     }
+@@ -868,6 +847,17 @@ DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
+     dinfo->unit = unit_id;
+     dinfo->devaddr = devaddr;
+ 
++    switch(type) {
++    case IF_IDE:
++    case IF_SCSI:
++    case IF_XEN:
++    case IF_NONE:
++        dinfo->media_cd = media == MEDIA_CDROM;
++        break;
++    default:
++        break;
++    }
++
+ fail:
+     qemu_opts_del(legacy_opts);
+     return dinfo;
+@@ -1766,7 +1756,7 @@ void qmp_blockdev_add(BlockdevOptions *options, Error **errp)
+ 
+     qdict_flatten(qdict);
+ 
+-    dinfo = blockdev_init(qdict, IF_NONE, MEDIA_DISK);
++    dinfo = blockdev_init(qdict, IF_NONE);
+     if (!dinfo) {
+         error_setg(errp, "Could not open image");
+         goto fail;
+-- 
+1.7.1
+

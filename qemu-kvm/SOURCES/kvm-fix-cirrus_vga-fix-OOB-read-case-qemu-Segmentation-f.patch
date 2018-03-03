@@ -1,0 +1,64 @@
+From f9b9adc4b66f991e655f51f2ef67dac46f6bd7d4 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Mon, 27 Mar 2017 10:01:16 +0200
+Subject: [PATCH 1/7] fix :cirrus_vga fix OOB read case qemu Segmentation fault
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1490608882-10242-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 74553
+O-Subject: [RHEL-7.4 qemu-kvm PATCH v2 1/7] fix :cirrus_vga fix OOB read case qemu Segmentation fault
+Bugzilla: 1430060
+RH-Acked-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: hangaohuai <hangaohuai@huawei.com>
+
+check the validity of parameters in cirrus_bitblt_rop_fwd_transp_xxx
+and cirrus_bitblt_rop_fwd_xxx to avoid the OOB read which causes qemu Segmentation fault.
+
+After the fix, we will touch the assert in
+cirrus_invalidate_region:
+assert(off_cur_end >= off_cur);
+
+Signed-off-by: fangying <fangying1@huawei.com>
+Signed-off-by: hangaohuai <hangaohuai@huawei.com>
+Message-id: 20170314063919.16200-1-hangaohuai@huawei.com
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 215902d7b6fb50c6fc216fc74f770858278ed904)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/display/cirrus_vga_rop.h | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/hw/display/cirrus_vga_rop.h b/hw/display/cirrus_vga_rop.h
+index 9c7bb09..a4f96c6 100644
+--- a/hw/display/cirrus_vga_rop.h
++++ b/hw/display/cirrus_vga_rop.h
+@@ -98,6 +98,11 @@ glue(glue(cirrus_bitblt_rop_fwd_transp_, ROP_NAME),_8)(CirrusVGAState *s,
+     uint8_t p;
+     dstpitch -= bltwidth;
+     srcpitch -= bltwidth;
++
++    if (bltheight > 1 && (dstpitch < 0 || srcpitch < 0)) {
++        return;
++    }
++
+     for (y = 0; y < bltheight; y++) {
+         for (x = 0; x < bltwidth; x++) {
+ 	    p = *dst;
+@@ -144,6 +149,11 @@ glue(glue(cirrus_bitblt_rop_fwd_transp_, ROP_NAME),_16)(CirrusVGAState *s,
+     uint8_t p1, p2;
+     dstpitch -= bltwidth;
+     srcpitch -= bltwidth;
++
++    if (bltheight > 1 && (dstpitch < 0 || srcpitch < 0)) {
++        return;
++    }
++
+     for (y = 0; y < bltheight; y++) {
+         for (x = 0; x < bltwidth; x+=2) {
+ 	    p1 = *dst;
+-- 
+1.8.3.1
+

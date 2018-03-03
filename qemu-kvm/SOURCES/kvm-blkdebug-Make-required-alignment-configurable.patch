@@ -1,0 +1,79 @@
+From 9f8b66d561d7b77338f79f2adf7a7d1102ad9d24 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 14 Jan 2014 13:44:35 +0100
+Subject: [PATCH 31/37] blkdebug: Make required alignment configurable
+
+Message-id: <1392117622-28812-32-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57196
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 31/37] blkdebug: Make required alignment configurable
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+The new 'align' option of blkdebug can be used in order to emulate
+backends with a required 4k alignment on hosts which only really require
+512 byte alignment.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit b35ee7fb2308e09092488029b5a9e456ce61bbe6)
+
+Conflicts:
+	block/blkdebug.c
+	qapi-schema.json
+
+Conflicts because RHEL 7 doesn't have the blockdev-add support series
+for blkdebug.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block/blkdebug.c | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+---
+ block/blkdebug.c |   16 ++++++++++++++++
+ 1 files changed, 16 insertions(+), 0 deletions(-)
+
+diff --git a/block/blkdebug.c b/block/blkdebug.c
+index 9ee4fbb..ccb562b 100644
+--- a/block/blkdebug.c
++++ b/block/blkdebug.c
+@@ -343,6 +343,11 @@ static QemuOptsList runtime_opts = {
+             .type = QEMU_OPT_STRING,
+             .help = "[internal use only, will be removed]",
+         },
++        {
++            .name = "align",
++            .type = QEMU_OPT_SIZE,
++            .help = "Required alignment in bytes",
++        },
+         { /* end of list */ }
+     },
+ };
+@@ -354,6 +359,7 @@ static int blkdebug_open(BlockDriverState *bs, QDict *options, int flags,
+     QemuOpts *opts;
+     Error *local_err = NULL;
+     const char *filename, *config;
++    uint64_t align;
+     int ret;
+ 
+     opts = qemu_opts_create_nofail(&runtime_opts);
+@@ -391,6 +397,16 @@ static int blkdebug_open(BlockDriverState *bs, QDict *options, int flags,
+         goto fail;
+     }
+ 
++    /* Set request alignment */
++    align = qemu_opt_get_size(opts, "align", bs->request_alignment);
++    if (align > 0 && align < INT_MAX && !(align & (align - 1))) {
++        bs->request_alignment = align;
++    } else {
++        error_setg(errp, "Invalid alignment");
++        ret = -EINVAL;
++        goto fail;
++    }
++
+     ret = 0;
+ fail:
+     qemu_opts_del(opts);
+-- 
+1.7.1
+

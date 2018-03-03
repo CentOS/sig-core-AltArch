@@ -1,0 +1,114 @@
+From e77dfa0b88d9efdf6b2125817cd6febdcf4385b0 Mon Sep 17 00:00:00 2001
+From: Vadim Rozenfeld <vrozenfe@redhat.com>
+Date: Mon, 3 Mar 2014 12:09:15 +0100
+Subject: [PATCH 03/12] KVM: fix coexistence of KVM and Hyper-V leaves
+
+RH-Author: Vadim Rozenfeld <vrozenfe@redhat.com>
+Message-id: <1393848564-10511-4-git-send-email-vrozenfe@redhat.com>
+Patchwork-id: 57959
+O-Subject: [RHEL-7.0 qemu-kvm v4 PATCH 03/12] KVM: fix coexistence of KVM and Hyper-V leaves
+Bugzilla: 1004773
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+kvm_arch_init_vcpu's initialization of the KVM leaves at 0x40000100
+is broken, because KVM_CPUID_FEATURES is left at 0x40000001.  Move
+it to 0x40000101 if Hyper-V is enabled.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 234cc64796557eea829544e4ff72ee99b6149187)
+---
+ target-i386/kvm.c | 47 +++++++++++++++++++++++++----------------------
+ 1 file changed, 25 insertions(+), 22 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/kvm.c |   47 +++++++++++++++++++++++++----------------------
+ 1 files changed, 25 insertions(+), 22 deletions(-)
+
+diff --git a/target-i386/kvm.c b/target-i386/kvm.c
+index 3a9e376..3688371 100644
+--- a/target-i386/kvm.c
++++ b/target-i386/kvm.c
+@@ -451,6 +451,7 @@ int kvm_arch_init_vcpu(CPUState *cs)
+     uint32_t unused;
+     struct kvm_cpuid_entry2 *c;
+     uint32_t signature[3];
++    int kvm_base = KVM_CPUID_SIGNATURE;
+     int r;
+ 
+     memset(&cpuid_data, 0, sizeof(cpuid_data));
+@@ -458,26 +459,22 @@ int kvm_arch_init_vcpu(CPUState *cs)
+     cpuid_i = 0;
+ 
+     /* Paravirtualization CPUIDs */
+-    c = &cpuid_data.entries[cpuid_i++];
+-    c->function = KVM_CPUID_SIGNATURE;
+-    if (!hyperv_enabled(cpu)) {
+-        memcpy(signature, "KVMKVMKVM\0\0\0", 12);
+-        c->eax = 0;
+-    } else {
++    if (hyperv_enabled(cpu)) {
++        c = &cpuid_data.entries[cpuid_i++];
++        c->function = HYPERV_CPUID_VENDOR_AND_MAX_FUNCTIONS;
+         memcpy(signature, "Microsoft Hv", 12);
+         c->eax = HYPERV_CPUID_MIN;
+-    }
+-    c->ebx = signature[0];
+-    c->ecx = signature[1];
+-    c->edx = signature[2];
+-
+-    c = &cpuid_data.entries[cpuid_i++];
+-    c->function = KVM_CPUID_FEATURES;
+-    c->eax = env->features[FEAT_KVM];
++        c->ebx = signature[0];
++        c->ecx = signature[1];
++        c->edx = signature[2];
+ 
+-    if (hyperv_enabled(cpu)) {
++        c = &cpuid_data.entries[cpuid_i++];
++        c->function = HYPERV_CPUID_INTERFACE;
+         memcpy(signature, "Hv#1\0\0\0\0\0\0\0\0", 12);
+         c->eax = signature[0];
++        c->ebx = 0;
++        c->ecx = 0;
++        c->edx = 0;
+ 
+         c = &cpuid_data.entries[cpuid_i++];
+         c->function = HYPERV_CPUID_VERSION;
+@@ -509,15 +506,21 @@ int kvm_arch_init_vcpu(CPUState *cs)
+         c->eax = 0x40;
+         c->ebx = 0x40;
+ 
+-        c = &cpuid_data.entries[cpuid_i++];
+-        c->function = KVM_CPUID_SIGNATURE_NEXT;
+-        memcpy(signature, "KVMKVMKVM\0\0\0", 12);
+-        c->eax = 0;
+-        c->ebx = signature[0];
+-        c->ecx = signature[1];
+-        c->edx = signature[2];
++        kvm_base = KVM_CPUID_SIGNATURE_NEXT;
+     }
+ 
++    memcpy(signature, "KVMKVMKVM\0\0\0", 12);
++    c = &cpuid_data.entries[cpuid_i++];
++    c->function = KVM_CPUID_SIGNATURE | kvm_base;
++    c->eax = 0;
++    c->ebx = signature[0];
++    c->ecx = signature[1];
++    c->edx = signature[2];
++
++    c = &cpuid_data.entries[cpuid_i++];
++    c->function = KVM_CPUID_FEATURES | kvm_base;
++    c->eax = env->features[FEAT_KVM];
++
+     has_msr_async_pf_en = c->eax & (1 << KVM_FEATURE_ASYNC_PF);
+ 
+     has_msr_pv_eoi_en = c->eax & (1 << KVM_FEATURE_PV_EOI);
+-- 
+1.7.1
+

@@ -1,0 +1,90 @@
+From c659199f9bf37c798bd741ddd151db213d5d73f8 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Tue, 11 Feb 2014 16:14:25 +0100
+Subject: [PATCH 19/28] block: resize backing file image during offline commit, if necessary
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <54cb47d8cd589585e9788df80b9612ea527e193d.1392134912.git.jcody@redhat.com>
+Patchwork-id: 57215
+O-Subject: [RHEL7 qemu-kvm PATCH 1/6] block: resize backing file image during offline commit, if necessary
+Bugzilla: 1047254
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Currently, if an image file is logically larger than its backing file,
+committing it via 'qemu-img commit' will fail.
+
+For instance, if we have a base image with a virtual size 10G, and a
+snapshot image of size 20G, then committing the snapshot offline with
+'qemu-img commit' will likely fail.
+
+This will automatically attempt to resize the base image, if the
+snapshot image to be committed is larger.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 72706ea4cd38bfcb151265df0178ba21863d7518)
+---
+ block.c | 28 +++++++++++++++++++++++++---
+ 1 file changed, 25 insertions(+), 3 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c |   28 +++++++++++++++++++++++++---
+ 1 files changed, 25 insertions(+), 3 deletions(-)
+
+diff --git a/block.c b/block.c
+index 1b57236..c7aa285 100644
+--- a/block.c
++++ b/block.c
+@@ -1947,10 +1947,10 @@ int bdrv_check(BlockDriverState *bs, BdrvCheckResult *res, BdrvCheckMode fix)
+ int bdrv_commit(BlockDriverState *bs)
+ {
+     BlockDriver *drv = bs->drv;
+-    int64_t sector, total_sectors;
++    int64_t sector, total_sectors, length, backing_length;
+     int n, ro, open_flags;
+     int ret = 0;
+-    uint8_t *buf;
++    uint8_t *buf = NULL;
+     char filename[PATH_MAX];
+ 
+     if (!drv)
+@@ -1975,7 +1975,29 @@ int bdrv_commit(BlockDriverState *bs)
+         }
+     }
+ 
+-    total_sectors = bdrv_getlength(bs) >> BDRV_SECTOR_BITS;
++    length = bdrv_getlength(bs);
++    if (length < 0) {
++        ret = length;
++        goto ro_cleanup;
++    }
++
++    backing_length = bdrv_getlength(bs->backing_hd);
++    if (backing_length < 0) {
++        ret = backing_length;
++        goto ro_cleanup;
++    }
++
++    /* If our top snapshot is larger than the backing file image,
++     * grow the backing file image if possible.  If not possible,
++     * we must return an error */
++    if (length > backing_length) {
++        ret = bdrv_truncate(bs->backing_hd, length);
++        if (ret < 0) {
++            goto ro_cleanup;
++        }
++    }
++
++    total_sectors = length >> BDRV_SECTOR_BITS;
+     buf = g_malloc(COMMIT_BUF_SECTORS * BDRV_SECTOR_SIZE);
+ 
+     for (sector = 0; sector < total_sectors; sector += n) {
+-- 
+1.7.1
+

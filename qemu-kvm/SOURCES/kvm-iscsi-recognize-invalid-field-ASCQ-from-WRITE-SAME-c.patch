@@ -1,0 +1,51 @@
+From 8ba513a1fa324d87a412705d2ded64e2154e1f2a Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Fri, 4 Apr 2014 05:56:00 +0200
+Subject: [PATCH 05/12] iscsi: recognize "invalid field" ASCQ from WRITE SAME command
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1396590962-25815-6-git-send-email-famz@redhat.com>
+Patchwork-id: 58342
+O-Subject: [RHEL-7 0day qemu-kvm PATCH 5/7] iscsi: recognize "invalid field" ASCQ from WRITE SAME command
+Bugzilla: 1083413
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+Some targets may return "invalid field" as the ASCQ from WRITE SAME
+if they support the command only without the UNMAP field.  Recognize
+that, and return ENOTSUP just like for "invalid operation code".
+
+Reviewed-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 27898a5daa4c6d28adb32b401a011d7198494482)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ block/iscsi.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/iscsi.c |    3 ++-
+ 1 files changed, 2 insertions(+), 1 deletions(-)
+
+diff --git a/block/iscsi.c b/block/iscsi.c
+index 4a535e3..268da2f 100644
+--- a/block/iscsi.c
++++ b/block/iscsi.c
+@@ -1012,7 +1012,8 @@ retry:
+ 
+     if (iTask.status == SCSI_STATUS_CHECK_CONDITION &&
+         iTask.task->sense.key == SCSI_SENSE_ILLEGAL_REQUEST &&
+-        iTask.task->sense.ascq == SCSI_SENSE_ASCQ_INVALID_OPERATION_CODE) {
++        (iTask.task->sense.ascq == SCSI_SENSE_ASCQ_INVALID_OPERATION_CODE ||
++         iTask.task->sense.ascq == SCSI_SENSE_ASCQ_INVALID_FIELD_IN_CDB)) {
+         /* WRITE SAME is not supported by the target */
+         iscsilun->has_write_same = false;
+         scsi_free_scsi_task(iTask.task);
+-- 
+1.7.1
+

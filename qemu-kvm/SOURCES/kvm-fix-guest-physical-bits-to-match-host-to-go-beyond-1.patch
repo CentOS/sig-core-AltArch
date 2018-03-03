@@ -1,0 +1,62 @@
+From 4c20b901edfb53e4545aab8fcefb6f40fca25964 Mon Sep 17 00:00:00 2001
+From: Andrea Arcangeli <aarcange@redhat.com>
+Date: Wed, 12 Feb 2014 13:30:18 +0100
+Subject: [PATCH 2/3] fix guest physical bits to match host, to go beyond 1TB guests
+
+RH-Author: Andrea Arcangeli <aarcange@redhat.com>
+Message-id: <1392211818-14964-2-git-send-email-aarcange@redhat.com>
+Patchwork-id: 57245
+O-Subject: [RHEL-7.0 qemu-kvm PATCH] fix guest physical bits to match host, to go beyond 1TB guests
+Bugzilla: 989677
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Andrew Jones <drjones@redhat.com>
+RH-Acked-by: Marcelo Tosatti <mtosatti@redhat.com>
+
+Without this patch the guest physical bits are advertised as 40, not
+44 or more depending on the hardware capability of the host.
+
+That leads to guest kernel crashes with injection of page faults 9
+(see oops: 0009) as bits above 40 in the guest pagetables are
+considered reserved.
+
+exregion-0206 [324572448] [17] ex_system_memory_space: System-Memory (width 32) R/W 0 Address=00000000FED00000
+BUG: unable to handle kernel paging request at ffffc9006030e000
+IP: [<ffffffff812fbb6f>] acpi_ex_system_memory_space_handler+0x23e/0x2cb
+PGD e01f875067 PUD 1001f075067 PMD e0178d8067 PTE 80000000fed00173
+Oops: 0009 [#1] SMP
+
+(see PUD with bit >=40 set)
+
+Signed-off-by: Andrea Arcangeli <aarcange@redhat.com>
+Reported-by: Chegu Vinod <chegu_vinod@hp.com>
+---
+ target-i386/cpu.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/cpu.c |    7 ++++++-
+ 1 files changed, 6 insertions(+), 1 deletions(-)
+
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index 2959915..31ff568 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -2174,8 +2174,13 @@ void cpu_x86_cpuid(CPUX86State *env, uint32_t index, uint32_t count,
+ /* XXX: This value must match the one used in the MMU code. */
+         if (env->features[FEAT_8000_0001_EDX] & CPUID_EXT2_LM) {
+             /* 64 bit processor */
+-/* XXX: The physical address space is limited to 42 bits in exec.c. */
+             *eax = 0x00003028; /* 48 bits virtual, 40 bits physical */
++            if (kvm_enabled()) {
++                uint32_t _eax;
++                host_cpuid(0x80000000, 0, &_eax, NULL, NULL, NULL);
++                if (_eax >= 0x80000008)
++                    host_cpuid(0x80000008, 0, eax, NULL, NULL, NULL);
++            }
+         } else {
+             if (env->features[FEAT_1_EDX] & CPUID_PSE36) {
+                 *eax = 0x00000024; /* 36 bits physical */
+-- 
+1.7.1
+

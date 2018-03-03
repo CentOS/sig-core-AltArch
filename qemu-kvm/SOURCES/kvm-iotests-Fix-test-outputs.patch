@@ -1,0 +1,147 @@
+From 2e9f9fc69b25cd73b46750497f494d3ea28d21e6 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:22:24 +0200
+Subject: [PATCH 30/42] iotests: Fix test outputs
+
+Message-id: <1434212556-3927-31-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66049
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 30/42] iotests: Fix test outputs
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1129893
+
+039, 060 and 061 all create images with referenced clusters having a
+refcount of 0. Because previous commits changed handling of such errors,
+these tests now have a different output. Fix it.
+
+Furthermore, 060 created a refblock with a refcount greater than one
+which now results in having to rebuild the refcount structure as well.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit d26e6ec052b8768ab45654dbf35d5213818a2cb8)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/039.out | 10 ++++++++--
+ tests/qemu-iotests/060.out | 10 ++++++++--
+ tests/qemu-iotests/061.out | 18 ++++++++++++------
+ 3 files changed, 28 insertions(+), 10 deletions(-)
+
+diff --git a/tests/qemu-iotests/039.out b/tests/qemu-iotests/039.out
+index 077fa64..d25bf0b 100644
+--- a/tests/qemu-iotests/039.out
++++ b/tests/qemu-iotests/039.out
+@@ -24,7 +24,10 @@ read 512/512 bytes at offset 0
+ incompatible_features     0x1
+ 
+ == Repairing the image file must succeed ==
+-Repairing cluster 5 refcount=0 reference=1
++ERROR cluster 5 refcount=0 reference=1
++Rebuilding refcount structure
++Repairing cluster 1 refcount=1 reference=0
++Repairing cluster 2 refcount=1 reference=0
+ The following inconsistencies were found and repaired:
+ 
+     0 leaked clusters
+@@ -43,7 +46,10 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=134217728
+ wrote 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ incompatible_features     0x1
+-Repairing cluster 5 refcount=0 reference=1
++ERROR cluster 5 refcount=0 reference=1
++Rebuilding refcount structure
++Repairing cluster 1 refcount=1 reference=0
++Repairing cluster 2 refcount=1 reference=0
+ wrote 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ incompatible_features     0x0
+diff --git a/tests/qemu-iotests/060.out b/tests/qemu-iotests/060.out
+index 4f0c6d0..88332e4 100644
+--- a/tests/qemu-iotests/060.out
++++ b/tests/qemu-iotests/060.out
+@@ -27,11 +27,15 @@ incompatible_features     0x0
+ qcow2: Marking image as corrupt: Preventing invalid write on metadata (overlaps with refcount block); further corruption events will be suppressed
+ write failed: Input/output error
+ incompatible_features     0x2
+-Repairing refcount block 0 refcount=2
++ERROR refcount block 0 refcount=2
++ERROR cluster 2 refcount=1 reference=2
++Rebuilding refcount structure
++Repairing cluster 1 refcount=1 reference=0
++Repairing cluster 2 refcount=2 reference=1
+ The following inconsistencies were found and repaired:
+ 
+     0 leaked clusters
+-    1 corruptions
++    2 corruptions
+ 
+ Double checking the fixed image now...
+ No errors were found on the image.
+@@ -59,6 +63,8 @@ incompatible_features     0x0
+ qcow2: Marking image as corrupt: Preventing invalid write on metadata (overlaps with inactive L2 table); further corruption events will be suppressed
+ write failed: Input/output error
+ incompatible_features     0x2
++ERROR cluster 4 refcount=1 reference=2
++Leaked cluster 9 refcount=1 reference=0
+ Repairing cluster 4 refcount=1 reference=2
+ Repairing cluster 9 refcount=1 reference=0
+ Repairing OFLAG_COPIED data cluster: l2_entry=8000000000040000 refcount=2
+diff --git a/tests/qemu-iotests/061.out b/tests/qemu-iotests/061.out
+index 4027e00..c5127cf 100644
+--- a/tests/qemu-iotests/061.out
++++ b/tests/qemu-iotests/061.out
+@@ -76,8 +76,11 @@ autoclear_features        0x0
+ refcount_order            4
+ header_length             104
+ 
+-Repairing cluster 5 refcount=0 reference=1
+-Repairing cluster 6 refcount=0 reference=1
++ERROR cluster 5 refcount=0 reference=1
++ERROR cluster 6 refcount=0 reference=1
++Rebuilding refcount structure
++Repairing cluster 1 refcount=1 reference=0
++Repairing cluster 2 refcount=1 reference=0
+ magic                     0x514649fb
+ version                   2
+ backing_file_offset       0x0
+@@ -87,7 +90,7 @@ size                      67108864
+ crypt_method              0
+ l1_size                   1
+ l1_table_offset           0x30000
+-refcount_table_offset     0x10000
++refcount_table_offset     0x80000
+ refcount_table_clusters   1
+ nb_snapshots              0
+ snapshot_offset           0x0
+@@ -230,8 +233,11 @@ autoclear_features        0x0
+ refcount_order            4
+ header_length             104
+ 
+-Repairing cluster 5 refcount=0 reference=1
+-Repairing cluster 6 refcount=0 reference=1
++ERROR cluster 5 refcount=0 reference=1
++ERROR cluster 6 refcount=0 reference=1
++Rebuilding refcount structure
++Repairing cluster 1 refcount=1 reference=0
++Repairing cluster 2 refcount=1 reference=0
+ magic                     0x514649fb
+ version                   3
+ backing_file_offset       0x0
+@@ -241,7 +247,7 @@ size                      67108864
+ crypt_method              0
+ l1_size                   1
+ l1_table_offset           0x30000
+-refcount_table_offset     0x10000
++refcount_table_offset     0x80000
+ refcount_table_clusters   1
+ nb_snapshots              0
+ snapshot_offset           0x0
+-- 
+1.8.3.1
+

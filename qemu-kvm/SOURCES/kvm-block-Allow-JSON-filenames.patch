@@ -1,0 +1,89 @@
+From c2eb29efe61ffe88d3aff449446a9ac0f0f045a5 Mon Sep 17 00:00:00 2001
+From: Richard Jones <rjones@redhat.com>
+Date: Tue, 2 Jun 2015 09:46:37 +0200
+Subject: [PATCH 3/4] block: Allow JSON filenames
+
+Message-id: <1433238397-2500-3-git-send-email-rjones@redhat.com>
+Patchwork-id: 65279
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 2/2] block: Allow JSON filenames
+Bugzilla: 1226697
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Max Reitz <mreitz@redhat.com>
+
+If the filename given to bdrv_open() is prefixed with "json:", parse the
+rest as a JSON object and merge the result into the options QDict. If
+there are conflicts, the options QDict takes precedence.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c | 41 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 41 insertions(+)
+
+diff --git a/block.c b/block.c
+index 45543d5..f2caf20 100644
+--- a/block.c
++++ b/block.c
+@@ -1085,6 +1085,33 @@ static void extract_subqdict(QDict *src, QDict **dst, const char *start)
+     }
+ }
+ 
++static QDict *parse_json_filename(const char *filename, Error **errp)
++{
++    QObject *options_obj;
++    QDict *options;
++    int ret;
++
++    ret = strstart(filename, "json:", &filename);
++    assert(ret);
++
++    options_obj = qobject_from_json(filename);
++    if (!options_obj) {
++        error_setg(errp, "Could not parse the JSON options");
++        return NULL;
++    }
++
++    if (qobject_type(options_obj) != QTYPE_QDICT) {
++        qobject_decref(options_obj);
++        error_setg(errp, "Invalid JSON object given");
++        return NULL;
++    }
++
++    options = qobject_to_qdict(options_obj);
++    qdict_flatten(options);
++
++    return options;
++}
++
+ /*
+  * Opens a disk image (raw, qcow2, vmdk, ...)
+  *
+@@ -1109,6 +1136,20 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+         options = qdict_new();
+     }
+ 
++    if (filename && g_str_has_prefix(filename, "json:")) {
++        QDict *json_options = parse_json_filename(filename, &local_err);
++        if (local_err) {
++            ret = -EINVAL;
++            goto fail;
++        }
++
++        /* Options given in the filename have lower priority than options
++         * specified directly */
++        qdict_join(options, json_options, false);
++        QDECREF(json_options);
++        filename = NULL;
++    }
++
+     bs->options = options;
+     options = qdict_clone_shallow(options);
+ 
+-- 
+1.8.3.1
+

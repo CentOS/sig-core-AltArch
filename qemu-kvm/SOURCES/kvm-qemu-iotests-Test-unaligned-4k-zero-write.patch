@@ -1,0 +1,123 @@
+From 7441576422844bf66c7560c5940d8159aa8f6882 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 25 May 2015 04:45:55 +0200
+Subject: [PATCH 3/6] qemu-iotests: Test unaligned 4k zero write
+
+Message-id: <1432529157-20381-2-git-send-email-famz@redhat.com>
+Patchwork-id: 65119
+O-Subject: [RHEL-7.2 qemu-kvm PATCH v2 1/3] qemu-iotests: Test unaligned 4k zero write
+Bugzilla: 1200295
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Message-id: 1427160230-4489-3-git-send-email-famz@redhat.com
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 61815d6e0aa1a549ad55f6621b6816aa6b1ab757)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/033     | 47 +++++++++++++++++++++++++++++-----------------
+ tests/qemu-iotests/033.out | 26 +++++++++++++++++++++++++
+ 2 files changed, 56 insertions(+), 17 deletions(-)
+
+diff --git a/tests/qemu-iotests/033 b/tests/qemu-iotests/033
+index ea3351c..4008f10 100755
+--- a/tests/qemu-iotests/033
++++ b/tests/qemu-iotests/033
+@@ -46,26 +46,39 @@ _supported_os Linux
+ size=128M
+ _make_test_img $size
+ 
+-echo
+-echo "== preparing image =="
+-$QEMU_IO -c "write -P 0xa 0x200 0x400" "$TEST_IMG" | _filter_qemu_io
+-$QEMU_IO -c "write -P 0xa 0x20000 0x600" "$TEST_IMG" | _filter_qemu_io
+-$QEMU_IO -c "write -z 0x400 0x20000" "$TEST_IMG" | _filter_qemu_io
++do_test()
++{
++	local align=$1
++	local iocmd=$2
++	local img=$3
++	{
++		echo "open -o driver=$IMGFMT,file.align=$align blkdebug::$img"
++		echo $iocmd
++	} | $QEMU_IO
++}
++
++for align in 512 4k; do
++	echo
++	echo "== preparing image =="
++	do_test $align "write -P 0xa 0x200 0x400" "$TEST_IMG" | _filter_qemu_io
++	do_test $align "write -P 0xa 0x20000 0x600" "$TEST_IMG" | _filter_qemu_io
++	do_test $align "write -z 0x400 0x20000" "$TEST_IMG" | _filter_qemu_io
+ 
+-echo
+-echo "== verifying patterns (1) =="
+-$QEMU_IO -c "read -P 0xa 0x200 0x200" "$TEST_IMG" | _filter_qemu_io
+-$QEMU_IO -c "read -P 0x0 0x400 0x20000" "$TEST_IMG" | _filter_qemu_io
+-$QEMU_IO -c "read -P 0xa 0x20400 0x200" "$TEST_IMG" | _filter_qemu_io
++	echo
++	echo "== verifying patterns (1) =="
++	do_test $align "read -P 0xa 0x200 0x200" "$TEST_IMG" | _filter_qemu_io
++	do_test $align "read -P 0x0 0x400 0x20000" "$TEST_IMG" | _filter_qemu_io
++	do_test $align "read -P 0xa 0x20400 0x200" "$TEST_IMG" | _filter_qemu_io
+ 
+-echo
+-echo "== rewriting zeroes =="
+-$QEMU_IO -c "write -P 0xb 0x10000 0x10000" "$TEST_IMG" | _filter_qemu_io
+-$QEMU_IO -c "write -z 0x10000 0x10000" "$TEST_IMG" | _filter_qemu_io
++	echo
++	echo "== rewriting zeroes =="
++	do_test $align "write -P 0xb 0x10000 0x10000" "$TEST_IMG" | _filter_qemu_io
++	do_test $align "write -z 0x10000 0x10000" "$TEST_IMG" | _filter_qemu_io
+ 
+-echo
+-echo "== verifying patterns (2) =="
+-$QEMU_IO -c "read -P 0x0 0x400 0x20000" "$TEST_IMG" | _filter_qemu_io
++	echo
++	echo "== verifying patterns (2) =="
++	do_test $align "read -P 0x0 0x400 0x20000" "$TEST_IMG" | _filter_qemu_io
++done
+ 
+ # success, all done
+ echo "*** done"
+diff --git a/tests/qemu-iotests/033.out b/tests/qemu-iotests/033.out
+index 2fe74df..344065f 100644
+--- a/tests/qemu-iotests/033.out
++++ b/tests/qemu-iotests/033.out
+@@ -26,4 +26,30 @@ wrote 65536/65536 bytes at offset 65536
+ == verifying patterns (2) ==
+ read 131072/131072 bytes at offset 1024
+ 128 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++== preparing image ==
++wrote 1024/1024 bytes at offset 512
++1 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote 1536/1536 bytes at offset 131072
++1.500 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote 131072/131072 bytes at offset 1024
++128 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++== verifying patterns (1) ==
++read 512/512 bytes at offset 512
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 131072/131072 bytes at offset 1024
++128 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 132096
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++== rewriting zeroes ==
++wrote 65536/65536 bytes at offset 65536
++64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote 65536/65536 bytes at offset 65536
++64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++== verifying patterns (2) ==
++read 131072/131072 bytes at offset 1024
++128 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ *** done
+-- 
+1.8.3.1
+

@@ -1,0 +1,70 @@
+From 0567c3f91a89c476b29341e581aac0e522d26717 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sun, 19 Jan 2014 18:08:00 +0100
+Subject: [PATCH 26/34] block/drive-mirror: Reuse backing HD for sync=none
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1390154881-17140-7-git-send-email-mreitz@redhat.com>
+Patchwork-id: 56819
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 6/7] block/drive-mirror: Reuse backing HD for sync=none
+Bugzilla: 921890
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+BZ: 921890
+
+For "none" sync mode in "absolute-paths" mode, the current image should
+be used as the backing file for the newly created image.
+
+The current behavior is:
+a) If the image to be mirrored has a backing file, use that (which is
+   wrong, since the operations recorded by "none" are applied to the
+   image itself, not to its backing file).
+b) If the image to be mirrored lacks a backing file, the target doesn't
+   have one either (which is not really wrong, but not really right,
+   either; "none" records a set of operations executed on the image
+   file, therefore having no backing file to apply these operations on
+   seems rather pointless).
+
+For a, this is clearly a bugfix. For b, it is still a bugfix, although
+it might break existing API - but since that case crashed qemu just
+three weeks ago (before 1452686495922b81d6cf43edf025c1aef15965c0), we
+can safely assume there is no such API relying on that case yet.
+
+Suggested-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Message-id: 1385407736-13941-2-git-send-email-mreitz@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@amazon.com>
+(cherry picked from commit 117e0c82881f05d88902d4059a3171bc6cd02df0)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ blockdev.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev.c |    3 +++
+ 1 files changed, 3 insertions(+), 0 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index 06bbf30..80c6bb4 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -1604,6 +1604,9 @@ void qmp_drive_mirror(const char *device, const char *target,
+     if (!source && sync == MIRROR_SYNC_MODE_TOP) {
+         sync = MIRROR_SYNC_MODE_FULL;
+     }
++    if (sync == MIRROR_SYNC_MODE_NONE) {
++        source = bs;
++    }
+ 
+     size = bdrv_getlength(bs);
+     if (size < 0) {
+-- 
+1.7.1
+

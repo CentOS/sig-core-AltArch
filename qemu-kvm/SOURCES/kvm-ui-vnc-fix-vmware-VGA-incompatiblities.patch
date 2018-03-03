@@ -1,0 +1,94 @@
+From e35f40730d3d79ebc1870c5716c14f821a67a5ef Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Wed, 22 Feb 2017 12:36:23 +0100
+Subject: [PATCH 05/24] ui/vnc: fix vmware VGA incompatiblities
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1487766986-6329-6-git-send-email-kraxel@redhat.com>
+Patchwork-id: 73976
+O-Subject: [RHEL-7.4 qemu-kvm PATCH 5/8] ui/vnc: fix vmware VGA incompatiblities
+Bugzilla: 1377977
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Marc-André Lureau <mlureau@redhat.com>
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+
+From: Peter Lieven <pl@kamp.de>
+
+this fixes invalid rectangle updates observed after commit 12b316d
+with the vmware VGA driver. The issues occured because the server
+and client surface update seems to be out of sync at some points
+and the max width of the surface is not dividable by
+VNC_DIRTY_BITS_PER_PIXEL (16).
+
+Reported-by: Serge Hallyn <serge.hallyn@ubuntu.com>
+Signed-off-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 2f487a3d40faff1772e14da6b921900915501f9a)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/display/vmware_vga.c |  3 ++-
+ ui/vnc.c                | 10 +++++++---
+ 2 files changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/hw/display/vmware_vga.c b/hw/display/vmware_vga.c
+index df76aec..8e334c0 100644
+--- a/hw/display/vmware_vga.c
++++ b/hw/display/vmware_vga.c
+@@ -24,6 +24,7 @@
+ #include "hw/hw.h"
+ #include "hw/loader.h"
+ #include "ui/console.h"
++#include "ui/vnc.h"
+ #include "hw/pci/pci.h"
+ 
+ #undef VERBOSE
+@@ -209,7 +210,7 @@ enum {
+ 
+ /* These values can probably be changed arbitrarily.  */
+ #define SVGA_SCRATCH_SIZE               0x8000
+-#define SVGA_MAX_WIDTH                  2360
++#define SVGA_MAX_WIDTH                  ROUND_UP(2360, VNC_DIRTY_PIXELS_PER_BIT)
+ #define SVGA_MAX_HEIGHT                 1770
+ 
+ #ifdef VERBOSE
+diff --git a/ui/vnc.c b/ui/vnc.c
+index 2540261..51f95be 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -898,7 +898,7 @@ static int vnc_update_client(VncState *vs, int has_dirty)
+         VncDisplay *vd = vs->vd;
+         VncJob *job;
+         int y;
+-        int height;
++        int height, width;
+         int n = 0;
+ 
+         if (vs->output.offset && !vs->audio_cap && !vs->force_update)
+@@ -917,6 +917,7 @@ static int vnc_update_client(VncState *vs, int has_dirty)
+         job = vnc_job_new(vs);
+ 
+         height = MIN(pixman_image_get_height(vd->server), vs->client_height);
++        width = MIN(pixman_image_get_width(vd->server), vs->client_width);
+ 
+         y = 0;
+         for (;;) {
+@@ -935,8 +936,11 @@ static int vnc_update_client(VncState *vs, int has_dirty)
+                                     VNC_DIRTY_BPL(vs), x);
+             bitmap_clear(vs->dirty[y], x, x2 - x);
+             h = find_and_clear_dirty_height(vs, y, x, x2, height);
+-            n += vnc_job_add_rect(job, x * VNC_DIRTY_PIXELS_PER_BIT, y,
+-                                  (x2 - x) * VNC_DIRTY_PIXELS_PER_BIT, h);
++            x2 = MIN(x2, width / VNC_DIRTY_PIXELS_PER_BIT);
++            if (x2 > x) {
++                n += vnc_job_add_rect(job, x * VNC_DIRTY_PIXELS_PER_BIT, y,
++                                      (x2 - x) * VNC_DIRTY_PIXELS_PER_BIT, h);
++            }
+         }
+ 
+         vnc_job_push(job);
+-- 
+1.8.3.1
+

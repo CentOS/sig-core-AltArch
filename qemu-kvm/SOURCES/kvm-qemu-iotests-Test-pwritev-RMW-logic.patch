@@ -1,0 +1,636 @@
+From df86b255911f2a682ffd411f4924442d6b007624 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 14 Jan 2014 15:37:03 +0100
+Subject: [PATCH 35/37] qemu-iotests: Test pwritev RMW logic
+
+Message-id: <1392117622-28812-35-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57199
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 35/37] qemu-iotests: Test pwritev RMW logic
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit 9e1cb96d9a5e434f389a4d7b7ff4dcdd71e8ec0f)
+
+Conflicts:
+	block.c
+	block/blkdebug.c
+	include/block/block.h
+	tests/qemu-iotests/group
+
+Conflicts because RHEL 7 doesn't have all blkdebug events that upstream
+has. (Plus group from qemu-iotests.)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c                    |   7 ++
+ block/blkdebug.c           |   8 ++
+ include/block/block.h      |   8 ++
+ tests/qemu-iotests/077     | 278 +++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/077.out | 202 ++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/group   |   1 +
+ 6 files changed, 504 insertions(+)
+ create mode 100755 tests/qemu-iotests/077
+ create mode 100644 tests/qemu-iotests/077.out
+---
+ block.c                    |    7 +
+ block/blkdebug.c           |    8 ++
+ include/block/block.h      |    8 ++
+ tests/qemu-iotests/077     |  278 ++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/077.out |  202 ++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/group   |    1 +
+ 6 files changed, 504 insertions(+), 0 deletions(-)
+ create mode 100755 tests/qemu-iotests/077
+ create mode 100644 tests/qemu-iotests/077.out
+
+diff --git a/block.c b/block.c
+index d18c2df..d063924 100644
+--- a/block.c
++++ b/block.c
+@@ -2982,10 +2982,13 @@ static int coroutine_fn bdrv_aligned_pwritev(BlockDriverState *bs,
+     assert(!waited || !req->serialising);
+ 
+     if (flags & BDRV_REQ_ZERO_WRITE) {
++        BLKDBG_EVENT(bs, BLKDBG_PWRITEV_ZERO);
+         ret = bdrv_co_do_write_zeroes(bs, sector_num, nb_sectors, flags);
+     } else {
++        BLKDBG_EVENT(bs, BLKDBG_PWRITEV);
+         ret = drv->bdrv_co_writev(bs, sector_num, nb_sectors, qiov);
+     }
++    BLKDBG_EVENT(bs, BLKDBG_PWRITEV_DONE);
+ 
+     if (ret == 0 && !bs->enable_write_cache) {
+         ret = bdrv_co_flush(bs);
+@@ -3058,11 +3061,13 @@ static int coroutine_fn bdrv_co_do_pwritev(BlockDriverState *bs,
+         };
+         qemu_iovec_init_external(&head_qiov, &head_iov, 1);
+ 
++        BLKDBG_EVENT(bs, BLKDBG_PWRITEV_RMW_HEAD);
+         ret = bdrv_aligned_preadv(bs, &req, offset & ~(align - 1), align,
+                                   align, &head_qiov, 0);
+         if (ret < 0) {
+             goto fail;
+         }
++        BLKDBG_EVENT(bs, BLKDBG_PWRITEV_RMW_AFTER_HEAD);
+ 
+         qemu_iovec_init(&local_qiov, qiov->niov + 2);
+         qemu_iovec_add(&local_qiov, head_buf, offset & (align - 1));
+@@ -3090,11 +3095,13 @@ static int coroutine_fn bdrv_co_do_pwritev(BlockDriverState *bs,
+         };
+         qemu_iovec_init_external(&tail_qiov, &tail_iov, 1);
+ 
++        BLKDBG_EVENT(bs, BLKDBG_PWRITEV_RMW_TAIL);
+         ret = bdrv_aligned_preadv(bs, &req, (offset + bytes) & ~(align - 1), align,
+                                   align, &tail_qiov, 0);
+         if (ret < 0) {
+             goto fail;
+         }
++        BLKDBG_EVENT(bs, BLKDBG_PWRITEV_RMW_AFTER_TAIL);
+ 
+         if (!use_local_qiov) {
+             qemu_iovec_init(&local_qiov, qiov->niov + 1);
+diff --git a/block/blkdebug.c b/block/blkdebug.c
+index 1e772a5..c61ce52 100644
+--- a/block/blkdebug.c
++++ b/block/blkdebug.c
+@@ -183,6 +183,14 @@ static const char *event_names[BLKDBG_EVENT_MAX] = {
+     [BLKDBG_CLUSTER_ALLOC]                  = "cluster_alloc",
+     [BLKDBG_CLUSTER_ALLOC_BYTES]            = "cluster_alloc_bytes",
+     [BLKDBG_CLUSTER_FREE]                   = "cluster_free",
++
++    [BLKDBG_PWRITEV_RMW_HEAD]               = "pwritev_rmw.head",
++    [BLKDBG_PWRITEV_RMW_AFTER_HEAD]         = "pwritev_rmw.after_head",
++    [BLKDBG_PWRITEV_RMW_TAIL]               = "pwritev_rmw.tail",
++    [BLKDBG_PWRITEV_RMW_AFTER_TAIL]         = "pwritev_rmw.after_tail",
++    [BLKDBG_PWRITEV]                        = "pwritev",
++    [BLKDBG_PWRITEV_ZERO]                   = "pwritev_zero",
++    [BLKDBG_PWRITEV_DONE]                   = "pwritev_done",
+ };
+ 
+ static int get_event_by_name(const char *name, BlkDebugEvent *event)
+diff --git a/include/block/block.h b/include/block/block.h
+index feb1926..13ef173 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -498,6 +498,14 @@ typedef enum {
+     BLKDBG_CLUSTER_ALLOC_BYTES,
+     BLKDBG_CLUSTER_FREE,
+ 
++    BLKDBG_PWRITEV_RMW_HEAD,
++    BLKDBG_PWRITEV_RMW_AFTER_HEAD,
++    BLKDBG_PWRITEV_RMW_TAIL,
++    BLKDBG_PWRITEV_RMW_AFTER_TAIL,
++    BLKDBG_PWRITEV,
++    BLKDBG_PWRITEV_ZERO,
++    BLKDBG_PWRITEV_DONE,
++
+     BLKDBG_EVENT_MAX,
+ } BlkDebugEvent;
+ 
+diff --git a/tests/qemu-iotests/077 b/tests/qemu-iotests/077
+new file mode 100755
+index 0000000..bbf7b51
+--- /dev/null
++++ b/tests/qemu-iotests/077
+@@ -0,0 +1,278 @@
++#!/bin/bash
++#
++# Test concurrent pread/pwrite
++#
++# Copyright (C) 2014 Red Hat, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++
++# creator
++owner=kwolf@redhat.com
++
++seq=`basename $0`
++echo "QA output created by $seq"
++
++here=`pwd`
++tmp=/tmp/$$
++status=1	# failure is the default!
++
++_cleanup()
++{
++	_cleanup_test_img
++}
++trap "_cleanup; exit \$status" 0 1 2 3 15
++
++# get standard environment, filters and checks
++. ./common.rc
++. ./common.filter
++
++_supported_fmt generic
++_supported_proto generic
++_supported_os Linux
++
++CLUSTER_SIZE=4k
++size=128M
++
++_make_test_img $size
++
++echo
++echo "== Some concurrent requests involving RMW =="
++
++function test_io()
++{
++echo "open -o file.align=4k blkdebug::$TEST_IMG"
++# A simple RMW request
++cat  <<EOF
++aio_write -P 10 0x200 0x200
++aio_flush
++EOF
++
++# Sequential RMW requests on the same physical sector
++off=0x1000
++for ev in "head" "after_head" "tail" "after_tail"; do
++cat  <<EOF
++break pwritev_rmw.$ev A
++aio_write -P 10 $((off + 0x200)) 0x200
++wait_break A
++aio_write -P 11 $((off + 0x400)) 0x200
++sleep 100
++resume A
++aio_flush
++EOF
++off=$((off + 0x1000))
++done
++
++# Chained dependencies
++cat  <<EOF
++break pwritev_rmw.after_tail A
++aio_write -P 10 0x5000 0x200
++wait_break A
++aio_write -P 11 0x5200 0x200
++aio_write -P 12 0x5400 0x200
++aio_write -P 13 0x5600 0x200
++aio_write -P 14 0x5800 0x200
++aio_write -P 15 0x5a00 0x200
++aio_write -P 16 0x5c00 0x200
++aio_write -P 17 0x5e00 0x200
++sleep 100
++resume A
++aio_flush
++EOF
++
++# Overlapping multiple requests
++cat  <<EOF
++break pwritev_rmw.after_tail A
++aio_write -P 10 0x6000 0x200
++wait_break A
++break pwritev_rmw.after_head B
++aio_write -P 10 0x7e00 0x200
++wait_break B
++aio_write -P 11 0x6800 0x1000
++resume A
++sleep 100
++resume B
++aio_flush
++EOF
++
++cat  <<EOF
++break pwritev_rmw.after_tail A
++aio_write -P 10 0x8000 0x200
++wait_break A
++break pwritev_rmw.after_head B
++aio_write -P 10 0x9e00 0x200
++wait_break B
++aio_write -P 11 0x8800 0x1000
++resume B
++sleep 100
++resume A
++aio_flush
++EOF
++
++cat  <<EOF
++break pwritev_rmw.after_tail A
++aio_write -P 10 0xa000 0x200
++wait_break A
++aio_write -P 11 0xa800 0x1000
++break pwritev_rmw.after_head B
++aio_write -P 10 0xbe00 0x200
++wait_break B
++resume A
++sleep 100
++resume B
++aio_flush
++EOF
++
++cat  <<EOF
++break pwritev_rmw.after_tail A
++aio_write -P 10 0xc000 0x200
++wait_break A
++aio_write -P 11 0xc800 0x1000
++break pwritev_rmw.after_head B
++aio_write -P 10 0xde00 0x200
++wait_break B
++resume B
++sleep 100
++resume A
++aio_flush
++EOF
++
++# Only RMW for the tail part
++cat  <<EOF
++break pwritev_rmw.after_tail A
++aio_write -P 10 0xe000 0x1800
++wait_break A
++aio_write -P 11 0xf000 0xc00
++sleep 100
++resume A
++aio_flush
++EOF
++
++cat  <<EOF
++break pwritev A
++aio_write -P 10 0x10000 0x800
++wait_break A
++break pwritev_rmw.after_tail B
++aio_write -P 11 0x10000 0x400
++break pwritev_done C
++resume A
++wait_break C
++resume C
++sleep 100
++wait_break B
++resume B
++aio_flush
++EOF
++
++cat  <<EOF
++break pwritev A
++aio_write -P 10 0x11000 0x800
++wait_break A
++aio_write -P 11 0x11000 0x1000
++sleep 100
++resume A
++aio_flush
++EOF
++}
++
++test_io | $QEMU_IO  | _filter_qemu_io | \
++    sed -e 's,[0-9/]* bytes at offset [0-9]*,XXX/XXX bytes at offset XXX,g' \
++        -e 's/^[0-9]* \(bytes\|KiB\)/XXX bytes/' \
++        -e '/Suspended/d'
++
++echo
++echo "== Verify image content =="
++
++function verify_io()
++{
++    # A simple RMW request
++    echo read -P 0       0 0x200
++    echo read -P 10  0x200 0x200
++    echo read -P 0   0x400 0xc00
++
++    # Sequential RMW requests on the same physical sector
++    echo read -P 0  0x1000 0x200
++    echo read -P 10 0x1200 0x200
++    echo read -P 11 0x1400 0x200
++    echo read -P 0  0x1600 0xa00
++
++    echo read -P 0  0x2000 0x200
++    echo read -P 10 0x2200 0x200
++    echo read -P 11 0x2400 0x200
++    echo read -P 0  0x2600 0xa00
++
++    echo read -P 0  0x3000 0x200
++    echo read -P 10 0x3200 0x200
++    echo read -P 11 0x3400 0x200
++    echo read -P 0  0x3600 0xa00
++
++    echo read -P 0  0x4000 0x200
++    echo read -P 10 0x4200 0x200
++    echo read -P 11 0x4400 0x200
++    echo read -P 0  0x4600 0xa00
++
++    # Chained dependencies
++    echo read -P 10 0x5000 0x200
++    echo read -P 11 0x5200 0x200
++    echo read -P 12 0x5400 0x200
++    echo read -P 13 0x5600 0x200
++    echo read -P 14 0x5800 0x200
++    echo read -P 15 0x5a00 0x200
++    echo read -P 16 0x5c00 0x200
++    echo read -P 17 0x5e00 0x200
++
++    # Overlapping multiple requests
++    echo read -P 10 0x6000 0x200
++    echo read -P  0 0x6200 0x600
++    echo read -P 11 0x6800 0x1000
++    echo read -P  0 0x7800 0x600
++    echo read -P 10 0x7e00 0x200
++
++    echo read -P 10 0x8000 0x200
++    echo read -P  0 0x8200 0x600
++    echo read -P 11 0x8800 0x1000
++    echo read -P  0 0x9800 0x600
++    echo read -P 10 0x9e00 0x200
++
++    echo read -P 10 0xa000 0x200
++    echo read -P  0 0xa200 0x600
++    echo read -P 11 0xa800 0x1000
++    echo read -P  0 0xb800 0x600
++    echo read -P 10 0xbe00 0x200
++
++    echo read -P 10 0xc000 0x200
++    echo read -P  0 0xc200 0x600
++    echo read -P 11 0xc800 0x1000
++    echo read -P  0 0xd800 0x600
++    echo read -P 10 0xde00 0x200
++
++    # Only RMW for the tail part
++    echo read -P 10 0xe000 0x1000
++    echo read -P 11 0xf800 0x400
++    echo read -P  0 0xfc00 0x400
++
++    echo read -P 11 0x10000 0x400
++    echo read -P 10 0x10400 0x400
++
++    echo read -P 11 0x11800 0x800
++}
++
++verify_io | $QEMU_IO "$TEST_IMG" | _filter_qemu_io
++
++_check_test_img
++
++# success, all done
++echo "*** done"
++rm -f $seq.full
++status=0
+diff --git a/tests/qemu-iotests/077.out b/tests/qemu-iotests/077.out
+new file mode 100644
+index 0000000..ab61234
+--- /dev/null
++++ b/tests/qemu-iotests/077.out
+@@ -0,0 +1,202 @@
++QA output created by 077
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=134217728 
++
++== Some concurrent requests involving RMW ==
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++blkdebug: Resuming request 'A'
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++blkdebug: Resuming request 'A'
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++blkdebug: Resuming request 'A'
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++blkdebug: Resuming request 'A'
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++blkdebug: Resuming request 'A'
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++blkdebug: Resuming request 'A'
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++blkdebug: Resuming request 'B'
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++blkdebug: Resuming request 'B'
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++blkdebug: Resuming request 'A'
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++blkdebug: Resuming request 'A'
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++blkdebug: Resuming request 'B'
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++blkdebug: Resuming request 'B'
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++blkdebug: Resuming request 'A'
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++blkdebug: Resuming request 'A'
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++blkdebug: Resuming request 'A'
++blkdebug: Resuming request 'C'
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++blkdebug: Resuming request 'B'
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++blkdebug: Resuming request 'A'
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote XXX/XXX bytes at offset XXX
++XXX bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++== Verify image content ==
++read 512/512 bytes at offset 0
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 512
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 3072/3072 bytes at offset 1024
++3 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 4096
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 4608
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 5120
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 2560/2560 bytes at offset 5632
++2.500 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 8192
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 8704
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 9216
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 2560/2560 bytes at offset 9728
++2.500 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 12288
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 12800
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 13312
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 2560/2560 bytes at offset 13824
++2.500 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 16384
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 16896
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 17408
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 2560/2560 bytes at offset 17920
++2.500 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 20480
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 20992
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 21504
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 22016
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 22528
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 23040
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 23552
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 24064
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 24576
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 1536/1536 bytes at offset 25088
++1.500 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 4096/4096 bytes at offset 26624
++4 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 1536/1536 bytes at offset 30720
++1.500 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 32256
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 32768
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 1536/1536 bytes at offset 33280
++1.500 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 4096/4096 bytes at offset 34816
++4 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 1536/1536 bytes at offset 38912
++1.500 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 40448
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 40960
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 1536/1536 bytes at offset 41472
++1.500 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 4096/4096 bytes at offset 43008
++4 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 1536/1536 bytes at offset 47104
++1.500 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 48640
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 49152
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 1536/1536 bytes at offset 49664
++1.500 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 4096/4096 bytes at offset 51200
++4 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 1536/1536 bytes at offset 55296
++1.500 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 56832
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 4096/4096 bytes at offset 57344
++4 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 1024/1024 bytes at offset 63488
++1 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 1024/1024 bytes at offset 64512
++1 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 1024/1024 bytes at offset 65536
++1 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 1024/1024 bytes at offset 66560
++1 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 2048/2048 bytes at offset 71680
++2 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++No errors were found on the image.
++*** done
+diff --git a/tests/qemu-iotests/group b/tests/qemu-iotests/group
+index 50a726e..dd70acb 100644
+--- a/tests/qemu-iotests/group
++++ b/tests/qemu-iotests/group
+@@ -71,3 +71,4 @@
+ 067 rw auto
+ 068 rw auto
+ 070 rw auto
++077 rw auto
+-- 
+1.7.1
+

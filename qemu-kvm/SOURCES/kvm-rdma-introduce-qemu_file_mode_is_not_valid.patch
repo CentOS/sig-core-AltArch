@@ -1,0 +1,106 @@
+From e7b184d50f2723ae82e35251ad8f05ec1cddb034 Mon Sep 17 00:00:00 2001
+Message-Id: <e7b184d50f2723ae82e35251ad8f05ec1cddb034.1387382496.git.minovotn@redhat.com>
+In-Reply-To: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+References: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+From: Nigel Croxon <ncroxon@redhat.com>
+Date: Thu, 14 Nov 2013 22:52:44 +0100
+Subject: [PATCH 08/46] rdma: introduce qemu_file_mode_is_not_valid()
+
+RH-Author: Nigel Croxon <ncroxon@redhat.com>
+Message-id: <1384469598-13137-9-git-send-email-ncroxon@redhat.com>
+Patchwork-id: 55692
+O-Subject: [RHEL7.0 PATCH 08/42] rdma: introduce qemu_file_mode_is_not_valid()
+Bugzilla: 1011720
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: 1011720
+https://bugzilla.redhat.com/show_bug.cgi?id=1011720
+
+>From commit ID:
+commit bc1256f7f187cc7d491bfe3861249a60873adbbc
+Author: Michael R. Hines <mrhines@us.ibm.com>
+Date:   Tue Jun 25 21:35:31 2013 -0400
+
+    rdma: introduce qemu_file_mode_is_not_valid()
+
+    QEMUFileRDMA also has read and write modes. This function is now
+    shared to reduce code duplication.
+
+    Reviewed-by: Juan Quintela <quintela@redhat.com>
+    Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+    Reviewed-by: Chegu Vinod <chegu_vinod@hp.com>
+    Tested-by: Chegu Vinod <chegu_vinod@hp.com>
+    Tested-by: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Juan Quintela <quintela@redhat.com>
+---
+ include/migration/qemu-file.h |    1 +
+ savevm.c                      |   20 +++++++++++++-------
+ 2 files changed, 14 insertions(+), 7 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ include/migration/qemu-file.h |  1 +
+ savevm.c                      | 20 +++++++++++++-------
+ 2 files changed, 14 insertions(+), 7 deletions(-)
+
+diff --git a/include/migration/qemu-file.h b/include/migration/qemu-file.h
+index fb1cf40..37d1604 100644
+--- a/include/migration/qemu-file.h
++++ b/include/migration/qemu-file.h
+@@ -80,6 +80,7 @@ void qemu_put_byte(QEMUFile *f, int v);
+  * The buffer should be available till it is sent asynchronously.
+  */
+ void qemu_put_buffer_async(QEMUFile *f, const uint8_t *buf, int size);
++bool qemu_file_mode_is_not_valid(const char *mode);
+ 
+ static inline void qemu_put_ubyte(QEMUFile *f, unsigned int v)
+ {
+diff --git a/savevm.c b/savevm.c
+index 9304788..26d5607 100644
+--- a/savevm.c
++++ b/savevm.c
+@@ -449,14 +449,23 @@ static const QEMUFileOps socket_write_ops = {
+     .close =      socket_close
+ };
+ 
+-QEMUFile *qemu_fopen_socket(int fd, const char *mode)
++bool qemu_file_mode_is_not_valid(const char *mode)
+ {
+-    QEMUFileSocket *s;
+-
+     if (mode == NULL ||
+         (mode[0] != 'r' && mode[0] != 'w') ||
+         mode[1] != 'b' || mode[2] != 0) {
+         fprintf(stderr, "qemu_fopen: Argument validity check failed\n");
++        return true;
++    }
++
++    return false;
++}
++
++QEMUFile *qemu_fopen_socket(int fd, const char *mode)
++{
++    QEMUFileSocket *s;
++
++    if (qemu_file_mode_is_not_valid(mode)) {
+         return NULL;
+     }
+ 
+@@ -475,10 +484,7 @@ QEMUFile *qemu_fopen(const char *filename, const char *mode)
+ {
+     QEMUFileStdio *s;
+ 
+-    if (mode == NULL ||
+-	(mode[0] != 'r' && mode[0] != 'w') ||
+-	mode[1] != 'b' || mode[2] != 0) {
+-        fprintf(stderr, "qemu_fopen: Argument validity check failed\n");
++    if (qemu_file_mode_is_not_valid(mode)) {
+         return NULL;
+     }
+ 
+-- 
+1.7.11.7
+

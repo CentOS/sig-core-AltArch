@@ -1,0 +1,83 @@
+From 2f5fb1498fa48ea25f2d4155c9730001931bdef7 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Tue, 16 Sep 2014 20:11:41 +0200
+Subject: [PATCH 03/20] block: make vdi bounds check match upstream
+
+Message-id: <0935a62fcd0e3cce1ed66aa79fc460804ed938c7.1410897407.git.jcody@redhat.com>
+Patchwork-id: 61207
+O-Subject: [PATCH qemu-kvm-rhel RHEL7.1 02/15] block: make vdi bounds check match upstream
+Bugzilla: 1098086
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+There is a slight discrepancy between downstream, and upstream,
+in a patch done for CVE-2014-0144.  There is no difference in
+functionality - the (earlier) downstream patch contained a redundant
+'#define' that was removed upstream, and some upstream added error
+messages and different error returns.
+
+Changing this to match upstream will make subsequent backports
+easier.
+
+Downstream-only.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vdi.c |   15 ++++++++++-----
+ 1 files changed, 10 insertions(+), 5 deletions(-)
+
+diff --git a/block/vdi.c b/block/vdi.c
+index 0457298..5e2fad5 100644
+--- a/block/vdi.c
++++ b/block/vdi.c
+@@ -120,11 +120,10 @@ typedef unsigned char uuid_t[16];
+ 
+ #define VDI_IS_ALLOCATED(X) ((X) < VDI_DISCARDED)
+ 
+-#define VDI_BLOCK_SIZE           (1 * MiB)
+ /* max blocks in image is (0xffffffff / 4) */
+ #define VDI_BLOCKS_IN_IMAGE_MAX  0x3fffffff
+ #define VDI_DISK_SIZE_MAX        ((uint64_t)VDI_BLOCKS_IN_IMAGE_MAX * \
+-                                  (uint64_t)VDI_BLOCK_SIZE)
++                                  (uint64_t)DEFAULT_CLUSTER_SIZE)
+ 
+ #if !defined(CONFIG_UUID)
+ static inline void uuid_generate(uuid_t out)
+@@ -392,7 +391,10 @@ static int vdi_open(BlockDriverState *bs, QDict *options, int flags,
+ #endif
+ 
+     if (header.disk_size > VDI_DISK_SIZE_MAX) {
+-        ret = -EINVAL;
++        error_setg(errp, "Unsupported VDI image size (size is 0x%" PRIx64
++                         ", max supported is 0x%" PRIx64 ")",
++                          header.disk_size, VDI_DISK_SIZE_MAX);
++        ret = -ENOTSUP;
+         goto fail;
+     }
+ 
+@@ -428,7 +430,7 @@ static int vdi_open(BlockDriverState *bs, QDict *options, int flags,
+         logout("unsupported sector size %u B\n", header.sector_size);
+         ret = -ENOTSUP;
+         goto fail;
+-    } else if (header.block_size != VDI_BLOCK_SIZE) {
++    } else if (header.block_size != DEFAULT_CLUSTER_SIZE) {
+         logout("unsupported block size %u B\n", header.block_size);
+         ret = -ENOTSUP;
+         goto fail;
+@@ -698,7 +700,10 @@ static int vdi_create(const char *filename, QEMUOptionParameter *options,
+     }
+ 
+     if (bytes > VDI_DISK_SIZE_MAX) {
+-        result = -EINVAL;
++        result = -ENOTSUP;
++        error_setg(errp, "Unsupported VDI image size (size is 0x%" PRIx64
++                         ", max supported is 0x%" PRIx64 ")",
++                          bytes, VDI_DISK_SIZE_MAX);
+         goto exit;
+     }
+ 
+-- 
+1.7.1
+

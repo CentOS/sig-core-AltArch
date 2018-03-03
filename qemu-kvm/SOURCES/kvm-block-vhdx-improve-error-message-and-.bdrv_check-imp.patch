@@ -1,0 +1,174 @@
+From ef9c4188157e2349ff68710982d9922f4a335b82 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Mon, 13 Jan 2014 20:52:04 +0100
+Subject: [PATCH 12/16] block: vhdx - improve error message, and .bdrv_check implementation
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <f13406a07edd6ca0f7c7c5a9f87c0376dc4c1663.1389634483.git.jcody@redhat.com>
+Patchwork-id: 56643
+O-Subject: [RHEL7 qemu-kvm PATCH] block: vhdx - improve error message, and .bdrv_check implementation
+Bugzilla: 1035001
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+If there is a dirty log file to be replayed in a VHDX image, it is
+replayed in .vhdx_open().  However, if the file is opened read-only,
+then a somewhat cryptic error message results.
+
+This adds a more helpful error message for the user.  If an image file
+contains a log to be replayed, and is opened read-only, the user is
+instructed to run 'qemu-img check -r all' on the image file.
+
+Running qemu-img check -r all will cause the image file to be opened
+r/w, which will replay the log file.  If a log file replay is detected,
+this is flagged, and bdrv_check will increase the corruptions_fixed
+count for the image.
+
+[Fixed typo in error message that was pointed out by Eric Blake
+<eblake@redhat.com>.
+--Stefan]
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 7e30e6a6746b417c7e0dbc9af009560fbb63f336)
+
+Conflicts:
+	block/vhdx.c
+
+RHEL7 Notes:  Conflict due to different order of members in the
+              BlockDriver struct.  Resolved so that the order matches
+              what is upstream.
+
+BZ 1035001
+Brew: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=6861970
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+---
+ block/vhdx-log.c | 13 ++++++++++++-
+ block/vhdx.c     | 25 ++++++++++++++++++++++---
+ block/vhdx.h     |  5 ++++-
+ 3 files changed, 38 insertions(+), 5 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vhdx-log.c |   13 ++++++++++++-
+ block/vhdx.c     |   25 ++++++++++++++++++++++---
+ block/vhdx.h     |    5 ++++-
+ 3 files changed, 38 insertions(+), 5 deletions(-)
+
+diff --git a/block/vhdx-log.c b/block/vhdx-log.c
+index ee5583c..8c9ae0d 100644
+--- a/block/vhdx-log.c
++++ b/block/vhdx-log.c
+@@ -706,7 +706,8 @@ exit:
+  *
+  * If read-only, we must replay the log in RAM (or refuse to open
+  * a dirty VHDX file read-only) */
+-int vhdx_parse_log(BlockDriverState *bs, BDRVVHDXState *s, bool *flushed)
++int vhdx_parse_log(BlockDriverState *bs, BDRVVHDXState *s, bool *flushed,
++                   Error **errp)
+ {
+     int ret = 0;
+     VHDXHeader *hdr;
+@@ -761,6 +762,16 @@ int vhdx_parse_log(BlockDriverState *bs, BDRVVHDXState *s, bool *flushed)
+     }
+ 
+     if (logs.valid) {
++        if (bs->read_only) {
++            ret = -EPERM;
++            error_setg_errno(errp, EPERM,
++                             "VHDX image file '%s' opened read-only, but "
++                             "contains a log that needs to be replayed.  To "
++                             "replay the log, execute:\n qemu-img check -r "
++                             "all '%s'",
++                             bs->filename, bs->filename);
++            goto exit;
++        }
+         /* now flush the log */
+         ret = vhdx_log_flush(bs, s, &logs);
+         if (ret < 0) {
+diff --git a/block/vhdx.c b/block/vhdx.c
+index 8e3b371..8b1a5c9 100644
+--- a/block/vhdx.c
++++ b/block/vhdx.c
+@@ -878,7 +878,6 @@ static int vhdx_open(BlockDriverState *bs, QDict *options, int flags,
+     int ret = 0;
+     uint32_t i;
+     uint64_t signature;
+-    bool log_flushed = false;
+ 
+ 
+     s->bat = NULL;
+@@ -907,7 +906,7 @@ static int vhdx_open(BlockDriverState *bs, QDict *options, int flags,
+         goto fail;
+     }
+ 
+-    ret = vhdx_parse_log(bs, s, &log_flushed);
++    ret = vhdx_parse_log(bs, s, &s->log_replayed_on_open, errp);
+     if (ret < 0) {
+         goto fail;
+     }
+@@ -1854,6 +1853,24 @@ exit:
+     return ret;
+ }
+ 
++/* If opened r/w, the VHDX driver will automatically replay the log,
++ * if one is present, inside the vhdx_open() call.
++ *
++ * If qemu-img check -r all is called, the image is automatically opened
++ * r/w and any log has already been replayed, so there is nothing (currently)
++ * for us to do here
++ */
++static int vhdx_check(BlockDriverState *bs, BdrvCheckResult *result,
++                       BdrvCheckMode fix)
++{
++    BDRVVHDXState *s = bs->opaque;
++
++    if (s->log_replayed_on_open) {
++        result->corruptions_fixed++;
++    }
++    return 0;
++}
++
+ static QEMUOptionParameter vhdx_create_options[] = {
+     {
+         .name = BLOCK_OPT_SIZE,
+@@ -1896,8 +1913,10 @@ static BlockDriver bdrv_vhdx = {
+     .bdrv_reopen_prepare    = vhdx_reopen_prepare,
+     .bdrv_co_readv          = vhdx_co_readv,
+     .bdrv_co_writev         = vhdx_co_writev,
+-    .bdrv_get_info          = vhdx_get_info,
+     .bdrv_create            = vhdx_create,
++    .bdrv_get_info          = vhdx_get_info,
++    .bdrv_check             = vhdx_check,
++
+     .create_options         = vhdx_create_options,
+ };
+ 
+diff --git a/block/vhdx.h b/block/vhdx.h
+index 365eca0..469e95c 100644
+--- a/block/vhdx.h
++++ b/block/vhdx.h
+@@ -394,6 +394,8 @@ typedef struct BDRVVHDXState {
+ 
+     Error *migration_blocker;
+ 
++    bool log_replayed_on_open;
++
+     QLIST_HEAD(VHDXRegionHead, VHDXRegionEntry) regions;
+ } BDRVVHDXState;
+ 
+@@ -408,7 +410,8 @@ uint32_t vhdx_checksum_calc(uint32_t crc, uint8_t *buf, size_t size,
+ 
+ bool vhdx_checksum_is_valid(uint8_t *buf, size_t size, int crc_offset);
+ 
+-int vhdx_parse_log(BlockDriverState *bs, BDRVVHDXState *s, bool *flushed);
++int vhdx_parse_log(BlockDriverState *bs, BDRVVHDXState *s, bool *flushed,
++                   Error **errp);
+ 
+ int vhdx_log_write_and_flush(BlockDriverState *bs, BDRVVHDXState *s,
+                              void *data, uint32_t length, uint64_t offset);
+-- 
+1.7.1
+

@@ -1,0 +1,195 @@
+From bff9b33a3c4e0757c1e779ebedbffa391d926ecb Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 4 Nov 2013 22:31:52 +0100
+Subject: [PATCH 01/87] block: drop bs_snapshots global variable
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-2-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55301
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 01/43] block: drop bs_snapshots global variable
+Bugzilla: 1026524
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1026524
+
+The bs_snapshots global variable points to the BlockDriverState which
+will be used to save vmstate.  This is really a savevm.c concept but was
+moved into block.c:bdrv_snapshots() when it became clear that hotplug
+could result in a dangling pointer.
+
+While auditing the block layer's global state I came upon bs_snapshots
+and realized that a variable is not necessary here.  Simply find the
+first BlockDriverState capable of internal snapshots each time this is
+needed.
+
+The behavior of bdrv_snapshots() is preserved across hotplug because new
+drives are always appended to the bdrv_states list.  This means that
+calling the new find_vmstate_bs() function is idempotent - it returns
+the same BlockDriverState unless it was hot-unplugged.
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Wenchao Xia <xiawenc@linux.vnet.ibm.com>
+Signed-off-by: Wenchao Xia <xiawenc@linux.vnet.ibm.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 29d782710f87f01991bfc85cd9bef7d15280a5e2)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block.c               | 28 ----------------------------
+ include/block/block.h |  1 -
+ savevm.c              | 19 +++++++++++++++----
+ 3 files changed, 15 insertions(+), 33 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c               |   28 ----------------------------
+ include/block/block.h |    1 -
+ savevm.c              |   19 +++++++++++++++----
+ 3 files changed, 15 insertions(+), 33 deletions(-)
+
+diff --git a/block.c b/block.c
+index fdff92f..84a3a8d 100644
+--- a/block.c
++++ b/block.c
+@@ -99,9 +99,6 @@ static QTAILQ_HEAD(, BlockDriverState) bdrv_states =
+ static QLIST_HEAD(, BlockDriver) bdrv_drivers =
+     QLIST_HEAD_INITIALIZER(bdrv_drivers);
+ 
+-/* The device to use for VM snapshots */
+-static BlockDriverState *bs_snapshots;
+-
+ /* If non-zero, use only whitelisted block drivers */
+ static int use_bdrv_whitelist;
+ 
+@@ -1384,9 +1381,6 @@ void bdrv_close(BlockDriverState *bs)
+     notifier_list_notify(&bs->close_notifiers, bs);
+ 
+     if (bs->drv) {
+-        if (bs == bs_snapshots) {
+-            bs_snapshots = NULL;
+-        }
+         if (bs->backing_hd) {
+             bdrv_delete(bs->backing_hd);
+             bs->backing_hd = NULL;
+@@ -1619,7 +1613,6 @@ void bdrv_delete(BlockDriverState *bs)
+ 
+     bdrv_close(bs);
+ 
+-    assert(bs != bs_snapshots);
+     g_free(bs);
+ }
+ 
+@@ -1663,9 +1656,6 @@ void bdrv_set_dev_ops(BlockDriverState *bs, const BlockDevOps *ops,
+ {
+     bs->dev_ops = ops;
+     bs->dev_opaque = opaque;
+-    if (bdrv_dev_has_removable_media(bs) && bs == bs_snapshots) {
+-        bs_snapshots = NULL;
+-    }
+ }
+ 
+ void bdrv_emit_qmp_error_event(const BlockDriverState *bdrv,
+@@ -3493,24 +3483,6 @@ int bdrv_is_snapshot(BlockDriverState *bs)
+     return !!(bs->open_flags & BDRV_O_SNAPSHOT);
+ }
+ 
+-BlockDriverState *bdrv_snapshots(void)
+-{
+-    BlockDriverState *bs;
+-
+-    if (bs_snapshots) {
+-        return bs_snapshots;
+-    }
+-
+-    bs = NULL;
+-    while ((bs = bdrv_next(bs))) {
+-        if (bdrv_can_snapshot(bs)) {
+-            bs_snapshots = bs;
+-            return bs;
+-        }
+-    }
+-    return NULL;
+-}
+-
+ int bdrv_snapshot_create(BlockDriverState *bs,
+                          QEMUSnapshotInfo *sn_info)
+ {
+diff --git a/include/block/block.h b/include/block/block.h
+index bc1f5f6..3b3f40e 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -362,7 +362,6 @@ BlockInfo *bdrv_query_info(BlockDriverState *s);
+ BlockStats *bdrv_query_stats(const BlockDriverState *bs);
+ int bdrv_can_snapshot(BlockDriverState *bs);
+ int bdrv_is_snapshot(BlockDriverState *bs);
+-BlockDriverState *bdrv_snapshots(void);
+ int bdrv_snapshot_create(BlockDriverState *bs,
+                          QEMUSnapshotInfo *sn_info);
+ int bdrv_snapshot_goto(BlockDriverState *bs,
+diff --git a/savevm.c b/savevm.c
+index 1ed7f05..d9f3787 100644
+--- a/savevm.c
++++ b/savevm.c
+@@ -2262,6 +2262,17 @@ out:
+     return ret;
+ }
+ 
++static BlockDriverState *find_vmstate_bs(void)
++{
++    BlockDriverState *bs = NULL;
++    while ((bs = bdrv_next(bs))) {
++        if (bdrv_can_snapshot(bs)) {
++            return bs;
++        }
++    }
++    return NULL;
++}
++
+ static int bdrv_snapshot_find(BlockDriverState *bs, QEMUSnapshotInfo *sn_info,
+                               const char *name)
+ {
+@@ -2338,7 +2349,7 @@ void do_savevm(Monitor *mon, const QDict *qdict)
+         }
+     }
+ 
+-    bs = bdrv_snapshots();
++    bs = find_vmstate_bs();
+     if (!bs) {
+         monitor_printf(mon, "No block device can accept snapshots\n");
+         return;
+@@ -2440,7 +2451,7 @@ int load_vmstate(const char *name)
+     QEMUFile *f;
+     int ret;
+ 
+-    bs_vm_state = bdrv_snapshots();
++    bs_vm_state = find_vmstate_bs();
+     if (!bs_vm_state) {
+         error_report("No block device supports snapshots");
+         return -ENOTSUP;
+@@ -2519,7 +2530,7 @@ void do_delvm(Monitor *mon, const QDict *qdict)
+     int ret;
+     const char *name = qdict_get_str(qdict, "name");
+ 
+-    bs = bdrv_snapshots();
++    bs = find_vmstate_bs();
+     if (!bs) {
+         monitor_printf(mon, "No block device supports snapshots\n");
+         return;
+@@ -2551,7 +2562,7 @@ void do_info_snapshots(Monitor *mon, const QDict *qdict)
+     int *available_snapshots;
+     char buf[256];
+ 
+-    bs = bdrv_snapshots();
++    bs = find_vmstate_bs();
+     if (!bs) {
+         monitor_printf(mon, "No available block device supports snapshots\n");
+         return;
+-- 
+1.7.1
+

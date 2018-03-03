@@ -1,0 +1,137 @@
+From 018133d4217c5aebaa09a43b341b0765075f4254 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Fri, 7 Nov 2014 17:17:55 +0100
+Subject: [PATCH 08/41] dump: add support for lzo/snappy
+
+Message-id: <1415380693-16593-9-git-send-email-lersek@redhat.com>
+Patchwork-id: 62194
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 08/26] dump: add support for lzo/snappy
+Bugzilla: 1157798
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: dgibson <dgibson@redhat.com>
+
+From: qiaonuohan <qiaonuohan@cn.fujitsu.com>
+
+kdump-compressed format supports three compression format, zlib/lzo/snappy.
+Currently, only zlib is available. This patch is used to support lzo/snappy.
+'--enable-lzo/--enable-snappy' is needed to be specified with configure to make
+lzo/snappy available for qemu
+
+Signed-off-by: Qiao Nuohan <qiaonuohan@cn.fujitsu.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit 607dacd0a082a4ea73a7a16a1c70406f37ebacdb)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	configure
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+---
+ configure | 54 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 54 insertions(+)
+
+diff --git a/configure b/configure
+index fb0c839..5373237 100755
+--- a/configure
++++ b/configure
+@@ -232,6 +232,8 @@ libusb=""
+ usb_redir=""
+ glx=""
+ zlib="yes"
++lzo="no"
++snappy="no"
+ guest_agent="yes"
+ want_tools="yes"
+ libiscsi=""
+@@ -909,6 +911,10 @@ for opt do
+   ;;
+   --disable-zlib-test) zlib="no"
+   ;;
++  --enable-lzo) lzo="yes"
++  ;;
++  --enable-snappy) snappy="yes"
++  ;;
+   --enable-guest-agent) guest_agent="yes"
+   ;;
+   --disable-guest-agent) guest_agent="no"
+@@ -1220,6 +1226,8 @@ echo "  --disable-libusb         disable libusb (for usb passthrough)"
+ echo "  --enable-libusb          enable libusb (for usb passthrough)"
+ echo "  --disable-usb-redir      disable usb network redirection support"
+ echo "  --enable-usb-redir       enable usb network redirection support"
++echo "  --enable-lzo             enable the support of lzo compression library"
++echo "  --enable-snappy          enable the support of snappy compression library"
+ echo "  --disable-guest-agent    disable building of the QEMU Guest Agent"
+ echo "  --enable-guest-agent     enable building of the QEMU Guest Agent"
+ echo "  --disable-seccomp        disable seccomp support"
+@@ -1554,6 +1562,42 @@ fi
+ libs_softmmu="$libs_softmmu -lz"
+ 
+ ##########################################
++# lzo check
++
++if test "$lzo" != "no" ; then
++    cat > $TMPC << EOF
++#include <lzo/lzo1x.h>
++int main(void) { lzo_version(); return 0; }
++EOF
++    if compile_prog "" "-llzo2" ; then
++        :
++    else
++        error_exit "lzo check failed" \
++            "Make sure to have the lzo libs and headers installed."
++    fi
++
++    libs_softmmu="$libs_softmmu -llzo2"
++fi
++
++##########################################
++# snappy check
++
++if test "$snappy" != "no" ; then
++    cat > $TMPC << EOF
++#include <snappy-c.h>
++int main(void) { snappy_max_compressed_length(4096); return 0; }
++EOF
++    if compile_prog "" "-lsnappy" ; then
++        :
++    else
++        error_exit "snappy check failed" \
++            "Make sure to have the snappy libs and headers installed."
++    fi
++
++    libs_softmmu="$libs_softmmu -lsnappy"
++fi
++
++##########################################
+ # libseccomp check
+ 
+ if test "$seccomp" != "no" ; then
+@@ -3648,6 +3692,8 @@ echo "QOM debugging     $qom_cast_debug"
+ echo "Live block operations $live_block_ops"
+ echo "Live block migration $live_block_migration"
+ echo "vhdx              $vhdx"
++echo "lzo support       $lzo"
++echo "snappy support    $snappy"
+ 
+ if test "$sdl_too_old" = "yes"; then
+ echo "-> Your SDL version is too old - please upgrade to have SDL support"
+@@ -3965,6 +4011,14 @@ if test "$glx" = "yes" ; then
+   echo "GLX_LIBS=$glx_libs" >> $config_host_mak
+ fi
+ 
++if test "$lzo" = "yes" ; then
++  echo "CONFIG_LZO=y" >> $config_host_mak
++fi
++
++if test "$snappy" = "yes" ; then
++  echo "CONFIG_SNAPPY=y" >> $config_host_mak
++fi
++
+ if test "$libiscsi" = "yes" ; then
+   echo "CONFIG_LIBISCSI=y" >> $config_host_mak
+   echo "LIBISCSI_CFLAGS=$libiscsi_cflags" >> $config_host_mak
+-- 
+1.8.3.1
+

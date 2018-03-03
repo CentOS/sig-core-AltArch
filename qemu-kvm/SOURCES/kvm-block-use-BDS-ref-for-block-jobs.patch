@@ -1,0 +1,154 @@
+From d83c96945764748dff98dbe37169ae7c65a3dac5 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Fri, 17 Jan 2014 03:07:52 +0100
+Subject: [PATCH 09/34] block: use BDS ref for block jobs
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1389928083-8921-8-git-send-email-famz@redhat.com>
+Patchwork-id: 56769
+O-Subject: [RHEL-7 qemu-kvm PATCH 07/18] block: use BDS ref for block jobs
+Bugzilla: 1041301
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Block jobs used drive_get_ref(drive_get_by_blockdev(bs)) to avoid BDS
+being deleted. Now we have BDS reference count, and block jobs don't
+care about dinfo, so replace them to get cleaner code. It is also the
+safe way when BDS has no drive info.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit fa510ebffa1fd509323e2e0888e369e23adbb508)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+
+Conflicts:
+	blockdev.c
+
+Conflict because drive-backup is not backported, and downstream has
+6270aec (block: optionally disable live block jobs).
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ blockdev.c | 44 +++++++++++++++-----------------------------
+ blockjob.c |  1 +
+ 2 files changed, 16 insertions(+), 29 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev.c |   44 +++++++++++++++-----------------------------
+ blockjob.c |    1 +
+ 2 files changed, 16 insertions(+), 29 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index 564262a..d795af2 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -243,34 +243,34 @@ void drive_get_ref(DriveInfo *dinfo)
+ 
+ typedef struct {
+     QEMUBH *bh;
+-    DriveInfo *dinfo;
+-} DrivePutRefBH;
++    BlockDriverState *bs;
++} BDRVPutRefBH;
+ 
+ /* right now, this is only used from block_job_cb() */
+ #ifdef CONFIG_LIVE_BLOCK_OPS
+-static void drive_put_ref_bh(void *opaque)
++static void bdrv_put_ref_bh(void *opaque)
+ {
+-    DrivePutRefBH *s = opaque;
++    BDRVPutRefBH *s = opaque;
+ 
+-    drive_put_ref(s->dinfo);
++    bdrv_unref(s->bs);
+     qemu_bh_delete(s->bh);
+     g_free(s);
+ }
+ 
+ /*
+- * Release a drive reference in a BH
++ * Release a BDS reference in a BH
+  *
+- * It is not possible to use drive_put_ref() from a callback function when the
+- * callers still need the drive.  In such cases we schedule a BH to release the
+- * reference.
++ * It is not safe to use bdrv_unref() from a callback function when the callers
++ * still need the BlockDriverState.  In such cases we schedule a BH to release
++ * the reference.
+  */
+-static void drive_put_ref_bh_schedule(DriveInfo *dinfo)
++static void bdrv_put_ref_bh_schedule(BlockDriverState *bs)
+ {
+-    DrivePutRefBH *s;
++    BDRVPutRefBH *s;
+ 
+-    s = g_new(DrivePutRefBH, 1);
+-    s->bh = qemu_bh_new(drive_put_ref_bh, s);
+-    s->dinfo = dinfo;
++    s = g_new(BDRVPutRefBH, 1);
++    s->bh = qemu_bh_new(bdrv_put_ref_bh, s);
++    s->bs = bs;
+     qemu_bh_schedule(s->bh);
+ }
+ #endif
+@@ -1423,7 +1423,7 @@ static void block_job_cb(void *opaque, int ret)
+     }
+     qobject_decref(obj);
+ 
+-    drive_put_ref_bh_schedule(drive_get_by_blockdev(bs));
++    bdrv_put_ref_bh_schedule(bs);
+ }
+ 
+ void qmp_block_stream(const char *device, bool has_base,
+@@ -1460,11 +1460,6 @@ void qmp_block_stream(const char *device, bool has_base,
+         return;
+     }
+ 
+-    /* Grab a reference so hotplug does not delete the BlockDriverState from
+-     * underneath us.
+-     */
+-    drive_get_ref(drive_get_by_blockdev(bs));
+-
+     trace_qmp_block_stream(bs, bs->job);
+ }
+ 
+@@ -1521,10 +1516,6 @@ void qmp_block_commit(const char *device,
+         error_propagate(errp, local_err);
+         return;
+     }
+-    /* Grab a reference so hotplug does not delete the BlockDriverState from
+-     * underneath us.
+-     */
+-    drive_get_ref(drive_get_by_blockdev(bs));
+ }
+ 
+ #define DEFAULT_MIRROR_BUF_SIZE   (10 << 20)
+@@ -1658,11 +1649,6 @@ void qmp_drive_mirror(const char *device, const char *target,
+         error_propagate(errp, local_err);
+         return;
+     }
+-
+-    /* Grab a reference so hotplug does not delete the BlockDriverState from
+-     * underneath us.
+-     */
+-    drive_get_ref(drive_get_by_blockdev(bs));
+ }
+ #endif
+ 
+diff --git a/blockjob.c b/blockjob.c
+index c0a22d9..6d8c3a2 100644
+--- a/blockjob.c
++++ b/blockjob.c
+@@ -45,6 +45,7 @@ void *block_job_create(const BlockJobType *job_type, BlockDriverState *bs,
+         error_set(errp, QERR_DEVICE_IN_USE, bdrv_get_device_name(bs));
+         return NULL;
+     }
++    bdrv_ref(bs);
+     bdrv_set_in_use(bs, 1);
+ 
+     job = g_malloc0(job_type->instance_size);
+-- 
+1.7.1
+

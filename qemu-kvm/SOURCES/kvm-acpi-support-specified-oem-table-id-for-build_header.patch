@@ -1,0 +1,154 @@
+From b36e60614f9c4a6eb3f417422c3cb99402b82963 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Wed, 11 May 2016 12:33:44 +0200
+Subject: [PATCH 05/10] acpi: support specified oem table id for build_header
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1462970028-10959-4-git-send-email-lersek@redhat.com>
+Patchwork-id: 70380
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 3/7] acpi: support specified oem table id for build_header
+Bugzilla: 1330969
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+
+From: Xiao Guangrong <guangrong.xiao@linux.intel.com>
+
+Let build_header() support specified OEM table id so that we can build
+multiple SSDT later
+
+If the oem table id is not specified (aka, NULL), we use the default id
+instead as the previous behavior
+
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Xiao Guangrong <guangrong.xiao@linux.intel.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 8870ca0e94f2524644812dd759863c0851ffb870)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	hw/acpi/aml-build.c
+	hw/arm/virt-acpi-build.c
+	hw/i386/acpi-build.c
+	include/hw/acpi/aml-build.h
+
+RHEL-7 backport note: this is actually a manual reimplementation of the
+upstream patch, which is mostly mechanic. A clean cherry-pick would depend
+on a lot of reorganizatorial upstream patches (e.g., 658c27181bf3
+("hw/i386/acpi-build: move generic acpi building helpers into dedictated
+file")), and many new features that overlap with ACPI generation (e.g.,
+the "virt" machtype of the arm/aarch64 targets).
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+---
+ hw/i386/acpi-build.c | 29 ++++++++++++++++++-----------
+ 1 file changed, 18 insertions(+), 11 deletions(-)
+---
+ hw/i386/acpi-build.c | 29 ++++++++++++++++++-----------
+ 1 file changed, 18 insertions(+), 11 deletions(-)
+
+diff --git a/hw/i386/acpi-build.c b/hw/i386/acpi-build.c
+index be32bc3..a9d9f97 100644
+--- a/hw/i386/acpi-build.c
++++ b/hw/i386/acpi-build.c
+@@ -243,14 +243,21 @@ static void acpi_get_pci_info(PcPciInfo *info)
+ 
+ static void
+ build_header(GArray *linker, GArray *table_data,
+-             AcpiTableHeader *h, const char *sig, int len, uint8_t rev)
++             AcpiTableHeader *h, const char *sig, int len, uint8_t rev,
++             const char *oem_table_id)
+ {
+     memcpy(&h->signature, sig, 4);
+     h->length = cpu_to_le32(len);
+     h->revision = rev;
+     memcpy(h->oem_id, ACPI_BUILD_APPNAME6, 6);
+-    memcpy(h->oem_table_id, ACPI_BUILD_APPNAME4, 4);
+-    memcpy(h->oem_table_id + 4, sig, 4);
++
++    if (oem_table_id) {
++        strncpy((char *)h->oem_table_id, oem_table_id, sizeof(h->oem_table_id));
++    } else {
++        memcpy(h->oem_table_id, ACPI_BUILD_APPNAME4, 4);
++        memcpy(h->oem_table_id + 4, sig, 4);
++    }
++
+     h->oem_revision = cpu_to_le32(1);
+     memcpy(h->asl_compiler_id, ACPI_BUILD_APPNAME4, 4);
+     h->asl_compiler_revision = cpu_to_le32(1);
+@@ -520,7 +527,7 @@ build_fadt(GArray *table_data, GArray *linker, AcpiPmInfo *pm,
+     fadt_setup(fadt, pm);
+ 
+     build_header(linker, table_data,
+-                 (void *)fadt, "FACP", sizeof(*fadt), 1);
++                 (void *)fadt, "FACP", sizeof(*fadt), 1, NULL);
+ }
+ 
+ static void
+@@ -590,7 +597,7 @@ build_madt(GArray *table_data, GArray *linker, AcpiCpuInfo *cpu,
+ 
+     build_header(linker, table_data,
+                  (void *)(table_data->data + madt_start), "APIC",
+-                 table_data->len - madt_start, 1);
++                 table_data->len - madt_start, 1, NULL);
+ }
+ 
+ /* Encode a hex value */
+@@ -782,7 +789,7 @@ build_ssdt(GArray *table_data, GArray *linker,
+ 
+     build_header(linker, table_data,
+                  (void *)(table_data->data + ssdt_start),
+-                 "SSDT", table_data->len - ssdt_start, 1);
++                 "SSDT", table_data->len - ssdt_start, 1, NULL);
+ }
+ 
+ static void
+@@ -797,7 +804,7 @@ build_hpet(GArray *table_data, GArray *linker)
+     hpet->timer_block_id = cpu_to_le32(0x8086a201);
+     hpet->addr.address = cpu_to_le64(HPET_BASE);
+     build_header(linker, table_data,
+-                 (void *)hpet, "HPET", sizeof(*hpet), 1);
++                 (void *)hpet, "HPET", sizeof(*hpet), 1, NULL);
+ }
+ 
+ static void
+@@ -890,7 +897,7 @@ build_srat(GArray *table_data, GArray *linker,
+     build_header(linker, table_data,
+                  (void *)(table_data->data + srat_start),
+                  "SRAT",
+-                 table_data->len - srat_start, 1);
++                 table_data->len - srat_start, 1, NULL);
+ }
+ 
+ static void
+@@ -919,7 +926,7 @@ build_mcfg_q35(GArray *table_data, GArray *linker, AcpiMcfgInfo *info)
+     } else {
+         sig = "MCFG";
+     }
+-    build_header(linker, table_data, (void *)mcfg, sig, len, 1);
++    build_header(linker, table_data, (void *)mcfg, sig, len, 1, NULL);
+ }
+ 
+ static void
+@@ -934,7 +941,7 @@ build_dsdt(GArray *table_data, GArray *linker, AcpiMiscInfo *misc)
+ 
+     memset(dsdt, 0, sizeof *dsdt);
+     build_header(linker, table_data, dsdt, "DSDT",
+-                 misc->dsdt_size, 1);
++                 misc->dsdt_size, 1, NULL);
+ }
+ 
+ /* Build final rsdt table */
+@@ -958,7 +965,7 @@ build_rsdt(GArray *table_data, GArray *linker, GArray *table_offsets)
+                                        sizeof(uint32_t));
+     }
+     build_header(linker, table_data,
+-                 (void *)rsdt, "RSDT", rsdt_len, 1);
++                 (void *)rsdt, "RSDT", rsdt_len, 1, NULL);
+ }
+ 
+ static GArray *
+-- 
+1.8.3.1
+

@@ -1,0 +1,119 @@
+From e49b0dccdd8687fb269610c86381bdcc8ec42222 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Tue, 22 Jul 2014 18:31:23 +0200
+Subject: [PATCH 03/11] char: report frontend open/closed state in 'query-chardev'
+
+Message-id: <1406053883-21237-3-git-send-email-lersek@redhat.com>
+Patchwork-id: 60230
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 2/2] char: report frontend open/closed state in 'query-chardev'
+Bugzilla: 1122151
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Eric Blake <eblake@redhat.com>
+
+In addition to the on-line reporting added in the previous patch, allow
+libvirt to query frontend state independently of events.
+
+Libvirt's path to identify the guest agent channel it cares about differs
+between the event added in the previous patch and the QMP response field
+added here. The event identifies the frontend device, by "id". The
+'query-chardev' QMP command identifies the backend device (again by "id").
+The association is under libvirt's control.
+
+RHBZ: https://bugzilla.redhat.com/show_bug.cgi?id=1080376
+
+Reviewed-by: Amit Shah <amit.shah@redhat.com>
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit 32a97ea1711f43388e178b7c43e02143a61e47ee)
+---
+ qapi-schema.json |  8 +++++++-
+ qemu-char.c      |  1 +
+ qmp-commands.hx  | 19 ++++++++++++++-----
+ 3 files changed, 22 insertions(+), 6 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qapi-schema.json |    8 +++++++-
+ qemu-char.c      |    1 +
+ qmp-commands.hx  |   19 ++++++++++++++-----
+ 3 files changed, 22 insertions(+), 6 deletions(-)
+
+diff --git a/qapi-schema.json b/qapi-schema.json
+index aaa86f5..604ec69 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -418,12 +418,18 @@
+ #
+ # @filename: the filename of the character device
+ #
++# @frontend-open: shows whether the frontend device attached to this backend
++#                 (eg. with the chardev=... option) is in open or closed state
++#                 (since 2.1)
++#
+ # Notes: @filename is encoded using the QEMU command line character device
+ #        encoding.  See the QEMU man page for details.
+ #
+ # Since: 0.14.0
+ ##
+-{ 'type': 'ChardevInfo', 'data': {'label': 'str', 'filename': 'str'} }
++{ 'type': 'ChardevInfo', 'data': {'label': 'str',
++                                  'filename': 'str',
++                                  'frontend-open': 'bool'} }
+ 
+ ##
+ # @query-chardev:
+diff --git a/qemu-char.c b/qemu-char.c
+index 930f3d4..47ac55a 100644
+--- a/qemu-char.c
++++ b/qemu-char.c
+@@ -3435,6 +3435,7 @@ ChardevInfoList *qmp_query_chardev(Error **errp)
+         info->value = g_malloc0(sizeof(*info->value));
+         info->value->label = g_strdup(chr->label);
+         info->value->filename = g_strdup(chr->filename);
++        info->value->frontend_open = chr->fe_open;
+ 
+         info->next = chr_list;
+         chr_list = info;
+diff --git a/qmp-commands.hx b/qmp-commands.hx
+index 1d4be84..405275c 100644
+--- a/qmp-commands.hx
++++ b/qmp-commands.hx
+@@ -1782,19 +1782,28 @@ Each json-object contain the following:
+ 
+ - "label": device's label (json-string)
+ - "filename": device's file (json-string)
++- "frontend-open": open/closed state of the frontend device attached to this
++                   backend (json-bool)
+ 
+ Example:
+ 
+ -> { "execute": "query-chardev" }
+ <- {
+-      "return":[
++      "return": [
++         {
++            "label": "charchannel0",
++            "filename": "unix:/var/lib/libvirt/qemu/seabios.rhel6.agent,server",
++            "frontend-open": false
++         },
+          {
+-            "label":"monitor",
+-            "filename":"stdio"
++            "label": "charmonitor",
++            "filename": "unix:/var/lib/libvirt/qemu/seabios.rhel6.monitor,server",
++            "frontend-open": true
+          },
+          {
+-            "label":"serial0",
+-            "filename":"vc"
++            "label": "charserial0",
++            "filename": "pty:/dev/pts/2",
++            "frontend-open": true
+          }
+       ]
+    }
+-- 
+1.7.1
+

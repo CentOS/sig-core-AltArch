@@ -1,0 +1,68 @@
+From b1e9937d355d28809635967f3ada98c2ecf8ae7f Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Thu, 23 Oct 2014 10:10:08 +0200
+Subject: [PATCH 03/19] blockdev: Fail blockdev-add with encrypted images
+
+Message-id: <1414059011-15516-6-git-send-email-kwolf@redhat.com>
+Patchwork-id: 61839
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v2 5/8] blockdev: Fail blockdev-add with encrypted images
+Bugzilla: 1088176
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+Encrypted images need a password before they can be used, and we don't
+want blockdev-add to create BDSes that aren't fully initialised. So for
+now simply forbid encrypted images; we can come back to it later if we
+need the functionality.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit 8ae8e904fcba484ff7c3f8f31339b56ebd88fbad)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	blockdev.c
+
+Trivial bonus bugfix so that the backported test 087 won't fail.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ blockdev.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index 7d4a53f..a2d5f02 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -1793,6 +1793,7 @@ void qmp___com_redhat_change_backing_file(const char *device,
+ void qmp_blockdev_add(BlockdevOptions *options, Error **errp)
+ {
+     QmpOutputVisitor *ov = qmp_output_visitor_new();
++    DriveInfo *dinfo;
+     QObject *obj;
+     QDict *qdict;
+     Error *local_err = NULL;
+@@ -1828,12 +1829,18 @@ void qmp_blockdev_add(BlockdevOptions *options, Error **errp)
+ 
+     qdict_flatten(qdict);
+ 
+-    blockdev_init(qdict, IF_NONE, &local_err);
++    dinfo = blockdev_init(qdict, IF_NONE, &local_err);
+     if (error_is_set(&local_err)) {
+         error_propagate(errp, local_err);
+         goto fail;
+     }
+ 
++    if (bdrv_key_required(dinfo->bdrv)) {
++        drive_uninit(dinfo);
++        error_setg(errp, "blockdev-add doesn't support encrypted devices");
++        goto fail;
++    }
++
+ fail:
+     qmp_output_visitor_cleanup(ov);
+ }
+-- 
+1.8.3.1
+

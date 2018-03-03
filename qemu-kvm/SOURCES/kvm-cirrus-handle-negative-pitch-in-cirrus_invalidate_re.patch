@@ -1,0 +1,64 @@
+From 45023277a5822c89806eae1cc5f4d5f897e28fcd Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Tue, 7 Feb 2017 10:07:49 +0100
+Subject: [PATCH 06/11] cirrus: handle negative pitch in
+ cirrus_invalidate_region()
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1486462072-32174-5-git-send-email-kraxel@redhat.com>
+Patchwork-id: 73566
+O-Subject: [RHEL-7.4 qemu-kvm PATCH 4/7] cirrus: handle negative pitch in cirrus_invalidate_region()
+Bugzilla: 1418233
+RH-Acked-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Wolfgang Bumiller <w.bumiller@proxmox.com>
+
+cirrus_invalidate_region() calls memory_region_set_dirty()
+on a per-line basis, always ranging from off_begin to
+off_begin+bytesperline. With a negative pitch off_begin
+marks the top most used address and thus we need to do an
+initial shift backwards by a line for negative pitches of
+backward blits, otherwise the first iteration covers the
+line going from the start offset forwards instead of
+backwards.
+Additionally since the start address is inclusive, if we
+shift by a full `bytesperline` we move to the first address
+*not* included in the blit, so we only shift by one less
+than bytesperline.
+
+Signed-off-by: Wolfgang Bumiller <w.bumiller@proxmox.com>
+Message-id: 1485352137-29367-1-git-send-email-w.bumiller@proxmox.com
+
+[ kraxel: codestyle fixes ]
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit f153b563f8cf121aebf5a2fff5f0110faf58ccb3)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/display/cirrus_vga.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/hw/display/cirrus_vga.c b/hw/display/cirrus_vga.c
+index c8f2f26..e09076a 100644
+--- a/hw/display/cirrus_vga.c
++++ b/hw/display/cirrus_vga.c
+@@ -656,9 +656,14 @@ static void cirrus_invalidate_region(CirrusVGAState * s, int off_begin,
+     int off_cur;
+     int off_cur_end;
+ 
++    if (off_pitch < 0) {
++        off_begin -= bytesperline - 1;
++    }
++
+     for (y = 0; y < lines; y++) {
+ 	off_cur = off_begin;
+ 	off_cur_end = (off_cur + bytesperline) & s->cirrus_addr_mask;
++        assert(off_cur_end >= off_cur);
+         memory_region_set_dirty(&s->vga.vram, off_cur, off_cur_end - off_cur);
+ 	off_begin += off_pitch;
+     }
+-- 
+1.8.3.1
+

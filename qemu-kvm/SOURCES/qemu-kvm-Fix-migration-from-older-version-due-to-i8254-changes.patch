@@ -1,0 +1,64 @@
+From c9b5ec980523f458cf0e4cfd9f9d014e853f15aa Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Wed, 31 Jul 2013 08:01:44 +0200
+Subject: qemu-kvm: Fix migration from older version due to i8254 changes
+
+Message-id: <1375201922-6794-2-git-send-email-armbru@redhat.com>
+Patchwork-id: 52815
+O-Subject: [RHEL-7 PATCH v3 01/15] qemu-kvm: Fix migration from older version due to i8254 changes
+Bugzilla: 983991
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Old qemu-kvm already contained an equivalent field to i8254's
+irq_disabled. We therefore have to remove upstream's version restriction
+here to allow migration from older versions.
+
+Signed-off-by: Jan Kiszka <jan.kiszka@siemens.com>
+Signed-off-by: Avi Kivity <avi@redhat.com>
+(cherry picked from commit 81bdec908fb2be0ccaff1d4ee67956c509e440ad)
+
+Conflicts:
+        hw/i8254.c
+
+Picked from qemu-kvm-1.1.
+
+qemu-kvm-0.11.0 commit f69b3e2 added PITState member flags, added it
+to migration section "i8254", and bumped its version to 2.
+
+qemu v0.12.0 commit 5122b43 ported i8254 to VMState, and also bumped
+section version to 2.  Version 2 now means different things in qemu
+and qemu-kvm.
+
+This got merged into qemu-kvm-0.12.0 in commit f4f2edc.  The merge
+added migration of flags to qemu's code.  Yet another version of
+version 2.  This is what we got in RHEL-6.
+
+qemu v1.1.0 commit ce967e2 added PITState member irq_disabled,
+included it in migration section "i8254", and bumped its version to 3.
+Because qemu's irq_disabled is compatible with qemu-kvm's flags,
+qemu's version 3 is migration compatible with the latest instance of
+qemu-kvm's version 2.
+
+When this got merged into qemu-kvm-1.1.0, it changed qemu-kvm's
+version 2 to no longer include flags / irq_disabled.  Commit 81bdec9
+reverted the change of version 2.
+
+We need to do the same to enable incoming migration from RHEL-6.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+
+diff --git a/hw/timer/i8254_common.c b/hw/timer/i8254_common.c
+index 5342df4..f6f9d26 100644
+--- a/hw/timer/i8254_common.c
++++ b/hw/timer/i8254_common.c
+@@ -275,7 +275,7 @@ static const VMStateDescription vmstate_pit_common = {
+     .pre_save = pit_dispatch_pre_save,
+     .post_load = pit_dispatch_post_load,
+     .fields = (VMStateField[]) {
+-        VMSTATE_UINT32_V(channels[0].irq_disabled, PITCommonState, 3),
++        VMSTATE_UINT32(channels[0].irq_disabled, PITCommonState), /* qemu-kvm's v2 had 'flags' here */
+         VMSTATE_STRUCT_ARRAY(channels, PITCommonState, 3, 2,
+                              vmstate_pit_channel, PITChannelState),
+         VMSTATE_INT64(channels[0].next_transition_time,

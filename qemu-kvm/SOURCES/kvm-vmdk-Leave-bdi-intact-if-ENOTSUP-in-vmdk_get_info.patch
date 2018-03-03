@@ -1,0 +1,74 @@
+From 824614c344ceeb60dd27b38cfdb190471b6a2ef9 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 15 Feb 2016 09:28:14 +0100
+Subject: [PATCH 01/18] vmdk: Leave bdi intact if -ENOTSUP in vmdk_get_info
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1455528511-9357-2-git-send-email-famz@redhat.com>
+Patchwork-id: 69167
+O-Subject: [RHEL-7.3 qemu-kvm PATCH 01/18] vmdk: Leave bdi intact if -ENOTSUP in vmdk_get_info
+Bugzilla: 1299250
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+BZ: https://bugzilla.redhat.com/show_bug.cgi?id=1299250
+
+When extent types don't match, we return -ENOTSUP. In this case, be
+polite to the caller and don't modify bdi.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Message-id: 1415938161-16217-1-git-send-email-famz@redhat.com
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 5f58330790b72c4705b373ee0646fb3adf800b4e)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vmdk.c | 20 +++++++++++++-------
+ 1 file changed, 13 insertions(+), 7 deletions(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 6b015ab..fa53d2f 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -2137,23 +2137,29 @@ static ImageInfoSpecific *vmdk_get_specific_info(BlockDriverState *bs)
+     return spec_info;
+ }
+ 
++static bool vmdk_extents_type_eq(const VmdkExtent *a, const VmdkExtent *b)
++{
++    return a->flat == b->flat &&
++           a->compressed == b->compressed &&
++           (a->flat || a->cluster_sectors == b->cluster_sectors);
++}
++
+ static int vmdk_get_info(BlockDriverState *bs, BlockDriverInfo *bdi)
+ {
+     int i;
+     BDRVVmdkState *s = bs->opaque;
+     assert(s->num_extents);
+-    bdi->needs_compressed_writes = s->extents[0].compressed;
+-    if (!s->extents[0].flat) {
+-        bdi->cluster_size = s->extents[0].cluster_sectors << BDRV_SECTOR_BITS;
+-    }
++
+     /* See if we have multiple extents but they have different cases */
+     for (i = 1; i < s->num_extents; i++) {
+-        if (bdi->needs_compressed_writes != s->extents[i].compressed ||
+-            (bdi->cluster_size && bdi->cluster_size !=
+-                s->extents[i].cluster_sectors << BDRV_SECTOR_BITS)) {
++        if (!vmdk_extents_type_eq(&s->extents[0], &s->extents[i])) {
+             return -ENOTSUP;
+         }
+     }
++    bdi->needs_compressed_writes = s->extents[0].compressed;
++    if (!s->extents[0].flat) {
++        bdi->cluster_size = s->extents[0].cluster_sectors << BDRV_SECTOR_BITS;
++    }
+     return 0;
+ }
+ 
+-- 
+1.8.3.1
+

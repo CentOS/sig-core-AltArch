@@ -1,0 +1,77 @@
+From bf95edfa1eee98775de7daac87304ceb50be7874 Mon Sep 17 00:00:00 2001
+Message-Id: <bf95edfa1eee98775de7daac87304ceb50be7874.1387382496.git.minovotn@redhat.com>
+In-Reply-To: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+References: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+From: Nigel Croxon <ncroxon@redhat.com>
+Date: Thu, 14 Nov 2013 22:53:11 +0100
+Subject: [PATCH 35/46] arch_init: right return for ram_save_iterate
+
+RH-Author: Nigel Croxon <ncroxon@redhat.com>
+Message-id: <1384469598-13137-36-git-send-email-ncroxon@redhat.com>
+Patchwork-id: 55719
+O-Subject: [RHEL7.0 PATCH 35/42] arch_init: right return for ram_save_iterate
+Bugzilla: 1011720
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: 1011720
+https://bugzilla.redhat.com/show_bug.cgi?id=1011720
+
+>From commit ID:
+commit 6cd0beda2c3c21fd7575e944764f392be7ef50c1
+Author: Lei Li <lilei@linux.vnet.ibm.com>
+Date:   Wed Sep 4 17:02:36 2013 +0800
+
+    arch_init: right return for ram_save_iterate
+
+    qemu_file_rate_limit() never return negative value since the refactor
+    by Commit 1964a39, this patch gets rid of the negative check for it,
+    adjust bytes_transferred and return value correspondingly in
+    ram_save_iterate().
+
+    Signed-off-by: Lei Li <lilei@linux.vnet.ibm.com>
+    Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+    Signed-off-by: Juan Quintela <quintela@redhat.com>
+---
+ arch_init.c |   15 ++++++++++-----
+ 1 files changed, 10 insertions(+), 5 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ arch_init.c | 15 ++++++++++-----
+ 1 file changed, 10 insertions(+), 5 deletions(-)
+
+diff --git a/arch_init.c b/arch_init.c
+index 034341c..26d0374 100644
+--- a/arch_init.c
++++ b/arch_init.c
+@@ -710,15 +710,20 @@ static int ram_save_iterate(QEMUFile *f, void *opaque)
+      */
+     ram_control_after_iterate(f, RAM_CONTROL_ROUND);
+ 
++    bytes_transferred += total_sent;
++
++    /*
++     * Do not count these 8 bytes into total_sent, so that we can
++     * return 0 if no page had been dirtied.
++     */
++    qemu_put_be64(f, RAM_SAVE_FLAG_EOS);
++    bytes_transferred += 8;
++
++    ret = qemu_file_get_error(f);
+     if (ret < 0) {
+-        bytes_transferred += total_sent;
+         return ret;
+     }
+ 
+-    qemu_put_be64(f, RAM_SAVE_FLAG_EOS);
+-    total_sent += 8;
+-    bytes_transferred += total_sent;
+-
+     return total_sent;
+ }
+ 
+-- 
+1.7.11.7
+

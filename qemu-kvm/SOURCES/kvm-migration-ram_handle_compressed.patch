@@ -1,0 +1,68 @@
+From 325f2d5f89e8275844a08c5fd0ea0e2ebe4874ca Mon Sep 17 00:00:00 2001
+Message-Id: <325f2d5f89e8275844a08c5fd0ea0e2ebe4874ca.1387382496.git.minovotn@redhat.com>
+In-Reply-To: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+References: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+From: Nigel Croxon <ncroxon@redhat.com>
+Date: Thu, 14 Nov 2013 22:53:16 +0100
+Subject: [PATCH 40/46] migration: ram_handle_compressed
+
+RH-Author: Nigel Croxon <ncroxon@redhat.com>
+Message-id: <1384469598-13137-41-git-send-email-ncroxon@redhat.com>
+Patchwork-id: 55727
+O-Subject: [RHEL7.0 PATCH 40/42] migration: ram_handle_compressed
+Bugzilla: 1011720
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: 1011720
+https://bugzilla.redhat.com/show_bug.cgi?id=1011720
+
+>From commit ID:
+commit d613a56f845788412a442c6b5aff88b38244f99a
+Author: Isaku Yamahata <yamahata@private.email.ne.jp>
+Date:   Sat Sep 21 01:23:37 2013 +0900
+
+    migration: ram_handle_compressed
+
+    ram_handle_compressed() should be aware of size > TARGET_PAGE_SIZE.
+    migration-rdma can call it with larger size.
+
+    Signed-off-by: Isaku Yamahata <yamahata@private.email.ne.jp>
+    Signed-off-by: Juan Quintela <quintela@redhat.com>
+---
+ arch_init.c |   11 ++++++-----
+ 1 files changed, 6 insertions(+), 5 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ arch_init.c | 11 ++++++-----
+ 1 file changed, 6 insertions(+), 5 deletions(-)
+
+diff --git a/arch_init.c b/arch_init.c
+index 5ce9c61..d71fb33 100644
+--- a/arch_init.c
++++ b/arch_init.c
+@@ -848,13 +848,14 @@ static inline void *host_from_stream_offset(QEMUFile *f,
+  */
+ void ram_handle_compressed(void *host, uint8_t ch, uint64_t size)
+ {
+-    if (ch != 0 || !is_zero_range(host, TARGET_PAGE_SIZE)) {
++    if (ch != 0 || !is_zero_range(host, size)) {
+         memset(host, ch, size);
+ #ifndef _WIN32
+-        if (ch == 0 &&
+-            (!kvm_enabled() || kvm_has_sync_mmu()) &&
+-            getpagesize() <= TARGET_PAGE_SIZE) {
+-            qemu_madvise(host, TARGET_PAGE_SIZE, QEMU_MADV_DONTNEED);
++        if (ch == 0 && (!kvm_enabled() || kvm_has_sync_mmu())) {
++            size = size & ~(getpagesize() - 1);
++            if (size > 0) {
++                qemu_madvise(host, size, QEMU_MADV_DONTNEED);
++            }
+         }
+ #endif
+     }
+-- 
+1.7.11.7
+

@@ -1,0 +1,104 @@
+From 291074de7615878e297df1e821f9a71ce5dd784a Mon Sep 17 00:00:00 2001
+From: Jeff Cody <jcody@redhat.com>
+Date: Thu, 7 Nov 2013 07:33:12 +0100
+Subject: [PATCH 59/81] migration: disable live block migration (-b/-i) for rhel and rhev
+
+RH-Author: Jeff Cody <jcody@redhat.com>
+Message-id: <696b8063664491b1d1799450b4498927c2ae9908.1383712781.git.jcody@redhat.com>
+Patchwork-id: 55480
+O-Subject: [RHEL7 qemu-kvm PATCH 3/3] migration: disable live block migration (-b/-i) for rhel and rhev
+Bugzilla: 1022392
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Eric Blake <eblake@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+This disables live block migration (both -b and -i options) for both
+the RHEL and RHEV versions of qemu-kvm.  Rather than delete the options
+from the QAPI/QMP commands (which would be unfriendly to libvirt), the
+options return a QMP error of unsupported ("this feature or command is
+not currently supported").
+
+A configure option to enable/disable this is set, which defaults to the
+command options being disabled.  Just to be safe, the rpm spec template
+explicitly disables it as well.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ configure                     |   12 ++++++++++++
+ migration.c                   |    7 +++++++
+ redhat/qemu-kvm.spec.template |    1 +
+ 3 files changed, 20 insertions(+), 0 deletions(-)
+
+diff --git a/configure b/configure
+index 9260d3c..d658434 100755
+--- a/configure
++++ b/configure
+@@ -241,6 +241,7 @@ gtkabi="2.0"
+ tpm="no"
+ libssh2=""
+ live_block_ops="yes"
++live_block_migration="no"
+ 
+ # parse CC options first
+ for opt do
+@@ -932,6 +933,10 @@ for opt do
+   ;;
+   --enable-live-block-ops) live_block_ops="yes"
+   ;;
++  --disable-live-block-migration) live_block_migration="no"
++  ;;
++  --enable-live-block-migration) live_block_migration="yes"
++  ;;
+ *) echo "ERROR: unknown option $opt"; show_help="yes"
+   ;;
+   esac
+@@ -1202,6 +1207,8 @@ echo "  --disable-libssh2        disable ssh block device support"
+ echo "  --enable-libssh2         enable ssh block device support"
+ echo "  --disable-live-block-ops disable live block operations support"
+ echo "  --enable-live-block-ops  enable live block operations support"
++echo "  --disable-live-block-migration disable live block migration"
++echo "  --enable-live-block-migration  enable live block migration"
+ echo ""
+ echo "NOTE: The object files are built at the place where configure is launched"
+ exit 1
+@@ -3564,6 +3571,7 @@ echo "libssh2 support   $libssh2"
+ echo "TPM passthrough   $tpm_passthrough"
+ echo "QOM debugging     $qom_cast_debug"
+ echo "Live block operations $live_block_ops"
++echo "Live block migration $live_block_migration"
+ 
+ if test "$sdl_too_old" = "yes"; then
+ echo "-> Your SDL version is too old - please upgrade to have SDL support"
+@@ -3952,6 +3960,10 @@ if test "$live_block_ops" = "yes" ; then
+   echo "CONFIG_LIVE_BLOCK_OPS=y" >> $config_host_mak
+ fi
+ 
++if test "$live_block_migration" = "yes" ; then
++  echo "CONFIG_LIVE_BLOCK_MIGRATION=y" >> $config_host_mak
++fi
++
+ # USB host support
+ if test "$libusb" = "yes"; then
+   echo "HOST_USB=libusb legacy" >> $config_host_mak
+diff --git a/migration.c b/migration.c
+index 6b87272..46c633a 100644
+--- a/migration.c
++++ b/migration.c
+@@ -388,6 +388,13 @@ void qmp_migrate(const char *uri, bool has_blk, bool blk,
+     params.blk = has_blk && blk;
+     params.shared = has_inc && inc;
+ 
++#ifndef CONFIG_LIVE_BLOCK_MIGRATION
++    if (params.blk || params.shared) {
++        error_set(errp, QERR_UNSUPPORTED);
++        return;
++    }
++#endif
++
+     if (s->state == MIG_STATE_ACTIVE) {
+         error_set(errp, QERR_MIGRATION_ACTIVE);
+         return;
+-- 
+1.7.1
+

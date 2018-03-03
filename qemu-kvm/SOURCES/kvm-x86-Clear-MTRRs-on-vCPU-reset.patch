@@ -1,0 +1,65 @@
+From 2f6d988d14532616d1f1f476b438b4e3295329f1 Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Fri, 10 Apr 2015 16:45:59 +0200
+Subject: [PATCH 13/14] x86: Clear MTRRs on vCPU reset
+
+Message-id: <20150410164559.16166.37319.stgit@gimli.home>
+Patchwork-id: 64799
+O-Subject: [RHEL7.2 qemu-kvm PATCH 3/3] x86: Clear MTRRs on vCPU reset
+Bugzilla: 1210510
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Upstream: 9db2efd95e13330075bff027cd682a063d725332
+
+The SDM specifies (June 2014 Vol3 11.11.5):
+
+    On a hardware reset, the P6 and more recent processors clear the
+    valid flags in variable-range MTRRs and clear the E flag in the
+    IA32_MTRR_DEF_TYPE MSR to disable all MTRRs. All other bits in the
+    MTRRs are undefined.
+
+We currently do none of that, so whatever MTRR settings you had prior
+to reset is what you have after reset.  Usually this doesn't matter
+because KVM often ignores the guest mappings and uses write-back
+anyway.  However, if you have an assigned device and an IOMMU that
+allows NoSnoop for that device, KVM defers to the guest memory
+mappings which are now stale after reset.  The result is that OVMF
+rebooting on such a configuration takes a full minute to LZMA
+decompress the firmware volume, a process that is nearly instant on
+the initial boot.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/cpu.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index 1507530..b76719d 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -2398,6 +2398,16 @@ static void x86_cpu_reset(CPUState *s)
+     cpu_breakpoint_remove_all(env, BP_CPU);
+     cpu_watchpoint_remove_all(env, BP_CPU);
+ 
++    /*
++     * SDM 11.11.5 requires:
++     *  - IA32_MTRR_DEF_TYPE MSR.E = 0
++     *  - IA32_MTRR_PHYSMASKn.V = 0
++     * All other bits are undefined.  For simplification, zero it all.
++     */
++    env->mtrr_deftype = 0;
++    memset(env->mtrr_var, 0, sizeof(env->mtrr_var));
++    memset(env->mtrr_fixed, 0, sizeof(env->mtrr_fixed));
++
+ #if !defined(CONFIG_USER_ONLY)
+     /* We hard-wire the BSP to the first CPU. */
+     if (s->cpu_index == 0) {
+-- 
+1.8.3.1
+

@@ -1,0 +1,152 @@
+From ab8cff98f973031b20d7f1971b4fe42d8bf6488c Mon Sep 17 00:00:00 2001
+Message-Id: <ab8cff98f973031b20d7f1971b4fe42d8bf6488c.1387382496.git.minovotn@redhat.com>
+In-Reply-To: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+References: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+From: Nigel Croxon <ncroxon@redhat.com>
+Date: Thu, 14 Nov 2013 22:52:52 +0100
+Subject: [PATCH 16/46] rdma: send pc.ram
+
+RH-Author: Nigel Croxon <ncroxon@redhat.com>
+Message-id: <1384469598-13137-17-git-send-email-ncroxon@redhat.com>
+Patchwork-id: 55700
+O-Subject: [RHEL7.0 PATCH 16/42] rdma: send pc.ram
+Bugzilla: 1011720
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: 1011720
+https://bugzilla.redhat.com/show_bug.cgi?id=1011720
+
+>From commit ID:
+commit 0033b8b42a1cc2a9350619ea19e11954b12fb819
+Author: Michael R. Hines <mrhines@us.ibm.com>
+Date:   Mon Jul 22 10:01:55 2013 -0400
+
+    rdma: send pc.ram
+
+    This takes advantages of the previous patches:
+
+    1. use the new QEMUFileOps hook 'save_page'
+
+    2. call out to the right accessor methods to invoke
+       the iteration hooks defined in QEMUFileOps
+
+    Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+    Reviewed-by: Chegu Vinod <chegu_vinod@hp.com>
+    Tested-by: Chegu Vinod <chegu_vinod@hp.com>
+    Tested-by: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Juan Quintela <quintela@redhat.com>
+---
+ arch_init.c |   33 ++++++++++++++++++++++++++++++++-
+ 1 files changed, 32 insertions(+), 1 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ arch_init.c | 33 ++++++++++++++++++++++++++++++++-
+ 1 file changed, 32 insertions(+), 1 deletion(-)
+
+diff --git a/arch_init.c b/arch_init.c
+index e7da520..034341c 100644
+--- a/arch_init.c
++++ b/arch_init.c
+@@ -118,6 +118,7 @@ static void check_guest_throttling(void);
+ #define RAM_SAVE_FLAG_EOS      0x10
+ #define RAM_SAVE_FLAG_CONTINUE 0x20
+ #define RAM_SAVE_FLAG_XBZRLE   0x40
++/* 0x80 is reserved in migration.h start with 0x100 next */
+ 
+ 
+ static struct defconfig_file {
+@@ -476,6 +477,7 @@ static int ram_save_block(QEMUFile *f, bool last_stage)
+                 ram_bulk_stage = false;
+             }
+         } else {
++            int ret;
+             uint8_t *p;
+             int cont = (block == last_sent_block) ?
+                 RAM_SAVE_FLAG_CONTINUE : 0;
+@@ -484,7 +486,18 @@ static int ram_save_block(QEMUFile *f, bool last_stage)
+ 
+             /* In doubt sent page as normal */
+             bytes_sent = -1;
+-            if (is_zero_page(p)) {
++            ret = ram_control_save_page(f, block->offset,
++                               offset, TARGET_PAGE_SIZE, &bytes_sent);
++
++            if (ret != RAM_SAVE_CONTROL_NOT_SUPP) {
++                if (ret != RAM_SAVE_CONTROL_DELAYED) {
++                    if (bytes_sent > 0) {
++                        acct_info.norm_pages++;
++                    } else if (bytes_sent == 0) {
++                        acct_info.dup_pages++;
++                    }
++                }
++            } else if (is_zero_page(p)) {
+                 acct_info.dup_pages++;
+                 bytes_sent = save_block_hdr(f, block, offset, cont,
+                                             RAM_SAVE_FLAG_COMPRESS);
+@@ -636,6 +649,10 @@ static int ram_save_setup(QEMUFile *f, void *opaque)
+     }
+ 
+     qemu_mutex_unlock_ramlist();
++
++    ram_control_before_iterate(f, RAM_CONTROL_SETUP);
++    ram_control_after_iterate(f, RAM_CONTROL_SETUP);
++
+     qemu_put_be64(f, RAM_SAVE_FLAG_EOS);
+ 
+     return 0;
+@@ -654,6 +671,8 @@ static int ram_save_iterate(QEMUFile *f, void *opaque)
+         reset_ram_globals();
+     }
+ 
++    ram_control_before_iterate(f, RAM_CONTROL_ROUND);
++
+     t0 = qemu_get_clock_ns(rt_clock);
+     i = 0;
+     while ((ret = qemu_file_rate_limit(f)) == 0) {
+@@ -685,6 +704,12 @@ static int ram_save_iterate(QEMUFile *f, void *opaque)
+ 
+     qemu_mutex_unlock_ramlist();
+ 
++    /*
++     * Must occur before EOS (or any QEMUFile operation)
++     * because of RDMA protocol.
++     */
++    ram_control_after_iterate(f, RAM_CONTROL_ROUND);
++
+     if (ret < 0) {
+         bytes_transferred += total_sent;
+         return ret;
+@@ -702,6 +727,8 @@ static int ram_save_complete(QEMUFile *f, void *opaque)
+     qemu_mutex_lock_ramlist();
+     migration_bitmap_sync();
+ 
++    ram_control_before_iterate(f, RAM_CONTROL_FINISH);
++
+     /* try transferring iterative blocks of memory */
+ 
+     /* flush all remaining blocks regardless of rate limiting */
+@@ -715,6 +742,8 @@ static int ram_save_complete(QEMUFile *f, void *opaque)
+         }
+         bytes_transferred += bytes_sent;
+     }
++
++    ram_control_after_iterate(f, RAM_CONTROL_FINISH);
+     migration_end();
+ 
+     qemu_mutex_unlock_ramlist();
+@@ -914,6 +943,8 @@ static int ram_load(QEMUFile *f, void *opaque, int version_id)
+                 ret = -EINVAL;
+                 goto done;
+             }
++        } else if (flags & RAM_SAVE_FLAG_HOOK) {
++            ram_control_load_hook(f, flags);
+         }
+         error = qemu_file_get_error(f);
+         if (error) {
+-- 
+1.7.11.7
+

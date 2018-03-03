@@ -1,0 +1,53 @@
+From cd67eba4f11bb3d188df01dd9c30b96c7665f8f3 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 17 Mar 2014 22:45:30 +0100
+Subject: [PATCH 5/6] block: bs->drv may be NULL in bdrv_debug_resume()
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1395096331-12610-3-git-send-email-mreitz@redhat.com>
+Patchwork-id: 58120
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 2/3] block: bs->drv may be NULL in bdrv_debug_resume()
+Bugzilla: 1048575
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+BZ: 1048575
+
+Currently, bdrv_debug_resume() requires every bs->drv in the BDS stack
+to be NULL until a bs->drv with an implementation of bdrv_debug_resume()
+is found. For a normal function, this would be fine, but this is a
+function for debugging purposes and should therefore allow intermediate
+BDS not to have a driver (i.e., be "ejected"). Otherwise, it is hard to
+debug such situations.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 938789ea92b3073ad1113b3e1bdf90d469ea4bf4)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/block.c b/block.c
+index ae55535..0321c74 100644
+--- a/block.c
++++ b/block.c
+@@ -3831,7 +3831,7 @@ int bdrv_debug_breakpoint(BlockDriverState *bs, const char *event,
+ 
+ int bdrv_debug_resume(BlockDriverState *bs, const char *tag)
+ {
+-    while (bs && bs->drv && !bs->drv->bdrv_debug_resume) {
++    while (bs && (!bs->drv || !bs->drv->bdrv_debug_resume)) {
+         bs = bs->file;
+     }
+ 
+-- 
+1.7.1
+

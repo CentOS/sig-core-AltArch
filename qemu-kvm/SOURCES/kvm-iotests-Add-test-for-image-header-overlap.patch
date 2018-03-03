@@ -1,0 +1,70 @@
+From f65ef16bd01c14e252e262ec24ff3ac16e0e335d Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:21:59 +0200
+Subject: [PATCH 05/42] iotests: Add test for image header overlap
+
+Message-id: <1434212556-3927-6-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66024
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 05/42] iotests: Add test for image header overlap
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1129893
+
+Add a test for an image with an unallocated image header; instead of an
+assertion, this should result in the image being marked corrupt.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit a42f8a3d05c5598cee893c9cf5ffeee48bacb83e)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/060     | 9 +++++++++
+ tests/qemu-iotests/060.out | 8 ++++++++
+ 2 files changed, 17 insertions(+)
+
+diff --git a/tests/qemu-iotests/060 b/tests/qemu-iotests/060
+index 2abd566..5180e23 100644
+--- a/tests/qemu-iotests/060
++++ b/tests/qemu-iotests/060
+@@ -164,6 +164,15 @@ wait_break 0
+ write 64k 64k
+ resume 0" | $QEMU_IO | _filter_qemu_io
+ 
++echo
++echo "=== Testing unallocated image header ==="
++echo
++_make_test_img 64M
++# Create L1/L2
++$QEMU_IO -c "$OPEN_RW" -c "write 0 64k" | _filter_qemu_io
++poke_file "$TEST_IMG" "$rb_offset" "\x00\x00"
++$QEMU_IO -c "$OPEN_RW" -c "write 64k 64k" | _filter_qemu_io
++
+ # success, all done
+ echo "*** done"
+ rm -f $seq.full
+diff --git a/tests/qemu-iotests/060.out b/tests/qemu-iotests/060.out
+index a517948..c27c952 100644
+--- a/tests/qemu-iotests/060.out
++++ b/tests/qemu-iotests/060.out
+@@ -93,4 +93,12 @@ blkdebug: Suspended request '0'
+ write failed: Input/output error
+ blkdebug: Resuming request '0'
+ aio_write failed: No medium found
++
++=== Testing unallocated image header ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++wrote 65536/65536 bytes at offset 0
++64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++qcow2: Preventing invalid write on metadata (overlaps with qcow2_header); image marked as corrupt.
++write failed: Input/output error
+ *** done
+-- 
+1.8.3.1
+

@@ -1,0 +1,68 @@
+From 9452583824b50cb6f095c5ec1894b38df7b01175 Mon Sep 17 00:00:00 2001
+Message-Id: <9452583824b50cb6f095c5ec1894b38df7b01175.1464449390.git.jen@redhat.com>
+In-Reply-To: <c7936395ecf322b3de37662c7c6b772e36866cc7.1464449390.git.jen@redhat.com>
+References: <c7936395ecf322b3de37662c7c6b772e36866cc7.1464449390.git.jen@redhat.com>
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 23 May 2016 11:28:41 -0400
+Subject: [CHANGE 3/3] block/raw-posix: Open file descriptor O_RDWR to work
+ around glibc posix_fallocate emulation issue.
+To: rhvirt-patches@redhat.com,
+    jen@redhat.com
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1464002921-1079-2-git-send-email-kwolf@redhat.com>
+Patchwork-id: 70425
+O-Subject: [RHEL-7.3 qemu-kvm PATCH 1/1] block/raw-posix: Open file descriptor O_RDWR to work around glibc posix_fallocate emulation issue.
+Bugzilla: 1268345
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Richard Jones <rjones@redhat.com>
+
+From: "Richard W.M. Jones" <rjones@redhat.com>
+
+The following command fails on an NFS mountpoint:
+
+  $ qemu-img create -f qcow2 -o preallocation=falloc disk.img 262144
+  Formatting 'disk.img', fmt=qcow2 size=262144 encryption=off cluster_size=65536 preallocation='falloc' lazy_refcounts=off
+  qemu-img: disk.img: Could not preallocate data for the new file: Bad file descriptor
+
+The reason turns out to be because NFS doesn't support the
+posix_fallocate call.  glibc emulates it instead.  However glibc's
+emulation involves using the pread(2) syscall.  The pread syscall
+fails with EBADF if the file descriptor is opened without the read
+open-flag (ie. open (..., O_WRONLY)).
+
+I contacted glibc upstream about this, and their response is here:
+
+  https://bugzilla.redhat.com/show_bug.cgi?id=1265196#c9
+
+There are two possible fixes: Use Linux fallocate directly, or (this
+fix) work around the problem in qemu by opening the file with O_RDWR
+instead of O_WRONLY.
+
+Signed-off-by: Richard W.M. Jones <rjones@redhat.com>
+Reviewed-by: Jeff Cody <jcody@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 73ba05d936e82fe01b2b2cf987bf3aecb4792af5)
+Signed-off-by: Jeff E. Nelson <jen@redhat.com>
+---
+ block/raw-posix.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/block/raw-posix.c b/block/raw-posix.c
+index 1f5275f..92fcb6c 100644
+--- a/block/raw-posix.c
++++ b/block/raw-posix.c
+@@ -1265,7 +1265,7 @@ static int raw_create(const char *filename, QEMUOptionParameter *options,
+         options++;
+     }
+ 
+-    fd = qemu_open(filename, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY,
++    fd = qemu_open(filename, O_RDWR | O_CREAT | O_TRUNC | O_BINARY,
+                    0644);
+     if (fd < 0) {
+         result = -errno;
+-- 
+2.5.5
+

@@ -1,0 +1,137 @@
+From 79d38d6ea2208ef31fe39eb7d5993e5eefd36eee Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Thu, 23 Jan 2014 14:03:37 +0100
+Subject: [PATCH 10/14] virtio-scsi: switch exit callback to VirtioDeviceClass
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1390485820-7585-8-git-send-email-armbru@redhat.com>
+Patchwork-id: 56931
+O-Subject: [PATCH 7.0 qemu-kvm 07/10] virtio-scsi: switch exit callback to VirtioDeviceClass
+Bugzilla: 983344
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+This ensures hot-unplug is handled properly by the proxy, and avoids
+leaking bus_name which is freed by virtio_device_exit.
+
+Cc: qemu-stable@nongnu.org
+Acked-by: Andreas Faerber <afaerber@suse.de>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit e3c9d76acc984218264bbc6435b0c09f959ed9b8)
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+---
+ hw/scsi/vhost-scsi.c            | 11 +++++------
+ hw/scsi/virtio-scsi.c           | 15 +++++++--------
+ include/hw/virtio/virtio-scsi.h |  2 +-
+ 3 files changed, 13 insertions(+), 15 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/scsi/vhost-scsi.c            |   11 +++++------
+ hw/scsi/virtio-scsi.c           |   15 +++++++--------
+ include/hw/virtio/virtio-scsi.h |    2 +-
+ 3 files changed, 13 insertions(+), 15 deletions(-)
+
+diff --git a/hw/scsi/vhost-scsi.c b/hw/scsi/vhost-scsi.c
+index 9e770fb..5e3cc61 100644
+--- a/hw/scsi/vhost-scsi.c
++++ b/hw/scsi/vhost-scsi.c
+@@ -240,11 +240,10 @@ static int vhost_scsi_init(VirtIODevice *vdev)
+     return 0;
+ }
+ 
+-static int vhost_scsi_exit(DeviceState *qdev)
++static void vhost_scsi_exit(VirtIODevice *vdev)
+ {
+-    VirtIODevice *vdev = VIRTIO_DEVICE(qdev);
+-    VHostSCSI *s = VHOST_SCSI(qdev);
+-    VirtIOSCSICommon *vs = VIRTIO_SCSI_COMMON(qdev);
++    VHostSCSI *s = VHOST_SCSI(vdev);
++    VirtIOSCSICommon *vs = VIRTIO_SCSI_COMMON(vdev);
+ 
+     migrate_del_blocker(s->migration_blocker);
+     error_free(s->migration_blocker);
+@@ -253,7 +252,7 @@ static int vhost_scsi_exit(DeviceState *qdev)
+     vhost_scsi_set_status(vdev, 0);
+ 
+     g_free(s->dev.vqs);
+-    return virtio_scsi_common_exit(vs);
++    virtio_scsi_common_exit(vs);
+ }
+ 
+ static Property vhost_scsi_properties[] = {
+@@ -265,10 +264,10 @@ static void vhost_scsi_class_init(ObjectClass *klass, void *data)
+ {
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     VirtioDeviceClass *vdc = VIRTIO_DEVICE_CLASS(klass);
+-    dc->exit = vhost_scsi_exit;
+     dc->props = vhost_scsi_properties;
+     set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
+     vdc->init = vhost_scsi_init;
++    vdc->exit = vhost_scsi_exit;
+     vdc->get_features = vhost_scsi_get_features;
+     vdc->set_config = vhost_scsi_set_config;
+     vdc->set_status = vhost_scsi_set_status;
+diff --git a/hw/scsi/virtio-scsi.c b/hw/scsi/virtio-scsi.c
+index 038cd83..57541b4 100644
+--- a/hw/scsi/virtio-scsi.c
++++ b/hw/scsi/virtio-scsi.c
+@@ -636,22 +636,21 @@ static int virtio_scsi_device_init(VirtIODevice *vdev)
+     return 0;
+ }
+ 
+-int virtio_scsi_common_exit(VirtIOSCSICommon *vs)
++void virtio_scsi_common_exit(VirtIOSCSICommon *vs)
+ {
+     VirtIODevice *vdev = VIRTIO_DEVICE(vs);
+ 
+     g_free(vs->cmd_vqs);
+     virtio_cleanup(vdev);
+-    return 0;
+ }
+ 
+-static int virtio_scsi_device_exit(DeviceState *qdev)
++static void virtio_scsi_device_exit(VirtIODevice *vdev)
+ {
+-    VirtIOSCSI *s = VIRTIO_SCSI(qdev);
+-    VirtIOSCSICommon *vs = VIRTIO_SCSI_COMMON(qdev);
++    VirtIOSCSI *s = VIRTIO_SCSI(vdev);
++    VirtIOSCSICommon *vs = VIRTIO_SCSI_COMMON(vdev);
+ 
+-    unregister_savevm(qdev, "virtio-scsi", s);
+-    return virtio_scsi_common_exit(vs);
++    unregister_savevm(DEVICE(vdev), "virtio-scsi", s);
++    virtio_scsi_common_exit(vs);
+ }
+ 
+ static Property virtio_scsi_properties[] = {
+@@ -672,10 +671,10 @@ static void virtio_scsi_class_init(ObjectClass *klass, void *data)
+ {
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     VirtioDeviceClass *vdc = VIRTIO_DEVICE_CLASS(klass);
+-    dc->exit = virtio_scsi_device_exit;
+     dc->props = virtio_scsi_properties;
+     set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
+     vdc->init = virtio_scsi_device_init;
++    vdc->exit = virtio_scsi_device_exit;
+     vdc->set_config = virtio_scsi_set_config;
+     vdc->get_features = virtio_scsi_get_features;
+     vdc->reset = virtio_scsi_reset;
+diff --git a/include/hw/virtio/virtio-scsi.h b/include/hw/virtio/virtio-scsi.h
+index 9a98540..206c61d 100644
+--- a/include/hw/virtio/virtio-scsi.h
++++ b/include/hw/virtio/virtio-scsi.h
+@@ -187,6 +187,6 @@ typedef struct {
+                                             VIRTIO_SCSI_F_CHANGE, true)
+ 
+ int virtio_scsi_common_init(VirtIOSCSICommon *vs);
+-int virtio_scsi_common_exit(VirtIOSCSICommon *vs);
++void virtio_scsi_common_exit(VirtIOSCSICommon *vs);
+ 
+ #endif /* _QEMU_VIRTIO_SCSI_H */
+-- 
+1.7.1
+

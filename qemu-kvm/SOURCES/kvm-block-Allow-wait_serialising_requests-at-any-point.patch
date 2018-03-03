@@ -1,0 +1,76 @@
+From 0bbe9e3a205c48c32f41ddd79292761cc625c747 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Fri, 13 Dec 2013 13:04:35 +0100
+Subject: [PATCH 23/37] block: Allow wait_serialising_requests() at any point
+
+Message-id: <1392117622-28812-24-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57188
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 23/37] block: Allow wait_serialising_requests() at any point
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+We can only have a single wait_serialising_requests() call per request
+because otherwise we can run into deadlocks where requests are waiting
+for each other. The same is true when wait_serialising_requests() is not
+at the very beginning of a request, so that other requests can be issued
+between the start of the tracking and wait_serialising_requests().
+
+Fix this by changing wait_serialising_requests() to ignore requests that
+are already (directly or indirectly) waiting for the calling request.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+(cherry picked from commit 6460440f34c709461b84375cfd8a86b27d433225)
+
+Conflicts:
+	include/block/block_int.h
+
+Conflicts because in RHEL 7 BdrvTrackedRequest is in block.c
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+---
+ block.c |   15 ++++++++++++---
+ 1 files changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/block.c b/block.c
+index 94fd702..fd37037 100644
+--- a/block.c
++++ b/block.c
+@@ -2047,6 +2047,8 @@ struct BdrvTrackedRequest {
+     QLIST_ENTRY(BdrvTrackedRequest) list;
+     Coroutine *co; /* owner, used for deadlock detection */
+     CoQueue wait_queue; /* coroutines blocked on this request */
++
++    struct BdrvTrackedRequest *waiting_for;
+ };
+ 
+ /**
+@@ -2176,9 +2178,16 @@ static void coroutine_fn wait_serialising_requests(BdrvTrackedRequest *self)
+                  */
+                 assert(qemu_coroutine_self() != req->co);
+ 
+-                qemu_co_queue_wait(&req->wait_queue);
+-                retry = true;
+-                break;
++                /* If the request is already (indirectly) waiting for us, or
++                 * will wait for us as soon as it wakes up, then just go on
++                 * (instead of producing a deadlock in the former case). */
++                if (!req->waiting_for) {
++                    self->waiting_for = req;
++                    qemu_co_queue_wait(&req->wait_queue);
++                    self->waiting_for = NULL;
++                    retry = true;
++                    break;
++                }
+             }
+         }
+     } while (retry);
+-- 
+1.7.1
+

@@ -1,0 +1,244 @@
+From 324996d0200ab451158581e199d9e5673e4adfd6 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Fri, 17 Jan 2014 03:07:54 +0100
+Subject: [PATCH 11/34] blockjob: rename BlockJobType to BlockJobDriver
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1389928083-8921-10-git-send-email-famz@redhat.com>
+Patchwork-id: 56771
+O-Subject: [RHEL-7 qemu-kvm PATCH 09/18] blockjob: rename BlockJobType to BlockJobDriver
+Bugzilla: 1041301
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+We will use BlockJobType as the enum type name of block jobs in QAPI,
+rename current BlockJobType to BlockJobDriver, which will eventually
+become a set of operations, similar to block drivers.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 3fc4b10af09b75a1cb811b61abc9d8c90771dfb2)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+
+Conflicts:
+	block/backup.c
+
+Not present downstream.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ block/commit.c           |  4 ++--
+ block/mirror.c           |  4 ++--
+ block/stream.c           |  4 ++--
+ blockjob.c               | 22 +++++++++++-----------
+ include/block/blockjob.h | 12 ++++++------
+ 5 files changed, 23 insertions(+), 23 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/commit.c           |    4 ++--
+ block/mirror.c           |    4 ++--
+ block/stream.c           |    4 ++--
+ blockjob.c               |   22 +++++++++++-----------
+ include/block/blockjob.h |   12 ++++++------
+ 5 files changed, 23 insertions(+), 23 deletions(-)
+
+diff --git a/block/commit.c b/block/commit.c
+index 37572f0..28f45e4 100644
+--- a/block/commit.c
++++ b/block/commit.c
+@@ -173,7 +173,7 @@ static void commit_set_speed(BlockJob *job, int64_t speed, Error **errp)
+     ratelimit_set_speed(&s->limit, speed / BDRV_SECTOR_SIZE, SLICE_TIME);
+ }
+ 
+-static const BlockJobType commit_job_type = {
++static const BlockJobDriver commit_job_driver = {
+     .instance_size = sizeof(CommitBlockJob),
+     .job_type      = "commit",
+     .set_speed     = commit_set_speed,
+@@ -238,7 +238,7 @@ void commit_start(BlockDriverState *bs, BlockDriverState *base,
+     }
+ 
+ 
+-    s = block_job_create(&commit_job_type, bs, speed, cb, opaque, errp);
++    s = block_job_create(&commit_job_driver, bs, speed, cb, opaque, errp);
+     if (!s) {
+         return;
+     }
+diff --git a/block/mirror.c b/block/mirror.c
+index 342c90d..139be06 100644
+--- a/block/mirror.c
++++ b/block/mirror.c
+@@ -525,7 +525,7 @@ static void mirror_complete(BlockJob *job, Error **errp)
+     block_job_resume(job);
+ }
+ 
+-static const BlockJobType mirror_job_type = {
++static const BlockJobDriver mirror_job_driver = {
+     .instance_size = sizeof(MirrorBlockJob),
+     .job_type      = "mirror",
+     .set_speed     = mirror_set_speed,
+@@ -563,7 +563,7 @@ void mirror_start(BlockDriverState *bs, BlockDriverState *target,
+         return;
+     }
+ 
+-    s = block_job_create(&mirror_job_type, bs, speed, cb, opaque, errp);
++    s = block_job_create(&mirror_job_driver, bs, speed, cb, opaque, errp);
+     if (!s) {
+         return;
+     }
+diff --git a/block/stream.c b/block/stream.c
+index ce16b0b..ffa4e9a 100644
+--- a/block/stream.c
++++ b/block/stream.c
+@@ -204,7 +204,7 @@ static void stream_set_speed(BlockJob *job, int64_t speed, Error **errp)
+     ratelimit_set_speed(&s->limit, speed / BDRV_SECTOR_SIZE, SLICE_TIME);
+ }
+ 
+-static const BlockJobType stream_job_type = {
++static const BlockJobDriver stream_job_driver = {
+     .instance_size = sizeof(StreamBlockJob),
+     .job_type      = "stream",
+     .set_speed     = stream_set_speed,
+@@ -225,7 +225,7 @@ void stream_start(BlockDriverState *bs, BlockDriverState *base,
+         return;
+     }
+ 
+-    s = block_job_create(&stream_job_type, bs, speed, cb, opaque, errp);
++    s = block_job_create(&stream_job_driver, bs, speed, cb, opaque, errp);
+     if (!s) {
+         return;
+     }
+diff --git a/blockjob.c b/blockjob.c
+index 6d8c3a2..dc0fa6d 100644
+--- a/blockjob.c
++++ b/blockjob.c
+@@ -35,7 +35,7 @@
+ #include "qmp-commands.h"
+ #include "qemu/timer.h"
+ 
+-void *block_job_create(const BlockJobType *job_type, BlockDriverState *bs,
++void *block_job_create(const BlockJobDriver *driver, BlockDriverState *bs,
+                        int64_t speed, BlockDriverCompletionFunc *cb,
+                        void *opaque, Error **errp)
+ {
+@@ -48,8 +48,8 @@ void *block_job_create(const BlockJobType *job_type, BlockDriverState *bs,
+     bdrv_ref(bs);
+     bdrv_set_in_use(bs, 1);
+ 
+-    job = g_malloc0(job_type->instance_size);
+-    job->job_type      = job_type;
++    job = g_malloc0(driver->instance_size);
++    job->driver        = driver;
+     job->bs            = bs;
+     job->cb            = cb;
+     job->opaque        = opaque;
+@@ -87,11 +87,11 @@ void block_job_set_speed(BlockJob *job, int64_t speed, Error **errp)
+ {
+     Error *local_err = NULL;
+ 
+-    if (!job->job_type->set_speed) {
++    if (!job->driver->set_speed) {
+         error_set(errp, QERR_NOT_SUPPORTED);
+         return;
+     }
+-    job->job_type->set_speed(job, speed, &local_err);
++    job->driver->set_speed(job, speed, &local_err);
+     if (error_is_set(&local_err)) {
+         error_propagate(errp, local_err);
+         return;
+@@ -102,12 +102,12 @@ void block_job_set_speed(BlockJob *job, int64_t speed, Error **errp)
+ 
+ void block_job_complete(BlockJob *job, Error **errp)
+ {
+-    if (job->paused || job->cancelled || !job->job_type->complete) {
++    if (job->paused || job->cancelled || !job->driver->complete) {
+         error_set(errp, QERR_BLOCK_JOB_NOT_READY, job->bs->device_name);
+         return;
+     }
+ 
+-    job->job_type->complete(job, errp);
++    job->driver->complete(job, errp);
+ }
+ 
+ void block_job_pause(BlockJob *job)
+@@ -143,8 +143,8 @@ bool block_job_is_cancelled(BlockJob *job)
+ void block_job_iostatus_reset(BlockJob *job)
+ {
+     job->iostatus = BLOCK_DEVICE_IO_STATUS_OK;
+-    if (job->job_type->iostatus_reset) {
+-        job->job_type->iostatus_reset(job);
++    if (job->driver->iostatus_reset) {
++        job->driver->iostatus_reset(job);
+     }
+ }
+ 
+@@ -209,7 +209,7 @@ void block_job_sleep_ns(BlockJob *job, QEMUClock *clock, int64_t ns)
+ BlockJobInfo *block_job_query(BlockJob *job)
+ {
+     BlockJobInfo *info = g_new0(BlockJobInfo, 1);
+-    info->type      = g_strdup(job->job_type->job_type);
++    info->type      = g_strdup(job->driver->job_type);
+     info->device    = g_strdup(bdrv_get_device_name(job->bs));
+     info->len       = job->len;
+     info->busy      = job->busy;
+@@ -236,7 +236,7 @@ QObject *qobject_from_block_job(BlockJob *job)
+                               "'len': %" PRId64 ","
+                               "'offset': %" PRId64 ","
+                               "'speed': %" PRId64 " }",
+-                              job->job_type->job_type,
++                              job->driver->job_type,
+                               bdrv_get_device_name(job->bs),
+                               job->len,
+                               job->offset,
+diff --git a/include/block/blockjob.h b/include/block/blockjob.h
+index c290d07..dadcd48 100644
+--- a/include/block/blockjob.h
++++ b/include/block/blockjob.h
+@@ -28,11 +28,11 @@
+ #include "block/block.h"
+ 
+ /**
+- * BlockJobType:
++ * BlockJobDriver:
+  *
+- * A class type for block job objects.
++ * A class type for block job driver.
+  */
+-typedef struct BlockJobType {
++typedef struct BlockJobDriver {
+     /** Derived BlockJob struct size */
+     size_t instance_size;
+ 
+@@ -50,7 +50,7 @@ typedef struct BlockJobType {
+      * manually.
+      */
+     void (*complete)(BlockJob *job, Error **errp);
+-} BlockJobType;
++} BlockJobDriver;
+ 
+ /**
+  * BlockJob:
+@@ -59,7 +59,7 @@ typedef struct BlockJobType {
+  */
+ struct BlockJob {
+     /** The job type, including the job vtable.  */
+-    const BlockJobType *job_type;
++    const BlockJobDriver *driver;
+ 
+     /** The block device on which the job is operating.  */
+     BlockDriverState *bs;
+@@ -128,7 +128,7 @@ struct BlockJob {
+  * This function is not part of the public job interface; it should be
+  * called from a wrapper that is specific to the job type.
+  */
+-void *block_job_create(const BlockJobType *job_type, BlockDriverState *bs,
++void *block_job_create(const BlockJobDriver *driver, BlockDriverState *bs,
+                        int64_t speed, BlockDriverCompletionFunc *cb,
+                        void *opaque, Error **errp);
+ 
+-- 
+1.7.1
+

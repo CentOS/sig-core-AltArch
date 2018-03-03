@@ -1,0 +1,101 @@
+From 4767cbd32744d8dff462233b6509f31ebe826588 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Fri, 17 Jan 2014 17:07:53 +0100
+Subject: [PATCH 03/11] qdev-monitor: Clean up qdev_device_add() variable naming
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1389978479-30595-4-git-send-email-armbru@redhat.com>
+Patchwork-id: 56786
+O-Subject: [PATCH 7.0 qemu-kvm 3/9] qdev-monitor: Clean up qdev_device_add() variable naming
+Bugzilla: 669524
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+
+From: Andreas Färber <afaerber@suse.de>
+
+Avoid confusion between object (obj) and object class (oc).
+Tidy DeviceClass variable while at it (k -> dc).
+
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit f4d85795605c7dc594c013221a4b6d62967bd8ab)
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+---
+ qdev-monitor.c | 22 +++++++++++-----------
+ 1 file changed, 11 insertions(+), 11 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qdev-monitor.c |   22 +++++++++++-----------
+ 1 files changed, 11 insertions(+), 11 deletions(-)
+
+diff --git a/qdev-monitor.c b/qdev-monitor.c
+index d187db5..5b45d02 100644
+--- a/qdev-monitor.c
++++ b/qdev-monitor.c
+@@ -454,8 +454,8 @@ static BusState *qbus_find(const char *path)
+ 
+ DeviceState *qdev_device_add(QemuOpts *opts)
+ {
+-    ObjectClass *obj;
+-    DeviceClass *k;
++    ObjectClass *oc;
++    DeviceClass *dc;
+     const char *driver, *path, *id;
+     DeviceState *qdev;
+     BusState *bus = NULL;
+@@ -467,22 +467,22 @@ DeviceState *qdev_device_add(QemuOpts *opts)
+     }
+ 
+     /* find driver */
+-    obj = object_class_by_name(driver);
+-    if (!obj) {
++    oc = object_class_by_name(driver);
++    if (!oc) {
+         const char *typename = find_typename_by_alias(driver);
+ 
+         if (typename) {
+             driver = typename;
+-            obj = object_class_by_name(driver);
++            oc = object_class_by_name(driver);
+         }
+     }
+ 
+-    if (!obj) {
++    if (!oc) {
+         qerror_report(QERR_INVALID_PARAMETER_VALUE, "driver", "device type");
+         return NULL;
+     }
+ 
+-    k = DEVICE_CLASS(obj);
++    dc = DEVICE_CLASS(oc);
+ 
+     /* find bus */
+     path = qemu_opt_get(opts, "bus");
+@@ -491,16 +491,16 @@ DeviceState *qdev_device_add(QemuOpts *opts)
+         if (!bus) {
+             return NULL;
+         }
+-        if (!object_dynamic_cast(OBJECT(bus), k->bus_type)) {
++        if (!object_dynamic_cast(OBJECT(bus), dc->bus_type)) {
+             qerror_report(QERR_BAD_BUS_FOR_DEVICE,
+                           driver, object_get_typename(OBJECT(bus)));
+             return NULL;
+         }
+-    } else if (k->bus_type != NULL) {
+-        bus = qbus_find_recursive(sysbus_get_default(), NULL, k->bus_type);
++    } else if (dc->bus_type != NULL) {
++        bus = qbus_find_recursive(sysbus_get_default(), NULL, dc->bus_type);
+         if (!bus) {
+             qerror_report(QERR_NO_BUS_FOR_DEVICE,
+-                          k->bus_type, driver);
++                          dc->bus_type, driver);
+             return NULL;
+         }
+     }
+-- 
+1.7.1
+

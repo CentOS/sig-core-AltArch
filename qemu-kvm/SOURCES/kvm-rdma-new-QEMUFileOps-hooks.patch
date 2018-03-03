@@ -1,0 +1,220 @@
+From 01eb364d7e367e66572363b4c974b7f3428ea4ca Mon Sep 17 00:00:00 2001
+Message-Id: <01eb364d7e367e66572363b4c974b7f3428ea4ca.1387382496.git.minovotn@redhat.com>
+In-Reply-To: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+References: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+From: Nigel Croxon <ncroxon@redhat.com>
+Date: Thu, 14 Nov 2013 22:52:46 +0100
+Subject: [PATCH 10/46] rdma: new QEMUFileOps hooks
+
+RH-Author: Nigel Croxon <ncroxon@redhat.com>
+Message-id: <1384469598-13137-11-git-send-email-ncroxon@redhat.com>
+Patchwork-id: 55694
+O-Subject: [RHEL7.0 PATCH 10/42] rdma: new QEMUFileOps hooks
+Bugzilla: 1011720
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: 1011720
+https://bugzilla.redhat.com/show_bug.cgi?id=1011720
+
+>From commit ID:
+commit 43487c678d6e4e7182bfa70d2bc75422578782aa
+Author: Michael R. Hines <mrhines@us.ibm.com>
+Date:   Tue Jun 25 21:35:35 2013 -0400
+
+    rdma: new QEMUFileOps hooks
+
+    These are the prototypes and implementation of new hooks that
+    RDMA takes advantage of to perform dynamic page registration.
+
+    An optional hook is also introduced for a custom function
+    to be able to override the default save_page function.
+
+    Also included are the prototypes and accessor methods used by
+    arch_init.c which invoke funtions inside savevm.c to call out
+    to the hooks that may or may not have been overridden
+    inside of QEMUFileOps.
+
+    Reviewed-by: Juan Quintela <quintela@redhat.com>
+    Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+    Reviewed-by: Chegu Vinod <chegu_vinod@hp.com>
+    Tested-by: Chegu Vinod <chegu_vinod@hp.com>
+    Tested-by: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Juan Quintela <quintela@redhat.com>
+---
+ include/migration/migration.h |   20 ++++++++++++++
+ include/migration/qemu-file.h |   29 ++++++++++++++++++++
+ savevm.c                      |   59 +++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 108 insertions(+), 0 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ include/migration/migration.h | 20 +++++++++++++++
+ include/migration/qemu-file.h | 29 +++++++++++++++++++++
+ savevm.c                      | 59 +++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 108 insertions(+)
+
+diff --git a/include/migration/migration.h b/include/migration/migration.h
+index 201be18..6455e36 100644
+--- a/include/migration/migration.h
++++ b/include/migration/migration.h
+@@ -21,6 +21,7 @@
+ #include "qapi/error.h"
+ #include "migration/vmstate.h"
+ #include "qapi-types.h"
++#include "exec/cpu-common.h"
+ 
+ struct MigrationParams {
+     bool blk;
+@@ -134,4 +135,23 @@ int migrate_use_xbzrle(void);
+ int64_t migrate_xbzrle_cache_size(void);
+ 
+ int64_t xbzrle_cache_resize(int64_t new_size);
++
++void ram_control_before_iterate(QEMUFile *f, uint64_t flags);
++void ram_control_after_iterate(QEMUFile *f, uint64_t flags);
++void ram_control_load_hook(QEMUFile *f, uint64_t flags);
++
++/* Whenever this is found in the data stream, the flags
++ * will be passed to ram_control_load_hook in the incoming-migration
++ * side. This lets before_ram_iterate/after_ram_iterate add
++ * transport-specific sections to the RAM migration data.
++ */
++#define RAM_SAVE_FLAG_HOOK     0x80
++
++#define RAM_SAVE_CONTROL_NOT_SUPP -1000
++#define RAM_SAVE_CONTROL_DELAYED  -2000
++
++size_t ram_control_save_page(QEMUFile *f, ram_addr_t block_offset,
++                             ram_addr_t offset, size_t size,
++                             int *bytes_sent);
++
+ #endif
+diff --git a/include/migration/qemu-file.h b/include/migration/qemu-file.h
+index 37d1604..0f757fb 100644
+--- a/include/migration/qemu-file.h
++++ b/include/migration/qemu-file.h
+@@ -23,6 +23,7 @@
+  */
+ #ifndef QEMU_FILE_H
+ #define QEMU_FILE_H 1
++#include "exec/cpu-common.h"
+ 
+ /* This function writes a chunk of data to a file at the given position.
+  * The pos argument can be ignored if the file is only being used for
+@@ -57,12 +58,40 @@ typedef int (QEMUFileGetFD)(void *opaque);
+ typedef ssize_t (QEMUFileWritevBufferFunc)(void *opaque, struct iovec *iov,
+                                            int iovcnt, int64_t pos);
+ 
++/*
++ * This function provides hooks around different
++ * stages of RAM migration.
++ */
++typedef int (QEMURamHookFunc)(QEMUFile *f, void *opaque, uint64_t flags);
++
++/*
++ * Constants used by ram_control_* hooks
++ */
++#define RAM_CONTROL_SETUP    0
++#define RAM_CONTROL_ROUND    1
++#define RAM_CONTROL_HOOK     2
++#define RAM_CONTROL_FINISH   3
++
++/*
++ * This function allows override of where the RAM page
++ * is saved (such as RDMA, for example.)
++ */
++typedef size_t (QEMURamSaveFunc)(QEMUFile *f, void *opaque,
++                               ram_addr_t block_offset,
++                               ram_addr_t offset,
++                               size_t size,
++                               int *bytes_sent);
++
+ typedef struct QEMUFileOps {
+     QEMUFilePutBufferFunc *put_buffer;
+     QEMUFileGetBufferFunc *get_buffer;
+     QEMUFileCloseFunc *close;
+     QEMUFileGetFD *get_fd;
+     QEMUFileWritevBufferFunc *writev_buffer;
++    QEMURamHookFunc *before_ram_iterate;
++    QEMURamHookFunc *after_ram_iterate;
++    QEMURamHookFunc *hook_ram_load;
++    QEMURamSaveFunc *save_page;
+ } QEMUFileOps;
+ 
+ QEMUFile *qemu_fopen_ops(void *opaque, const QEMUFileOps *ops);
+diff --git a/savevm.c b/savevm.c
+index 26d5607..e0491e7 100644
+--- a/savevm.c
++++ b/savevm.c
+@@ -616,6 +616,65 @@ void qemu_fflush(QEMUFile *f)
+     }
+ }
+ 
++void ram_control_before_iterate(QEMUFile *f, uint64_t flags)
++{
++    int ret = 0;
++
++    if (f->ops->before_ram_iterate) {
++        ret = f->ops->before_ram_iterate(f, f->opaque, flags);
++        if (ret < 0) {
++            qemu_file_set_error(f, ret);
++        }
++    }
++}
++
++void ram_control_after_iterate(QEMUFile *f, uint64_t flags)
++{
++    int ret = 0;
++
++    if (f->ops->after_ram_iterate) {
++        ret = f->ops->after_ram_iterate(f, f->opaque, flags);
++        if (ret < 0) {
++            qemu_file_set_error(f, ret);
++        }
++    }
++}
++
++void ram_control_load_hook(QEMUFile *f, uint64_t flags)
++{
++    int ret = 0;
++
++    if (f->ops->hook_ram_load) {
++        ret = f->ops->hook_ram_load(f, f->opaque, flags);
++        if (ret < 0) {
++            qemu_file_set_error(f, ret);
++        }
++    } else {
++        qemu_file_set_error(f, ret);
++    }
++}
++
++size_t ram_control_save_page(QEMUFile *f, ram_addr_t block_offset,
++                         ram_addr_t offset, size_t size, int *bytes_sent)
++{
++    if (f->ops->save_page) {
++        int ret = f->ops->save_page(f, f->opaque, block_offset,
++                                    offset, size, bytes_sent);
++
++        if (ret != RAM_SAVE_CONTROL_DELAYED) {
++            if (*bytes_sent > 0) {
++                qemu_update_position(f, *bytes_sent);
++            } else if (ret < 0) {
++                qemu_file_set_error(f, ret);
++            }
++        }
++
++        return ret;
++    }
++
++    return RAM_SAVE_CONTROL_NOT_SUPP;
++}
++
+ static void qemu_fill_buffer(QEMUFile *f)
+ {
+     int len;
+-- 
+1.7.11.7
+

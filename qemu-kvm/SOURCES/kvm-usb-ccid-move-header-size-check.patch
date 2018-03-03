@@ -1,0 +1,64 @@
+From 6116e5c19a7623b2543fbd937970da9a6e0e1ce7 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Tue, 14 Mar 2017 08:52:55 +0100
+Subject: [PATCH 22/24] usb-ccid: move header size check
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1489481576-26911-4-git-send-email-kraxel@redhat.com>
+Patchwork-id: 74285
+O-Subject: [RHEL-7.4 qemu-kvm PATCH 3/4] usb-ccid: move header size check
+Bugzilla: 1419818
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Move up header size check, so we can use header fields in sanity checks
+(in followup patches).  Also reword the debug message.
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+Reviewed-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: 1487250819-23764-3-git-send-email-kraxel@redhat.com
+(cherry picked from commit 7569c54642e8aa9fa03e250c7c578bd4d3747f00)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/dev-smartcard-reader.c | 13 ++++++-------
+ 1 file changed, 6 insertions(+), 7 deletions(-)
+
+diff --git a/hw/usb/dev-smartcard-reader.c b/hw/usb/dev-smartcard-reader.c
+index 672a7bf..07d15ba 100644
+--- a/hw/usb/dev-smartcard-reader.c
++++ b/hw/usb/dev-smartcard-reader.c
+@@ -1001,21 +1001,20 @@ static void ccid_handle_bulk_out(USBCCIDState *s, USBPacket *p)
+     if (p->iov.size + s->bulk_out_pos > BULK_OUT_DATA_SIZE) {
+         goto err;
+     }
+-    ccid_header = (CCID_Header *)s->bulk_out_data;
+     usb_packet_copy(p, s->bulk_out_data + s->bulk_out_pos, p->iov.size);
+     s->bulk_out_pos += p->iov.size;
++    if (s->bulk_out_pos < 10) {
++        DPRINTF(s, 1, "%s: header incomplete\n", __func__);
++        goto err;
++    }
++
++    ccid_header = (CCID_Header *)s->bulk_out_data;
+     if (p->iov.size == CCID_MAX_PACKET_SIZE) {
+         DPRINTF(s, D_VERBOSE,
+             "usb-ccid: bulk_in: expecting more packets (%zd/%d)\n",
+             p->iov.size, ccid_header->dwLength);
+         return;
+     }
+-    if (s->bulk_out_pos < 10) {
+-        DPRINTF(s, 1,
+-                "%s: bad USB_TOKEN_OUT length, should be at least 10 bytes\n",
+-                __func__);
+-        goto err;
+-    }
+ 
+     DPRINTF(s, D_MORE_INFO, "%s %x %s\n", __func__,
+             ccid_header->bMessageType,
+-- 
+1.8.3.1
+

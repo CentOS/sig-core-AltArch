@@ -1,0 +1,87 @@
+From 6ddf29f50854ed657ee27241cbd0bb7c2b4ae4b7 Mon Sep 17 00:00:00 2001
+Message-Id: <6ddf29f50854ed657ee27241cbd0bb7c2b4ae4b7.1383564115.git.minovotn@redhat.com>
+In-Reply-To: <5575e0aec51f40ebec46e98ec085cda053283aba.1383564115.git.minovotn@redhat.com>
+References: <5575e0aec51f40ebec46e98ec085cda053283aba.1383564115.git.minovotn@redhat.com>
+From: Markus Armbruster <armbru@redhat.com>
+Date: Fri, 27 Sep 2013 13:31:15 +0200
+Subject: [PATCH 05/14] pc: Make -no-fd-bootchk stick across boot order
+ changes
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1380288680-26645-6-git-send-email-armbru@redhat.com>
+Patchwork-id: 54564
+O-Subject: [PATCH 7.0 qemu-kvm 05/10] pc: Make -no-fd-bootchk stick across boot order changes
+Bugzilla: 997817
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Option -no-fd-bootchk asks the BIOS to attempt booting from a floppy
+even when the boot sector signature isn't there, by setting a bit in
+RTC CMOS.  It was added back in 2006 (commit 52ca8d6a).
+
+Two years later, commit 0ecdffbb added monitor command boot_set.
+Implemented by new function pc_boot_set().  It unconditionally clears
+the floppy signature bit in CMOS.
+
+Commit e0f084bf added -boot option once to automatically change the
+boot order on first reset.  Reuses pc_boot_set(), thus also clears the
+floppy signature bit.  Commit d9346e81 took care to preserve this
+behavior.
+
+Thus, -no-fd-bootchk applies to any number of boots.  Except it
+applies just to the first boot with -boot once, and never after
+boot_set.  Weird.  Make it stick instead: set the bit according to
+-no-fd-bootchk in pc_boot_set().
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Anthony Liguori <aliguori@us.ibm.com>
+Message-id: 1371208516-7857-6-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit e1123015a50abf44f9daa9495f40eeaaf4c9bb98)
+---
+ hw/i386/pc.c | 7 +++----
+ 1 file changed, 3 insertions(+), 4 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/i386/pc.c | 7 +++----
+ 1 file changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/hw/i386/pc.c b/hw/i386/pc.c
+index 71b7a26..3c77040 100644
+--- a/hw/i386/pc.c
++++ b/hw/i386/pc.c
+@@ -266,7 +266,7 @@ static int boot_device2nibble(char boot_device)
+     return 0;
+ }
+ 
+-static int set_boot_dev(ISADevice *s, const char *boot_device, int fd_bootchk)
++static int set_boot_dev(ISADevice *s, const char *boot_device)
+ {
+ #define PC_MAX_BOOT_DEVICES 3
+     int nbds, bds[3] = { 0, };
+@@ -292,7 +292,7 @@ static int set_boot_dev(ISADevice *s, const char *boot_device, int fd_bootchk)
+ 
+ static int pc_boot_set(void *opaque, const char *boot_device)
+ {
+-    return set_boot_dev(opaque, boot_device, 0);
++    return set_boot_dev(opaque, boot_device);
+ }
+ 
+ typedef struct pc_cmos_init_late_arg {
+@@ -407,8 +407,7 @@ void pc_cmos_init(ram_addr_t ram_size, ram_addr_t above_4g_mem_size,
+     cpu_hotplug_cb.cpu_added_notifier.notify = rtc_notify_cpu_added;
+     qemu_register_cpu_added_notifier(&cpu_hotplug_cb.cpu_added_notifier);
+ 
+-    /* set boot devices, and disable floppy signature check if requested */
+-    if (set_boot_dev(s, boot_device, fd_bootchk)) {
++    if (set_boot_dev(s, boot_device)) {
+         exit(1);
+     }
+ 
+-- 
+1.7.11.7
+

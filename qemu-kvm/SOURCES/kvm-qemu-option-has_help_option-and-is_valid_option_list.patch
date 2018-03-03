@@ -1,0 +1,114 @@
+From 8720a390e468547c84e8143ee5cf81263d0fb4f3 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 25 Feb 2014 15:00:00 +0100
+Subject: [PATCH 2/7] qemu-option: has_help_option() and is_valid_option_list()
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1393340405-9936-2-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57793
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 1/6] qemu-option: has_help_option() and is_valid_option_list()
+Bugzilla: 1065873
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+has_help_option() checks if any help option ('help' or '?') occurs
+anywhere in an option string, so that things like 'cluster_size=4k,help'
+are recognised.
+
+is_valid_option_list() ensures that the option list doesn't have options
+with leading commas or trailing unescaped commas.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Jeff Cody <jcody@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit 7cc07ab8daa01f100f36ab63382d491f2d278c64)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ include/qemu/option.h |  2 ++
+ util/qemu-option.c    | 49 +++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 51 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ include/qemu/option.h |    2 ++
+ util/qemu-option.c    |   49 +++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 51 insertions(+), 0 deletions(-)
+
+diff --git a/include/qemu/option.h b/include/qemu/option.h
+index 5c0c6dd..e1d3dd0 100644
+--- a/include/qemu/option.h
++++ b/include/qemu/option.h
+@@ -79,6 +79,8 @@ void parse_option_size(const char *name, const char *value,
+ void free_option_parameters(QEMUOptionParameter *list);
+ void print_option_parameters(QEMUOptionParameter *list);
+ void print_option_help(QEMUOptionParameter *list);
++bool has_help_option(const char *param);
++bool is_valid_option_list(const char *param);
+ 
+ /* ------------------------------------------------------------------ */
+ 
+diff --git a/util/qemu-option.c b/util/qemu-option.c
+index 2445406..4de5d13 100644
+--- a/util/qemu-option.c
++++ b/util/qemu-option.c
+@@ -450,6 +450,55 @@ fail:
+     return NULL;
+ }
+ 
++bool has_help_option(const char *param)
++{
++    size_t buflen = strlen(param) + 1;
++    char *buf = g_malloc0(buflen);
++    const char *p = param;
++    bool result = false;
++
++    while (*p) {
++        p = get_opt_value(buf, buflen, p);
++        if (*p) {
++            p++;
++        }
++
++        if (is_help_option(buf)) {
++            result = true;
++            goto out;
++        }
++    }
++
++out:
++    free(buf);
++    return result;
++}
++
++bool is_valid_option_list(const char *param)
++{
++    size_t buflen = strlen(param) + 1;
++    char *buf = g_malloc0(buflen);
++    const char *p = param;
++    bool result = true;
++
++    while (*p) {
++        p = get_opt_value(buf, buflen, p);
++        if (*p && !*++p) {
++            result = false;
++            goto out;
++        }
++
++        if (!*buf || *buf == ',') {
++            result = false;
++            goto out;
++        }
++    }
++
++out:
++    free(buf);
++    return result;
++}
++
+ /*
+  * Prints all options of a list that have a value to stdout
+  */
+-- 
+1.7.1
+

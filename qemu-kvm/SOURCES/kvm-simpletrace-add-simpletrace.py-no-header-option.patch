@@ -1,0 +1,109 @@
+From ae603c6d842f7e7f1529f040ca463be2f2edd4c8 Mon Sep 17 00:00:00 2001
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Tue, 7 Oct 2014 14:06:53 +0200
+Subject: [PATCH 35/43] simpletrace: add simpletrace.py --no-header option
+
+Message-id: <1412690820-31016-5-git-send-email-stefanha@redhat.com>
+Patchwork-id: 61609
+O-Subject: [RHEL7.1 qemu-kvm PATCH 04/11] simpletrace: add simpletrace.py --no-header option
+Bugzilla: 1088112
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+It can be useful to read simpletrace files that have no header.  For
+example, a ring buffer may not have a header record but can still be
+processed if the user is sure the file format version is compatible.
+
+  $ scripts/simpletrace.py --no-header trace-events trace-file
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 15327c3df049c9621ff9b542ccbfc3d17203d1f7)
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	scripts/simpletrace.py
+
+Context conflict because upstream doesn't have enabled_events[].
+---
+ scripts/simpletrace.py | 25 ++++++++++++++++++-------
+ 1 file changed, 18 insertions(+), 7 deletions(-)
+
+diff --git a/scripts/simpletrace.py b/scripts/simpletrace.py
+index 682ec66..b931dd2 100755
+--- a/scripts/simpletrace.py
++++ b/scripts/simpletrace.py
+@@ -59,8 +59,8 @@ def read_record(edict, fobj):
+     rechdr = read_header(fobj, rec_header_fmt)
+     return get_record(edict, rechdr, fobj) # return tuple of record elements
+ 
+-def read_trace_file(edict, fobj):
+-    """Deserialize trace records from a file, yielding record tuples (event_num, timestamp, pid, arg1, ..., arg6)."""
++def read_trace_header(fobj):
++    """Read and verify trace file header"""
+     header = read_header(fobj, log_header_fmt)
+     if header is None or \
+        header[0] != header_event_id or \
+@@ -74,6 +74,8 @@ def read_trace_file(edict, fobj):
+         raise ValueError('Log format %d not supported with this QEMU release!'
+                          % log_version)
+ 
++def read_trace_records(edict, fobj):
++    """Deserialize trace records from a file, yielding record tuples (event_num, timestamp, pid, arg1, ..., arg6)."""
+     while True:
+         rec = read_record(edict, fobj)
+         if rec is None:
+@@ -103,7 +105,7 @@ class Analyzer(object):
+         """Called at the end of the trace."""
+         pass
+ 
+-def process(events, log, analyzer):
++def process(events, log, analyzer, read_header=True):
+     """Invoke an analyzer on each event in a log."""
+     if isinstance(events, str):
+         events = _read_events(open(events, 'r'))
+@@ -111,6 +113,10 @@ def process(events, log, analyzer):
+         log = open(log, 'rb')
+ 
+     enabled_events = []
++
++    if read_header:
++        read_trace_header(log)
++
+     dropped_event = Event.build("Dropped_Event(uint64_t num_events_dropped)")
+     edict = {dropped_event_id: dropped_event}
+ 
+@@ -142,7 +148,7 @@ def process(events, log, analyzer):
+ 
+     analyzer.begin()
+     fn_cache = {}
+-    for rec in read_trace_file(edict, log):
++    for rec in read_trace_records(edict, log):
+         event_num = rec[0]
+         event = edict[event_num]
+         if event_num not in fn_cache:
+@@ -157,12 +163,17 @@ def run(analyzer):
+     advanced scripts will want to call process() instead."""
+     import sys
+ 
+-    if len(sys.argv) != 3:
+-        sys.stderr.write('usage: %s <trace-events> <trace-file>\n' % sys.argv[0])
++    read_header = True
++    if len(sys.argv) == 4 and sys.argv[1] == '--no-header':
++        read_header = False
++        del sys.argv[1]
++    elif len(sys.argv) != 3:
++        sys.stderr.write('usage: %s [--no-header] <trace-events> ' \
++                         '<trace-file>\n' % sys.argv[0])
+         sys.exit(1)
+ 
+     events = _read_events(open(sys.argv[1], 'r'))
+-    process(events, sys.argv[2], analyzer)
++    process(events, sys.argv[2], analyzer, read_header=read_header)
+ 
+ if __name__ == '__main__':
+     class Formatter(Analyzer):
+-- 
+1.8.3.1
+

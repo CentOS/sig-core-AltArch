@@ -1,0 +1,56 @@
+From ac25e461b9f69a91349aa00531e42dea604b92a7 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 17 Mar 2014 13:29:27 +0100
+Subject: [PATCH 3/6] qcow2: Keep option in qcow2_invalidate_cache()
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1395062967-16867-3-git-send-email-kwolf@redhat.com>
+Patchwork-id: 58112
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 2/2] qcow2: Keep option in qcow2_invalidate_cache()
+Bugzilla: 1048575
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+Instead of manually building a list of all options from BDRVQcowState
+values just reuse the options that were used to open the image.
+qcow2_open() won't fully use all of the options in the QDict, but that's
+okay.
+
+This fixes all of the driver-specific options in qcow2, except for
+lazy-refcounts, which was special cased before.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit d475e5acd2f4679d6ce458369ee658dbd60227e9)
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block/qcow2.c | 5 +----
+ 1 file changed, 1 insertion(+), 4 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2.c |    5 +----
+ 1 files changed, 1 insertions(+), 4 deletions(-)
+
+diff --git a/block/qcow2.c b/block/qcow2.c
+index e9bd9c9..18e136e 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -1178,11 +1178,8 @@ static void qcow2_invalidate_cache(BlockDriverState *bs)
+ 
+     bdrv_invalidate_cache(bs->file);
+ 
+-    options = qdict_new();
+-    qdict_put(options, QCOW2_OPT_LAZY_REFCOUNTS,
+-              qbool_from_int(s->use_lazy_refcounts));
+-
+     memset(s, 0, sizeof(BDRVQcowState));
++    options = qdict_clone_shallow(bs->options);
+     qcow2_open(bs, options, flags, NULL);
+ 
+     QDECREF(options);
+-- 
+1.7.1
+

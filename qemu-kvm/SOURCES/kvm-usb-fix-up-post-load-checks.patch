@@ -1,0 +1,64 @@
+From b7dd3cebccd2a785e78aca482f336d0e1500cfc5 Mon Sep 17 00:00:00 2001
+From: Michael S. Tsirkin <mst@redhat.com>
+Date: Thu, 15 May 2014 09:52:56 +0200
+Subject: [PATCH 25/31] usb: fix up post load checks
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1400144784-16355-1-git-send-email-mst@redhat.com>
+Patchwork-id: 58907
+O-Subject: [PATCH qemu-kvm RHEL7.1] usb: fix up post load checks
+Bugzilla: 1096829
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+
+Correct post load checks:
+1. dev->setup_len == sizeof(dev->data_buf)
+    seems fine, no need to fail migration
+2. When state is DATA, passing index > len
+   will cause memcpy with negative length,
+   resulting in heap overflow
+
+First of the issues was reported by dgilbert.
+
+Reported-by: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit 719ffe1f5f72b1c7ace4afe9ba2815bcb53a829e)
+Note: in maintainer's tree
+ git://github.com/juanquintela/qemu.git tags/migration/20140515,
+ pull request sent
+
+CVE-2014-3461
+
+Bugzilla: 1096829
+Brew build: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7459730
+Tested: lightly on developer's box
+---
+ hw/usb/bus.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/bus.c |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/hw/usb/bus.c b/hw/usb/bus.c
+index 9766b7f..f4eeb5e 100644
+--- a/hw/usb/bus.c
++++ b/hw/usb/bus.c
+@@ -51,8 +51,8 @@ static int usb_device_post_load(void *opaque, int version_id)
+     }
+     if (dev->setup_index < 0 ||
+         dev->setup_len < 0 ||
+-        dev->setup_index >= sizeof(dev->data_buf) ||
+-        dev->setup_len >= sizeof(dev->data_buf)) {
++        dev->setup_index > dev->setup_len ||
++        dev->setup_len > sizeof(dev->data_buf)) {
+         return -EINVAL;
+     }
+     return 0;
+-- 
+1.7.1
+

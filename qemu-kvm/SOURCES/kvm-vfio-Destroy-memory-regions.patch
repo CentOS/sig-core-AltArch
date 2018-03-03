@@ -1,0 +1,68 @@
+From 6ca164c42aa26e2273871061aa509cc50bd0dc4c Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Wed, 22 Jan 2014 21:33:06 -0500
+Subject: [PATCH 2/6] vfio: Destroy memory regions
+
+Message-id: <20140122213238.6166.63139.stgit@bling.home>
+Patchwork-id: 56902
+O-Subject: [RHEL-7 qemu-kvm PATCH 1/1] vfio: Destroy memory regions
+Bugzilla: 1052030
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Bugzilla: 1052030
+Upstream: 7c4228b4771acddcb8815079bc116007cec8a1ff (tag from pull request)
+
+Somehow this has been lurking for a while; we remove our subregions
+from the base BAR and VGA region mappings, but we don't destroy them,
+creating a leak and more serious problems when we try to migrate after
+removing these devices.  Add the trivial bit of final cleanup to
+remove these entirely.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+---
+ hw/misc/vfio.c |    4 ++++
+ 1 file changed, 4 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index 83f2b6a..e1f30a2 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -1928,6 +1928,7 @@ static void vfio_vga_quirk_teardown(VFIODevice *vdev)
+         while (!QLIST_EMPTY(&vdev->vga.region[i].quirks)) {
+             VFIOQuirk *quirk = QLIST_FIRST(&vdev->vga.region[i].quirks);
+             memory_region_del_subregion(&vdev->vga.region[i].mem, &quirk->mem);
++            memory_region_destroy(&quirk->mem);
+             QLIST_REMOVE(quirk, next);
+             g_free(quirk);
+         }
+@@ -1950,6 +1951,7 @@ static void vfio_bar_quirk_teardown(VFIODevice *vdev, int nr)
+     while (!QLIST_EMPTY(&bar->quirks)) {
+         VFIOQuirk *quirk = QLIST_FIRST(&bar->quirks);
+         memory_region_del_subregion(&bar->mem, &quirk->mem);
++        memory_region_destroy(&quirk->mem);
+         QLIST_REMOVE(quirk, next);
+         g_free(quirk);
+     }
+@@ -2379,10 +2381,12 @@ static void vfio_unmap_bar(VFIODevice *vdev, int nr)
+ 
+     memory_region_del_subregion(&bar->mem, &bar->mmap_mem);
+     munmap(bar->mmap, memory_region_size(&bar->mmap_mem));
++    memory_region_destroy(&bar->mmap_mem);
+ 
+     if (vdev->msix && vdev->msix->table_bar == nr) {
+         memory_region_del_subregion(&bar->mem, &vdev->msix->mmap_mem);
+         munmap(vdev->msix->mmap, memory_region_size(&vdev->msix->mmap_mem));
++        memory_region_destroy(&vdev->msix->mmap_mem);
+     }
+ 
+     memory_region_destroy(&bar->mem);
+-- 
+1.8.3.1
+

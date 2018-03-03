@@ -1,0 +1,63 @@
+From 3ad8bb6f424f7ff1d4bbf73237fb1590f0ce1810 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 18 May 2017 09:21:23 +0200
+Subject: [PATCH 10/18] serial: check if backed by a physical serial port at
+ realize time
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <20170518092131.16571-11-famz@redhat.com>
+Patchwork-id: 75299
+O-Subject: [RHEL-7.4 qemu-kvm PATCH v3 10/18] serial: check if backed by a physical serial port at realize time
+Bugzilla: 1451470
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+Right now, s->poll_msl may linger at "0" value for an arbitrarily long
+time, until serial_update_msl is called for the first time.  This is
+unnecessary, and will lead to the s->poll_msl field being unnecessarily
+migrated.
+
+We can call serial_update_msl immediately at realize time (via
+serial_reset) and be done with it.  The memory-mapped UART was already
+doing that, but not the ISA and PCI variants.
+
+Regarding the delta bits, be consistent with what serial_reset does when
+the serial port is not backed by a physical serial port, and always clear
+them at reset time.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit a30cf8760f4a59797fc060c3c5a13b7749551d0c)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/char/serial.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/hw/char/serial.c b/hw/char/serial.c
+index 33e06fb..5ef9b95 100644
+--- a/hw/char/serial.c
++++ b/hw/char/serial.c
+@@ -650,6 +650,9 @@ static void serial_reset(void *opaque)
+     s->thr_ipending = 0;
+     s->last_break_enable = 0;
+     qemu_irq_lower(s->irq);
++
++    serial_update_msl(s);
++    s->msr &= ~UART_MSR_ANY_DELTA;
+ }
+ 
+ void serial_init_core(SerialState *s)
+@@ -768,7 +771,5 @@ SerialState *serial_mm_init(MemoryRegion *address_space,
+     memory_region_init_io(&s->io, &serial_mm_ops[end], s,
+                           "serial", 8 << it_shift);
+     memory_region_add_subregion(address_space, base, &s->io);
+-
+-    serial_update_msl(s);
+     return s;
+ }
+-- 
+1.8.3.1
+

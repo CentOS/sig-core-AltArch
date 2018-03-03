@@ -1,0 +1,87 @@
+From 0c6d2ffcebff88c6cda738aa46fa77c09b93b78b Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 18 May 2017 09:21:27 +0200
+Subject: [PATCH 14/18] serial: only resample THR interrupt on rising edge of
+ IER.THRI
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <20170518092131.16571-15-famz@redhat.com>
+Patchwork-id: 75304
+O-Subject: [RHEL-7.4 qemu-kvm PATCH v3 14/18] serial: only resample THR interrupt on rising edge of IER.THRI
+Bugzilla: 1451470
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+There is disagreement on whether LSR.THRE should be resampled when
+IER.THRI goes from 1 to 1.  Bochs only does it if IER.THRI goes from 0
+to 1; PCE does it even if IER.THRI is unchanged.  But the Windows driver
+seems to always go from 1 to 0 and back to 1, so do things in agreement
+with Bochs, because the handling of thr_ipending was reported in 2010
+(https://lists.gnu.org/archive/html/qemu-devel/2010-03/msg01914.html)
+as breaking DR-DOS Plus.
+
+Reported-by: Roy Tam <roytam@gmail.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 1645b8eee558ffe2389a081bf61d08a864c36d2c)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/char/serial.c | 25 ++++++++++++++++---------
+ 1 file changed, 16 insertions(+), 9 deletions(-)
+
+diff --git a/hw/char/serial.c b/hw/char/serial.c
+index e0d29a8..9986adf 100644
+--- a/hw/char/serial.c
++++ b/hw/char/serial.c
+@@ -306,10 +306,12 @@ static void serial_ioport_write(void *opaque, hwaddr addr, uint64_t val,
+             s->divider = (s->divider & 0x00ff) | (val << 8);
+             serial_update_parameters(s);
+         } else {
++            uint8_t changed = (s->ier ^ val) & 0x0f;
+             s->ier = val & 0x0f;
+             /* If the backend device is a real serial port, turn polling of the modem
+-               status lines on physical port on or off depending on UART_IER_MSI state */
+-            if (s->poll_msl >= 0) {
++             * status lines on physical port on or off depending on UART_IER_MSI state.
++             */
++            if ((changed & UART_IER_MSI) && s->poll_msl >= 0) {
+                 if (s->ier & UART_IER_MSI) {
+                      s->poll_msl = 1;
+                      serial_update_msl(s);
+@@ -324,18 +326,23 @@ static void serial_ioport_write(void *opaque, hwaddr addr, uint64_t val,
+              * This is not in the datasheet, but Windows relies on it.  It is
+              * unclear if THRE has to be resampled every time THRI becomes
+              * 1, or only on the rising edge.  Bochs does the latter, and Windows
+-             * always toggles IER to all zeroes and back to all ones.  But for
+-             * now leave it as it has always been in QEMU.
++             * always toggles IER to all zeroes and back to all ones, so do the
++             * same.
+              *
+              * If IER.THRI is zero, thr_ipending is not used.  Set it to zero
+              * so that the thr_ipending subsection is not migrated.
+              */
+-            if ((s->ier & UART_IER_THRI) && (s->lsr & UART_LSR_THRE)) {
+-                s->thr_ipending = 1;
+-            } else {
+-                s->thr_ipending = 0;
++            if (changed & UART_IER_THRI) {
++                if ((s->ier & UART_IER_THRI) && (s->lsr & UART_LSR_THRE)) {
++                    s->thr_ipending = 1;
++                } else {
++                    s->thr_ipending = 0;
++                }
++            }
++
++            if (changed) {
++                serial_update_irq(s);
+             }
+-            serial_update_irq(s);
+         }
+         break;
+     case 2:
+-- 
+1.8.3.1
+

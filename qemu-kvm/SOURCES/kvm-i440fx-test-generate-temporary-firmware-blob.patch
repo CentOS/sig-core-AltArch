@@ -1,0 +1,120 @@
+From a577ed3eaa3c3ba84133d9bea1907c69c01063ad Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Sat, 11 Jan 2014 18:00:06 +0100
+Subject: [PATCH 16/22] i440fx-test: generate temporary firmware blob
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1389463208-6278-17-git-send-email-lersek@redhat.com>
+Patchwork-id: 56629
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 16/18] i440fx-test: generate temporary firmware blob
+Bugzilla: 1032346
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Andrew Jones <drjones@redhat.com>
+
+The blob is 64K in size and contains 0x00..0xFF repeatedly.
+
+The client code added to main() wouldn't make much sense in the long term.
+It helps with debugging and it silences gcc about create_blob_file() being
+unused, and we'll replace it in the next patch anyway.
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 27d59ccd89a5b112e5a5804250440ea30dbfb891)
+---
+ tests/i440fx-test.c | 60 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 60 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/i440fx-test.c |   60 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 files changed, 60 insertions(+), 0 deletions(-)
+
+diff --git a/tests/i440fx-test.c b/tests/i440fx-test.c
+index 3962bca..b6e0cd3 100644
+--- a/tests/i440fx-test.c
++++ b/tests/i440fx-test.c
+@@ -20,6 +20,11 @@
+ 
+ #include <glib.h>
+ #include <string.h>
++#include <stdio.h>
++#include <unistd.h>
++#include <errno.h>
++#include <sys/mman.h>
++#include <stdlib.h>
+ 
+ #define BROKEN 1
+ 
+@@ -272,13 +277,68 @@ static void test_i440fx_pam(gconstpointer opaque)
+     qtest_end();
+ }
+ 
++#define BLOB_SIZE ((size_t)65536)
++
++/* Create a blob file, and return its absolute pathname as a dynamically
++ * allocated string.
++ * The file is closed before the function returns.
++ * In case of error, NULL is returned. The function prints the error message.
++ */
++static char *create_blob_file(void)
++{
++    int ret, fd;
++    char *pathname;
++    GError *error = NULL;
++
++    ret = -1;
++    fd = g_file_open_tmp("blob_XXXXXX", &pathname, &error);
++    if (fd == -1) {
++        fprintf(stderr, "unable to create blob file: %s\n", error->message);
++        g_error_free(error);
++    } else {
++        if (ftruncate(fd, BLOB_SIZE) == -1) {
++            fprintf(stderr, "ftruncate(\"%s\", %zu): %s\n", pathname,
++                    BLOB_SIZE, strerror(errno));
++        } else {
++            void *buf;
++
++            buf = mmap(NULL, BLOB_SIZE, PROT_WRITE, MAP_SHARED, fd, 0);
++            if (buf == MAP_FAILED) {
++                fprintf(stderr, "mmap(\"%s\", %zu): %s\n", pathname, BLOB_SIZE,
++                        strerror(errno));
++            } else {
++                size_t i;
++
++                for (i = 0; i < BLOB_SIZE; ++i) {
++                    ((uint8_t *)buf)[i] = i;
++                }
++                munmap(buf, BLOB_SIZE);
++                ret = 0;
++            }
++        }
++        close(fd);
++        if (ret == -1) {
++            unlink(pathname);
++            g_free(pathname);
++        }
++    }
++
++    return ret == -1 ? NULL : pathname;
++}
++
+ int main(int argc, char **argv)
+ {
++    char *fw_pathname;
+     TestData data;
+     int ret;
+ 
+     g_test_init(&argc, &argv, NULL);
+ 
++    fw_pathname = create_blob_file();
++    g_assert(fw_pathname != NULL);
++    unlink(fw_pathname);
++    g_free(fw_pathname);
++
+     data.num_cpus = 1;
+ 
+     g_test_add_data_func("/i440fx/defaults", &data, test_i440fx_defaults);
+-- 
+1.7.1
+

@@ -1,0 +1,113 @@
+From b55e2f4749d2e4ebfc7dfc8782de85391c1026e8 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Fri, 17 Jan 2014 03:08:00 +0100
+Subject: [PATCH 17/34] commit: Support commit active layer
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1389928083-8921-16-git-send-email-famz@redhat.com>
+Patchwork-id: 56777
+O-Subject: [RHEL-7 qemu-kvm PATCH 15/18] commit: Support commit active layer
+Bugzilla: 1041301
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+If active is top, it will be mirrored to base, (with block/mirror.c
+code), then the image is switched when user completes the block job.
+
+QMP documentation is updated.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 20a63d2cec838c2dde4d246c4d7abe747d9b7a11)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ block/mirror.c   | 11 +++++++++++
+ blockdev.c       |  9 +++++++--
+ qapi-schema.json |  5 +++--
+ 3 files changed, 21 insertions(+), 4 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/mirror.c   |   11 +++++++++++
+ blockdev.c       |    9 +++++++--
+ qapi-schema.json |    5 +++--
+ 3 files changed, 21 insertions(+), 4 deletions(-)
+
+diff --git a/block/mirror.c b/block/mirror.c
+index 01fe379..6e1f9b1 100644
+--- a/block/mirror.c
++++ b/block/mirror.c
+@@ -478,6 +478,13 @@ immediate_exit:
+             bdrv_reopen(s->target, bdrv_get_flags(s->common.bs), NULL);
+         }
+         bdrv_swap(s->target, s->common.bs);
++        if (s->common.driver->job_type == BLOCK_JOB_TYPE_COMMIT) {
++            /* drop the bs loop chain formed by the swap: break the loop then
++             * trigger the unref from the top one */
++            BlockDriverState *p = s->base->backing_hd;
++            s->base->backing_hd = NULL;
++            bdrv_unref(p);
++        }
+     }
+     bdrv_unref(s->target);
+     block_job_completed(&s->common, ret);
+@@ -620,6 +627,10 @@ void commit_active_start(BlockDriverState *bs, BlockDriverState *base,
+                          BlockDriverCompletionFunc *cb,
+                          void *opaque, Error **errp)
+ {
++    if (bdrv_reopen(base, bs->open_flags, errp)) {
++        return;
++    }
++    bdrv_ref(base);
+     mirror_start_job(bs, base, speed, 0, 0,
+                      on_error, on_error, cb, opaque, errp,
+                      &commit_active_job_driver, false, base);
+diff --git a/blockdev.c b/blockdev.c
+index d795af2..33a5f5f 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -1510,8 +1510,13 @@ void qmp_block_commit(const char *device,
+         return;
+     }
+ 
+-    commit_start(bs, base_bs, top_bs, speed, on_error, block_job_cb, bs,
+-                &local_err);
++    if (top_bs == bs) {
++        commit_active_start(bs, base_bs, speed, on_error, block_job_cb,
++                            bs, &local_err);
++    } else {
++        commit_start(bs, base_bs, top_bs, speed, on_error, block_job_cb, bs,
++                    &local_err);
++    }
+     if (local_err != NULL) {
+         error_propagate(errp, local_err);
+         return;
+diff --git a/qapi-schema.json b/qapi-schema.json
+index b0bd53c..a783e8e 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -1837,9 +1837,11 @@
+ #
+ # @top:              The file name of the backing image within the image chain,
+ #                    which contains the topmost data to be committed down.
+-#                    Note, the active layer as 'top' is currently unsupported.
+ #
+ #                    If top == base, that is an error.
++#                    If top == active, the job will not be completed by itself,
++#                    user needs to complete the job with the block-job-complete
++#                    command after getting the ready event. (Since 2.0)
+ #
+ #
+ # @speed:  #optional the maximum speed, in bytes per second
+@@ -1849,7 +1851,6 @@
+ #          If @device does not exist, DeviceNotFound
+ #          If image commit is not supported by this device, NotSupported
+ #          If @base or @top is invalid, a generic error is returned
+-#          If @top is the active layer, or omitted, a generic error is returned
+ #          If @speed is invalid, InvalidParameter
+ #
+ # Since: 1.3
+-- 
+1.7.1
+

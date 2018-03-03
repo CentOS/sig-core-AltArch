@@ -1,0 +1,109 @@
+From 8f25ff7e1496ce8a26edacfa01c64f3a98c564a0 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Fri, 22 Jul 2016 09:34:39 +0200
+Subject: [PATCH 2/4] qxl: store memory region and offset instead of pointer
+ for guest slots
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1469180081-28522-3-git-send-email-kraxel@redhat.com>
+Patchwork-id: 71314
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 2/4] qxl: store memory region and offset instead of pointer for guest slots
+Bugzilla: 1355730
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Store MemoryRegion and offset instead of a pointer for each qxl memory
+slot, so we can easily figure in which memory region an qxl object
+stored.
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: 1466597244-5938-2-git-send-email-kraxel@redhat.com
+(cherry picked from commit 3cb5158f15604a9f50287f2f06777d5835ff4c15)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/display/qxl.c | 15 +++++++++++----
+ hw/display/qxl.h |  3 ++-
+ 2 files changed, 13 insertions(+), 5 deletions(-)
+
+diff --git a/hw/display/qxl.c b/hw/display/qxl.c
+index 5e1ecd8..de5770e 100644
+--- a/hw/display/qxl.c
++++ b/hw/display/qxl.c
+@@ -1232,6 +1232,7 @@ static int qxl_add_memslot(PCIQXLDevice *d, uint32_t slot_id, uint64_t delta,
+     int pci_region;
+     pcibus_t pci_start;
+     pcibus_t pci_end;
++    MemoryRegion *mr;
+     intptr_t virt_start;
+     QXLDevMemSlot memslot;
+     int i;
+@@ -1278,11 +1279,11 @@ static int qxl_add_memslot(PCIQXLDevice *d, uint32_t slot_id, uint64_t delta,
+ 
+     switch (pci_region) {
+     case QXL_RAM_RANGE_INDEX:
+-        virt_start = (intptr_t)memory_region_get_ram_ptr(&d->vga.vram);
++        mr = &d->vga.vram;
+         break;
+     case QXL_VRAM_RANGE_INDEX:
+     case 4 /* vram 64bit */:
+-        virt_start = (intptr_t)memory_region_get_ram_ptr(&d->vram_bar);
++        mr = &d->vram_bar;
+         break;
+     default:
+         /* should not happen */
+@@ -1290,6 +1291,7 @@ static int qxl_add_memslot(PCIQXLDevice *d, uint32_t slot_id, uint64_t delta,
+         return 1;
+     }
+ 
++    virt_start = (intptr_t)memory_region_get_ram_ptr(mr);
+     memslot.slot_id = slot_id;
+     memslot.slot_group_id = MEMSLOT_GROUP_GUEST; /* guest group */
+     memslot.virt_start = virt_start + (guest_start - pci_start);
+@@ -1299,7 +1301,8 @@ static int qxl_add_memslot(PCIQXLDevice *d, uint32_t slot_id, uint64_t delta,
+     qxl_rom_set_dirty(d);
+ 
+     qemu_spice_add_memslot(&d->ssd, &memslot, async);
+-    d->guest_slots[slot_id].ptr = (void*)memslot.virt_start;
++    d->guest_slots[slot_id].mr = mr;
++    d->guest_slots[slot_id].offset = memslot.virt_start - virt_start;
+     d->guest_slots[slot_id].size = memslot.virt_end - memslot.virt_start;
+     d->guest_slots[slot_id].delta = delta;
+     d->guest_slots[slot_id].active = 1;
+@@ -1366,6 +1369,7 @@ void *qxl_phys2virt(PCIQXLDevice *qxl, QXLPHYSICAL pqxl, int group_id)
+ {
+     uint64_t offset;
+     uint32_t slot;
++    void *ptr;
+ 
+     switch (group_id) {
+     case MEMSLOT_GROUP_HOST:
+@@ -1375,7 +1379,10 @@ void *qxl_phys2virt(PCIQXLDevice *qxl, QXLPHYSICAL pqxl, int group_id)
+         if (!qxl_get_check_slot_offset(qxl, pqxl, &slot, &offset)) {
+             return NULL;
+         }
+-        return qxl->guest_slots[slot].ptr + offset;
++        ptr = memory_region_get_ram_ptr(qxl->guest_slots[slot].mr);
++        ptr += qxl->guest_slots[slot].offset;
++        ptr += offset;
++        return ptr;
+     }
+     return NULL;
+ }
+diff --git a/hw/display/qxl.h b/hw/display/qxl.h
+index 5247ce9..f3f51e2 100644
+--- a/hw/display/qxl.h
++++ b/hw/display/qxl.h
+@@ -49,7 +49,8 @@ typedef struct PCIQXLDevice {
+ 
+     struct guest_slots {
+         QXLMemSlot     slot;
+-        void           *ptr;
++        MemoryRegion   *mr;
++        uint64_t       offset;
+         uint64_t       size;
+         uint64_t       delta;
+         uint32_t       active;
+-- 
+1.8.3.1
+

@@ -1,0 +1,177 @@
+From 8061ffe654905d1e184b82cb4b4d75647618a0c1 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Thu, 24 Apr 2014 10:57:23 +0200
+Subject: [PATCH 11/12] uhci: UNfix irq routing for RHEL-6 machtypes (RHEL only)
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1398337043-4967-1-git-send-email-lersek@redhat.com>
+Patchwork-id: 58540
+O-Subject: [RHEL-7.0 0day qemu-kvm PATCH] uhci: UNfix irq routing for RHEL-6 machtypes (RHEL only)
+Bugzilla: 1085701
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1085701
+Brew:     https://brewweb.devel.redhat.com/taskinfo?taskID=7368968
+
+Tested by myself and QE.
+
+(Note that the bulk of the work related to this issue happened in bug
+1027565 comments 64 to 74, because QE was experiencing it with the other
+(original) issue reported in bug 1027565. Only later did I realize that
+bug 1085701 already existed for this specific problem.)
+
+Refer to the following upstream commit, present in v1.2.0 and RHEL-7:
+
+    commit 973002c11460efd3c17fe61a76711a103e30e1f9
+    Author: Gerd Hoffmann <kraxel@redhat.com>
+    Date:   Fri May 25 12:53:47 2012 +0200
+
+        uhci: fix irq routing
+
+        The multifunction ich9 ehci controller with uhci companions uses a
+        different interrupt pin for each function.  The three uhci devices
+        get pins A, B and C, whereas ehci uses pin D.  This way the guest
+        can assign different IRQ lines to each controller.
+
+        Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+
+This is a performance optimization so that IRQ sharing can be avoided in
+the guest.
+
+Contrarily, the RHEL-6 emulator exclusively assigns pin D to each of the
+three devices (see "hw/usb-uhci.c" there):
+- usb_uhci_ich9_1_initfn()
+- usb_uhci_ich9_2_initfn()
+- usb_uhci_ich9_3_initfn()
+
+These init functions call usb_uhci_common_initfn(), which in turn assigns:
+
+    pci_conf[0x3d] = 4; // interrupt pin 3
+
+This mismatch breaks migration for rhel6.x.0 machine types from the
+RHEL-6.5 emulator to the RHEL-7.0 one.
+
+For example, considering the uhci1 controller, the guest kernel, started
+on the RHEL-6.5 source host, will see pin D advertised, and (according to
+the PCI interrupt routing table provided by SeaBIOS) will route it to IRQ
+11:
+
+  dmesg:
+
+    uhci_hcd 0000:00:11.0: PCI INT D -> Link[LNKD] -> GSI 11 (level, high)
+    -> IRQ 11
+
+  /proc/interrupts:
+
+     10: ... IO-APIC-fasteoi   virtio0
+     11: ... IO-APIC-fasteoi   uhci_hcd:usb1
+
+When the same guest kernel, using the same rhel6.5.0 machine type, is
+started fresh on the RHEL-7.0 target host, pin A is advertised instead
+(and routed to a different IRQ, based on the same table from SeaBIOS):
+
+  dmesg:
+
+    uhci_hcd 0000:00:11.0: PCI INT A -> Link[LNKA] -> GSI 10 (level, high)
+    -> IRQ 10
+
+  /proc/interrupts:
+
+     10: ... IO-APIC-fasteoi   uhci_hcd:usb1, virtio0
+
+This is no problem as long as we don't migrate.
+
+When we migrate the rhel6.x.0 machtype guest from the RHEL-6.5 host to the
+RHEL-7.0 host, the guest kernel (having booted on the source host) will
+expect the interrupts for the UHCI device on pin D / IRQ 11. However, the
+target host will inject the interrupts on pin A / IRQ 10. No handler in
+the guest kernel will claim such IRQ 10 instances (examples are: HDA or
+virtio-balloon), hence IRQ 10 will be disabled.
+
+We can fix this in at least two ways:
+(1) Drop the persistent "UHCIState.irq_pin" field, and simply use the pin
+    identifier that is stored in (already migrated) PCI config space (at
+    offset 0x3d).
+(2) Introduce yet another RHEL-6 compatibility knob that selects pin D for
+    all three ICH9-UHCI controllers.
+
+Since PCI config space could be write-accessible to the guest, plus it
+could originate from an untrusted migration source as well, and we'd use
+the setting as a subscript into the s->dev.irq[] array in
+uhci_update_irq(), it seems safer to go with (2).
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+---
+ include/hw/usb.h  |  4 ++++
+ hw/i386/pc_piix.c |  1 +
+ hw/usb/hcd-uhci.c | 13 ++++++++++++-
+ 3 files changed, 17 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/pc_piix.c |    1 +
+ hw/usb/hcd-uhci.c |   13 ++++++++++++-
+ include/hw/usb.h  |    4 ++++
+ 3 files changed, 17 insertions(+), 1 deletions(-)
+
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index fea98b6..67d51da 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -955,6 +955,7 @@ static void pc_compat_rhel650(QEMUMachineInitArgs *args)
+     has_acpi_build = false;
+     gigabyte_align = false;
+     shadow_bios_after_incoming = true;
++    ich9_uhci123_irqpin_override = true;
+ }
+ 
+ static void pc_init_rhel650(QEMUMachineInitArgs *args)
+diff --git a/hw/usb/hcd-uhci.c b/hw/usb/hcd-uhci.c
+index 4fc3410..3380107 100644
+--- a/hw/usb/hcd-uhci.c
++++ b/hw/usb/hcd-uhci.c
+@@ -187,6 +187,8 @@ typedef struct UHCI_QH {
+     uint32_t el_link;
+ } UHCI_QH;
+ 
++bool ich9_uhci123_irqpin_override;
++
+ static void uhci_async_cancel(UHCIAsync *async);
+ static void uhci_queue_fill(UHCIQueue *q, UHCI_TD *td);
+ 
+@@ -1232,7 +1234,16 @@ static int usb_uhci_common_initfn(PCIDevice *dev)
+     /* TODO: reset value should be 0. */
+     pci_conf[USB_SBRN] = USB_RELEASE_1; // release number
+ 
+-    s->irq_pin = u->info.irq_pin;
++    if (ich9_uhci123_irqpin_override &&
++        u->info.vendor_id == PCI_VENDOR_ID_INTEL &&
++        (u->info.device_id == PCI_DEVICE_ID_INTEL_82801I_UHCI1 ||
++         u->info.device_id == PCI_DEVICE_ID_INTEL_82801I_UHCI2 ||
++         u->info.device_id == PCI_DEVICE_ID_INTEL_82801I_UHCI3)) {
++        fprintf(stderr, "RHEL-6 compat: %s: irq_pin = 3\n", u->info.name);
++        s->irq_pin = 3;
++    } else {
++        s->irq_pin = u->info.irq_pin;
++    }
+     pci_config_set_interrupt_pin(pci_conf, s->irq_pin + 1);
+ 
+     if (s->masterbus) {
+diff --git a/include/hw/usb.h b/include/hw/usb.h
+index b111be0..5668701 100644
+--- a/include/hw/usb.h
++++ b/include/hw/usb.h
+@@ -578,4 +578,8 @@ int usb_get_quirks(uint16_t vendor_id, uint16_t product_id,
+                    uint8_t interface_class, uint8_t interface_subclass,
+                    uint8_t interface_protocol);
+ 
++
++/* hcd-uhci.c -- RHEL-6 machine type compatibility */
++extern bool ich9_uhci123_irqpin_override;
++
+ #endif
+-- 
+1.7.1
+

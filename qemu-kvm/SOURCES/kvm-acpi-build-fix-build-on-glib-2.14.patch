@@ -1,0 +1,95 @@
+From 80522ccccfe378cb1b9ff1d6fb468f275aa69c86 Mon Sep 17 00:00:00 2001
+Message-Id: <80522ccccfe378cb1b9ff1d6fb468f275aa69c86.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:19:21 +0100
+Subject: [PATCH 53/56] acpi-build: fix build on glib < 2.14
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-54-git-send-email-mst@redhat.com>
+Patchwork-id: 56359
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 53/57] acpi-build: fix build on glib < 2.14
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+g_array_get_element_size was only added in glib 2.14.
+Fortunately we don't use it for any arrays where
+element size is > 1, so just add an assert.
+
+Reported-by: Richard Henderson <rth@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: 1385036128-8753-2-git-send-email-mst@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@amazon.com>
+(cherry picked from commit b15654c21acef4d2bc17e6ac528c6c93abbb7e1e)
+---
+ hw/i386/acpi-build.c         | 5 ++++-
+ hw/i386/bios-linker-loader.c | 8 ++++----
+ 2 files changed, 8 insertions(+), 5 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/i386/acpi-build.c         | 5 ++++-
+ hw/i386/bios-linker-loader.c | 8 ++++----
+ 2 files changed, 8 insertions(+), 5 deletions(-)
+
+diff --git a/hw/i386/acpi-build.c b/hw/i386/acpi-build.c
+index 4e2d709..4074350 100644
+--- a/hw/i386/acpi-build.c
++++ b/hw/i386/acpi-build.c
+@@ -425,7 +425,10 @@ static inline void *acpi_data_push(GArray *table_data, unsigned size)
+ 
+ static unsigned acpi_data_len(GArray *table)
+ {
+-    return table->len * g_array_get_element_size(table);
++#if GLIB_CHECK_VERSION(2, 14, 0)
++    assert(g_array_get_element_size(table) == 1);
++#endif
++    return table->len;
+ }
+ 
+ static void acpi_align_size(GArray *blob, unsigned align)
+diff --git a/hw/i386/bios-linker-loader.c b/hw/i386/bios-linker-loader.c
+index 0833853..fd23611 100644
+--- a/hw/i386/bios-linker-loader.c
++++ b/hw/i386/bios-linker-loader.c
+@@ -90,7 +90,7 @@ enum {
+ 
+ GArray *bios_linker_loader_init(void)
+ {
+-    return g_array_new(false, true /* clear */, sizeof(BiosLinkerLoaderEntry));
++    return g_array_new(false, true /* clear */, 1);
+ }
+ 
+ /* Free linker wrapper and return the linker array. */
+@@ -115,7 +115,7 @@ void bios_linker_loader_alloc(GArray *linker,
+                                     BIOS_LINKER_LOADER_ALLOC_ZONE_HIGH);
+ 
+     /* Alloc entries must come first, so prepend them */
+-    g_array_prepend_val(linker, entry);
++    g_array_prepend_vals(linker, &entry, sizeof entry);
+ }
+ 
+ void bios_linker_loader_add_checksum(GArray *linker, const char *file,
+@@ -132,7 +132,7 @@ void bios_linker_loader_add_checksum(GArray *linker, const char *file,
+     entry.cksum.start = cpu_to_le32((uint8_t *)start - (uint8_t *)table);
+     entry.cksum.length = cpu_to_le32(size);
+ 
+-    g_array_append_val(linker, entry);
++    g_array_append_vals(linker, &entry, sizeof entry);
+ }
+ 
+ void bios_linker_loader_add_pointer(GArray *linker,
+@@ -154,5 +154,5 @@ void bios_linker_loader_add_pointer(GArray *linker,
+     assert(pointer_size == 1 || pointer_size == 2 ||
+            pointer_size == 4 || pointer_size == 8);
+ 
+-    g_array_append_val(linker, entry);
++    g_array_append_vals(linker, &entry, sizeof entry);
+ }
+-- 
+1.7.11.7
+

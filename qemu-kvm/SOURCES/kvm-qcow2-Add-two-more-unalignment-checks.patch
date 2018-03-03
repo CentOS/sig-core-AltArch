@@ -1,0 +1,72 @@
+From b8514c8dfe9af1d7c6e5ed3eff1a4383b5da087e Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:22:31 +0200
+Subject: [PATCH 37/42] qcow2: Add two more unalignment checks
+
+Message-id: <1434212556-3927-38-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66056
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 37/42] qcow2: Add two more unalignment checks
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1129893
+
+This adds checks for unaligned L2 table offsets and unaligned data
+cluster offsets (actually the preallocated offsets for zero clusters) to
+the zero cluster expansion function.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 8dd93d9339505376f6ce6737ead871ff6d7e676f)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-cluster.c | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/block/qcow2-cluster.c b/block/qcow2-cluster.c
+index 053e9fe..f7938f6 100644
+--- a/block/qcow2-cluster.c
++++ b/block/qcow2-cluster.c
+@@ -1579,6 +1579,14 @@ static int expand_zero_clusters_in_l1(BlockDriverState *bs, uint64_t *l1_table,
+             continue;
+         }
+ 
++        if (offset_into_cluster(s, l2_offset)) {
++            qcow2_signal_corruption(bs, true, -1, -1, "L2 table offset %#"
++                                    PRIx64 " unaligned (L1 index: %#x)",
++                                    l2_offset, i);
++            ret = -EIO;
++            goto fail;
++        }
++
+         if (is_active_l1) {
+             /* get active L2 tables from cache */
+             ret = qcow2_cache_get(bs, s->l2_table_cache, l2_offset,
+@@ -1638,6 +1646,19 @@ static int expand_zero_clusters_in_l1(BlockDriverState *bs, uint64_t *l1_table,
+                 }
+             }
+ 
++            if (offset_into_cluster(s, offset)) {
++                qcow2_signal_corruption(bs, true, -1, -1, "Data cluster offset "
++                                        "%#" PRIx64 " unaligned (L2 offset: %#"
++                                        PRIx64 ", L2 index: %#x)", offset,
++                                        l2_offset, j);
++                if (!preallocated) {
++                    qcow2_free_clusters(bs, offset, s->cluster_size,
++                                        QCOW2_DISCARD_ALWAYS);
++                }
++                ret = -EIO;
++                goto fail;
++            }
++
+             ret = qcow2_pre_write_overlap_check(bs, 0, offset, s->cluster_size);
+             if (ret < 0) {
+                 if (!preallocated) {
+-- 
+1.8.3.1
+

@@ -1,0 +1,85 @@
+From 23bc583f18eb8ffc28604a4ae42e2f7a55b31c3e Mon Sep 17 00:00:00 2001
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Thu, 5 Nov 2015 15:20:57 +0100
+Subject: [PATCH 2/6] rbd: make qemu's cache setting override any ceph setting
+
+Message-id: <1446736858-29005-2-git-send-email-stefanha@redhat.com>
+Patchwork-id: 68293
+O-Subject: [RHEL-7.2.z qemu-kvm PATCH 1/2] rbd: make qemu's cache setting override any ceph setting
+Bugzilla: 1277248
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+From: Josh Durgin <jdurgin@redhat.com>
+
+To be safe, when cache=none is used ceph settings should not be able
+to override it to turn on caching. This was previously possible with
+rbd_cache=true in the rbd device configuration or a ceph configuration
+file. Similarly, rbd settings could have turned off caching when qemu
+requested it, although this would just be a performance problem.
+
+Fix this by changing rbd's cache setting to match qemu after all other
+ceph settings have been applied.
+
+Signed-off-by: Josh Durgin <jdurgin@redhat.com>
+Reviewed-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 99a3c89d5d538dc6c360e35dffb797cfe06e9cda)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	block/rbd.c - downstream doesn't use Error **errp
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+---
+ block/rbd.c | 26 +++++++++++++-------------
+ 1 file changed, 13 insertions(+), 13 deletions(-)
+
+diff --git a/block/rbd.c b/block/rbd.c
+index 4eea455..11a39ac 100644
+--- a/block/rbd.c
++++ b/block/rbd.c
+@@ -501,19 +501,6 @@ static int qemu_rbd_open(BlockDriverState *bs, QDict *options, int flags,
+         s->snap = g_strdup(snap_buf);
+     }
+ 
+-    /*
+-     * Fallback to more conservative semantics if setting cache
+-     * options fails. Ignore errors from setting rbd_cache because the
+-     * only possible error is that the option does not exist, and
+-     * librbd defaults to no caching. If write through caching cannot
+-     * be set up, fall back to no caching.
+-     */
+-    if (flags & BDRV_O_NOCACHE) {
+-        rados_conf_set(s->cluster, "rbd_cache", "false");
+-    } else {
+-        rados_conf_set(s->cluster, "rbd_cache", "true");
+-    }
+-
+     if (strstr(conf, "conf=") == NULL) {
+         /* try default location, but ignore failure */
+         rados_conf_read_file(s->cluster, NULL);
+@@ -527,6 +514,19 @@ static int qemu_rbd_open(BlockDriverState *bs, QDict *options, int flags,
+         }
+     }
+ 
++    /*
++     * Fallback to more conservative semantics if setting cache
++     * options fails. Ignore errors from setting rbd_cache because the
++     * only possible error is that the option does not exist, and
++     * librbd defaults to no caching. If write through caching cannot
++     * be set up, fall back to no caching.
++     */
++    if (flags & BDRV_O_NOCACHE) {
++        rados_conf_set(s->cluster, "rbd_cache", "false");
++    } else {
++        rados_conf_set(s->cluster, "rbd_cache", "true");
++    }
++
+     r = rados_connect(s->cluster);
+     if (r < 0) {
+         error_report("error connecting");
+-- 
+1.8.3.1
+

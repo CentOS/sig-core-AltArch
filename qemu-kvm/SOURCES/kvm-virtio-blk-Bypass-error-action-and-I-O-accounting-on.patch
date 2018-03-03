@@ -1,0 +1,88 @@
+From 8406a85d6b78d2f3478a204b5eab0cd714fe9aa4 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Fri, 31 Oct 2014 16:29:53 +0100
+Subject: [PATCH 16/19] virtio-blk: Bypass error action and I/O accounting on
+ invalid r/w
+
+Message-id: <1414772996-17272-3-git-send-email-armbru@redhat.com>
+Patchwork-id: 62014
+O-Subject: [PATCH RHEL-7.1 qemu-kvm 2/5] virtio-blk: Bypass error action and I/O accounting on invalid r/w
+Bugzilla: 1085232
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+When a device model's I/O operation fails, we execute the error
+action.  This lets layers above QEMU implement thin provisioning, or
+attempt to correct errors before they reach the guest.  But when the
+I/O operation fails because it's invalid, reporting the error to the
+guest is the only sensible action.
+
+If the guest's read or write asks for an invalid sector range, fail
+the request right away, without considering the error action.  No
+change with error action BDRV_ACTION_REPORT.
+
+Furthermore, bypass I/O accounting, because we want to track only I/O
+that actually reaches the block layer.
+
+The next commit will extend "invalid sector range" to cover attempts
+to read/write beyond the end of the medium.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 42e38c1fd0199155d32f3464aedce282d3d7f6a1)
+
+Straightforward semantic conflict: requests still have to be freed
+with g_free() because we don't have commit 671ec3f.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/block/virtio-blk.c | 14 ++++++++------
+ 1 file changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/hw/block/virtio-blk.c b/hw/block/virtio-blk.c
+index 0f1d3ec..ffb311c 100644
+--- a/hw/block/virtio-blk.c
++++ b/hw/block/virtio-blk.c
+@@ -300,15 +300,16 @@ static void virtio_blk_handle_write(VirtIOBlockReq *req, MultiReqBuffer *mrb)
+ 
+     sector = ldq_p(&req->out->sector);
+ 
+-    bdrv_acct_start(req->dev->bs, &req->acct, req->qiov.size, BDRV_ACCT_WRITE);
+-
+     trace_virtio_blk_handle_write(req, sector, req->qiov.size / 512);
+ 
+     if (!virtio_blk_sect_range_ok(req->dev, sector, req->qiov.size)) {
+-        virtio_blk_rw_complete(req, -EIO);
++        virtio_blk_req_complete(req, VIRTIO_BLK_S_IOERR);
++        g_free(req);
+         return;
+     }
+ 
++    bdrv_acct_start(req->dev->bs, &req->acct, req->qiov.size, BDRV_ACCT_WRITE);
++
+     if (mrb->num_writes == 32) {
+         virtio_submit_multiwrite(req->dev->bs, mrb);
+     }
+@@ -330,14 +331,15 @@ static void virtio_blk_handle_read(VirtIOBlockReq *req)
+ 
+     sector = ldq_p(&req->out->sector);
+ 
+-    bdrv_acct_start(req->dev->bs, &req->acct, req->qiov.size, BDRV_ACCT_READ);
+-
+     trace_virtio_blk_handle_read(req, sector, req->qiov.size / 512);
+ 
+     if (!virtio_blk_sect_range_ok(req->dev, sector, req->qiov.size)) {
+-        virtio_blk_rw_complete(req, -EIO);
++        virtio_blk_req_complete(req, VIRTIO_BLK_S_IOERR);
++        g_free(req);
+         return;
+     }
++
++    bdrv_acct_start(req->dev->bs, &req->acct, req->qiov.size, BDRV_ACCT_READ);
+     bdrv_aio_readv(req->dev->bs, sector, &req->qiov,
+                    req->qiov.size / BDRV_SECTOR_SIZE,
+                    virtio_blk_rw_complete, req);
+-- 
+1.8.3.1
+

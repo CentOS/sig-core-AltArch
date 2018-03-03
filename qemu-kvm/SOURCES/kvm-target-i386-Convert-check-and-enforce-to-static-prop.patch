@@ -1,0 +1,100 @@
+From f60e83f9ba3436243c247fe81a53b0158f982b2a Mon Sep 17 00:00:00 2001
+From: Vadim Rozenfeld <vrozenfe@redhat.com>
+Date: Mon, 3 Mar 2014 12:09:22 +0100
+Subject: [PATCH 10/12] target-i386: Convert 'check' and 'enforce' to static properties
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Vadim Rozenfeld <vrozenfe@redhat.com>
+Message-id: <1393848564-10511-11-git-send-email-vrozenfe@redhat.com>
+Patchwork-id: 57966
+O-Subject: [RHEL-7.0 qemu-kvm v4 PATCH 10/12] target-i386: Convert 'check' and 'enforce' to static properties
+Bugzilla: 1004773
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+
+From: Igor Mammedov <imammedo@redhat.com>
+
+* Additionally convert check_cpuid & enforce_cpuid to bool and make them
+  members of X86CPU
+* Make 'enforce' feature independent from 'check'
+
+Signed-off-by: Igor Mammedov <imammedo@redhat.com>
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit 912ffc479c0008bd983f5733daa52438b359be6f)
+---
+ target-i386/cpu-qom.h |  2 ++
+ target-i386/cpu.c     | 13 ++++++-------
+ 2 files changed, 8 insertions(+), 7 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/cpu-qom.h |    2 ++
+ target-i386/cpu.c     |   13 ++++++-------
+ 2 files changed, 8 insertions(+), 7 deletions(-)
+
+diff --git a/target-i386/cpu-qom.h b/target-i386/cpu-qom.h
+index ac56fec..99ba65f 100644
+--- a/target-i386/cpu-qom.h
++++ b/target-i386/cpu-qom.h
+@@ -69,6 +69,8 @@ typedef struct X86CPU {
+     bool hyperv_vapic;
+     bool hyperv_relaxed_timing;
+     int hyperv_spinlock_attempts;
++    bool check_cpuid;
++    bool enforce_cpuid;
+ 
+     /* Features that were filtered out because of missing host capabilities */
+     uint32_t filtered_features[FEATURE_WORDS];
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index db51f72..9f2a04e 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -242,9 +242,6 @@ typedef struct model_features_t {
+     FeatureWord feat_word;
+ } model_features_t;
+ 
+-int check_cpuid = 0;
+-int enforce_cpuid = 0;
+-
+ static uint32_t kvm_default_features = (1 << KVM_FEATURE_CLOCKSOURCE) |
+         (1 << KVM_FEATURE_NOP_IO_DELAY) |
+         (1 << KVM_FEATURE_CLOCKSOURCE2) |
+@@ -1687,9 +1684,9 @@ static void cpu_x86_parse_featurestr(X86CPU *cpu, char *features, Error **errp)
+                 goto out;
+             }
+         } else if (!strcmp(featurestr, "check")) {
+-            check_cpuid = 1;
++            object_property_parse(OBJECT(cpu), "on", featurestr, errp);
+         } else if (!strcmp(featurestr, "enforce")) {
+-            check_cpuid = enforce_cpuid = 1;
++            object_property_parse(OBJECT(cpu), "on", featurestr, errp);
+         } else if (!strcmp(featurestr, "hv_relaxed")) {
+             object_property_parse(OBJECT(cpu), "on", "hv-relaxed", errp);
+         } else if (!strcmp(featurestr, "hv_vapic")) {
+@@ -2490,8 +2487,8 @@ static void x86_cpu_realizefn(DeviceState *dev, Error **errp)
+         env->features[FEAT_8000_0001_ECX] &= TCG_EXT3_FEATURES;
+         env->features[FEAT_SVM] &= TCG_SVM_FEATURES;
+     } else {
+-        if (check_cpuid && kvm_check_features_against_host(cpu)
+-            && enforce_cpuid) {
++        if ((cpu->check_cpuid || cpu->enforce_cpuid)
++            && kvm_check_features_against_host(cpu) && cpu->enforce_cpuid) {
+             error_setg(&local_err,
+                        "Host's CPU doesn't support requested features");
+             goto out;
+@@ -2633,6 +2630,8 @@ static Property x86_cpu_properties[] = {
+     { .name  = "hv-spinlocks", .info  = &qdev_prop_spinlocks },
+     DEFINE_PROP_BOOL("hv-relaxed", X86CPU, hyperv_relaxed_timing, false),
+     DEFINE_PROP_BOOL("hv-vapic", X86CPU, hyperv_vapic, false),
++    DEFINE_PROP_BOOL("check", X86CPU, check_cpuid, false),
++    DEFINE_PROP_BOOL("enforce", X86CPU, enforce_cpuid, false),
+     DEFINE_PROP_END_OF_LIST()
+ };
+ 
+-- 
+1.7.1
+

@@ -1,0 +1,70 @@
+From 036dba4d4b9a82507dafba8a365bf6e6bbf5b6e8 Mon Sep 17 00:00:00 2001
+Message-Id: <036dba4d4b9a82507dafba8a365bf6e6bbf5b6e8.1387382496.git.minovotn@redhat.com>
+In-Reply-To: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+References: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+From: Nigel Croxon <ncroxon@redhat.com>
+Date: Thu, 14 Nov 2013 22:53:04 +0100
+Subject: [PATCH 28/46] rdma: validate RDMAControlHeader::len
+
+RH-Author: Nigel Croxon <ncroxon@redhat.com>
+Message-id: <1384469598-13137-29-git-send-email-ncroxon@redhat.com>
+Patchwork-id: 55709
+O-Subject: [RHEL7.0 PATCH 28/42] rdma: validate RDMAControlHeader::len
+Bugzilla: 1011720
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: 1011720
+https://bugzilla.redhat.com/show_bug.cgi?id=1011720
+
+>From commit ID:
+commit 6f1484edadba57f2800dc04ae3527ee4b6dac7ef
+Author: Isaku Yamahata <yamahata@private.email.ne.jp>
+Date:   Fri Aug 9 16:05:41 2013 -0400
+
+    rdma: validate RDMAControlHeader::len
+
+    RMDAControlHeader::len is provided from remote, so validate it.
+
+    Reviewed-by: Orit Wasserman <owasserm@redhat.com>
+    Reviewed-by: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Isaku Yamahata <yamahata@private.email.ne.jp>
+    Signed-off-by: Michael R. Hines <mrhines@us.ibm.com>
+    Message-id: 1376078746-24948-3-git-send-email-mrhines@linux.vnet.ibm.com
+    Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+---
+ migration-rdma.c |    5 +++++
+ 1 files changed, 5 insertions(+), 0 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ migration-rdma.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/migration-rdma.c b/migration-rdma.c
+index 1412cde..140d930 100644
+--- a/migration-rdma.c
++++ b/migration-rdma.c
+@@ -1424,6 +1424,7 @@ static int qemu_rdma_post_send_control(RDMAContext *rdma, uint8_t *buf,
+      * The copy makes the RDMAControlHeader simpler to manipulate
+      * for the time being.
+      */
++    assert(head->len <= RDMA_CONTROL_MAX_BUFFER - sizeof(*head));
+     memcpy(wr->control, head, sizeof(RDMAControlHeader));
+     control_to_network((void *) wr->control);
+ 
+@@ -1504,6 +1505,10 @@ static int qemu_rdma_exchange_get_response(RDMAContext *rdma,
+                 control_desc[head->type], head->type, head->len);
+         return -EIO;
+     }
++    if (head->len > RDMA_CONTROL_MAX_BUFFER - sizeof(*head)) {
++        fprintf(stderr, "too long length: %d\n", head->len);
++        return -EINVAL;
++    }
+ 
+     return 0;
+ }
+-- 
+1.7.11.7
+

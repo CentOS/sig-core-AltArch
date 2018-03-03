@@ -1,0 +1,70 @@
+From 3938c85004bbd742c5a8c7e1480ed14c2420cd9d Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Tue, 26 Aug 2014 13:33:14 +0200
+Subject: [PATCH 1/6] Enforce stack protector usage
+
+Message-id: <1409059994-2966-1-git-send-email-mrezanin@redhat.com>
+Patchwork-id: 60699
+O-Subject: [RHEL-7.1 qemu-kvm PATCH] Enforce stack protector usage
+Bugzilla: 1064260
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Jeff Nelson <jenelson@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+From: Miroslav Rezanina <mrezanin@redhat.com>
+
+If --enable-stack-protector is used is used, configure script try to use
+--fstack-protector-strong. In case it's not supported, --fstack-protector-all
+is enabled. If both protectors are not supported, configure does not use
+any protector at all without any notification.
+
+This patch reports error when user requests stack protector to be used and
+both protector modes are not supported. Behavior is not changed in case
+user do not use any of --enable-stack-protector/--disable-stack-protector.
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+[Fix non-POSIX operator in test. - Paolo]
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+
+(cherry picked from commit 3b463a3fa8f7690ffa3ef273993dff349b3a73d3)
+
+Conflicts:
+	configure - upstream use -fstack-protector-all as second option
+                we used -fstack-protector.
+                Updated to upstream behavior
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ configure |    9 ++++++++-
+ 1 files changed, 8 insertions(+), 1 deletions(-)
+
+diff --git a/configure b/configure
+index 4552e08..0c666e5 100755
+--- a/configure
++++ b/configure
+@@ -1303,14 +1303,21 @@ for flag in $gcc_flags; do
+ done
+ 
+ if test "$stack_protector" != "no" ; then
+-  gcc_flags="-fstack-protector-strong -fstack-protector"
++  gcc_flags="-fstack-protector-strong -fstack-protector-all"
++  sp_on=0
+   for flag in $gcc_flags; do
+     if compile_prog "-Werror $flag" "" ; then
+       QEMU_CFLAGS="$QEMU_CFLAGS $flag"
+       LIBTOOLFLAGS="$LIBTOOLFLAGS -Wc,$flag"
++      sp_on=1
+       break
+     fi
+   done
++  if test "$stack_protector" = yes; then
++    if test $sp_on = 0; then
++      error_exit "Stack protector not supported"
++    fi
++  fi
+ fi
+ 
+ # Workaround for http://gcc.gnu.org/PR55489.  Happens with -fPIE/-fPIC and
+-- 
+1.7.1
+

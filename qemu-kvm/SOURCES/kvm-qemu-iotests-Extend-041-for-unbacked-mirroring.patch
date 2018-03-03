@@ -1,0 +1,88 @@
+From 728f93f0bf205f8b4ebbf2c4f0e57ecd63e1ea98 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sun, 19 Jan 2014 18:07:58 +0100
+Subject: [PATCH 24/34] qemu-iotests: Extend 041 for unbacked mirroring
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1390154881-17140-5-git-send-email-mreitz@redhat.com>
+Patchwork-id: 56817
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 4/7] qemu-iotests: Extend 041 for unbacked mirroring
+Bugzilla: 921890
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+BZ: 921890
+
+Add a new test case in file 041 for mirroring unbacked images in
+"absolute-paths" mode. This should work, if possible, but most
+importantly, qemu should never crash.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Wenchao Xia <xiawenc@linux.vnet.ibm.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit c15badee200f9e743e3639cc5e3e7dd62c69332f)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ tests/qemu-iotests/041     | 25 +++++++++++++++++++++++++
+ tests/qemu-iotests/041.out |  4 ++--
+ 2 files changed, 27 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/041     |   25 +++++++++++++++++++++++++
+ tests/qemu-iotests/041.out |    4 ++--
+ 2 files changed, 27 insertions(+), 2 deletions(-)
+
+diff --git a/tests/qemu-iotests/041 b/tests/qemu-iotests/041
+index ff89427..eccfe38 100755
+--- a/tests/qemu-iotests/041
++++ b/tests/qemu-iotests/041
+@@ -736,5 +736,30 @@ class TestSetSpeed(ImageMirroringTestCase):
+ 
+         self.cancel_and_wait()
+ 
++class TestUnbackedSource(ImageMirroringTestCase):
++    image_len = 2 * 1024 * 1024 # MB
++
++    def setUp(self):
++        qemu_img('create', '-f', iotests.imgfmt, test_img,
++                 str(TestUnbackedSource.image_len))
++        self.vm = iotests.VM().add_drive(test_img)
++        self.vm.launch()
++
++    def tearDown(self):
++        self.vm.shutdown()
++        os.remove(test_img)
++        os.remove(target_img)
++
++    def test_absolute_paths(self):
++        self.assert_no_active_block_jobs()
++
++        for sync_mode in ['full', 'top', 'none']:
++            result = self.vm.qmp('drive-mirror', device='drive0',
++                                 sync=sync_mode, target=target_img,
++                                 mode='absolute-paths')
++            self.assert_qmp(result, 'return', {})
++            self.complete_and_wait()
++            self.assert_no_active_block_jobs()
++
+ if __name__ == '__main__':
+     iotests.main(supported_fmts=['qcow2', 'qed'])
+diff --git a/tests/qemu-iotests/041.out b/tests/qemu-iotests/041.out
+index 42314e9..4fd1c2d 100644
+--- a/tests/qemu-iotests/041.out
++++ b/tests/qemu-iotests/041.out
+@@ -1,5 +1,5 @@
+-........................
++.........................
+ ----------------------------------------------------------------------
+-Ran 24 tests
++Ran 25 tests
+ 
+ OK
+-- 
+1.7.1
+

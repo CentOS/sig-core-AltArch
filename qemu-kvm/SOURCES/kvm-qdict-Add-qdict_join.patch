@@ -1,0 +1,89 @@
+From 08ab287975f409e420863a8d39e3b3add8ca6088 Mon Sep 17 00:00:00 2001
+From: Richard Jones <rjones@redhat.com>
+Date: Tue, 2 Jun 2015 09:46:36 +0200
+Subject: [PATCH 2/4] qdict: Add qdict_join()
+
+Message-id: <1433238397-2500-2-git-send-email-rjones@redhat.com>
+Patchwork-id: 65278
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 1/2] qdict: Add qdict_join()
+Bugzilla: 1226697
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Max Reitz <mreitz@redhat.com>
+
+This function joins two QDicts by absorbing one into the other.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ include/qapi/qmp/qdict.h |  3 +++
+ qobject/qdict.c          | 32 ++++++++++++++++++++++++++++++++
+ 2 files changed, 35 insertions(+)
+
+diff --git a/include/qapi/qmp/qdict.h b/include/qapi/qmp/qdict.h
+index d6855d1..fc6e2f2 100644
+--- a/include/qapi/qmp/qdict.h
++++ b/include/qapi/qmp/qdict.h
+@@ -16,6 +16,7 @@
+ #include "qapi/qmp/qobject.h"
+ #include "qapi/qmp/qlist.h"
+ #include "qemu/queue.h"
++#include <stdbool.h>
+ #include <stdint.h>
+ 
+ #define QDICT_BUCKET_MAX 512
+@@ -67,4 +68,6 @@ const char *qdict_get_try_str(const QDict *qdict, const char *key);
+ QDict *qdict_clone_shallow(const QDict *src);
+ void qdict_flatten(QDict *qdict);
+ 
++void qdict_join(QDict *dest, QDict *src, bool overwrite);
++
+ #endif /* QDICT_H */
+diff --git a/qobject/qdict.c b/qobject/qdict.c
+index 472f106..c7e35ae 100644
+--- a/qobject/qdict.c
++++ b/qobject/qdict.c
+@@ -527,3 +527,35 @@ void qdict_flatten(QDict *qdict)
+ {
+     qdict_do_flatten(qdict, qdict, NULL);
+ }
++
++/**
++ * qdict_join(): Absorb the src QDict into the dest QDict, that is, move all
++ * elements from src to dest.
++ *
++ * If an element from src has a key already present in dest, it will not be
++ * moved unless overwrite is true.
++ *
++ * If overwrite is true, the conflicting values in dest will be discarded and
++ * replaced by the corresponding values from src.
++ *
++ * Therefore, with overwrite being true, the src QDict will always be empty when
++ * this function returns. If overwrite is false, the src QDict will be empty
++ * iff there were no conflicts.
++ */
++void qdict_join(QDict *dest, QDict *src, bool overwrite)
++{
++    const QDictEntry *entry, *next;
++
++    entry = qdict_first(src);
++    while (entry) {
++        next = qdict_next(src, entry);
++
++        if (overwrite || !qdict_haskey(dest, entry->key)) {
++            qobject_incref(entry->value);
++            qdict_put_obj(dest, entry->key, entry->value);
++            qdict_del(src, entry->key);
++        }
++
++        entry = next;
++    }
++}
+-- 
+1.8.3.1
+

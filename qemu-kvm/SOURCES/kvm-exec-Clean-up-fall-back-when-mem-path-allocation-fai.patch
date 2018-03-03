@@ -1,0 +1,66 @@
+From 897142f67237f772669d48d024e8e7719f6a5a79 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 18 Sep 2013 09:31:03 +0200
+Subject: [PATCH 19/29] exec: Clean up fall back when -mem-path allocation fails
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1379496669-22778-3-git-send-email-armbru@redhat.com>
+Patchwork-id: 54421
+O-Subject: [PATCH 7.0 qemu-kvm 2/8] exec: Clean up fall back when -mem-path allocation fails
+Bugzilla: 1009328
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+With -mem-path, qemu_ram_alloc_from_ptr() first tries to allocate
+accordingly, but when it fails, it falls back to normal allocation.
+
+The fall back allocation code used to be effectively identical to the
+"-mem-path not given" code, until it started to diverge in commit
+432d268.  I believe the code still works, but clean it up anyway: drop
+the special fall back allocation code, and fall back to the ordinary
+"-mem-path not given" code instead.
+
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Acked-by: Laszlo Ersek <lersek@redhat.com>
+Acked-by: Stefano Stabellini <stefano.stabellini@eu.citrix.com>
+Message-id: 1375276272-15988-3-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <anthony@codemonkey.ws>
+(cherry picked from commit 0628c18267bbe8d44f0faf3e71acf0ae31bea7fd)
+---
+ exec.c | 7 ++-----
+ 1 file changed, 2 insertions(+), 5 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ exec.c |    7 ++-----
+ 1 files changed, 2 insertions(+), 5 deletions(-)
+
+diff --git a/exec.c b/exec.c
+index 914d066..ef8d311 100644
+--- a/exec.c
++++ b/exec.c
+@@ -1063,15 +1063,12 @@ ram_addr_t qemu_ram_alloc_from_ptr(ram_addr_t size, void *host,
+         if (mem_path) {
+ #if defined (__linux__) && !defined(TARGET_S390X)
+             new_block->host = file_ram_alloc(new_block, size, mem_path);
+-            if (!new_block->host) {
+-                new_block->host = qemu_anon_ram_alloc(size);
+-                memory_try_enable_merging(new_block->host, size);
+-            }
+ #else
+             fprintf(stderr, "-mem-path option unsupported\n");
+             exit(1);
+ #endif
+-        } else {
++        }
++        if (!new_block->host) {
+             if (kvm_enabled()) {
+                 /* some s390/kvm configurations have special constraints */
+                 new_block->host = kvm_ram_alloc(size);
+-- 
+1.7.1
+

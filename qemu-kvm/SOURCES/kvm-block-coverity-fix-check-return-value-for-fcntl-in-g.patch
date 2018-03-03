@@ -1,0 +1,51 @@
+From 25730930b496dd639afe8906744ce9ebeb7db7e9 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Wed, 5 Aug 2015 14:38:26 +0200
+Subject: [PATCH 3/3] block: coverity fix: check return value for fcntl in
+ gluster
+
+Message-id: <9a482772dc4e110d2a774bbed0e1dbecdaaec43e.1438784597.git.jcody@redhat.com>
+Patchwork-id: 67323
+O-Subject: [RHEL-7.2 qemu-kvm PATCH v3] block: coverity fix: check return value for fcntl in gluster
+Bugzilla: 1219217
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Check return value in the Gluster driver for fcntl, as pointed
+out by coverity.
+
+Cleanup of s->fds is done inline in the error handling for the fcntl()
+call, rather than in the function cleanup, to keep changes minimal for
+future backports.
+
+Downstream-only, as upstream Gluster driver does not use fcntl anymore.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/gluster.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/block/gluster.c b/block/gluster.c
+index 5f85799..1793386 100644
+--- a/block/gluster.c
++++ b/block/gluster.c
+@@ -357,7 +357,13 @@ static int qemu_gluster_open(BlockDriverState *bs,  QDict *options,
+         ret = -errno;
+         goto out;
+     }
+-    fcntl(s->fds[GLUSTER_FD_READ], F_SETFL, O_NONBLOCK);
++    ret = fcntl(s->fds[GLUSTER_FD_READ], F_SETFL, O_NONBLOCK);
++    if (ret < 0) {
++        ret = -errno;
++        close(s->fds[GLUSTER_FD_READ]);
++        close(s->fds[GLUSTER_FD_WRITE]);
++        goto out;
++    }
+     qemu_aio_set_fd_handler(s->fds[GLUSTER_FD_READ],
+         qemu_gluster_aio_event_reader, NULL, qemu_gluster_aio_flush_cb, s);
+ 
+-- 
+1.8.3.1
+

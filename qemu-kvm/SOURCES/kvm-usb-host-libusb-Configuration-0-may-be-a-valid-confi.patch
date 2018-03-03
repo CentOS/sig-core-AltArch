@@ -1,0 +1,66 @@
+From 50120520c3ec6385d2d36f5f0fe37acf8d230e91 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Wed, 6 Nov 2013 12:16:59 +0100
+Subject: [PATCH 64/81] usb-host-libusb: Configuration 0 may be a valid configuration
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1383740220-2049-3-git-send-email-kraxel@redhat.com>
+Patchwork-id: 55512
+O-Subject: [RHEL-7 qemu-kvm PATCH 2/3] usb-host-libusb: Configuration 0 may be a valid configuration
+Bugzilla: 980383
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+
+From: Hans de Goede <hdegoede@redhat.com>
+
+Quoting from: linux/Documentation/ABI/stable/sysfs-bus-usb:
+
+	Note that some devices, in violation of the USB spec, have a
+	configuration with a value equal to 0. Writing 0 to
+	bConfigurationValue for these devices will install that
+	configuration, rather then unconfigure the device.
+
+So don't compare the configuration value against 0 to check for unconfigured
+devices, instead check for a LIBUSB_ERROR_NOT_FOUND return from
+libusb_get_active_config_descriptor().
+
+Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 1294ca797c6bee39d4dbc3e92010873ce4047e0e)
+---
+ hw/usb/host-libusb.c | 9 ++++-----
+ 1 file changed, 4 insertions(+), 5 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/host-libusb.c |    9 ++++-----
+ 1 files changed, 4 insertions(+), 5 deletions(-)
+
+diff --git a/hw/usb/host-libusb.c b/hw/usb/host-libusb.c
+index 9c8905e..9b226e4 100644
+--- a/hw/usb/host-libusb.c
++++ b/hw/usb/host-libusb.c
+@@ -992,15 +992,14 @@ static int usb_host_claim_interfaces(USBHostDevice *s, int configuration)
+     udev->ninterfaces   = 0;
+     udev->configuration = 0;
+ 
+-    if (configuration == 0) {
+-        /* address state - ignore */
+-        return USB_RET_SUCCESS;
+-    }
+-
+     usb_host_detach_kernel(s);
+ 
+     rc = libusb_get_active_config_descriptor(s->dev, &conf);
+     if (rc != 0) {
++        if (rc == LIBUSB_ERROR_NOT_FOUND) {
++            /* address state - ignore */
++            return USB_RET_SUCCESS;
++        }
+         return USB_RET_STALL;
+     }
+ 
+-- 
+1.7.1
+

@@ -1,0 +1,86 @@
+From 89bdd1d20e9ccde41f271fe5dc22c355cbbc822a Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Tue, 11 Feb 2014 16:14:28 +0100
+Subject: [PATCH 22/28] block: Fix bdrv_commit return value
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <5019e17d0114b49c58c42415e79b81abdcb648d3.1392134912.git.jcody@redhat.com>
+Patchwork-id: 57218
+O-Subject: [RHEL7 qemu-kvm PATCH 4/6] block: Fix bdrv_commit return value
+Bugzilla: 1047254
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+bdrv_commit() could return 0 or 1 on success, depending on whether or
+not the last sector was allocated in the overlay and whether the overlay
+format had a .bdrv_make_empty callback.
+
+Most callers ignored it, but qemu-img commit would print an error
+message while the operation actually succeeded.
+
+Also clean up the handling of I/O errors to return the real error code
+instead of -EIO.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+(cherry picked from commit dabfa6cc2e2a06269026fcb42772894f67bd0c3e)
+---
+ block.c | 15 ++++++++++-----
+ 1 file changed, 10 insertions(+), 5 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c |   15 ++++++++++-----
+ 1 files changed, 10 insertions(+), 5 deletions(-)
+
+diff --git a/block.c b/block.c
+index c7aa285..642e8d6 100644
+--- a/block.c
++++ b/block.c
+@@ -2006,13 +2006,13 @@ int bdrv_commit(BlockDriverState *bs)
+             goto ro_cleanup;
+         }
+         if (ret) {
+-            if (bdrv_read(bs, sector, buf, n) != 0) {
+-                ret = -EIO;
++            ret = bdrv_read(bs, sector, buf, n);
++            if (ret < 0) {
+                 goto ro_cleanup;
+             }
+ 
+-            if (bdrv_write(bs->backing_hd, sector, buf, n) != 0) {
+-                ret = -EIO;
++            ret = bdrv_write(bs->backing_hd, sector, buf, n);
++            if (ret < 0) {
+                 goto ro_cleanup;
+             }
+         }
+@@ -2020,6 +2020,9 @@ int bdrv_commit(BlockDriverState *bs)
+ 
+     if (drv->bdrv_make_empty) {
+         ret = drv->bdrv_make_empty(bs);
++        if (ret < 0) {
++            goto ro_cleanup;
++        }
+         bdrv_flush(bs);
+     }
+ 
+@@ -2027,9 +2030,11 @@ int bdrv_commit(BlockDriverState *bs)
+      * Make sure all data we wrote to the backing device is actually
+      * stable on disk.
+      */
+-    if (bs->backing_hd)
++    if (bs->backing_hd) {
+         bdrv_flush(bs->backing_hd);
++    }
+ 
++    ret = 0;
+ ro_cleanup:
+     g_free(buf);
+ 
+-- 
+1.7.1
+

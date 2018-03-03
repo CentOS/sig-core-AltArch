@@ -1,0 +1,54 @@
+From 231ea3db5b4c6b9de25fa62b2e6c39ebc4987a6f Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Fri, 18 Oct 2013 08:14:41 +0200
+Subject: [PATCH 16/81] block: return BDRV_BLOCK_ZERO past end of backing file
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1382084091-16636-17-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 54999
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 16/26] block: return BDRV_BLOCK_ZERO past end of backing file
+Bugzilla: 989646
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+If the sectors are unallocated and we are past the end of the
+backing file, they will read as zero.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit f0ad5712d5d15ff272b9e107910be4aae468fb3d)
+---
+ block.c | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c |   12 ++++++++++--
+ 1 files changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/block.c b/block.c
+index 00bc3b2..36a2f24 100644
+--- a/block.c
++++ b/block.c
+@@ -3068,8 +3068,16 @@ static int64_t coroutine_fn bdrv_co_get_block_status(BlockDriverState *bs,
+         return ret;
+     }
+ 
+-    if (!(ret & BDRV_BLOCK_DATA) && bdrv_has_zero_init(bs)) {
+-        ret |= BDRV_BLOCK_ZERO;
++    if (!(ret & BDRV_BLOCK_DATA)) {
++        if (bdrv_has_zero_init(bs)) {
++            ret |= BDRV_BLOCK_ZERO;
++        } else {
++            BlockDriverState *bs2 = bs->backing_hd;
++            int64_t length2 = bdrv_getlength(bs2);
++            if (length2 >= 0 && sector_num >= (length2 >> BDRV_SECTOR_BITS)) {
++                ret |= BDRV_BLOCK_ZERO;
++            }
++        }
+     }
+     return ret;
+ }
+-- 
+1.7.1
+

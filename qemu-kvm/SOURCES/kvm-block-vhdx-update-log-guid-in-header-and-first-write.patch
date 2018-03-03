@@ -1,0 +1,146 @@
+From c310637234eeafe32d0eb5626f91e12b5a2399b9 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Wed, 20 Nov 2013 19:43:55 +0100
+Subject: [PATCH 12/25] block: vhdx - update log guid in header, and first write tracker
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <313d521b2aab6f6657de5b4fbb9cc10e58d9d5c4.1384975172.git.jcody@redhat.com>
+Patchwork-id: 55806
+O-Subject: [RHEL7 qemu-kvm PATCH 12/26] block: vhdx - update log guid in header, and first write tracker
+Bugzilla: 879234
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+Allow tracking of first file write in the VHDX image, as well as
+the ability to update the GUID in the header.  This is in preparation
+for log support.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit c3906c5e8281b37a526c706596af8575d6ac00d3)
+---
+ block/vhdx.c | 30 ++++++++++++++++++++++++------
+ block/vhdx.h |  6 ++++++
+ 2 files changed, 30 insertions(+), 6 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vhdx.c |   30 ++++++++++++++++++++++++------
+ block/vhdx.h |    6 ++++++
+ 2 files changed, 30 insertions(+), 6 deletions(-)
+
+diff --git a/block/vhdx.c b/block/vhdx.c
+index 2efece1..49219df 100644
+--- a/block/vhdx.c
++++ b/block/vhdx.c
+@@ -230,7 +230,7 @@ static int vhdx_probe(const uint8_t *buf, int buf_size, const char *filename)
+  *  - non-current header is updated with largest sequence number
+  */
+ static int vhdx_update_header(BlockDriverState *bs, BDRVVHDXState *s,
+-                              bool generate_data_write_guid)
++                              bool generate_data_write_guid, MSGUID *log_guid)
+ {
+     int ret = 0;
+     int hdr_idx = 0;
+@@ -262,6 +262,11 @@ static int vhdx_update_header(BlockDriverState *bs, BDRVVHDXState *s,
+         vhdx_guid_generate(&inactive_header->data_write_guid);
+     }
+ 
++    /* update the log guid if present */
++    if (log_guid) {
++        inactive_header->log_guid = *log_guid;
++    }
++
+     /* the header checksum is not over just the packed size of VHDXHeader,
+      * but rather over the entire 'reserved' range for the header, which is
+      * 4KB (VHDX_HEADER_SIZE). */
+@@ -294,16 +299,16 @@ exit:
+  * The VHDX spec calls for header updates to be performed twice, so that both
+  * the current and non-current header have valid info
+  */
+-static int vhdx_update_headers(BlockDriverState *bs, BDRVVHDXState *s,
+-                               bool generate_data_write_guid)
++int vhdx_update_headers(BlockDriverState *bs, BDRVVHDXState *s,
++                        bool generate_data_write_guid, MSGUID *log_guid)
+ {
+     int ret;
+ 
+-    ret = vhdx_update_header(bs, s, generate_data_write_guid);
++    ret = vhdx_update_header(bs, s, generate_data_write_guid, log_guid);
+     if (ret < 0) {
+         return ret;
+     }
+-    ret = vhdx_update_header(bs, s, generate_data_write_guid);
++    ret = vhdx_update_header(bs, s, generate_data_write_guid, log_guid);
+     return ret;
+ }
+ 
+@@ -784,6 +789,7 @@ static int vhdx_open(BlockDriverState *bs, QDict *options, int flags,
+ 
+ 
+     s->bat = NULL;
++    s->first_visible_write = true;
+ 
+     qemu_co_mutex_init(&s->lock);
+ 
+@@ -864,7 +870,7 @@ static int vhdx_open(BlockDriverState *bs, QDict *options, int flags,
+     }
+ 
+     if (flags & BDRV_O_RDWR) {
+-        ret = vhdx_update_headers(bs, s, false);
++        ret = vhdx_update_headers(bs, s, false, NULL);
+         if (ret < 0) {
+             goto fail;
+         }
+@@ -1022,6 +1028,18 @@ exit:
+ 
+ 
+ 
++/* Per the spec, on the first write of guest-visible data to the file the
++ * data write guid must be updated in the header */
++int vhdx_user_visible_write(BlockDriverState *bs, BDRVVHDXState *s)
++{
++    int ret = 0;
++    if (s->first_visible_write) {
++        s->first_visible_write = false;
++        ret = vhdx_update_headers(bs, s, true, NULL);
++    }
++    return ret;
++}
++
+ static coroutine_fn int vhdx_co_writev(BlockDriverState *bs, int64_t sector_num,
+                                       int nb_sectors, QEMUIOVector *qiov)
+ {
+diff --git a/block/vhdx.h b/block/vhdx.h
+index 55975a2..81785e5 100644
+--- a/block/vhdx.h
++++ b/block/vhdx.h
+@@ -361,6 +361,7 @@ typedef struct BDRVVHDXState {
+     VHDXBatEntry *bat;
+     uint64_t bat_offset;
+ 
++    bool first_visible_write;
+     MSGUID session_guid;
+ 
+     VHDXLogEntries log;
+@@ -373,6 +374,9 @@ typedef struct BDRVVHDXState {
+ 
+ void vhdx_guid_generate(MSGUID *guid);
+ 
++int vhdx_update_headers(BlockDriverState *bs, BDRVVHDXState *s, bool rw,
++                        MSGUID *log_guid);
++
+ uint32_t vhdx_update_checksum(uint8_t *buf, size_t size, int crc_offset);
+ uint32_t vhdx_checksum_calc(uint32_t crc, uint8_t *buf, size_t size,
+                             int crc_offset);
+@@ -402,4 +406,6 @@ void vhdx_log_data_le_export(VHDXLogDataSector *d);
+ void vhdx_log_entry_hdr_le_import(VHDXLogEntryHeader *hdr);
+ void vhdx_log_entry_hdr_le_export(VHDXLogEntryHeader *hdr);
+ 
++int vhdx_user_visible_write(BlockDriverState *bs, BDRVVHDXState *s);
++
+ #endif
+-- 
+1.7.1
+

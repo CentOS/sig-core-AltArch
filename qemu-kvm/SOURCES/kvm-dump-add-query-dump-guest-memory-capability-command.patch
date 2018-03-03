@@ -1,0 +1,144 @@
+From 1b2628fe2375d602a6f123a0aa4a5cd190e72d3e Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Fri, 7 Nov 2014 17:18:05 +0100
+Subject: [PATCH 18/41] dump: add 'query-dump-guest-memory-capability' command
+
+Message-id: <1415380693-16593-19-git-send-email-lersek@redhat.com>
+Patchwork-id: 62204
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 18/26] dump: add 'query-dump-guest-memory-capability' command
+Bugzilla: 1157798
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: dgibson <dgibson@redhat.com>
+
+From: qiaonuohan <qiaonuohan@cn.fujitsu.com>
+
+'query-dump-guest-memory-capability' is used to query the available formats for
+'dump-guest-memory'. The output of the command will be like:
+
+-> { "execute": "query-dump-guest-memory-capability" }
+<- { "return": { "formats":
+                    ["elf", "kdump-zlib", "kdump-lzo", "kdump-snappy"] }
+
+Signed-off-by: Qiao Nuohan <qiaonuohan@cn.fujitsu.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit 7d6dc7f30c4781857ce230333da6ddd21fe0dcde)
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c           | 33 +++++++++++++++++++++++++++++++++
+ qapi-schema.json | 24 ++++++++++++++++++++++++
+ qmp-commands.hx  | 20 ++++++++++++++++++++
+ 3 files changed, 77 insertions(+)
+
+diff --git a/dump.c b/dump.c
+index 507a250..25bf8e6 100644
+--- a/dump.c
++++ b/dump.c
+@@ -1797,3 +1797,36 @@ void qmp_dump_guest_memory(bool paging, const char *file, bool has_begin,
+ 
+     g_free(s);
+ }
++
++DumpGuestMemoryCapability *qmp_query_dump_guest_memory_capability(Error **errp)
++{
++    DumpGuestMemoryFormatList *item;
++    DumpGuestMemoryCapability *cap =
++                                  g_malloc0(sizeof(DumpGuestMemoryCapability));
++
++    /* elf is always available */
++    item = g_malloc0(sizeof(DumpGuestMemoryFormatList));
++    cap->formats = item;
++    item->value = DUMP_GUEST_MEMORY_FORMAT_ELF;
++
++    /* kdump-zlib is always available */
++    item->next = g_malloc0(sizeof(DumpGuestMemoryFormatList));
++    item = item->next;
++    item->value = DUMP_GUEST_MEMORY_FORMAT_KDUMP_ZLIB;
++
++    /* add new item if kdump-lzo is available */
++#ifdef CONFIG_LZO
++    item->next = g_malloc0(sizeof(DumpGuestMemoryFormatList));
++    item = item->next;
++    item->value = DUMP_GUEST_MEMORY_FORMAT_KDUMP_LZO;
++#endif
++
++    /* add new item if kdump-snappy is available */
++#ifdef CONFIG_SNAPPY
++    item->next = g_malloc0(sizeof(DumpGuestMemoryFormatList));
++    item = item->next;
++    item->value = DUMP_GUEST_MEMORY_FORMAT_KDUMP_SNAPPY;
++#endif
++
++    return cap;
++}
+diff --git a/qapi-schema.json b/qapi-schema.json
+index 8f81c76..31ac5c5 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -2645,6 +2645,30 @@
+             '*length': 'int', '*format': 'DumpGuestMemoryFormat' } }
+ 
+ ##
++# @DumpGuestMemoryCapability:
++#
++# A list of the available formats for dump-guest-memory
++#
++# Since: 2.0
++##
++{ 'type': 'DumpGuestMemoryCapability',
++  'data': {
++      'formats': ['DumpGuestMemoryFormat'] } }
++
++##
++# @query-dump-guest-memory-capability:
++#
++# Returns the available formats for dump-guest-memory
++#
++# Returns:  A @DumpGuestMemoryCapability object listing available formats for
++#           dump-guest-memory
++#
++# Since: 2.0
++##
++{ 'command': 'query-dump-guest-memory-capability',
++  'returns': 'DumpGuestMemoryCapability' }
++
++##
+ # @netdev_add:
+ #
+ # Add a network backend.
+diff --git a/qmp-commands.hx b/qmp-commands.hx
+index 61aa3bf..9c11213 100644
+--- a/qmp-commands.hx
++++ b/qmp-commands.hx
+@@ -923,6 +923,26 @@ Notes:
+ EQMP
+ 
+     {
++        .name       = "query-dump-guest-memory-capability",
++        .args_type  = "",
++    .mhandler.cmd_new = qmp_marshal_input_query_dump_guest_memory_capability,
++    },
++
++SQMP
++query-dump-guest-memory-capability
++----------
++
++Show available formats for 'dump-guest-memory'
++
++Example:
++
++-> { "execute": "query-dump-guest-memory-capability" }
++<- { "return": { "formats":
++                    ["elf", "kdump-zlib", "kdump-lzo", "kdump-snappy"] }
++
++EQMP
++
++    {
+         .name       = "netdev_add",
+         .args_type  = "netdev:O",
+         .mhandler.cmd_new = qmp_netdev_add,
+-- 
+1.8.3.1
+

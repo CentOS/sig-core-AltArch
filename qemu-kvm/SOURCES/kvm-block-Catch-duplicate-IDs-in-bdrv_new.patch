@@ -1,0 +1,123 @@
+From 48398d9b96fa334e8c0e626d99cf2df8f4a5c664 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Thu, 23 Oct 2014 10:10:11 +0200
+Subject: [PATCH 08/19] block: Catch duplicate IDs in bdrv_new()
+
+Message-id: <1414059011-15516-9-git-send-email-kwolf@redhat.com>
+Patchwork-id: 61840
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v2 8/8] block: Catch duplicate IDs in bdrv_new()
+Bugzilla: 1088176
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+Since commit f298d071, block devices added with blockdev-add don't have
+a QemuOpts around in dinfo->opts. Consequently, we can't rely any more
+on QemuOpts catching duplicate IDs for block devices.
+
+This patch adds a new check for duplicate IDs to bdrv_new(), and moves
+the existing check that the ID isn't already taken for a node-name there
+as well.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit f2d953ec31eeeb3029ca915a55938c538a14efa8)
+
+In RHEL 7, node names don't exist yet, so only check the ID.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c                    |  6 ++++++
+ tests/qemu-iotests/087     | 33 +++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/087.out | 13 +++++++++++++
+ 3 files changed, 52 insertions(+)
+
+diff --git a/block.c b/block.c
+index eb0810e..d7b6376 100644
+--- a/block.c
++++ b/block.c
+@@ -304,6 +304,12 @@ BlockDriverState *bdrv_new(const char *device_name, Error **errp)
+ {
+     BlockDriverState *bs;
+ 
++    if (bdrv_find(device_name)) {
++        error_setg(errp, "Device with id '%s' already exists",
++                   device_name);
++        return NULL;
++    }
++
+     bs = g_malloc0(sizeof(BlockDriverState));
+     pstrcpy(bs->device_name, sizeof(bs->device_name), device_name);
+     if (device_name[0] != '\0') {
+diff --git a/tests/qemu-iotests/087 b/tests/qemu-iotests/087
+index 53b6c43..f2fb3f4 100755
+--- a/tests/qemu-iotests/087
++++ b/tests/qemu-iotests/087
+@@ -73,6 +73,39 @@ run_qemu <<EOF
+ EOF
+ 
+ echo
++echo === Duplicate ID ===
++echo
++
++run_qemu <<EOF
++{ "execute": "qmp_capabilities" }
++{ "execute": "blockdev-add",
++  "arguments": {
++      "options": {
++        "driver": "$IMGFMT",
++        "id": "disk",
++        "file": {
++            "driver": "file",
++            "filename": "$TEST_IMG"
++        }
++      }
++    }
++  }
++{ "execute": "blockdev-add",
++  "arguments": {
++      "options": {
++        "driver": "$IMGFMT",
++        "id": "disk",
++        "file": {
++            "driver": "file",
++            "filename": "$TEST_IMG"
++        }
++      }
++    }
++  }
++{ "execute": "quit" }
++EOF
++
++echo
+ echo === aio=native without O_DIRECT ===
+ echo
+ 
+diff --git a/tests/qemu-iotests/087.out b/tests/qemu-iotests/087.out
+index b871032..19e0228 100644
+--- a/tests/qemu-iotests/087.out
++++ b/tests/qemu-iotests/087.out
+@@ -13,6 +13,19 @@ QMP_VERSION
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_TRAY_MOVED", "data": {"device": "floppy0", "tray-open": true}}
+ 
+ 
++=== Duplicate ID ===
++
++Testing:
++QMP_VERSION
++{"return": {}}
++{"return": {}}
++{"error": {"class": "GenericError", "desc": "Device with id 'disk' already exists"}}
++{"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN"}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_TRAY_MOVED", "data": {"device": "ide1-cd0", "tray-open": true}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_TRAY_MOVED", "data": {"device": "floppy0", "tray-open": true}}
++
++
+ === aio=native without O_DIRECT ===
+ 
+ Testing:
+-- 
+1.8.3.1
+

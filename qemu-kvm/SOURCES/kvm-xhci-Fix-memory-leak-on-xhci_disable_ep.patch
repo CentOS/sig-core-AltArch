@@ -1,0 +1,56 @@
+From 1a353074ec2bc18c3f9dd0a56e5febb2cdc1892c Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Fri, 11 Jul 2014 14:20:45 +0200
+Subject: [PATCH 11/43] xhci: Fix memory leak on xhci_disable_ep
+
+Message-id: <1405088470-24115-13-git-send-email-kraxel@redhat.com>
+Patchwork-id: 59821
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 12/37] xhci: Fix memory leak on xhci_disable_ep
+Bugzilla: 980833
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Hans de Goede <hdegoede@redhat.com>
+
+The USBPacket-s in the transfers need to be cleaned up so that the memory
+allocated by the iovec in there gets freed.
+
+Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit b21da4e504fbdb907543a918b190783dc896d8e1)
+---
+ hw/usb/hcd-xhci.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/hcd-xhci.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/hw/usb/hcd-xhci.c b/hw/usb/hcd-xhci.c
+index 56145a5..bb3bba3 100644
+--- a/hw/usb/hcd-xhci.c
++++ b/hw/usb/hcd-xhci.c
+@@ -1382,6 +1382,7 @@ static TRBCCode xhci_disable_ep(XHCIState *xhci, unsigned int slotid,
+ {
+     XHCISlot *slot;
+     XHCIEPContext *epctx;
++    int i;
+ 
+     trace_usb_xhci_ep_disable(slotid, epid);
+     assert(slotid >= 1 && slotid <= xhci->numslots);
+@@ -1402,6 +1403,10 @@ static TRBCCode xhci_disable_ep(XHCIState *xhci, unsigned int slotid,
+         xhci_free_streams(epctx);
+     }
+ 
++    for (i = 0; i < ARRAY_SIZE(epctx->transfers); i++) {
++        usb_packet_cleanup(&epctx->transfers[i].packet);
++    }
++
+     xhci_set_ep_state(xhci, epctx, NULL, EP_DISABLED);
+ 
+     qemu_free_timer(epctx->kick_timer);
+-- 
+1.8.3.1
+

@@ -1,0 +1,89 @@
+From 4394f52159cec32cded60ec8f86cd4b92a85bfe5 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Tue, 7 Feb 2017 10:07:47 +0100
+Subject: [PATCH 04/11] display: cirrus: check vga bits per pixel(bpp) value
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1486462072-32174-3-git-send-email-kraxel@redhat.com>
+Patchwork-id: 73568
+O-Subject: [RHEL-7.4 qemu-kvm PATCH 2/7] display: cirrus: check vga bits per pixel(bpp) value
+Bugzilla: 1418233
+RH-Acked-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Prasad J Pandit <pjp@fedoraproject.org>
+
+In Cirrus CLGD 54xx VGA Emulator, if cirrus graphics mode is VGA,
+'cirrus_get_bpp' returns zero(0), which could lead to a divide
+by zero error in while copying pixel data. The same could occur
+via blit pitch values. Add check to avoid it.
+
+Reported-by: Huawei PSIRT <psirt@huawei.com>
+Signed-off-by: Prasad J Pandit <pjp@fedoraproject.org>
+Message-id: 1476776717-24807-1-git-send-email-ppandit@redhat.com
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 4299b90e9ba9ce5ca9024572804ba751aa1a7e70)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/display/cirrus_vga.c | 14 ++++++++++----
+ 1 file changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/hw/display/cirrus_vga.c b/hw/display/cirrus_vga.c
+index c42dfcf..dacfac6 100644
+--- a/hw/display/cirrus_vga.c
++++ b/hw/display/cirrus_vga.c
+@@ -267,6 +267,9 @@ static void cirrus_update_memory_access(CirrusVGAState *s);
+ static bool blit_region_is_unsafe(struct CirrusVGAState *s,
+                                   int32_t pitch, int32_t addr)
+ {
++    if (!pitch) {
++        return true;
++    }
+     if (pitch < 0) {
+         int64_t min = addr
+             + ((int64_t)s->cirrus_blt_height-1) * pitch;
+@@ -710,7 +713,7 @@ static int cirrus_bitblt_videotovideo_patterncopy(CirrusVGAState * s)
+                                             s->cirrus_addr_mask));
+ }
+ 
+-static void cirrus_do_copy(CirrusVGAState *s, int dst, int src, int w, int h)
++static int cirrus_do_copy(CirrusVGAState *s, int dst, int src, int w, int h)
+ {
+     int sx = 0, sy = 0;
+     int dx = 0, dy = 0;
+@@ -724,6 +727,9 @@ static void cirrus_do_copy(CirrusVGAState *s, int dst, int src, int w, int h)
+         int width, height;
+ 
+         depth = s->vga.get_bpp(&s->vga) / 8;
++        if (!depth) {
++            return 0;
++        }
+         s->vga.get_resolution(&s->vga, &width, &height);
+ 
+         /* extra x, y */
+@@ -778,6 +784,8 @@ static void cirrus_do_copy(CirrusVGAState *s, int dst, int src, int w, int h)
+     cirrus_invalidate_region(s, s->cirrus_blt_dstaddr,
+ 				s->cirrus_blt_dstpitch, s->cirrus_blt_width,
+ 				s->cirrus_blt_height);
++
++    return 1;
+ }
+ 
+ static int cirrus_bitblt_videotovideo_copy(CirrusVGAState * s)
+@@ -785,11 +793,9 @@ static int cirrus_bitblt_videotovideo_copy(CirrusVGAState * s)
+     if (blit_is_unsafe(s))
+         return 0;
+ 
+-    cirrus_do_copy(s, s->cirrus_blt_dstaddr - s->vga.start_addr,
++    return cirrus_do_copy(s, s->cirrus_blt_dstaddr - s->vga.start_addr,
+             s->cirrus_blt_srcaddr - s->vga.start_addr,
+             s->cirrus_blt_width, s->cirrus_blt_height);
+-
+-    return 1;
+ }
+ 
+ /***************************************
+-- 
+1.8.3.1
+

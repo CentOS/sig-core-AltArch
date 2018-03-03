@@ -1,0 +1,156 @@
+From 90fad0c40a1947e229fdf82a30219e33a3e1dad8 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:21:57 +0200
+Subject: [PATCH 03/42] block: Introduce qemu_try_blockalign()
+
+Message-id: <1434212556-3927-4-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66022
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 03/42] block: Introduce qemu_try_blockalign()
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+BZ: 1129893
+
+This function returns NULL instead of aborting when an allocation fails.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+(cherry picked from commit 7d2a35cc921ea4832083a7e8598461868bb538ce)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c               | 13 +++++++++++++
+ include/block/block.h |  1 +
+ include/qemu/osdep.h  |  1 +
+ util/oslib-posix.c    | 16 ++++++++++------
+ util/oslib-win32.c    |  9 +++++++--
+ 5 files changed, 32 insertions(+), 8 deletions(-)
+
+diff --git a/block.c b/block.c
+index f2caf20..caea2ea 100644
+--- a/block.c
++++ b/block.c
+@@ -5175,6 +5175,19 @@ void *qemu_blockalign(BlockDriverState *bs, size_t size)
+     return qemu_memalign(bdrv_opt_mem_align(bs), size);
+ }
+ 
++void *qemu_try_blockalign(BlockDriverState *bs, size_t size)
++{
++    size_t align = bdrv_opt_mem_align(bs);
++
++    /* Ensure that NULL is never returned on success */
++    assert(align > 0);
++    if (size == 0) {
++        size = align;
++    }
++
++    return qemu_try_memalign(align, size);
++}
++
+ /*
+  * Check if all memory in this vector is sector aligned.
+  */
+diff --git a/include/block/block.h b/include/block/block.h
+index 3170cbc..7b538b7 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -417,6 +417,7 @@ void bdrv_img_create(const char *filename, const char *fmt,
+ size_t bdrv_opt_mem_align(BlockDriverState *bs);
+ void bdrv_set_guest_block_size(BlockDriverState *bs, int align);
+ void *qemu_blockalign(BlockDriverState *bs, size_t size);
++void *qemu_try_blockalign(BlockDriverState *bs, size_t size);
+ bool bdrv_qiov_is_aligned(BlockDriverState *bs, QEMUIOVector *qiov);
+ 
+ struct HBitmapIter;
+diff --git a/include/qemu/osdep.h b/include/qemu/osdep.h
+index 7a5ae28..8984da0 100644
+--- a/include/qemu/osdep.h
++++ b/include/qemu/osdep.h
+@@ -95,6 +95,7 @@ typedef signed int              int_fast16_t;
+ #define qemu_printf printf
+ 
+ int qemu_daemon(int nochdir, int noclose);
++void *qemu_try_memalign(size_t alignment, size_t size);
+ void *qemu_memalign(size_t alignment, size_t size);
+ void *qemu_anon_ram_alloc(size_t size);
+ void qemu_vfree(void *ptr);
+diff --git a/util/oslib-posix.c b/util/oslib-posix.c
+index fef840a..f0fb297 100644
+--- a/util/oslib-posix.c
++++ b/util/oslib-posix.c
+@@ -83,7 +83,7 @@ void *qemu_oom_check(void *ptr)
+     return ptr;
+ }
+ 
+-void *qemu_memalign(size_t alignment, size_t size)
++void *qemu_try_memalign(size_t alignment, size_t size)
+ {
+     void *ptr;
+ 
+@@ -95,19 +95,23 @@ void *qemu_memalign(size_t alignment, size_t size)
+     int ret;
+     ret = posix_memalign(&ptr, alignment, size);
+     if (ret != 0) {
+-        fprintf(stderr, "Failed to allocate %zu B: %s\n",
+-                size, strerror(ret));
+-        abort();
++        errno = ret;
++        ptr = NULL;
+     }
+ #elif defined(CONFIG_BSD)
+-    ptr = qemu_oom_check(valloc(size));
++    ptr = valloc(size);
+ #else
+-    ptr = qemu_oom_check(memalign(alignment, size));
++    ptr = memalign(alignment, size);
+ #endif
+     trace_qemu_memalign(alignment, size, ptr);
+     return ptr;
+ }
+ 
++void *qemu_memalign(size_t alignment, size_t size)
++{
++    return qemu_oom_check(qemu_try_memalign(alignment, size));
++}
++
+ /* alloc shared memory pages */
+ void *qemu_anon_ram_alloc(size_t size)
+ {
+diff --git a/util/oslib-win32.c b/util/oslib-win32.c
+index 332e743..0fb78ef 100644
+--- a/util/oslib-win32.c
++++ b/util/oslib-win32.c
+@@ -46,18 +46,23 @@ void *qemu_oom_check(void *ptr)
+     return ptr;
+ }
+ 
+-void *qemu_memalign(size_t alignment, size_t size)
++void *qemu_try_memalign(size_t alignment, size_t size)
+ {
+     void *ptr;
+ 
+     if (!size) {
+         abort();
+     }
+-    ptr = qemu_oom_check(VirtualAlloc(NULL, size, MEM_COMMIT, PAGE_READWRITE));
++    ptr = VirtualAlloc(NULL, size, MEM_COMMIT, PAGE_READWRITE);
+     trace_qemu_memalign(alignment, size, ptr);
+     return ptr;
+ }
+ 
++void *qemu_memalign(size_t alignment, size_t size)
++{
++    return qemu_oom_check(qemu_try_memalign(alignment, size));
++}
++
+ void *qemu_anon_ram_alloc(size_t size)
+ {
+     void *ptr;
+-- 
+1.8.3.1
+

@@ -1,0 +1,195 @@
+From 9b80afa6377ff6cb0f0f28ab3719ddb5b61e4193 Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Mon, 20 Jan 2014 19:05:29 +0100
+Subject: [PATCH 32/34] pc: Create pc_compat_rhel*() functions
+
+RH-Author: Eduardo Habkost <ehabkost@redhat.com>
+Message-id: <1390244730-31038-2-git-send-email-ehabkost@redhat.com>
+Patchwork-id: 56847
+O-Subject: [RHEL7 qemu-kvm PATCH 1/2] pc: Create pc_compat_rhel*() functions
+Bugzilla: 1049706
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+
+Bugzilla: 1049706
+Brew scratch build: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=6900764
+Upstream status: not applicable
+
+This is the RHEL equivalent of upstream
+commit 396f79f45ea75bd1c421522f29b4f91d490df7cc.
+
+With the previous code, the compat code for a newer release could undo
+the compat changes made by the compat code for an older release. With
+the pc_init_*()/pc_compat_*() pattern, we can have two compat functions
+touching the same bits, as the older compat functions will run last,
+allowing it to undo changes done by newer compat functions.
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+---
+ hw/i386/pc_piix.c | 59 ++++++++++++++++++++++++++++++++++++++++++++++---------
+ hw/i386/pc_q35.c  |  5 +++++
+ 2 files changed, 55 insertions(+), 9 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/pc_piix.c |   59 ++++++++++++++++++++++++++++++++++++++++++++--------
+ hw/i386/pc_q35.c  |    5 ++++
+ 2 files changed, 55 insertions(+), 9 deletions(-)
+
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index e061877..769571c 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -743,8 +743,13 @@ machine_init(pc_machine_init);
+ 
+ /* Red Hat Enterprise Linux machine types */
+ 
++static void pc_compat_rhel700(QEMUMachineInitArgs *args)
++{
++}
++
+ static void pc_init_rhel700(QEMUMachineInitArgs *args)
+ {
++    pc_compat_rhel700(args);
+     pc_init_pci(args);
+ }
+ 
+@@ -868,8 +873,9 @@ static QEMUMachine pc_machine_rhel700 = {
+         .value    = "rhel6-virtio.rom",\
+     }
+ 
+-static void pc_init_rhel650(QEMUMachineInitArgs *args)
++static void pc_compat_rhel650(QEMUMachineInitArgs *args)
+ {
++    pc_compat_rhel700(args);
+     x86_cpu_compat_set_features("pentium", FEAT_1_EDX, 0, CPUID_APIC);
+     x86_cpu_compat_set_features("pentium2", FEAT_1_EDX, 0, CPUID_APIC);
+     x86_cpu_compat_set_features("pentium3", FEAT_1_EDX, 0, CPUID_APIC);
+@@ -911,7 +917,12 @@ static void pc_init_rhel650(QEMUMachineInitArgs *args)
+ 
+     rom_file_in_ram = false; 
+     has_acpi_build = false;
+-    pc_init_rhel700(args);
++}
++
++static void pc_init_rhel650(QEMUMachineInitArgs *args)
++{
++    pc_compat_rhel650(args);
++    pc_init_pci(args);
+ }
+ 
+ static QEMUMachine pc_machine_rhel650 = {
+@@ -950,10 +961,16 @@ static QEMUMachine pc_machine_rhel650 = {
+         .value    = "off",\
+     }
+ 
+-static void pc_init_rhel640(QEMUMachineInitArgs *args)
++static void pc_compat_rhel640(QEMUMachineInitArgs *args)
+ {
++    pc_compat_rhel650(args);
+     x86_cpu_compat_set_features(NULL, FEAT_1_EDX, 0, CPUID_SEP);
+-    pc_init_rhel650(args);
++}
++
++static void pc_init_rhel640(QEMUMachineInitArgs *args)
++{
++    pc_compat_rhel640(args);
++    pc_init_pci(args);
+ }
+ 
+ static QEMUMachine pc_machine_rhel640 = {
+@@ -1016,13 +1033,19 @@ static QEMUMachine pc_machine_rhel640 = {
+         .value    = "1",\
+     }
+ 
+-static void pc_init_rhel630(QEMUMachineInitArgs *args)
++static void pc_compat_rhel630(QEMUMachineInitArgs *args)
+ {
++    pc_compat_rhel640(args);
+     disable_kvm_pv_eoi();
+     enable_compat_apic_id_mode();
+     x86_cpu_compat_set_features("SandyBridge", FEAT_1_ECX,
+                                 0, CPUID_EXT_TSC_DEADLINE_TIMER);
+-    pc_init_rhel640(args);
++}
++
++static void pc_init_rhel630(QEMUMachineInitArgs *args)
++{
++    pc_compat_rhel630(args);
++    pc_init_pci(args);
+ }
+ 
+ static QEMUMachine pc_machine_rhel630 = {
+@@ -1045,9 +1068,15 @@ static QEMUMachine pc_machine_rhel630 = {
+         .value = "off",\
+     }
+ 
++static void pc_compat_rhel620(QEMUMachineInitArgs *args)
++{
++    pc_compat_rhel630(args);
++}
++
+ static void pc_init_rhel620(QEMUMachineInitArgs *args)
+ {
+-    pc_init_rhel630(args);
++    pc_compat_rhel620(args);
++    pc_init_pci(args);
+ }
+ 
+ static QEMUMachine pc_machine_rhel620 = {
+@@ -1111,9 +1140,15 @@ static QEMUMachine pc_machine_rhel620 = {
+         .value    = "1",\
+     }
+ 
++static void pc_compat_rhel610(QEMUMachineInitArgs *args)
++{
++    pc_compat_rhel620(args);
++}
++
+ static void pc_init_rhel610(QEMUMachineInitArgs *args)
+ {
+-    pc_init_rhel620(args);
++    pc_compat_rhel610(args);
++    pc_init_pci(args);
+ }
+ 
+ static QEMUMachine pc_machine_rhel610 = {
+@@ -1144,9 +1179,15 @@ static QEMUMachine pc_machine_rhel610 = {
+         .value    = stringify(0),\
+     }
+ 
++static void pc_compat_rhel600(QEMUMachineInitArgs *args)
++{
++    pc_compat_rhel610(args);
++}
++
+ static void pc_init_rhel600(QEMUMachineInitArgs *args)
+ {
+-    pc_init_rhel610(args);
++    pc_compat_rhel600(args);
++    pc_init_pci(args);
+ }
+ 
+ static QEMUMachine pc_machine_rhel600 = {
+diff --git a/hw/i386/pc_q35.c b/hw/i386/pc_q35.c
+index 8d1a714..0280a95 100644
+--- a/hw/i386/pc_q35.c
++++ b/hw/i386/pc_q35.c
+@@ -268,8 +268,13 @@ machine_init(pc_q35_machine_init);
+ 
+ /* Red Hat Enterprise Linux machine types */
+ 
++static void pc_q35_compat_rhel700(QEMUMachineInitArgs *args)
++{
++}
++
+ static void pc_q35_init_rhel700(QEMUMachineInitArgs *args)
+ {
++    pc_q35_compat_rhel700(args);
+     pc_q35_init(args);
+ }
+ 
+-- 
+1.7.1
+

@@ -1,0 +1,73 @@
+From 3741ae811d3287e34779a307480dfb3e93dbb451 Mon Sep 17 00:00:00 2001
+From: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+Date: Mon, 30 Jun 2014 09:49:51 +0200
+Subject: [PATCH] Allow mismatched virtio config-len
+
+RH-Author: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+Message-id: <1404121791-14438-2-git-send-email-dgilbert@redhat.com>
+Patchwork-id: 59405
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 1/1] Allow mismatched virtio config-len
+Bugzilla: 1113009
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+
+Commit 'virtio: validate config_len on load' restricted config_len
+loaded from the wire to match the config_len that the device had.
+
+Unfortunately, there are cases where this isn't true, the one
+we found it on was the wce addition in virtio-blk.
+
+Allow mismatched config-lengths:
+   *) If the version on the wire is shorter then fine
+   *) If the version on the wire is longer, load what we have space
+      for and skip the rest.
+
+(This is mst@redhat.com's rework of what I originally posted)
+
+Signed-off-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 2f5732e9648fcddc8759a8fd25c0b41a38352be6)
+---
+ hw/virtio/virtio.c | 16 +++++++++++-----
+ 1 file changed, 11 insertions(+), 5 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/virtio/virtio.c |   16 +++++++++++-----
+ 1 files changed, 11 insertions(+), 5 deletions(-)
+
+diff --git a/hw/virtio/virtio.c b/hw/virtio/virtio.c
+index 44309c2..132b5af 100644
+--- a/hw/virtio/virtio.c
++++ b/hw/virtio/virtio.c
+@@ -886,12 +886,18 @@ int virtio_load(VirtIODevice *vdev, QEMUFile *f)
+         return -1;
+     }
+     config_len = qemu_get_be32(f);
+-    if (config_len != vdev->config_len) {
+-        error_report("Unexpected config length 0x%x. Expected 0x%zx",
+-                     config_len, vdev->config_len);
+-        return -1;
++
++    /*
++     * There are cases where the incoming config can be bigger or smaller
++     * than what we have; so load what we have space for, and skip
++     * any excess that's in the stream.
++     */
++    qemu_get_buffer(f, vdev->config, MIN(config_len, vdev->config_len));
++
++    while (config_len > vdev->config_len) {
++        qemu_get_byte(f);
++        config_len--;
+     }
+-    qemu_get_buffer(f, vdev->config, vdev->config_len);
+ 
+     num = qemu_get_be32(f);
+ 
+-- 
+1.7.1
+

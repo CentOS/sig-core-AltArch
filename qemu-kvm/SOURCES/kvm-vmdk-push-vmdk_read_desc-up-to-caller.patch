@@ -1,0 +1,170 @@
+From feb051e6d8bc62e6b9e162ada4dc576c59edc00f Mon Sep 17 00:00:00 2001
+Message-Id: <feb051e6d8bc62e6b9e162ada4dc576c59edc00f.1418766606.git.jen@redhat.com>
+In-Reply-To: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+References: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 4 Dec 2014 00:05:06 -0600
+Subject: [CHANGE 12/31] vmdk: push vmdk_read_desc up to caller
+To: rhvirt-patches@redhat.com,
+    jen@redhat.com
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1417651524-18041-13-git-send-email-famz@redhat.com>
+Patchwork-id: 62685
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v5 12/30] vmdk: push vmdk_read_desc up to caller
+Bugzilla: 1134251
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+Currently, we just try reading a VMDK file as both image and descriptor.
+This makes it hard to choose which of the two attempts gave the best error.
+We'll decide in advance if the file looks like an image or a descriptor,
+and this patch is the first step to that end.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit d1833ef52be349e41d17e9c5ddaea8bb4ad3a7fb)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Jeff E. Nelson <jen@redhat.com>
+---
+ block/vmdk.c | 55 +++++++++++++++++++++++++++++++------------------------
+ 1 file changed, 31 insertions(+), 24 deletions(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 425064c..458bceb 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -526,8 +526,8 @@ static int vmdk_open_vmfs_sparse(BlockDriverState *bs,
+     return ret;
+ }
+ 
+-static int vmdk_open_desc_file(BlockDriverState *bs, int flags,
+-                               uint64_t desc_offset, Error **errp);
++static int vmdk_open_desc_file(BlockDriverState *bs, int flags, char *buf,
++                               Error **errp);
+ 
+ static char *vmdk_read_desc(BlockDriverState *file, uint64_t desc_offset,
+                             Error **errp)
+@@ -576,7 +576,13 @@ static int vmdk_open_vmdk4(BlockDriverState *bs,
+     if (header.capacity == 0) {
+         uint64_t desc_offset = le64_to_cpu(header.desc_offset);
+         if (desc_offset) {
+-            return vmdk_open_desc_file(bs, flags, desc_offset << 9, errp);
++            char *buf = vmdk_read_desc(file, desc_offset << 9, errp);
++            if (!buf) {
++                return -EINVAL;
++            }
++            ret = vmdk_open_desc_file(bs, flags, buf, errp);
++            g_free(buf);
++            return ret;
+         }
+     }
+ 
+@@ -727,16 +733,12 @@ static int vmdk_parse_description(const char *desc, const char *opt_name,
+ 
+ /* Open an extent file and append to bs array */
+ static int vmdk_open_sparse(BlockDriverState *bs,
+-                            BlockDriverState *file,
+-                            int flags, Error **errp)
++                            BlockDriverState *file, int flags,
++                            char *buf, Error **errp)
+ {
+     uint32_t magic;
+ 
+-    if (bdrv_pread(file, 0, &magic, sizeof(magic)) != sizeof(magic)) {
+-        return -EIO;
+-    }
+-
+-    magic = be32_to_cpu(magic);
++    magic = ldl_be_p(buf);
+     switch (magic) {
+         case VMDK3_MAGIC:
+             return vmdk_open_vmfs_sparse(bs, file, flags, errp);
+@@ -821,8 +823,14 @@ static int vmdk_parse_extents(const char *desc, BlockDriverState *bs,
+             extent->flat_start_offset = flat_offset << 9;
+         } else if (!strcmp(type, "SPARSE") || !strcmp(type, "VMFSSPARSE")) {
+             /* SPARSE extent and VMFSSPARSE extent are both "COWD" sparse file*/
+-            ret = vmdk_open_sparse(bs, extent_file, bs->open_flags, errp);
++            char *buf = vmdk_read_desc(extent_file, 0, errp);
++            if (!buf) {
++                ret = -EINVAL;
++            } else {
++                ret = vmdk_open_sparse(bs, extent_file, bs->open_flags, buf, errp);
++            }
+             if (ret) {
++                g_free(buf);
+                 bdrv_unref(extent_file);
+                 return ret;
+             }
+@@ -845,20 +853,13 @@ next_line:
+     return 0;
+ }
+ 
+-static int vmdk_open_desc_file(BlockDriverState *bs, int flags,
+-                               uint64_t desc_offset, Error **errp)
++static int vmdk_open_desc_file(BlockDriverState *bs, int flags, char *buf,
++                               Error **errp)
+ {
+     int ret;
+-    char *buf;
+     char ct[128];
+     BDRVVmdkState *s = bs->opaque;
+ 
+-    buf = vmdk_read_desc(bs->file, desc_offset, errp);
+-    if (!buf) {
+-        return -EINVAL;
+-        goto exit;
+-    }
+-
+     if (vmdk_parse_description(buf, "createType", ct, sizeof(ct))) {
+         error_setg(errp, "invalid VMDK image descriptor");
+         ret = -EINVAL;
+@@ -877,20 +878,25 @@ static int vmdk_open_desc_file(BlockDriverState *bs, int flags,
+     s->desc_offset = 0;
+     ret = vmdk_parse_extents(buf, bs, bs->file->filename, errp);
+ exit:
+-    g_free(buf);
+     return ret;
+ }
+ 
+ static int vmdk_open(BlockDriverState *bs, QDict *options, int flags,
+                      Error **errp)
+ {
++    char *buf = NULL;
+     int ret;
+     BDRVVmdkState *s = bs->opaque;
+ 
+-    if (vmdk_open_sparse(bs, bs->file, flags, errp) == 0) {
++    buf = vmdk_read_desc(bs->file, 0, errp);
++    if (!buf) {
++        return -EINVAL;
++    }
++
++    if (vmdk_open_sparse(bs, bs->file, flags, buf, errp) == 0) {
+         s->desc_offset = 0x200;
+     } else {
+-        ret = vmdk_open_desc_file(bs, flags, 0, errp);
++        ret = vmdk_open_desc_file(bs, flags, buf, errp);
+         if (ret) {
+             goto fail;
+         }
+@@ -909,10 +915,11 @@ static int vmdk_open(BlockDriverState *bs, QDict *options, int flags,
+               QERR_BLOCK_FORMAT_FEATURE_NOT_SUPPORTED,
+               "vmdk", bs->device_name, "live migration");
+     migrate_add_blocker(s->migration_blocker);
+-
++    g_free(buf);
+     return 0;
+ 
+ fail:
++    g_free(buf);
+     g_free(s->create_type);
+     s->create_type = NULL;
+     vmdk_free_extents(bs);
+-- 
+2.1.0
+

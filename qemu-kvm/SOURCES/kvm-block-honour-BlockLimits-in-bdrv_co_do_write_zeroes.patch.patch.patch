@@ -1,0 +1,121 @@
+From 69e802baf506bd21a2f444cfebe4ac7f5b5d07a8 Mon Sep 17 00:00:00 2001
+Message-Id: <69e802baf506bd21a2f444cfebe4ac7f5b5d07a8.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:09:02 +0100
+Subject: [PATCH 14/50] block: honour BlockLimits in bdrv_co_do_write_zeroes
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-17-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56052
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 16/52] block: honour BlockLimits in bdrv_co_do_write_zeroes
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Peter Lieven <pl@kamp.de>
+
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit c31cb70728d2c0c8900b35a66784baa446fd5147)
+---
+ block.c | 65 +++++++++++++++++++++++++++++++++++++++++++++++++----------------
+ 1 file changed, 49 insertions(+), 16 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ block.c | 65 +++++++++++++++++++++++++++++++++++++++++++++++++----------------
+ 1 file changed, 49 insertions(+), 16 deletions(-)
+
+diff --git a/block.c b/block.c
+index 2fae459..2ed9aa9 100644
+--- a/block.c
++++ b/block.c
+@@ -2724,32 +2724,65 @@ int coroutine_fn bdrv_co_copy_on_readv(BlockDriverState *bs,
+                             BDRV_REQ_COPY_ON_READ);
+ }
+ 
++/* if no limit is specified in the BlockLimits use a default
++ * of 32768 512-byte sectors (16 MiB) per request.
++ */
++#define MAX_WRITE_ZEROES_DEFAULT 32768
++
+ static int coroutine_fn bdrv_co_do_write_zeroes(BlockDriverState *bs,
+     int64_t sector_num, int nb_sectors, BdrvRequestFlags flags)
+ {
+     BlockDriver *drv = bs->drv;
+     QEMUIOVector qiov;
+-    struct iovec iov;
+-    int ret;
++    struct iovec iov = {0};
++    int ret = 0;
+ 
+-    /* TODO Emulate only part of misaligned requests instead of letting block
+-     * drivers return -ENOTSUP and emulate everything */
++    int max_write_zeroes = bs->bl.max_write_zeroes ?
++                           bs->bl.max_write_zeroes : MAX_WRITE_ZEROES_DEFAULT;
+ 
+-    /* First try the efficient write zeroes operation */
+-    if (drv->bdrv_co_write_zeroes) {
+-        ret = drv->bdrv_co_write_zeroes(bs, sector_num, nb_sectors, flags);
+-        if (ret != -ENOTSUP) {
+-            return ret;
++    while (nb_sectors > 0 && !ret) {
++        int num = nb_sectors;
++
++        /* align request */
++        if (bs->bl.write_zeroes_alignment &&
++            num >= bs->bl.write_zeroes_alignment &&
++            sector_num % bs->bl.write_zeroes_alignment) {
++            if (num > bs->bl.write_zeroes_alignment) {
++                num = bs->bl.write_zeroes_alignment;
++            }
++            num -= sector_num % bs->bl.write_zeroes_alignment;
+         }
+-    }
+ 
+-    /* Fall back to bounce buffer if write zeroes is unsupported */
+-    iov.iov_len  = nb_sectors * BDRV_SECTOR_SIZE;
+-    iov.iov_base = qemu_blockalign(bs, iov.iov_len);
+-    memset(iov.iov_base, 0, iov.iov_len);
+-    qemu_iovec_init_external(&qiov, &iov, 1);
++        /* limit request size */
++        if (num > max_write_zeroes) {
++            num = max_write_zeroes;
++        }
++
++        ret = -ENOTSUP;
++        /* First try the efficient write zeroes operation */
++        if (drv->bdrv_co_write_zeroes) {
++            ret = drv->bdrv_co_write_zeroes(bs, sector_num, num, flags);
++        }
++
++        if (ret == -ENOTSUP) {
++            /* Fall back to bounce buffer if write zeroes is unsupported */
++            iov.iov_len = num * BDRV_SECTOR_SIZE;
++            if (iov.iov_base == NULL) {
++                /* allocate bounce buffer only once and ensure that it
++                 * is big enough for this and all future requests.
++                 */
++                size_t bufsize = num <= nb_sectors ? num : max_write_zeroes;
++                iov.iov_base = qemu_blockalign(bs, bufsize * BDRV_SECTOR_SIZE);
++                memset(iov.iov_base, 0, bufsize * BDRV_SECTOR_SIZE);
++            }
++            qemu_iovec_init_external(&qiov, &iov, 1);
+ 
+-    ret = drv->bdrv_co_writev(bs, sector_num, nb_sectors, &qiov);
++            ret = drv->bdrv_co_writev(bs, sector_num, num, &qiov);
++        }
++
++        sector_num += num;
++        nb_sectors -= num;
++    }
+ 
+     qemu_vfree(iov.iov_base);
+     return ret;
+-- 
+1.7.11.7
+

@@ -1,0 +1,98 @@
+From 14eb19d20c600001321edcc664614b9f5f2bb758 Mon Sep 17 00:00:00 2001
+From: Juan Quintela <quintela@redhat.com>
+Date: Tue, 14 Jan 2014 15:07:50 +0100
+Subject: [PATCH 39/40] ram: split function that synchronizes a range
+
+RH-Author: Juan Quintela <quintela@redhat.com>
+Message-id: <1389712071-23303-40-git-send-email-quintela@redhat.com>
+Patchwork-id: 56694
+O-Subject: [RHEL7 qemu-kvm PATCH 39/40] ram: split function that synchronizes a range
+Bugzilla: 997559
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+
+This function is the only bit where we care about speed.
+
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+Reviewed-by: Orit Wasserman <owasserm@redhat.com>
+(cherry picked from commit 791fa2a2451799232d6bc0c29c0fbb13b5293eeb)
+Signed-off-by: Juan Quintela <quintela@trasno.org>
+---
+ arch_init.c | 34 ++++++++++++++++++++--------------
+ 1 file changed, 20 insertions(+), 14 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ arch_init.c |   34 ++++++++++++++++++++--------------
+ 1 files changed, 20 insertions(+), 14 deletions(-)
+
+diff --git a/arch_init.c b/arch_init.c
+index 41da357..23650e7 100644
+--- a/arch_init.c
++++ b/arch_init.c
+@@ -360,11 +360,10 @@ ram_addr_t migration_bitmap_find_and_reset_dirty(MemoryRegion *mr,
+     return (next - base) << TARGET_PAGE_BITS;
+ }
+ 
+-static inline bool migration_bitmap_set_dirty(MemoryRegion *mr,
+-                                              ram_addr_t offset)
++static inline bool migration_bitmap_set_dirty(ram_addr_t addr)
+ {
+     bool ret;
+-    int nr = (mr->ram_addr + offset) >> TARGET_PAGE_BITS;
++    int nr = addr >> TARGET_PAGE_BITS;
+ 
+     ret = test_and_set_bit(nr, migration_bitmap);
+ 
+@@ -374,12 +373,28 @@ static inline bool migration_bitmap_set_dirty(MemoryRegion *mr,
+     return ret;
+ }
+ 
++static void migration_bitmap_sync_range(ram_addr_t start, ram_addr_t length)
++{
++    ram_addr_t addr;
++
++    for (addr = 0; addr < length; addr += TARGET_PAGE_SIZE) {
++        if (cpu_physical_memory_get_dirty(start + addr,
++                                          TARGET_PAGE_SIZE,
++                                          DIRTY_MEMORY_MIGRATION)) {
++            cpu_physical_memory_reset_dirty(start + addr,
++                                            TARGET_PAGE_SIZE,
++                                            DIRTY_MEMORY_MIGRATION);
++            migration_bitmap_set_dirty(start + addr);
++        }
++    }
++}
++
++
+ /* Needs iothread lock! */
+ 
+ static void migration_bitmap_sync(void)
+ {
+     RAMBlock *block;
+-    ram_addr_t addr;
+     uint64_t num_dirty_pages_init = migration_dirty_pages;
+     MigrationState *s = migrate_get_current();
+     static int64_t start_time;
+@@ -400,16 +415,7 @@ static void migration_bitmap_sync(void)
+     memory_global_sync_dirty_bitmap(get_system_memory());
+ 
+     QTAILQ_FOREACH(block, &ram_list.blocks, next) {
+-        for (addr = 0; addr < block->length; addr += TARGET_PAGE_SIZE) {
+-            if (cpu_physical_memory_get_dirty(block->mr->ram_addr + addr,
+-                                              TARGET_PAGE_SIZE,
+-                                              DIRTY_MEMORY_MIGRATION)) {
+-                cpu_physical_memory_reset_dirty(block->mr->ram_addr + addr,
+-                                                TARGET_PAGE_SIZE,
+-                                                DIRTY_MEMORY_MIGRATION);
+-                migration_bitmap_set_dirty(block->mr, addr);
+-            }
+-        }
++        migration_bitmap_sync_range(block->mr->ram_addr, block->length);
+     }
+     trace_migration_bitmap_sync_end(migration_dirty_pages
+                                     - num_dirty_pages_init);
+-- 
+1.7.1
+

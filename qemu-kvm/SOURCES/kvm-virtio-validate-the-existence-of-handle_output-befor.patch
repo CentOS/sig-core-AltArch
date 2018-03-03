@@ -1,0 +1,59 @@
+From 612017cc4834cd5eabc12afc7dd6cebf890b42e5 Mon Sep 17 00:00:00 2001
+From: Xiao Wang <jasowang@redhat.com>
+Date: Fri, 19 Aug 2016 09:24:25 +0200
+Subject: [PATCH] virtio: validate the existence of handle_output before
+ calling it
+
+RH-Author: Xiao Wang <jasowang@redhat.com>
+Message-id: <1471598665-23846-1-git-send-email-jasowang@redhat.com>
+Patchwork-id: 72021
+O-Subject: [RHEL7.3 qemu-kvm PATCH] virtio: validate the existence of handle_output before calling it
+Bugzilla: 1367040
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Pankaj Gupta <pagupta@redhat.com>
+
+Bugzilla: 1367040
+Brew Build: https://brewweb.engineering.redhat.com/brew/taskinfo?taskID=11620539
+Test status: Tested by myself.
+
+We don't validate the existence of handle_output which may let a buggy
+guest to trigger a SIGSEV easily. E.g:
+
+1) write 10 to queue_sel to a virtio net device with only 1 queue
+2) setup an arbitrary pfn
+3) then notify queue 10
+
+Fixing this by validating the existence of handle_output before.
+
+Cc: qemu-stable@nongnu.org
+Cc: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Jason Wang <jasowang@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Reviewed-by: Don Koch <dkoch@verizon.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+(cherry picked from commit 9e0f5b8108e248b78444c9a2ec41a8309825736c)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/virtio/virtio.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/hw/virtio/virtio.c b/hw/virtio/virtio.c
+index a861870..e67337b 100644
+--- a/hw/virtio/virtio.c
++++ b/hw/virtio/virtio.c
+@@ -692,8 +692,9 @@ int virtio_queue_get_id(VirtQueue *vq)
+ 
+ void virtio_queue_notify_vq(VirtQueue *vq)
+ {
+-    if (vq->vring.desc) {
++    if (vq->vring.desc && vq->handle_output) {
+         VirtIODevice *vdev = vq->vdev;
++
+         trace_virtio_queue_notify(vdev, vq - vdev->vq, vq);
+         vq->handle_output(vdev, vq);
+     }
+-- 
+1.8.3.1
+

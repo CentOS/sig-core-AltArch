@@ -1,0 +1,148 @@
+From 72bba55d794ac3e3ecaadb8e0bc382947b6f17ea Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Thu, 5 Dec 2013 12:09:38 +0100
+Subject: [PATCH 27/37] block: Change coroutine wrapper to byte granularity
+
+Message-id: <1392117622-28812-28-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57192
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 27/37] block: Change coroutine wrapper to byte granularity
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit 775aa8b6e0ea25f8cca74d0fcb1e30a764cf624f)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c | 48 ++++++++++++++++++++++++++----------------------
+ 1 file changed, 26 insertions(+), 22 deletions(-)
+---
+ block.c |   48 ++++++++++++++++++++++++++----------------------
+ 1 files changed, 26 insertions(+), 22 deletions(-)
+
+diff --git a/block.c b/block.c
+index 76de7d2..3b5b706 100644
+--- a/block.c
++++ b/block.c
+@@ -64,11 +64,11 @@ static int coroutine_fn bdrv_co_readv_em(BlockDriverState *bs,
+ static int coroutine_fn bdrv_co_writev_em(BlockDriverState *bs,
+                                          int64_t sector_num, int nb_sectors,
+                                          QEMUIOVector *iov);
+-static int coroutine_fn bdrv_co_do_readv(BlockDriverState *bs,
+-    int64_t sector_num, int nb_sectors, QEMUIOVector *qiov,
++static int coroutine_fn bdrv_co_do_preadv(BlockDriverState *bs,
++    int64_t offset, unsigned int bytes, QEMUIOVector *qiov,
+     BdrvRequestFlags flags);
+-static int coroutine_fn bdrv_co_do_writev(BlockDriverState *bs,
+-    int64_t sector_num, int nb_sectors, QEMUIOVector *qiov,
++static int coroutine_fn bdrv_co_do_pwritev(BlockDriverState *bs,
++    int64_t offset, unsigned int bytes, QEMUIOVector *qiov,
+     BdrvRequestFlags flags);
+ static BlockDriverAIOCB *bdrv_co_aio_rw_vector(BlockDriverState *bs,
+                                                int64_t sector_num,
+@@ -2404,8 +2404,7 @@ static int bdrv_check_request(BlockDriverState *bs, int64_t sector_num,
+ 
+ typedef struct RwCo {
+     BlockDriverState *bs;
+-    int64_t sector_num;
+-    int nb_sectors;
++    int64_t offset;
+     QEMUIOVector *qiov;
+     bool is_write;
+     int ret;
+@@ -2417,34 +2416,32 @@ static void coroutine_fn bdrv_rw_co_entry(void *opaque)
+     RwCo *rwco = opaque;
+ 
+     if (!rwco->is_write) {
+-        rwco->ret = bdrv_co_do_readv(rwco->bs, rwco->sector_num,
+-                                     rwco->nb_sectors, rwco->qiov,
+-                                     rwco->flags);
+-    } else {
+-        rwco->ret = bdrv_co_do_writev(rwco->bs, rwco->sector_num,
+-                                      rwco->nb_sectors, rwco->qiov,
++        rwco->ret = bdrv_co_do_preadv(rwco->bs, rwco->offset,
++                                      rwco->qiov->size, rwco->qiov,
+                                       rwco->flags);
++    } else {
++        rwco->ret = bdrv_co_do_pwritev(rwco->bs, rwco->offset,
++                                       rwco->qiov->size, rwco->qiov,
++                                       rwco->flags);
+     }
+ }
+ 
+ /*
+  * Process a vectored synchronous request using coroutines
+  */
+-static int bdrv_rwv_co(BlockDriverState *bs, int64_t sector_num,
+-                       QEMUIOVector *qiov, bool is_write,
+-                       BdrvRequestFlags flags)
++static int bdrv_prwv_co(BlockDriverState *bs, int64_t offset,
++                        QEMUIOVector *qiov, bool is_write,
++                        BdrvRequestFlags flags)
+ {
+     Coroutine *co;
+     RwCo rwco = {
+         .bs = bs,
+-        .sector_num = sector_num,
+-        .nb_sectors = qiov->size >> BDRV_SECTOR_BITS,
++        .offset = offset,
+         .qiov = qiov,
+         .is_write = is_write,
+         .ret = NOT_DONE,
+         .flags = flags,
+     };
+-    assert((qiov->size & (BDRV_SECTOR_SIZE - 1)) == 0);
+ 
+     /**
+      * In sync call context, when the vcpu is blocked, this throttling timer
+@@ -2483,7 +2480,8 @@ static int bdrv_rw_co(BlockDriverState *bs, int64_t sector_num, uint8_t *buf,
+     };
+ 
+     qemu_iovec_init_external(&qiov, &iov, 1);
+-    return bdrv_rwv_co(bs, sector_num, &qiov, is_write, flags);
++    return bdrv_prwv_co(bs, sector_num << BDRV_SECTOR_BITS,
++                        &qiov, is_write, flags);
+ }
+ 
+ /* return < 0 if error. See bdrv_write() for the return codes */
+@@ -2521,7 +2519,7 @@ int bdrv_write(BlockDriverState *bs, int64_t sector_num,
+ 
+ int bdrv_writev(BlockDriverState *bs, int64_t sector_num, QEMUIOVector *qiov)
+ {
+-    return bdrv_rwv_co(bs, sector_num, qiov, true, 0);
++    return bdrv_prwv_co(bs, sector_num << BDRV_SECTOR_BITS, qiov, true, 0);
+ }
+ 
+ int bdrv_write_zeroes(BlockDriverState *bs, int64_t sector_num,
+@@ -4793,9 +4791,15 @@ int bdrv_flush(BlockDriverState *bs)
+     return rwco.ret;
+ }
+ 
++typedef struct DiscardCo {
++    BlockDriverState *bs;
++    int64_t sector_num;
++    int nb_sectors;
++    int ret;
++} DiscardCo;
+ static void coroutine_fn bdrv_discard_co_entry(void *opaque)
+ {
+-    RwCo *rwco = opaque;
++    DiscardCo *rwco = opaque;
+ 
+     rwco->ret = bdrv_co_discard(rwco->bs, rwco->sector_num, rwco->nb_sectors);
+ }
+@@ -4881,7 +4885,7 @@ int coroutine_fn bdrv_co_discard(BlockDriverState *bs, int64_t sector_num,
+ int bdrv_discard(BlockDriverState *bs, int64_t sector_num, int nb_sectors)
+ {
+     Coroutine *co;
+-    RwCo rwco = {
++    DiscardCo rwco = {
+         .bs = bs,
+         .sector_num = sector_num,
+         .nb_sectors = nb_sectors,
+-- 
+1.7.1
+

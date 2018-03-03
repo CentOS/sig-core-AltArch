@@ -1,0 +1,89 @@
+From 5ccdcc1c49246cce9b1536e28a4977c65d72531c Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Wed, 11 May 2016 12:33:47 +0200
+Subject: [PATCH 08/10] acpi: add function to extract oem_id and oem_table_id
+ from the user's SLIC
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1462970028-10959-7-git-send-email-lersek@redhat.com>
+Patchwork-id: 70383
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 6/7] acpi: add function to extract oem_id and oem_table_id from the user's SLIC
+Bugzilla: 1330969
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+
+The acpi_get_slic_oem() function stores pointers to these fields in the
+(first) SLIC table that the user passes in with the -acpitable switch.
+
+Cc: "Michael S. Tsirkin" <mst@redhat.com> (supporter:ACPI/SMBIOS)
+Cc: Igor Mammedov <imammedo@redhat.com> (supporter:ACPI/SMBIOS)
+Cc: Richard W.M. Jones <rjones@redhat.com>
+Cc: Aleksei Kovura <alex3kov@zoho.com>
+Cc: Michael Tokarev <mjt@tls.msk.ru>
+Cc: Steven Newbury <steve@snewbury.org.uk>
+RHBZ: https://bugzilla.redhat.com/show_bug.cgi?id=1248758
+LP: https://bugs.launchpad.net/qemu/+bug/1533848
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Reviewed-by: Steven Newbury <steve@snewbury.org.uk>
+(cherry picked from commit 88594e4fd1e916b778968b2bdd8d7375ca2fe8d8)
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+---
+ include/hw/acpi/acpi.h |  7 +++++++
+ hw/acpi/core.c         | 16 ++++++++++++++++
+ 2 files changed, 23 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/acpi/core.c         | 16 ++++++++++++++++
+ include/hw/acpi/acpi.h |  7 +++++++
+ 2 files changed, 23 insertions(+)
+
+diff --git a/hw/acpi/core.c b/hw/acpi/core.c
+index 88efba7..99c5918 100644
+--- a/hw/acpi/core.c
++++ b/hw/acpi/core.c
+@@ -349,6 +349,22 @@ uint8_t *acpi_table_next(uint8_t *current)
+     }
+ }
+ 
++int acpi_get_slic_oem(AcpiSlicOem *oem)
++{
++    uint8_t *u;
++
++    for (u = acpi_table_first(); u; u = acpi_table_next(u)) {
++        struct acpi_table_header *hdr = (void *)(u - sizeof(hdr->_length));
++
++        if (memcmp(hdr->sig, "SLIC", 4) == 0) {
++            oem->id = hdr->oem_id;
++            oem->table_id = hdr->oem_table_id;
++            return 0;
++        }
++    }
++    return -1;
++}
++
+ static void acpi_notify_wakeup(Notifier *notifier, void *data)
+ {
+     ACPIREGS *ar = container_of(notifier, ACPIREGS, wakeup);
+diff --git a/include/hw/acpi/acpi.h b/include/hw/acpi/acpi.h
+index bb7136d..1e59ec9 100644
+--- a/include/hw/acpi/acpi.h
++++ b/include/hw/acpi/acpi.h
+@@ -171,4 +171,11 @@ unsigned acpi_table_len(void *current);
+ void acpi_table_add(const QemuOpts *opts, Error **errp);
+ void acpi_table_add_builtin(const QemuOpts *opts, Error **errp);
+ 
++typedef struct AcpiSlicOem AcpiSlicOem;
++struct AcpiSlicOem {
++  char *id;
++  char *table_id;
++};
++int acpi_get_slic_oem(AcpiSlicOem *oem);
++
+ #endif /* !QEMU_HW_ACPI_H */
+-- 
+1.8.3.1
+

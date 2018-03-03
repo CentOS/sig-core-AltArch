@@ -1,0 +1,70 @@
+From 83178d872394db83d8e4cc91f34edd7c2af43bc2 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Fri, 7 Nov 2014 17:18:12 +0100
+Subject: [PATCH 25/41] dump: hoist lzo_init() from get_len_buf_out() to
+ dump_init()
+
+Message-id: <1415380693-16593-26-git-send-email-lersek@redhat.com>
+Patchwork-id: 62208
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 25/26] dump: hoist lzo_init() from get_len_buf_out() to dump_init()
+Bugzilla: 1157798
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: dgibson <dgibson@redhat.com>
+
+qmp_dump_guest_memory()
+  dump_init()
+    lzo_init() <---------+
+  create_kdump_vmcore()  |
+    write_dump_pages()   |
+      get_len_buf_out()  |
+        lzo_init() ------+
+
+This patch doesn't change the fact that lzo_init() is called for every
+LZO-compressed dump, but it makes get_len_buf_out() more focused (single
+responsibility).
+
+Suggested-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit c998acb03df614ddf2f3e206582586f191d07fff)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c | 13 ++++++-------
+ 1 file changed, 6 insertions(+), 7 deletions(-)
+
+diff --git a/dump.c b/dump.c
+index 450f658..f980354 100644
+--- a/dump.c
++++ b/dump.c
+@@ -1237,13 +1237,6 @@ static size_t get_len_buf_out(size_t page_size, uint32_t flag_compress)
+ 
+     /* buf size for lzo */
+ #ifdef CONFIG_LZO
+-    if (flag_compress & DUMP_DH_COMPRESSED_LZO) {
+-        if (lzo_init() != LZO_E_OK) {
+-            /* return 0 to indicate lzo is unavailable */
+-            return 0;
+-        }
+-    }
+-
+     /*
+      * LZO will expand incompressible data by a little amount. please check the
+      * following URL to see the expansion calculation:
+@@ -1631,6 +1624,12 @@ static int dump_init(DumpState *s, int fd, bool has_format,
+             break;
+ 
+         case DUMP_GUEST_MEMORY_FORMAT_KDUMP_LZO:
++#ifdef CONFIG_LZO
++            if (lzo_init() != LZO_E_OK) {
++                error_setg(errp, "failed to initialize the LZO library");
++                goto cleanup;
++            }
++#endif
+             s->flag_compress = DUMP_DH_COMPRESSED_LZO;
+             break;
+ 
+-- 
+1.8.3.1
+

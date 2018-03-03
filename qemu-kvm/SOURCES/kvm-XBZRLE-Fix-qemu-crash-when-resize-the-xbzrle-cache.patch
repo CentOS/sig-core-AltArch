@@ -1,0 +1,158 @@
+From 600b6421fd97881aad2471ea0a6f465a2d55e9d6 Mon Sep 17 00:00:00 2001
+From: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+Date: Thu, 8 May 2014 10:58:39 +0200
+Subject: [PATCH 04/31] XBZRLE: Fix qemu crash when resize the xbzrle cache
+
+RH-Author: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+Message-id: <1399546722-6350-2-git-send-email-dgilbert@redhat.com>
+Patchwork-id: 58741
+O-Subject: [RHEL7.1/RHEL7.0.z qemu-kvm PATCH 1/4] XBZRLE: Fix qemu crash when resize the xbzrle cache
+Bugzilla: 1066338
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+
+From: Gonglei <arei.gonglei@huawei.com>
+
+Resizing the xbzrle cache during migration causes qemu-crash,
+because the main-thread and migration-thread modify the xbzrle
+cache size concurrently without lock-protection.
+
+Signed-off-by: ChenLiang <chenliang88@huawei.com>
+Signed-off-by: Gonglei <arei.gonglei@huawei.com>
+Reviewed-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit fd8cec932c2ddc687e2da954978954b46a926f90)
+---
+ arch_init.c | 52 +++++++++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 49 insertions(+), 3 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ arch_init.c |   52 +++++++++++++++++++++++++++++++++++++++++++++++++---
+ 1 files changed, 49 insertions(+), 3 deletions(-)
+
+diff --git a/arch_init.c b/arch_init.c
+index f5d521a..8641afa 100644
+--- a/arch_init.c
++++ b/arch_init.c
+@@ -164,8 +164,9 @@ static struct {
+     uint8_t *encoded_buf;
+     /* buffer for storing page content */
+     uint8_t *current_buf;
+-    /* Cache for XBZRLE */
++    /* Cache for XBZRLE, Protected by lock. */
+     PageCache *cache;
++    QemuMutex lock;
+ } XBZRLE = {
+     .encoded_buf = NULL,
+     .current_buf = NULL,
+@@ -174,16 +175,52 @@ static struct {
+ /* buffer used for XBZRLE decoding */
+ static uint8_t *xbzrle_decoded_buf;
+ 
++static void XBZRLE_cache_lock(void)
++{
++    if (migrate_use_xbzrle())
++        qemu_mutex_lock(&XBZRLE.lock);
++}
++
++static void XBZRLE_cache_unlock(void)
++{
++    if (migrate_use_xbzrle())
++        qemu_mutex_unlock(&XBZRLE.lock);
++}
++
+ int64_t xbzrle_cache_resize(int64_t new_size)
+ {
++    PageCache *new_cache, *cache_to_free;
++
+     if (new_size < TARGET_PAGE_SIZE) {
+         return -1;
+     }
+ 
++    /* no need to lock, the current thread holds qemu big lock */
+     if (XBZRLE.cache != NULL) {
+-        return cache_resize(XBZRLE.cache, new_size / TARGET_PAGE_SIZE) *
+-            TARGET_PAGE_SIZE;
++        /* check XBZRLE.cache again later */
++        if (pow2floor(new_size) == migrate_xbzrle_cache_size()) {
++            return pow2floor(new_size);
++        }
++        new_cache = cache_init(new_size / TARGET_PAGE_SIZE,
++                                        TARGET_PAGE_SIZE);
++        if (!new_cache) {
++            DPRINTF("Error creating cache\n");
++            return -1;
++        }
++
++        XBZRLE_cache_lock();
++        /* the XBZRLE.cache may have be destroyed, check it again */
++        if (XBZRLE.cache != NULL) {
++            cache_to_free = XBZRLE.cache;
++            XBZRLE.cache = new_cache;
++        } else {
++            cache_to_free = new_cache;
++        }
++        XBZRLE_cache_unlock();
++
++        cache_fini(cache_to_free);
+     }
++
+     return pow2floor(new_size);
+ }
+ 
+@@ -539,6 +576,8 @@ static int ram_save_block(QEMUFile *f, bool last_stage)
+             ret = ram_control_save_page(f, block->offset,
+                                offset, TARGET_PAGE_SIZE, &bytes_sent);
+ 
++            XBZRLE_cache_lock();
++
+             current_addr = block->offset + offset;
+             if (ret != RAM_SAVE_CONTROL_NOT_SUPP) {
+                 if (ret != RAM_SAVE_CONTROL_DELAYED) {
+@@ -587,6 +626,7 @@ static int ram_save_block(QEMUFile *f, bool last_stage)
+                 acct_info.norm_pages++;
+             }
+ 
++            XBZRLE_cache_unlock();
+             /* if page is unmodified, continue to the next */
+             if (bytes_sent > 0) {
+                 last_sent_block = block;
+@@ -654,6 +694,7 @@ static void migration_end(void)
+         migration_bitmap = NULL;
+     }
+ 
++    XBZRLE_cache_lock();
+     if (XBZRLE.cache) {
+         cache_fini(XBZRLE.cache);
+         g_free(XBZRLE.cache);
+@@ -663,6 +704,7 @@ static void migration_end(void)
+         XBZRLE.encoded_buf = NULL;
+         XBZRLE.current_buf = NULL;
+     }
++    XBZRLE_cache_unlock();
+ }
+ 
+ static void ram_migration_cancel(void *opaque)
+@@ -693,13 +735,17 @@ static int ram_save_setup(QEMUFile *f, void *opaque)
+     dirty_rate_high_cnt = 0;
+ 
+     if (migrate_use_xbzrle()) {
++        qemu_mutex_lock_iothread();
+         XBZRLE.cache = cache_init(migrate_xbzrle_cache_size() /
+                                   TARGET_PAGE_SIZE,
+                                   TARGET_PAGE_SIZE);
+         if (!XBZRLE.cache) {
++            qemu_mutex_unlock_iothread();
+             DPRINTF("Error creating cache\n");
+             return -1;
+         }
++        qemu_mutex_init(&XBZRLE.lock);
++        qemu_mutex_unlock_iothread();
+ 
+         /* We prefer not to abort if there is no memory */
+         XBZRLE.encoded_buf = g_try_malloc0(TARGET_PAGE_SIZE);
+-- 
+1.7.1
+

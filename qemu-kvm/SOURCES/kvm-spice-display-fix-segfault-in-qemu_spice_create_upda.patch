@@ -1,0 +1,60 @@
+From 25bafb9e1c938197a716d21010ab532aa85b82bf Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Thu, 11 Jun 2015 15:17:36 +0200
+Subject: [PATCH 4/4] spice-display: fix segfault in qemu_spice_create_update
+
+Message-id: <1434035856-9153-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 65858
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 1/1] spice-display: fix segfault in qemu_spice_create_update
+Bugzilla: 1230808
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Although it is pretty unusual the stride for the guest image and the
+mirror image maintained by spice-display can be different.  So use
+separate variables for them.
+
+Cc: qemu-stable@nongnu.org
+Reported-by: perrier vincent <clownix@clownix.net>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit c6e484707f28b3e115e64122a0570f6b3c585489)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ ui/spice-display.c | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/ui/spice-display.c b/ui/spice-display.c
+index dc8be8a..d29d2ab 100644
+--- a/ui/spice-display.c
++++ b/ui/spice-display.c
+@@ -199,7 +199,7 @@ static void qemu_spice_create_update(SimpleSpiceDisplay *ssd)
+     static const int blksize = 32;
+     int blocks = (surface_width(ssd->ds) + blksize - 1) / blksize;
+     int dirty_top[blocks];
+-    int y, yoff, x, xoff, blk, bw;
++    int y, yoff1, yoff2, x, xoff, blk, bw;
+     int bpp = surface_bytes_per_pixel(ssd->ds);
+     uint8_t *guest, *mirror;
+ 
+@@ -220,13 +220,14 @@ static void qemu_spice_create_update(SimpleSpiceDisplay *ssd)
+     guest = surface_data(ssd->ds);
+     mirror = (void *)pixman_image_get_data(ssd->mirror);
+     for (y = ssd->dirty.top; y < ssd->dirty.bottom; y++) {
+-        yoff = y * surface_stride(ssd->ds);
++        yoff1 = y * surface_stride(ssd->ds);
++        yoff2 = y * pixman_image_get_stride(ssd->mirror);
+         for (x = ssd->dirty.left; x < ssd->dirty.right; x += blksize) {
+             xoff = x * bpp;
+             blk = x / blksize;
+             bw = MIN(blksize, ssd->dirty.right - x);
+-            if (memcmp(guest + yoff + xoff,
+-                       mirror + yoff + xoff,
++            if (memcmp(guest + yoff1 + xoff,
++                       mirror + yoff2 + xoff,
+                        bw * bpp) == 0) {
+                 if (dirty_top[blk] != -1) {
+                     QXLRect update = {
+-- 
+1.8.3.1
+

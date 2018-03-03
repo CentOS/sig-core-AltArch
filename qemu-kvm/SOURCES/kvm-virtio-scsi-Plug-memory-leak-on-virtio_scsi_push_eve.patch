@@ -1,0 +1,55 @@
+From 56c66eefb296121eca5c78c7ab17215671712045 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 3 Nov 2014 04:56:41 +0100
+Subject: [PATCH 4/9] virtio-scsi: Plug memory leak on virtio_scsi_push_event()
+ error path
+
+Message-id: <1414990601-21198-1-git-send-email-famz@redhat.com>
+Patchwork-id: 62029
+O-Subject: [RHEL-7.1 qemu-kvm PATCH] virtio-scsi: Plug memory leak on virtio_scsi_push_event() error path
+Bugzilla: 1088822
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Spotted by Coverity.
+
+calling virtqueue_pop() without checking VIRTIO_CONFIG_S_DRIVER_OK first
+is racy: we may use the queues before the guest set them up.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 91e7fcca4743cf694eb0c8e7a8d938cf359b5bd8)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/scsi/virtio-scsi.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/hw/scsi/virtio-scsi.c b/hw/scsi/virtio-scsi.c
+index 7cf3e4b..35b3d65 100644
+--- a/hw/scsi/virtio-scsi.c
++++ b/hw/scsi/virtio-scsi.c
+@@ -490,7 +490,7 @@ static void virtio_scsi_push_event(VirtIOSCSI *s, SCSIDevice *dev,
+                                    uint32_t event, uint32_t reason)
+ {
+     VirtIOSCSICommon *vs = VIRTIO_SCSI_COMMON(s);
+-    VirtIOSCSIReq *req = virtio_scsi_pop_req(s, vs->event_vq);
++    VirtIOSCSIReq *req;
+     VirtIOSCSIEvent *evt;
+     VirtIODevice *vdev = VIRTIO_DEVICE(s);
+     int in_size;
+@@ -499,6 +499,7 @@ static void virtio_scsi_push_event(VirtIOSCSI *s, SCSIDevice *dev,
+         return;
+     }
+ 
++    req = virtio_scsi_pop_req(s, vs->event_vq);
+     if (!req) {
+         s->events_dropped = true;
+         return;
+-- 
+1.8.3.1
+

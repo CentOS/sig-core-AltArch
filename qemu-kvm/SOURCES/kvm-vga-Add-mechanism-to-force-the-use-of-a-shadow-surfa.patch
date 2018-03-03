@@ -1,0 +1,88 @@
+From c7b591dff2d72eb1571f05d7f328471954980966 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Fri, 20 Oct 2017 11:06:17 +0200
+Subject: [PATCH 09/11] vga: Add mechanism to force the use of a shadow surface
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <20171020110619.2541-10-kraxel@redhat.com>
+Patchwork-id: 77409
+O-Subject: [RHEL-7.5 qemu-kvm PATCH 09/11] vga: Add mechanism to force the use of a shadow surface
+Bugzilla: 1501294
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+
+This prevents surface sharing which will be necessary to
+fix cirrus HW cursor support.
+
+Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 5508099397c480f1c3b4f14b0e64593ebe284b26)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/display/vga.c     | 17 +++++++++++++++--
+ hw/display/vga_int.h |  1 +
+ 2 files changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/hw/display/vga.c b/hw/display/vga.c
+index dda3f5f..a343a0a 100644
+--- a/hw/display/vga.c
++++ b/hw/display/vga.c
+@@ -1510,6 +1510,7 @@ static void vga_draw_graphic(VGACommonState *s, int full_update)
+     uint8_t *d;
+     uint32_t v, addr1, addr;
+     vga_draw_line_func *vga_draw_line;
++    bool share_surface;
+ #if defined(TARGET_WORDS_BIGENDIAN)
+     static const bool big_endian_fb = true;
+ #else
+@@ -1558,18 +1559,30 @@ static void vga_draw_graphic(VGACommonState *s, int full_update)
+     }
+ 
+     depth = s->get_bpp(s);
++
++    share_surface = (!s->force_shadow) &&
++            ( depth == 32 || (depth == 16 && !byteswap) );
+     if (s->line_offset != s->last_line_offset ||
+         disp_width != s->last_width ||
+         height != s->last_height ||
+-        s->last_depth != depth) {
+-        if (depth == 32 || (depth == 16 && !byteswap)) {
++        s->last_depth != depth ||
++        share_surface != is_buffer_shared(surface)) {
++        if (share_surface) {
+             surface = qemu_create_displaysurface_from(disp_width,
+                     height, depth, s->line_offset,
+                     s->vram_ptr + (s->start_addr * 4), byteswap);
+             dpy_gfx_replace_surface(s->con, surface);
++#ifdef DEBUG_VGA
++            printf("VGA: Using shared surface for depth=%d swap=%d\n",
++                   depth, byteswap);
++#endif
+         } else {
+             qemu_console_resize(s->con, disp_width, height);
+             surface = qemu_console_surface(s->con);
++#ifdef DEBUG_VGA
++            printf("VGA: Using shadow surface for depth=%d swap=%d\n",
++                   depth, byteswap);
++#endif
+         }
+         s->last_scr_width = disp_width;
+         s->last_scr_height = height;
+diff --git a/hw/display/vga_int.h b/hw/display/vga_int.h
+index 94add2f..5b9ca87 100644
+--- a/hw/display/vga_int.h
++++ b/hw/display/vga_int.h
+@@ -149,6 +149,7 @@ typedef struct VGACommonState {
+     uint32_t last_width, last_height; /* in chars or pixels */
+     uint32_t last_scr_width, last_scr_height; /* in pixels */
+     uint32_t last_depth; /* in bits */
++    bool force_shadow;
+     uint8_t cursor_start, cursor_end;
+     bool cursor_visible_phase;
+     int64_t cursor_blink_time;
+-- 
+1.8.3.1
+

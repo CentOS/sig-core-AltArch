@@ -1,0 +1,266 @@
+From 9ab9b4d966cf80520ad0864bc61b1d3a255ce39c Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 5 Nov 2013 14:09:08 +0100
+Subject: [PATCH 55/87] blockdev: Move bus/unit/index processing to drive_init
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383660558-32096-15-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55393
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 14/24] blockdev: Move bus/unit/index processing to drive_init
+Bugzilla: 978402
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+This requires moving the automatic ID generation at the same time, so
+let's do that as well.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit 87a899c5090c7864fc7dcff3ea0ac34153ea621b)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ blockdev.c | 157 ++++++++++++++++++++++++++++---------------------------------
+ 1 file changed, 73 insertions(+), 84 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev.c |  157 ++++++++++++++++++++++++++++--------------------------------
+ 1 files changed, 73 insertions(+), 84 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index 9f9cbba..b6dff50 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -334,10 +334,6 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+     const char *buf;
+     const char *file = NULL;
+     const char *serial;
+-    const char *mediastr = "";
+-    int bus_id, unit_id;
+-    int max_devs;
+-    int index;
+     int ro = 0;
+     int bdrv_flags = 0;
+     int on_read_error, on_write_error;
+@@ -377,10 +373,6 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+     has_driver_specific_opts = !!qdict_size(bs_opts);
+ 
+     /* extract parameters */
+-    bus_id  = qemu_opt_get_number(opts, "bus", 0);
+-    unit_id = qemu_opt_get_number(opts, "unit", -1);
+-    index   = qemu_opt_get_number(opts, "index", -1);
+-
+     snapshot = qemu_opt_get_bool(opts, "snapshot", 0);
+     ro = qemu_opt_get_bool(opts, "read-only", 0);
+     copy_on_read = qemu_opt_get_bool(opts, "copy-on-read", false);
+@@ -388,8 +380,6 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+     file = qemu_opt_get(opts, "file");
+     serial = qemu_opt_get(opts, "serial");
+ 
+-    max_devs = if_max_devs[type];
+-
+     if ((buf = qemu_opt_get(opts, "discard")) != NULL) {
+         if (bdrv_parse_discard_flags(buf, &bdrv_flags) != 0) {
+             error_report("invalid discard option");
+@@ -489,66 +479,6 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+         }
+     }
+ 
+-    /* compute bus and unit according index */
+-
+-    if (index != -1) {
+-        if (bus_id != 0 || unit_id != -1) {
+-            error_report("index cannot be used with bus and unit");
+-            return NULL;
+-        }
+-        bus_id = drive_index_to_bus_id(type, index);
+-        unit_id = drive_index_to_unit_id(type, index);
+-    }
+-
+-    /* if user doesn't specify a unit_id,
+-     * try to find the first free
+-     */
+-
+-    if (unit_id == -1) {
+-       unit_id = 0;
+-       while (drive_get(type, bus_id, unit_id) != NULL) {
+-           unit_id++;
+-           if (max_devs && unit_id >= max_devs) {
+-               unit_id -= max_devs;
+-               bus_id++;
+-           }
+-       }
+-    }
+-
+-    /* check unit id */
+-
+-    if (max_devs && unit_id >= max_devs) {
+-        error_report("unit %d too big (max is %d)",
+-                     unit_id, max_devs - 1);
+-        return NULL;
+-    }
+-
+-    /*
+-     * catch multiple definitions
+-     */
+-
+-    if (drive_get(type, bus_id, unit_id) != NULL) {
+-        error_report("drive with bus=%d, unit=%d (index=%d) exists",
+-                     bus_id, unit_id, index);
+-        return NULL;
+-    }
+-
+-    /* no id supplied -> create one */
+-    if (qemu_opts_id(opts) == NULL) {
+-        char *new_id;
+-        if (type == IF_IDE || type == IF_SCSI) {
+-            mediastr = (media == MEDIA_CDROM) ? "-cd" : "-hd";
+-        }
+-        if (max_devs) {
+-            new_id = g_strdup_printf("%s%i%s%i", if_name[type], bus_id,
+-                                     mediastr, unit_id);
+-        } else {
+-            new_id = g_strdup_printf("%s%s%i", if_name[type],
+-                                     mediastr, unit_id);
+-        }
+-        qemu_opts_set_id(opts, new_id);
+-    }
+-
+     /* init */
+     dinfo = g_malloc0(sizeof(*dinfo));
+     dinfo->id = g_strdup(qemu_opts_id(opts));
+@@ -557,8 +487,6 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+     dinfo->bdrv->read_only = ro;
+     dinfo->devaddr = devaddr;
+     dinfo->type = type;
+-    dinfo->bus = bus_id;
+-    dinfo->unit = unit_id;
+     dinfo->refcount = 1;
+     if (serial != NULL) {
+         dinfo->serial = g_strdup(serial);
+@@ -681,6 +609,18 @@ QemuOptsList qemu_legacy_drive_opts = {
+     .head = QTAILQ_HEAD_INITIALIZER(qemu_legacy_drive_opts.head),
+     .desc = {
+         {
++            .name = "bus",
++            .type = QEMU_OPT_NUMBER,
++            .help = "bus number",
++        },{
++            .name = "unit",
++            .type = QEMU_OPT_NUMBER,
++            .help = "unit number (i.e. lun for scsi)",
++        },{
++            .name = "index",
++            .type = QEMU_OPT_NUMBER,
++            .help = "index number",
++        },{
+             .name = "media",
+             .type = QEMU_OPT_STRING,
+             .help = "media type (disk, cdrom)",
+@@ -722,6 +662,7 @@ DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
+     DriveMediaType media = MEDIA_DISK;
+     BlockInterfaceType type;
+     int cyls, heads, secs, translation;
++    int max_devs, bus_id, unit_id, index;
+     Error *local_err = NULL;
+ 
+     /* Change legacy command line options into QMP ones */
+@@ -854,6 +795,63 @@ DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
+         }
+     }
+ 
++    /* Device address specified by bus/unit or index.
++     * If none was specified, try to find the first free one. */
++    bus_id  = qemu_opt_get_number(legacy_opts, "bus", 0);
++    unit_id = qemu_opt_get_number(legacy_opts, "unit", -1);
++    index   = qemu_opt_get_number(legacy_opts, "index", -1);
++
++    max_devs = if_max_devs[type];
++
++    if (index != -1) {
++        if (bus_id != 0 || unit_id != -1) {
++            error_report("index cannot be used with bus and unit");
++            goto fail;
++        }
++        bus_id = drive_index_to_bus_id(type, index);
++        unit_id = drive_index_to_unit_id(type, index);
++    }
++
++    if (unit_id == -1) {
++       unit_id = 0;
++       while (drive_get(type, bus_id, unit_id) != NULL) {
++           unit_id++;
++           if (max_devs && unit_id >= max_devs) {
++               unit_id -= max_devs;
++               bus_id++;
++           }
++       }
++    }
++
++    if (max_devs && unit_id >= max_devs) {
++        error_report("unit %d too big (max is %d)", unit_id, max_devs - 1);
++        goto fail;
++    }
++
++    if (drive_get(type, bus_id, unit_id) != NULL) {
++        error_report("drive with bus=%d, unit=%d (index=%d) exists",
++                     bus_id, unit_id, index);
++        goto fail;
++    }
++
++    /* no id supplied -> create one */
++    if (qemu_opts_id(all_opts) == NULL) {
++        char *new_id;
++        const char *mediastr = "";
++        if (type == IF_IDE || type == IF_SCSI) {
++            mediastr = (media == MEDIA_CDROM) ? "-cd" : "-hd";
++        }
++        if (max_devs) {
++            new_id = g_strdup_printf("%s%i%s%i", if_name[type], bus_id,
++                                     mediastr, unit_id);
++        } else {
++            new_id = g_strdup_printf("%s%s%i", if_name[type],
++                                     mediastr, unit_id);
++        }
++        qdict_put(bs_opts, "id", qstring_from_str(new_id));
++        g_free(new_id);
++    }
++
+     /* Actual block device init: Functionality shared with blockdev-add */
+     dinfo = blockdev_init(bs_opts, type, media);
+     if (dinfo == NULL) {
+@@ -869,6 +867,9 @@ DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
+     dinfo->secs = secs;
+     dinfo->trans = translation;
+ 
++    dinfo->bus = bus_id;
++    dinfo->unit = unit_id;
++
+ fail:
+     qemu_opts_del(legacy_opts);
+     return dinfo;
+@@ -1804,18 +1805,6 @@ QemuOptsList qemu_common_drive_opts = {
+     .head = QTAILQ_HEAD_INITIALIZER(qemu_common_drive_opts.head),
+     .desc = {
+         {
+-            .name = "bus",
+-            .type = QEMU_OPT_NUMBER,
+-            .help = "bus number",
+-        },{
+-            .name = "unit",
+-            .type = QEMU_OPT_NUMBER,
+-            .help = "unit number (i.e. lun for scsi)",
+-        },{
+-            .name = "index",
+-            .type = QEMU_OPT_NUMBER,
+-            .help = "index number",
+-        },{
+             .name = "snapshot",
+             .type = QEMU_OPT_BOOL,
+             .help = "enable/disable snapshot mode",
+-- 
+1.7.1
+

@@ -1,0 +1,81 @@
+From e1826a5a94d53d337a0e0e18230d81b572173ba7 Mon Sep 17 00:00:00 2001
+Message-Id: <e1826a5a94d53d337a0e0e18230d81b572173ba7.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:19:27 +0100
+Subject: [PATCH 55/56] acpi-build: Fix compiler warning (missing gnu_printf
+ format attribute)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-56-git-send-email-mst@redhat.com>
+Patchwork-id: 56361
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 55/57] acpi-build: Fix compiler warning (missing gnu_printf format attribute)
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Stefan Weil <sw@weilnetz.de>
+
+gcc 4.8.2 reports this warning when extra warnings are enabled (-Wextra):
+
+  CC    m68k-softmmu/hw/m68k/mcf5206.o
+hw/i386/acpi-build.c: In function ‘build_append_nameseg’:
+hw/i386/acpi-build.c:294:5: error:
+ function might be possible candidate for ‘gnu_printf’ format attribute [-Werror=suggest-attribute=format]
+     g_string_vprintf(s, format, args);
+     ^
+
+When this warning is fixed, there is a new compiler warning:
+
+  CC    i386-softmmu/hw/i386/acpi-build.o
+hw/i386/acpi-build.c: In function ‘build_append_notify’:
+hw/i386/acpi-build.c:632:5: error:
+ format not a string literal and no format arguments [-Werror=format-security]
+     build_append_nameseg(method, name);
+     ^
+
+This is fixed here, too.
+
+Signed-off-by: Stefan Weil <sw@weilnetz.de>
+Signed-off-by: Michael Tokarev <mjt@tls.msk.ru>
+(cherry picked from commit 867d898ccf50ef095b95c403d7dc809c188b14e2)
+---
+ hw/i386/acpi-build.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/i386/acpi-build.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/hw/i386/acpi-build.c b/hw/i386/acpi-build.c
+index 316d6d3..2d008bd 100644
+--- a/hw/i386/acpi-build.c
++++ b/hw/i386/acpi-build.c
+@@ -285,7 +285,8 @@ static inline void build_append_array(GArray *array, GArray *val)
+     g_array_append_vals(array, val->data, val->len);
+ }
+ 
+-static void build_append_nameseg(GArray *array, const char *format, ...)
++static void GCC_FMT_ATTR(2, 3)
++build_append_nameseg(GArray *array, const char *format, ...)
+ {
+     /* It would be nicer to use g_string_vprintf but it's only there in 2.22 */
+     char s[] = "XXXX";
+@@ -630,7 +631,7 @@ build_append_notify(GArray *device, const char *name,
+     GArray *method = build_alloc_array();
+     uint8_t op = 0x14; /* MethodOp */
+ 
+-    build_append_nameseg(method, name);
++    build_append_nameseg(method, "%s", name);
+     build_append_byte(method, 0x02); /* MethodFlags: ArgCount */
+     for (i = skip; i < count; i++) {
+         GArray *target = build_alloc_array();
+-- 
+1.7.11.7
+

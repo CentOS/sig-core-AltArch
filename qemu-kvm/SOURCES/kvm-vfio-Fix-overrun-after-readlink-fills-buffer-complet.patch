@@ -1,0 +1,55 @@
+From a254fe579062a9eaf97f2b81474c19b4b46ddc85 Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Fri, 10 Apr 2015 16:33:56 +0200
+Subject: [PATCH 04/14] vfio: Fix overrun after readlink() fills buffer
+ completely
+
+Message-id: <20150410163356.15324.47617.stgit@gimli.home>
+Patchwork-id: 64786
+O-Subject: [RHEL7.2 qemu-kvm PATCH 4/8] vfio: Fix overrun after readlink() fills buffer completely
+Bugzilla: 1210504
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Upstream: 13665a2d2f675341e73618fcd7f9d36b6c68b509
+
+readlink() returns the number of bytes written to the buffer, and it
+doesn't write a terminating null byte.  vfio_init() writes it itself.
+Overruns the buffer when readlink() filled it completely.
+
+Fix by treating readlink() filling the buffer completely as error,
+like we do in pci-assign.c's assign_failed_examine().
+
+Spotted by Coverity.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index 57bc974..81e6594 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -3767,10 +3767,10 @@ static int vfio_initfn(PCIDevice *pdev)
+ 
+     strncat(path, "iommu_group", sizeof(path) - strlen(path) - 1);
+ 
+-    len = readlink(path, iommu_group_path, PATH_MAX);
+-    if (len <= 0) {
++    len = readlink(path, iommu_group_path, sizeof(path));
++    if (len <= 0 || len >= sizeof(path)) {
+         error_report("vfio: error no iommu_group for device");
+-        return -errno;
++        return len < 0 ? -errno : ENAMETOOLONG;
+     }
+ 
+     iommu_group_path[len] = 0;
+-- 
+1.8.3.1
+

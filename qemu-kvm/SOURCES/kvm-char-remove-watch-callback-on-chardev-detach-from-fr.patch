@@ -1,0 +1,66 @@
+From dd0ab2d849f8a93fe54a29eedb8a536fbc42fe5d Mon Sep 17 00:00:00 2001
+From: Amit Shah <amit.shah@redhat.com>
+Date: Tue, 8 Oct 2013 06:13:07 +0200
+Subject: [PATCH 08/11] char: remove watch callback on chardev detach from frontend
+
+RH-Author: Amit Shah <amit.shah@redhat.com>
+Message-id: <0044db8c12053fd38667200f350132d7a3485cde.1381210228.git.amit.shah@redhat.com>
+Patchwork-id: 54729
+O-Subject: [RHEL7 qemu-kvm PATCH 3/3] char: remove watch callback on chardev detach from frontend
+Bugzilla: 1007222
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+
+If a frontend device releases the chardev (via unplug), the chr handlers
+are set to NULL via qdev's exit callbacks invoking
+qemu_chr_add_handlers().  If the chardev had a pending operation, a
+callback will be invoked, which will try to access data in the
+just-released frontend, causing a segfault.
+
+Ensure the callbacks are disabled when frontends release chardevs.
+
+This was seen when a virtio-serial port was unplugged when heavy
+guest->host IO was in progress (causing a callback to be registered).
+In the window in which the throttling was active, unplugging ports
+caused a qemu segfault.
+
+https://bugzilla.redhat.com/show_bug.cgi?id=985205
+
+CC: <qemu-stable@nongnu.org>
+Reported-by: Sibiao Luo <sluo@redhat.com>
+Reviewed-by: Gerd Hoffmann <kraxel@redhat.com>
+Signed-off-by: Amit Shah <amit.shah@redhat.com>
+---
+ qemu-char.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qemu-char.c |    3 +++
+ 1 files changed, 3 insertions(+), 0 deletions(-)
+
+diff --git a/qemu-char.c b/qemu-char.c
+index 8d46f98..2fb876c 100644
+--- a/qemu-char.c
++++ b/qemu-char.c
+@@ -195,6 +195,8 @@ void qemu_chr_fe_printf(CharDriverState *s, const char *fmt, ...)
+     va_end(ap);
+ }
+ 
++static void remove_fd_in_watch(CharDriverState *chr);
++
+ void qemu_chr_add_handlers(CharDriverState *s,
+                            IOCanReadHandler *fd_can_read,
+                            IOReadHandler *fd_read,
+@@ -205,6 +207,7 @@ void qemu_chr_add_handlers(CharDriverState *s,
+ 
+     if (!opaque && !fd_can_read && !fd_read && !fd_event) {
+         fe_open = 0;
++        remove_fd_in_watch(s);
+     } else {
+         fe_open = 1;
+     }
+-- 
+1.7.1
+

@@ -1,0 +1,68 @@
+From 8880d01298ccf89558b95b948984647959d862ae Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Tue, 8 Sep 2015 18:06:25 +0200
+Subject: [PATCH 7/7] util/uri: Add overflow check to rfc3986_parse_port
+
+Message-id: <1441735585-23432-8-git-send-email-armbru@redhat.com>
+Patchwork-id: 67705
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 7/7] util/uri: Add overflow check to rfc3986_parse_port
+Bugzilla: 1218919
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+
+From: Max Reitz <mreitz@redhat.com>
+
+And while at it, replace tabs by eight spaces in this function.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Message-Id: <1424887718-10800-2-git-send-email-mreitz@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 2b21233061696feed434317a70e0a8b74f956ec8)
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ util/uri.c | 24 ++++++++++++++----------
+ 1 file changed, 14 insertions(+), 10 deletions(-)
+
+diff --git a/util/uri.c b/util/uri.c
+index 1cfd78b..550b984 100644
+--- a/util/uri.c
++++ b/util/uri.c
+@@ -320,19 +320,23 @@ static int
+ rfc3986_parse_port(URI *uri, const char **str)
+ {
+     const char *cur = *str;
++    int port = 0;
+ 
+     if (ISA_DIGIT(cur)) {
+-	if (uri != NULL)
+-	    uri->port = 0;
+-	while (ISA_DIGIT(cur)) {
+-	    if (uri != NULL)
+-		uri->port = uri->port * 10 + (*cur - '0');
+-	    cur++;
+-	}
+-	*str = cur;
+-	return(0);
++        while (ISA_DIGIT(cur)) {
++            port = port * 10 + (*cur - '0');
++            if (port > 65535) {
++                return 1;
++            }
++            cur++;
++        }
++        if (uri) {
++            uri->port = port;
++        }
++        *str = cur;
++        return 0;
+     }
+-    return(1);
++    return 1;
+ }
+ 
+ /**
+-- 
+1.8.3.1
+

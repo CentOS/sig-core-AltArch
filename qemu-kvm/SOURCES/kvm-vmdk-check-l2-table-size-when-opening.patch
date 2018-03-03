@@ -1,0 +1,85 @@
+From 6442a27eaebb5a42ef26a73f0efcf0166f70b235 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Tue, 6 Aug 2013 15:44:52 +0800
+Subject: [PATCH 06/13] vmdk: check l2 table size when opening
+
+Message-id: <1377573001-27070-7-git-send-email-famz@redhat.com>
+Patchwork-id: 53787
+O-Subject: [RHEL-7 qemu-kvm PATCH 06/13] vmdk: check l2 table size when opening
+Bugzilla: 995866
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+header.num_gtes_per_gte determines size for L2 table. Check for too big
+value before using it. Limit to 512M entries (2GB per one L2 table).
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit f8ce04036e333aae480b1d06d969f6436652633d)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ block/vmdk.c               |    5 +++++
+ tests/qemu-iotests/059     |    7 +++++++
+ tests/qemu-iotests/059.out |    6 ++++++
+ 3 files changed, 18 insertions(+), 0 deletions(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 8f59697..b2a3fe2 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -585,6 +585,11 @@ static int vmdk_open_vmdk4(BlockDriverState *bs,
+         return -ENOTSUP;
+     }
+ 
++    if (le32_to_cpu(header.num_gtes_per_gte) > 512) {
++        error_report("L2 table size too big");
++        return -EINVAL;
++    }
++
+     l1_entry_sectors = le32_to_cpu(header.num_gtes_per_gte)
+                         * le64_to_cpu(header.granularity);
+     if (l1_entry_sectors == 0) {
+diff --git a/tests/qemu-iotests/059 b/tests/qemu-iotests/059
+index 9545e82..301eaca 100755
+--- a/tests/qemu-iotests/059
++++ b/tests/qemu-iotests/059
+@@ -44,6 +44,7 @@ _supported_proto generic
+ _supported_os Linux
+ 
+ granularity_offset=20
++grain_table_size_offset=44
+ 
+ echo "=== Testing invalid granularity ==="
+ echo
+@@ -51,6 +52,12 @@ _make_test_img 64M
+ poke_file "$TEST_IMG" "$granularity_offset" "\xff\xff\xff\xff\xff\xff\xff\xff"
+ { $QEMU_IO -c "read 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
+ 
++echo "=== Testing too big L2 table size ==="
++echo
++_make_test_img 64M
++poke_file "$TEST_IMG" "$grain_table_size_offset" "\xff\xff\xff\xff"
++{ $QEMU_IO -c "read 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
++
+ # success, all done
+ echo "*** done"
+ rm -f $seq.full
+diff --git a/tests/qemu-iotests/059.out b/tests/qemu-iotests/059.out
+index 380ca3d..583955f 100644
+--- a/tests/qemu-iotests/059.out
++++ b/tests/qemu-iotests/059.out
+@@ -5,4 +5,10 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864
+ invalid granularity, image may be corrupt
+ qemu-io: can't open device TEST_DIR/t.vmdk
+ no file open, try 'help open'
++=== Testing too big L2 table size ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864
++L2 table size too big
++qemu-io: can't open device TEST_DIR/t.vmdk
++no file open, try 'help open'
+ *** done
+-- 
+1.7.1
+

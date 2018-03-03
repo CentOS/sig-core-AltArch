@@ -1,0 +1,183 @@
+From eb7381f07b22955557a2b7ea469c5bf5aa39281e Mon Sep 17 00:00:00 2001
+From: Orit Wasserman <owasserm@redhat.com>
+Date: Wed, 9 Oct 2013 10:09:09 +0200
+Subject: [PATCH 14/25] block-migration: efficiently encode zero blocks
+
+RH-Author: Orit Wasserman <owasserm@redhat.com>
+Message-id: <1381313355-15641-5-git-send-email-owasserm@redhat.com>
+Patchwork-id: 54800
+O-Subject: [RHEL7.0 qemu-kvm v2 04/10] block-migration: efficiently encode zero blocks
+Bugzilla: 921465
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+
+From: Peter Lieven <pl@kamp.de>
+
+this patch adds a efficient encoding for zero blocks by
+adding a new flag indicating a block is completely zero.
+
+additionally bdrv_write_zeros() is used at the destination
+to efficiently write these zeroes. depending on the implementation
+this avoids that the destination target gets fully provisioned.
+
+Signed-off-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 323004a39d4d8d33c744a5b108f80bfe6402fca3)
+Conflicts:
+	include/migration/migration.h
+	qapi-schema.json
+---
+ block-migration.c             | 32 ++++++++++++++++++++++++++------
+ include/migration/migration.h |  2 ++
+ migration.c                   |  9 +++++++++
+ qapi-schema.json              |  8 +++++++-
+ 4 files changed, 44 insertions(+), 7 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block-migration.c             |   32 ++++++++++++++++++++++++++------
+ include/migration/migration.h |    2 ++
+ migration.c                   |    9 +++++++++
+ qapi-schema.json              |    8 +++++++-
+ 4 files changed, 44 insertions(+), 7 deletions(-)
+
+diff --git a/block-migration.c b/block-migration.c
+index 2fd7699..f803f20 100644
+--- a/block-migration.c
++++ b/block-migration.c
+@@ -29,6 +29,7 @@
+ #define BLK_MIG_FLAG_DEVICE_BLOCK       0x01
+ #define BLK_MIG_FLAG_EOS                0x02
+ #define BLK_MIG_FLAG_PROGRESS           0x04
++#define BLK_MIG_FLAG_ZERO_BLOCK         0x08
+ 
+ #define MAX_IS_ALLOCATED_SEARCH 65536
+ 
+@@ -80,6 +81,7 @@ typedef struct BlkMigState {
+     int shared_base;
+     QSIMPLEQ_HEAD(bmds_list, BlkMigDevState) bmds_list;
+     int64_t total_sector_sum;
++    bool zero_blocks;
+ 
+     /* Protected by lock.  */
+     QSIMPLEQ_HEAD(blk_list, BlkMigBlock) blk_list;
+@@ -114,16 +116,30 @@ static void blk_mig_unlock(void)
+ static void blk_send(QEMUFile *f, BlkMigBlock * blk)
+ {
+     int len;
++    uint64_t flags = BLK_MIG_FLAG_DEVICE_BLOCK;
++
++    if (block_mig_state.zero_blocks &&
++        buffer_is_zero(blk->buf, BLOCK_SIZE)) {
++        flags |= BLK_MIG_FLAG_ZERO_BLOCK;
++    }
+ 
+     /* sector number and flags */
+     qemu_put_be64(f, (blk->sector << BDRV_SECTOR_BITS)
+-                     | BLK_MIG_FLAG_DEVICE_BLOCK);
++                     | flags);
+ 
+     /* device name */
+     len = strlen(blk->bmds->bs->device_name);
+     qemu_put_byte(f, len);
+     qemu_put_buffer(f, (uint8_t *)blk->bmds->bs->device_name, len);
+ 
++    /* if a block is zero we need to flush here since the network
++     * bandwidth is now a lot higher than the storage device bandwidth.
++     * thus if we queue zero blocks we slow down the migration */
++    if (flags & BLK_MIG_FLAG_ZERO_BLOCK) {
++        qemu_fflush(f);
++        return;
++    }
++
+     qemu_put_buffer(f, blk->buf, BLOCK_SIZE);
+ }
+ 
+@@ -344,6 +360,7 @@ static void init_blk_migration(QEMUFile *f)
+     block_mig_state.total_sector_sum = 0;
+     block_mig_state.prev_progress = -1;
+     block_mig_state.bulk_completed = 0;
++    block_mig_state.zero_blocks = migrate_zero_blocks();
+ 
+     bdrv_iterate(init_blk_migration_it, NULL);
+ }
+@@ -762,12 +779,15 @@ static int block_load(QEMUFile *f, void *opaque, int version_id)
+                 nr_sectors = BDRV_SECTORS_PER_DIRTY_CHUNK;
+             }
+ 
+-            buf = g_malloc(BLOCK_SIZE);
+-
+-            qemu_get_buffer(f, buf, BLOCK_SIZE);
+-            ret = bdrv_write(bs, addr, buf, nr_sectors);
++            if (flags & BLK_MIG_FLAG_ZERO_BLOCK) {
++                ret = bdrv_write_zeroes(bs, addr, nr_sectors);
++            } else {
++                buf = g_malloc(BLOCK_SIZE);
++                qemu_get_buffer(f, buf, BLOCK_SIZE);
++                ret = bdrv_write(bs, addr, buf, nr_sectors);
++                g_free(buf);
++            }
+ 
+-            g_free(buf);
+             if (ret < 0) {
+                 return ret;
+             }
+diff --git a/include/migration/migration.h b/include/migration/migration.h
+index 1fc2666..f1519dd 100644
+--- a/include/migration/migration.h
++++ b/include/migration/migration.h
+@@ -119,6 +119,8 @@ void migrate_add_blocker(Error *reason);
+  */
+ void migrate_del_blocker(Error *reason);
+ 
++bool migrate_zero_blocks(void);
++
+ bool migrate_auto_converge(void);
+ 
+ int xbzrle_encode_buffer(uint8_t *old_buf, uint8_t *new_buf, int slen,
+diff --git a/migration.c b/migration.c
+index 177fc22..cc0e649 100644
+--- a/migration.c
++++ b/migration.c
+@@ -483,6 +483,15 @@ bool migrate_auto_converge(void)
+     return s->enabled_capabilities[MIGRATION_CAPABILITY_AUTO_CONVERGE];
+ }
+ 
++bool migrate_zero_blocks(void)
++{
++    MigrationState *s;
++
++    s = migrate_get_current();
++
++    return s->enabled_capabilities[MIGRATION_CAPABILITY_ZERO_BLOCKS];
++}
++
+ int migrate_use_xbzrle(void)
+ {
+     MigrationState *s;
+diff --git a/qapi-schema.json b/qapi-schema.json
+index 3936337..a717fbf 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -605,10 +605,16 @@
+ # @auto-converge: If enabled, QEMU will automatically throttle down the guest
+ #          to speed up convergence of RAM migration. (since 1.6)
+ #
++# @zero-blocks: During storage migration encode blocks of zeroes efficiently. This
++#          essentially saves 1MB of zeroes per block on the wire. Enabling requires
++#          source and target VM to support this feature. To enable it is sufficient
++#          to enable the capability on the source VM. The feature is disabled by
++#          default. (since 1.6)
++#
+ # Since: 1.2
+ ##
+ { 'enum': 'MigrationCapability',
+-  'data': ['xbzrle', 'auto-converge'] }
++  'data': ['xbzrle', 'auto-converge', 'zero-blocks'] }
+ 
+ ##
+ # @MigrationCapabilityStatus
+-- 
+1.7.1
+

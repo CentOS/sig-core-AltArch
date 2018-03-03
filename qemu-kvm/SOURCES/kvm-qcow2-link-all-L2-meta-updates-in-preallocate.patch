@@ -1,0 +1,69 @@
+From 8be02a0613ef6aee7a95ab7dae3d0aa489b65249 Mon Sep 17 00:00:00 2001
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Tue, 1 Apr 2014 09:45:35 +0200
+Subject: [PATCH 2/2] qcow2: link all L2 meta updates in preallocate()
+
+RH-Author: Stefan Hajnoczi <stefanha@redhat.com>
+Message-id: <1396345535-19829-1-git-send-email-stefanha@redhat.com>
+Patchwork-id: 58320
+O-Subject: [RHEL7 qemu-kvm PATCH] qcow2: link all L2 meta updates in preallocate()
+Bugzilla: 1081393
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+BZ: 1081393
+Upstream: not merged yet, http://article.gmane.org/gmane.comp.emulators.qemu/264904
+BREW: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7282765
+
+preallocate() only links the first QCowL2Meta's data clusters into the
+L2 table and ignores any chained QCowL2Metas in the linked list.
+
+Chains of QCowL2Meta structs are built up when contiguous clusters span
+L2 tables.  Each QCowL2Meta describes one L2 table update.  This is a
+rare case in preallocate() but can happen.
+
+This patch fixes preallocate() by iterating over the whole list of
+QCowL2Metas.  Compare with the qcow2_co_writev() function's
+implementation, which is similar but also also handles request
+dependencies.  preallocate() only performs one allocation at a time so
+there can be no dependencies.
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+---
+ block/qcow2.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2.c |    7 ++++++-
+ 1 files changed, 6 insertions(+), 1 deletions(-)
+
+diff --git a/block/qcow2.c b/block/qcow2.c
+index 66ed906..7398b16 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -1509,7 +1509,9 @@ static int preallocate(BlockDriverState *bs)
+             return ret;
+         }
+ 
+-        if (meta != NULL) {
++        while (meta) {
++            QCowL2Meta *next = meta->next;
++
+             ret = qcow2_alloc_cluster_link_l2(bs, meta);
+             if (ret < 0) {
+                 qcow2_free_any_clusters(bs, meta->alloc_offset,
+@@ -1520,6 +1522,9 @@ static int preallocate(BlockDriverState *bs)
+             /* There are no dependent requests, but we need to remove our
+              * request from the list of in-flight requests */
+             QLIST_REMOVE(meta, next_in_flight);
++
++            g_free(meta);
++            meta = next;
+         }
+ 
+         /* TODO Preallocate data if requested */
+-- 
+1.7.1
+

@@ -1,0 +1,67 @@
+From aec2ed0972eec0b7d251de1ae27de00b2bf29936 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Tue, 27 Jan 2015 17:48:10 +0100
+Subject: [PATCH 07/16] main(): set current_machine before calling
+ machine->init()
+
+Message-id: <1422380891-11054-2-git-send-email-lersek@redhat.com>
+Patchwork-id: 63584
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 1/2] main(): set current_machine before calling machine->init()
+Bugzilla: 1176283
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+Performing the assignment earlier allows machine->init() and its children
+to access current_machine->name.
+
+The alternative would be to pass QEMUMachineInitArgs down to
+pc_memory_init() and even deeper, which I deem to cause more annoyance for
+future backports than this patch.
+
+Note that upstream commit 0056ae24bc36798fdd96d0b31e217e9f73896736 moved
+the assignment similarly (but it is not backportable to RHEL-7).
+
+This patch could only regress code that depends on the nullity of
+"current_machine". I only found one such site, qemu_system_reset().
+qemu_system_reset() is called from the following places:
+- load_vmstate(), which is not called in the code straddled by the
+  assignment movement,
+- main_loop_should_exit(), ditto,
+- later in main(),
+- "xen-all.c", irrelevant.
+
+Downstream only.
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ vl.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/vl.c b/vl.c
+index 2b3dc88..35b927e 100644
+--- a/vl.c
++++ b/vl.c
+@@ -4252,6 +4252,9 @@ int main(int argc, char **argv, char **envp)
+                                  .kernel_cmdline = kernel_cmdline,
+                                  .initrd_filename = initrd_filename,
+                                  .cpu_model = cpu_model };
++
++    current_machine = machine;
++
+     machine->init(&args);
+ 
+     audio_init();
+@@ -4260,8 +4263,6 @@ int main(int argc, char **argv, char **envp)
+ 
+     set_numa_modes();
+ 
+-    current_machine = machine;
+-
+     /* init USB devices */
+     if (usb_enabled(false)) {
+         if (foreach_device_config(DEV_USB, usb_parse) < 0)
+-- 
+1.8.3.1
+

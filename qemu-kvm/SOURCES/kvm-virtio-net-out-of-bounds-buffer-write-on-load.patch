@@ -1,0 +1,77 @@
+From 33ea847dbe677a3df68fecac80636050f72286ae Mon Sep 17 00:00:00 2001
+From: Michael S. Tsirkin <mst@redhat.com>
+Date: Wed, 14 May 2014 08:31:42 +0200
+Subject: [PATCH 11/31] virtio-net: out-of-bounds buffer write on load
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1400056285-6688-2-git-send-email-mst@redhat.com>
+Patchwork-id: 58856
+O-Subject: [PATCH qemu-kvm RHEL7.1] virtio-net: out-of-bounds buffer write on load
+Bugzilla: 1095685
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Xiao Wang <jasowang@redhat.com>
+RH-Acked-by: Amos Kong <akong@redhat.com>
+
+CVE-2013-4149 QEMU 1.3.0 out-of-bounds buffer write in
+virtio_net_load()@hw/net/virtio-net.c
+
+>         } else if (n->mac_table.in_use) {
+>             uint8_t *buf = g_malloc0(n->mac_table.in_use);
+
+We are allocating buffer of size n->mac_table.in_use
+
+>             qemu_get_buffer(f, buf, n->mac_table.in_use * ETH_ALEN);
+
+and read to the n->mac_table.in_use size buffer n->mac_table.in_use *
+ETH_ALEN bytes, corrupting memory.
+
+If adversary controls state then memory written there is controlled
+by adversary.
+
+Reviewed-by: Michael Roth <mdroth@linux.vnet.ibm.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit 98f93ddd84800f207889491e0b5d851386b459cf)
+
+Bugzilla: 1095685
+Tested: lightly on developer's box
+Brew build: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7452039
+---
+ hw/net/virtio-net.c | 15 +++++++++++----
+ 1 file changed, 11 insertions(+), 4 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/net/virtio-net.c |   15 +++++++++++----
+ 1 files changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/hw/net/virtio-net.c b/hw/net/virtio-net.c
+index 007cc2a..f72be9f 100644
+--- a/hw/net/virtio-net.c
++++ b/hw/net/virtio-net.c
+@@ -1273,10 +1273,17 @@ static int virtio_net_load(QEMUFile *f, void *opaque, int version_id)
+         if (n->mac_table.in_use <= MAC_TABLE_ENTRIES) {
+             qemu_get_buffer(f, n->mac_table.macs,
+                             n->mac_table.in_use * ETH_ALEN);
+-        } else if (n->mac_table.in_use) {
+-            uint8_t *buf = g_malloc0(n->mac_table.in_use);
+-            qemu_get_buffer(f, buf, n->mac_table.in_use * ETH_ALEN);
+-            g_free(buf);
++        } else {
++            int64_t i;
++
++            /* Overflow detected - can happen if source has a larger MAC table.
++             * We simply set overflow flag so there's no need to maintain the
++             * table of addresses, discard them all.
++             * Note: 64 bit math to avoid integer overflow.
++             */
++            for (i = 0; i < (int64_t)n->mac_table.in_use * ETH_ALEN; ++i) {
++                qemu_get_byte(f);
++            }
+             n->mac_table.multi_overflow = n->mac_table.uni_overflow = 1;
+             n->mac_table.in_use = 0;
+         }
+-- 
+1.7.1
+

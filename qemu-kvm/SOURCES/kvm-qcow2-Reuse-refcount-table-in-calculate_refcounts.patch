@@ -1,0 +1,66 @@
+From 2f67e26a87ace81cb7a9c122c39f4d8d667d69d1 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:22:19 +0200
+Subject: [PATCH 25/42] qcow2: Reuse refcount table in calculate_refcounts()
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Message-id: <1434212556-3927-26-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66044
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 25/42] qcow2: Reuse refcount table in calculate_refcounts()
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1129893
+
+We will later call calculate_refcounts multiple times, so reuse the
+refcount table if possible.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Benoît Canet <benoit.canet@nodalink.com>
+Reviewed-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 9696df219a71c6608f058ade8873d6d0b4e352fe)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-refcount.c | 12 +++++++-----
+ 1 file changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/block/qcow2-refcount.c b/block/qcow2-refcount.c
+index 7d03e65..8f1215c 100644
+--- a/block/qcow2-refcount.c
++++ b/block/qcow2-refcount.c
+@@ -1631,10 +1631,12 @@ static int calculate_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
+     QCowSnapshot *sn;
+     int ret;
+ 
+-    *refcount_table = g_try_new0(uint16_t, *nb_clusters);
+-    if (*nb_clusters && *refcount_table == NULL) {
+-        res->check_errors++;
+-        return -ENOMEM;
++    if (!*refcount_table) {
++        *refcount_table = g_try_new0(uint16_t, *nb_clusters);
++        if (*nb_clusters && *refcount_table == NULL) {
++            res->check_errors++;
++            return -ENOMEM;
++        }
+     }
+ 
+     /* header */
+@@ -1750,7 +1752,7 @@ int qcow2_check_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
+ {
+     BDRVQcowState *s = bs->opaque;
+     int64_t size, highest_cluster, nb_clusters;
+-    uint16_t *refcount_table;
++    uint16_t *refcount_table = NULL;
+     int ret;
+ 
+     size = bdrv_getlength(bs->file);
+-- 
+1.8.3.1
+

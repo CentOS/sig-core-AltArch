@@ -1,0 +1,60 @@
+From ce4b6f19e7e027480606076804cc6da2cccf99ba Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Mon, 27 Oct 2014 11:45:22 +0100
+Subject: [PATCH 14/19] ac97: register reset via qom
+
+Message-id: <1414410322-25041-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 61905
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 1/1] ac97: register reset via qom
+Bugzilla: 1141667
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Amos Kong <akong@redhat.com>
+
+So it gets properly unregistered on hot-unplug.
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 133771477c39f3716d9a85609aca0d3e5a77c55c)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/audio/ac97.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/hw/audio/ac97.c b/hw/audio/ac97.c
+index 8455a96..7f6763f 100644
+--- a/hw/audio/ac97.c
++++ b/hw/audio/ac97.c
+@@ -1323,9 +1323,9 @@ static const MemoryRegionOps ac97_io_nabm_ops = {
+     .endianness = DEVICE_LITTLE_ENDIAN,
+ };
+ 
+-static void ac97_on_reset (void *opaque)
++static void ac97_on_reset (DeviceState *dev)
+ {
+-    AC97LinkState *s = opaque;
++    AC97LinkState *s = container_of(dev, AC97LinkState, dev.qdev);
+ 
+     reset_bm_regs (s, &s->bm_regs[0]);
+     reset_bm_regs (s, &s->bm_regs[1]);
+@@ -1382,9 +1382,8 @@ static int ac97_initfn (PCIDevice *dev)
+     memory_region_init_io (&s->io_nabm, &ac97_io_nabm_ops, s, "ac97-nabm", 256);
+     pci_register_bar (&s->dev, 0, PCI_BASE_ADDRESS_SPACE_IO, &s->io_nam);
+     pci_register_bar (&s->dev, 1, PCI_BASE_ADDRESS_SPACE_IO, &s->io_nabm);
+-    qemu_register_reset (ac97_on_reset, s);
+     AUD_register_card ("ac97", &s->card);
+-    ac97_on_reset (s);
++    ac97_on_reset (&s->dev.qdev);
+     return 0;
+ }
+ 
+@@ -1422,6 +1421,7 @@ static void ac97_class_init (ObjectClass *klass, void *data)
+     dc->desc = "Intel 82801AA AC97 Audio";
+     dc->vmsd = &vmstate_ac97;
+     dc->props = ac97_properties;
++    dc->reset = ac97_on_reset;
+ }
+ 
+ static const TypeInfo ac97_info = {
+-- 
+1.8.3.1
+

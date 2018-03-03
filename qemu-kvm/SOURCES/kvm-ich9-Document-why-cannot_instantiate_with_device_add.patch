@@ -1,0 +1,85 @@
+From 085e956d2dbbc280727760ffa620b8a22db1cb6e Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Wed, 6 Nov 2013 14:41:17 +0100
+Subject: [PATCH 41/81] ich9: Document why cannot_instantiate_with_device_add_yet
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383748882-22831-13-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55538
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 12/17] ich9: Document why cannot_instantiate_with_device_add_yet
+Bugzilla: 1001216
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+An ICH9 southbridge contains several PCI devices, some of them with
+multiple functions.  We model each function as a separate qdev.  Two
+of them need some special wiring set up in pc_q35_init() to work: the
+LPC controller at 00:1f.0, and the SMBus controller at 00:1f.3.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Peter Maydell <peter.maydell@linaro.org>
+(cherry picked from pending upstream submission)
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ hw/i2c/smbus_ich9.c | 6 +++++-
+ hw/isa/lpc_ich9.c   | 7 +++++--
+ 2 files changed, 10 insertions(+), 3 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i2c/smbus_ich9.c |    6 +++++-
+ hw/isa/lpc_ich9.c   |    7 +++++--
+ 2 files changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/hw/i2c/smbus_ich9.c b/hw/i2c/smbus_ich9.c
+index c1ffa34..8d47eaf 100644
+--- a/hw/i2c/smbus_ich9.c
++++ b/hw/i2c/smbus_ich9.c
+@@ -97,11 +97,15 @@ static void ich9_smb_class_init(ObjectClass *klass, void *data)
+     k->device_id = PCI_DEVICE_ID_INTEL_ICH9_6;
+     k->revision = ICH9_A2_SMB_REVISION;
+     k->class_id = PCI_CLASS_SERIAL_SMBUS;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_ich9_smbus;
+     dc->desc = "ICH9 SMBUS Bridge";
+     k->init = ich9_smbus_initfn;
+     k->config_write = ich9_smbus_write_config;
++    /*
++     * Reason: part of ICH9 southbridge, needs to be wired up by
++     * pc_q35_init()
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ i2c_bus *ich9_smb_init(PCIBus *bus, int devfn, uint32_t smb_io_base)
+diff --git a/hw/isa/lpc_ich9.c b/hw/isa/lpc_ich9.c
+index 580e9ac..4f834b9 100644
+--- a/hw/isa/lpc_ich9.c
++++ b/hw/isa/lpc_ich9.c
+@@ -603,14 +603,17 @@ static void ich9_lpc_class_init(ObjectClass *klass, void *data)
+     dc->reset = ich9_lpc_reset;
+     k->init = ich9_lpc_initfn;
+     dc->vmsd = &vmstate_ich9_lpc;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     k->config_write = ich9_lpc_config_write;
+     dc->desc = "ICH9 LPC bridge";
+     k->vendor_id = PCI_VENDOR_ID_INTEL;
+     k->device_id = PCI_DEVICE_ID_INTEL_ICH9_8;
+     k->revision = ICH9_A2_LPC_REVISION;
+     k->class_id = PCI_CLASS_BRIDGE_ISA;
+-
++    /*
++     * Reason: part of ICH9 southbridge, needs to be wired up by
++     * pc_q35_init()
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo ich9_lpc_info = {
+-- 
+1.7.1
+

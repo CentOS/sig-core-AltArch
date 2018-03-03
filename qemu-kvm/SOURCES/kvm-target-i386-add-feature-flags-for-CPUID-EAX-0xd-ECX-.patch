@@ -1,0 +1,168 @@
+From 5fcaf5176d7545518c76f3aa8ea7ce6fb063c62d Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Wed, 6 Jul 2016 20:47:52 +0200
+Subject: [PATCH 1/2] target-i386: add feature flags for CPUID[EAX=0xd, ECX=1]
+
+RH-Author: Eduardo Habkost <ehabkost@redhat.com>
+Message-id: <1467838073-23873-2-git-send-email-ehabkost@redhat.com>
+Patchwork-id: 71051
+O-Subject: [RHEL-7.3 qemu-kvm PATCH 1/2] target-i386: add feature flags for CPUID[EAX=0xd, ECX=1]
+Bugzilla: 1327599
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+These represent xsave-related capabilities of the processor, and KVM may
+or may not support them.
+
+Add feature bits so that they are considered by "-cpu ...,enforce", and use
+the new feature work instead of calling kvm_arch_get_supported_cpuid.
+
+Bit 3 (XSAVES) is not migratables because it requires saving MSR_IA32_XSS.
+Neither KVM nor any commonly available hardware supports it anyway.
+
+RHEL backport notes:
+* In addition to allowing xsave flags to be configured, this
+  patch is a bug fix because we shouldn't use
+  kvm_arch_supported_cpuid() directly when configuring CPUID for
+  the guest
+* tcg_features didn't exist, handle it inside x86_cpu_realizefn()
+  directly in the !kvm_enabled() check
+* As the unmigratable_flags mechanism is not present yet,
+  remove the "xsaves" flag name so it can't be enabled manually
+  (otherwise we would need to backport upstream commit
+  18cd2c17b5370369a886155c001da0a7f54bbcca too)
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 0bb0b2d2fe7f645ddaf1f0ff40ac669c9feb4aa1)
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/cpu.c | 28 +++++++++++++++++++++++++++-
+ target-i386/cpu.h |  6 ++++++
+ 2 files changed, 33 insertions(+), 1 deletion(-)
+
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index 06efe17..6650c72 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -150,6 +150,17 @@ static const char *cpuid_7_0_ebx_feature_name[] = {
+     NULL, NULL, "avx512pf", "avx512er", "avx512cd", NULL, NULL, NULL,
+ };
+ 
++static const char *cpuid_xsave_feature_name[] = {
++    "xsaveopt", "xsavec", "xgetbv1", NULL,
++    NULL, NULL, NULL, NULL,
++    NULL, NULL, NULL, NULL,
++    NULL, NULL, NULL, NULL,
++    NULL, NULL, NULL, NULL,
++    NULL, NULL, NULL, NULL,
++    NULL, NULL, NULL, NULL,
++    NULL, NULL, NULL, NULL,
++};
++
+ typedef struct FeatureWordInfo {
+     const char **feat_names;
+     uint32_t cpuid_eax;   /* Input EAX for CPUID */
+@@ -193,6 +204,12 @@ static FeatureWordInfo feature_word_info[FEATURE_WORDS] = {
+         .cpuid_needs_ecx = true, .cpuid_ecx = 0,
+         .cpuid_reg = R_EBX,
+     },
++    [FEAT_XSAVE] = {
++        .feat_names = cpuid_xsave_feature_name,
++        .cpuid_eax = 0xd,
++        .cpuid_needs_ecx = true, .cpuid_ecx = 1,
++        .cpuid_reg = R_EAX,
++    },
+ };
+ 
+ typedef struct X86RegisterInfo32 {
+@@ -833,6 +850,8 @@ static x86_def_t builtin_x86_defs[] = {
+              CPUID_EXT2_SYSCALL,
+         .features[FEAT_8000_0001_ECX] =
+             CPUID_EXT3_LAHF_LM,
++        .features[FEAT_XSAVE] =
++            CPUID_XSAVE_XSAVEOPT,
+         .xlevel = 0x8000000A,
+         .model_id = "Intel Xeon E312xx (Sandy Bridge)",
+     },
+@@ -866,6 +885,8 @@ static x86_def_t builtin_x86_defs[] = {
+             CPUID_7_0_EBX_HLE | CPUID_7_0_EBX_AVX2 | CPUID_7_0_EBX_SMEP |
+             CPUID_7_0_EBX_BMI2 | CPUID_7_0_EBX_ERMS | CPUID_7_0_EBX_INVPCID |
+             CPUID_7_0_EBX_RTM,
++        .features[FEAT_XSAVE] =
++            CPUID_XSAVE_XSAVEOPT,
+         .xlevel = 0x8000000A,
+         .model_id = "Intel Core Processor (Haswell)",
+     },
+@@ -900,6 +921,8 @@ static x86_def_t builtin_x86_defs[] = {
+             CPUID_7_0_EBX_BMI2 | CPUID_7_0_EBX_ERMS | CPUID_7_0_EBX_INVPCID |
+             CPUID_7_0_EBX_RTM | CPUID_7_0_EBX_RDSEED | CPUID_7_0_EBX_ADX |
+             CPUID_7_0_EBX_SMAP,
++        .features[FEAT_XSAVE] =
++            CPUID_XSAVE_XSAVEOPT,
+         .xlevel = 0x8000000A,
+         .model_id = "Intel Core Processor (Broadwell)",
+     },
+@@ -1017,6 +1040,7 @@ static x86_def_t builtin_x86_defs[] = {
+              CPUID_EXT3_3DNOWPREFETCH | CPUID_EXT3_MISALIGNSSE |
+              CPUID_EXT3_SSE4A | CPUID_EXT3_ABM | CPUID_EXT3_SVM |
+              CPUID_EXT3_LAHF_LM,
++        /* no xsaveopt! */
+         .xlevel = 0x8000001A,
+         .model_id = "AMD Opteron 62xx class CPU",
+     },
+@@ -1051,6 +1075,7 @@ static x86_def_t builtin_x86_defs[] = {
+              CPUID_EXT3_3DNOWPREFETCH | CPUID_EXT3_MISALIGNSSE |
+              CPUID_EXT3_SSE4A | CPUID_EXT3_ABM | CPUID_EXT3_SVM |
+              CPUID_EXT3_LAHF_LM,
++        /* no xsaveopt! */
+         .xlevel = 0x8000001A,
+         .model_id = "AMD Opteron 63xx class CPU",
+     },
+@@ -2196,7 +2221,7 @@ void cpu_x86_cpuid(CPUX86State *env, uint32_t index, uint32_t count,
+             *eax |= kvm_mask & (XSTATE_FP | XSTATE_SSE);
+             *ebx = *ecx;
+         } else if (count == 1) {
+-            *eax = kvm_arch_get_supported_cpuid(s, 0xd, 1, R_EAX);
++            *eax = env->features[FEAT_XSAVE];
+         } else if (count < ARRAY_SIZE(ext_save_areas)) {
+             const ExtSaveArea *esa = &ext_save_areas[count];
+             if ((env->features[esa->feature] & esa->bits) == esa->bits &&
+@@ -2540,6 +2565,7 @@ static void x86_cpu_realizefn(DeviceState *dev, Error **errp)
+             );
+         env->features[FEAT_8000_0001_ECX] &= TCG_EXT3_FEATURES;
+         env->features[FEAT_SVM] &= TCG_SVM_FEATURES;
++        env->features[FEAT_XSAVE] = 0;
+     } else {
+         if ((cpu->check_cpuid || cpu->enforce_cpuid)
+             && kvm_check_features_against_host(cpu) && cpu->enforce_cpuid) {
+diff --git a/target-i386/cpu.h b/target-i386/cpu.h
+index 61e9b86..da7e060 100644
+--- a/target-i386/cpu.h
++++ b/target-i386/cpu.h
+@@ -405,6 +405,7 @@ typedef enum FeatureWord {
+     FEAT_C000_0001_EDX, /* CPUID[C000_0001].EDX */
+     FEAT_KVM,           /* CPUID[4000_0001].EAX (KVM_CPUID_FEATURES) */
+     FEAT_SVM,           /* CPUID[8000_000A].EDX */
++    FEAT_XSAVE,         /* CPUID[EAX=0xd,ECX=1].EAX */
+     FEATURE_WORDS,
+ } FeatureWord;
+ 
+@@ -565,6 +566,11 @@ typedef uint32_t FeatureWordArray[FEATURE_WORDS];
+ #define CPUID_7_0_EBX_AVX512ER (1U << 27) /* AVX-512 Exponential and Reciprocal */
+ #define CPUID_7_0_EBX_AVX512CD (1U << 28) /* AVX-512 Conflict Detection */
+ 
++#define CPUID_XSAVE_XSAVEOPT   (1U << 0)
++#define CPUID_XSAVE_XSAVEC     (1U << 1)
++#define CPUID_XSAVE_XGETBV1    (1U << 2)
++#define CPUID_XSAVE_XSAVES     (1U << 3)
++
+ #define CPUID_VENDOR_SZ      12
+ 
+ #define CPUID_VENDOR_INTEL_1 0x756e6547 /* "Genu" */
+-- 
+1.8.3.1
+

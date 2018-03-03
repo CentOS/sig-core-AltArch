@@ -1,0 +1,294 @@
+From 69a283009c8736d5e063b6721b47f4b453595c15 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Wed, 11 Dec 2013 19:26:16 +0100
+Subject: [PATCH 02/37] block: Move initialisation of BlockLimits to bdrv_refresh_limits()
+
+Message-id: <1392117622-28812-3-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57167
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 02/37] block: Move initialisation of BlockLimits to bdrv_refresh_limits()
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+This function separates filling the BlockLimits from bdrv_open(), which
+allows it to call it from other operations which may change the limits
+(e.g. modifications to the backing file chain or bdrv_reopen)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+(cherry picked from commit d34682cd4a06efe9ee3fc8cb7e8a0ea445299989)
+
+Conflicts:
+	block/qed.c
+
+Trivial context-only conflict.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c                   | 18 ++++++++++++++++++
+ block/iscsi.c             | 46 +++++++++++++++++++++++++++++-----------------
+ block/qcow2.c             | 11 ++++++++++-
+ block/qed.c               | 11 ++++++++++-
+ block/vmdk.c              | 22 ++++++++++++++++++----
+ include/block/block_int.h |  2 ++
+ 6 files changed, 87 insertions(+), 23 deletions(-)
+---
+ block.c                   |   18 +++++++++++++++++
+ block/iscsi.c             |   46 ++++++++++++++++++++++++++++----------------
+ block/qcow2.c             |   11 +++++++++-
+ block/qed.c               |   11 +++++++++-
+ block/vmdk.c              |   22 +++++++++++++++++---
+ include/block/block_int.h |    2 +
+ 6 files changed, 87 insertions(+), 23 deletions(-)
+
+diff --git a/block.c b/block.c
+index df0adf3..26eebcc 100644
+--- a/block.c
++++ b/block.c
+@@ -446,6 +446,19 @@ int bdrv_create_file(const char* filename, QEMUOptionParameter *options,
+     return ret;
+ }
+ 
++static int bdrv_refresh_limits(BlockDriverState *bs)
++{
++    BlockDriver *drv = bs->drv;
++
++    memset(&bs->bl, 0, sizeof(bs->bl));
++
++    if (drv && drv->bdrv_refresh_limits) {
++        return drv->bdrv_refresh_limits(bs);
++    }
++
++    return 0;
++}
++
+ /*
+  * Create a uniquely-named empty temporary file.
+  * Return 0 upon success, otherwise a negative errno value.
+@@ -797,6 +810,8 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
+         goto free_and_fail;
+     }
+ 
++    bdrv_refresh_limits(bs);
++
+ #ifndef _WIN32
+     if (bs->is_temporary) {
+         assert(filename != NULL);
+@@ -984,6 +999,9 @@ int bdrv_open_backing_file(BlockDriverState *bs, QDict *options, Error **errp)
+                 bs->backing_hd->file->filename);
+     }
+ 
++    /* Recalculate the BlockLimits with the backing file */
++    bdrv_refresh_limits(bs);
++
+     return 0;
+ }
+ 
+diff --git a/block/iscsi.c b/block/iscsi.c
+index 1c5b0a2..83e4f15 100644
+--- a/block/iscsi.c
++++ b/block/iscsi.c
+@@ -1445,23 +1445,6 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
+                sizeof(struct scsi_inquiry_block_limits));
+         scsi_free_scsi_task(task);
+         task = NULL;
+-
+-        if (iscsilun->bl.max_unmap < 0xffffffff) {
+-            bs->bl.max_discard = sector_lun2qemu(iscsilun->bl.max_unmap,
+-                                                 iscsilun);
+-        }
+-        bs->bl.discard_alignment = sector_lun2qemu(iscsilun->bl.opt_unmap_gran,
+-                                                   iscsilun);
+-
+-        if (iscsilun->bl.max_ws_len < 0xffffffff) {
+-            bs->bl.max_write_zeroes = sector_lun2qemu(iscsilun->bl.max_ws_len,
+-                                                      iscsilun);
+-        }
+-        bs->bl.write_zeroes_alignment = sector_lun2qemu(iscsilun->bl.opt_unmap_gran,
+-                                                        iscsilun);
+-
+-        bs->bl.opt_transfer_length = sector_lun2qemu(iscsilun->bl.opt_xfer_len,
+-                                                     iscsilun);
+     }
+ 
+ #if defined(LIBISCSI_FEATURE_NOP_COUNTER)
+@@ -1506,6 +1489,34 @@ static void iscsi_close(BlockDriverState *bs)
+     memset(iscsilun, 0, sizeof(IscsiLun));
+ }
+ 
++static int iscsi_refresh_limits(BlockDriverState *bs)
++{
++    IscsiLun *iscsilun = bs->opaque;
++
++    /* We don't actually refresh here, but just return data queried in
++     * iscsi_open(): iscsi targets don't change their limits. */
++    if (iscsilun->lbp.lbpu || iscsilun->lbp.lbpws) {
++        if (iscsilun->bl.max_unmap < 0xffffffff) {
++            bs->bl.max_discard = sector_lun2qemu(iscsilun->bl.max_unmap,
++                                                 iscsilun);
++        }
++        bs->bl.discard_alignment = sector_lun2qemu(iscsilun->bl.opt_unmap_gran,
++                                                   iscsilun);
++
++        if (iscsilun->bl.max_ws_len < 0xffffffff) {
++            bs->bl.max_write_zeroes = sector_lun2qemu(iscsilun->bl.max_ws_len,
++                                                      iscsilun);
++        }
++        bs->bl.write_zeroes_alignment = sector_lun2qemu(iscsilun->bl.opt_unmap_gran,
++                                                        iscsilun);
++
++        bs->bl.opt_transfer_length = sector_lun2qemu(iscsilun->bl.opt_xfer_len,
++                                                     iscsilun);
++    }
++
++    return 0;
++}
++
+ /* We have nothing to do for iSCSI reopen, stub just returns
+  * success */
+ static int iscsi_reopen_prepare(BDRVReopenState *state,
+@@ -1626,6 +1637,7 @@ static BlockDriver bdrv_iscsi = {
+     .bdrv_getlength  = iscsi_getlength,
+     .bdrv_get_info   = iscsi_get_info,
+     .bdrv_truncate   = iscsi_truncate,
++    .bdrv_refresh_limits = iscsi_refresh_limits,
+ 
+     .bdrv_co_get_block_status = iscsi_co_get_block_status,
+     .bdrv_co_discard      = iscsi_co_discard,
+diff --git a/block/qcow2.c b/block/qcow2.c
+index f6307af..05ea0cd 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -718,7 +718,6 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
+     }
+ 
+     qemu_opts_del(opts);
+-    bs->bl.write_zeroes_alignment = s->cluster_sectors;
+ 
+     if (s->use_lazy_refcounts && s->qcow_version < 3) {
+         error_setg(errp, "Lazy refcounts require a qcow2 image with at least "
+@@ -751,6 +750,15 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
+     return ret;
+ }
+ 
++static int qcow2_refresh_limits(BlockDriverState *bs)
++{
++    BDRVQcowState *s = bs->opaque;
++
++    bs->bl.write_zeroes_alignment = s->cluster_sectors;
++
++    return 0;
++}
++
+ static int qcow2_set_key(BlockDriverState *bs, const char *key)
+ {
+     BDRVQcowState *s = bs->opaque;
+@@ -2262,6 +2270,7 @@ static BlockDriver bdrv_qcow2 = {
+ 
+     .bdrv_change_backing_file   = qcow2_change_backing_file,
+ 
++    .bdrv_refresh_limits        = qcow2_refresh_limits,
+     .bdrv_invalidate_cache      = qcow2_invalidate_cache,
+ 
+     .create_options = qcow2_create_options,
+diff --git a/block/qed.c b/block/qed.c
+index fb8ccd5..da68152 100644
+--- a/block/qed.c
++++ b/block/qed.c
+@@ -495,7 +495,6 @@ static int bdrv_qed_open(BlockDriverState *bs, QDict *options, int flags,
+         }
+     }
+ 
+-    bs->bl.write_zeroes_alignment = s->header.cluster_size >> BDRV_SECTOR_BITS;
+     s->need_check_timer = qemu_new_timer_ns(vm_clock,
+                                             qed_need_check_timer_cb, s);
+ 
+@@ -507,6 +506,15 @@ out:
+     return ret;
+ }
+ 
++static int bdrv_qed_refresh_limits(BlockDriverState *bs)
++{
++    BDRVQEDState *s = bs->opaque;
++
++    bs->bl.write_zeroes_alignment = s->header.cluster_size >> BDRV_SECTOR_BITS;
++
++    return 0;
++}
++
+ /* We have nothing to do for QED reopen, stubs just return
+  * success */
+ static int bdrv_qed_reopen_prepare(BDRVReopenState *state,
+@@ -1616,6 +1624,7 @@ static BlockDriver bdrv_qed = {
+     .bdrv_truncate            = bdrv_qed_truncate,
+     .bdrv_getlength           = bdrv_qed_getlength,
+     .bdrv_get_info            = bdrv_qed_get_info,
++    .bdrv_refresh_limits      = bdrv_qed_refresh_limits,
+     .bdrv_change_backing_file = bdrv_qed_change_backing_file,
+     .bdrv_invalidate_cache    = bdrv_qed_invalidate_cache,
+     .bdrv_check               = bdrv_qed_check,
+diff --git a/block/vmdk.c b/block/vmdk.c
+index a1994a4..a966715 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -428,10 +428,6 @@ static int vmdk_add_extent(BlockDriverState *bs,
+     extent->l2_size = l2_size;
+     extent->cluster_sectors = flat ? sectors : cluster_sectors;
+ 
+-    if (!flat) {
+-        bs->bl.write_zeroes_alignment =
+-            MAX(bs->bl.write_zeroes_alignment, cluster_sectors);
+-    }
+     if (s->num_extents > 1) {
+         extent->end_sector = (*(extent - 1)).end_sector + extent->sectors;
+     } else {
+@@ -886,6 +882,23 @@ fail:
+     return ret;
+ }
+ 
++
++static int vmdk_refresh_limits(BlockDriverState *bs)
++{
++    BDRVVmdkState *s = bs->opaque;
++    int i;
++
++    for (i = 0; i < s->num_extents; i++) {
++        if (!s->extents[i].flat) {
++            bs->bl.write_zeroes_alignment =
++                MAX(bs->bl.write_zeroes_alignment,
++                    s->extents[i].cluster_sectors);
++        }
++    }
++
++    return 0;
++}
++
+ static int get_whole_cluster(BlockDriverState *bs,
+                 VmdkExtent *extent,
+                 uint64_t cluster_offset,
+@@ -1957,6 +1970,7 @@ static BlockDriver bdrv_vmdk = {
+     .bdrv_get_allocated_file_size = vmdk_get_allocated_file_size,
+     .bdrv_has_zero_init           = vmdk_has_zero_init,
+     .bdrv_get_specific_info       = vmdk_get_specific_info,
++    .bdrv_refresh_limits          = vmdk_refresh_limits,
+ 
+     .create_options               = vmdk_create_options,
+ };
+diff --git a/include/block/block_int.h b/include/block/block_int.h
+index c8f30fd..13a52e8 100644
+--- a/include/block/block_int.h
++++ b/include/block/block_int.h
+@@ -213,6 +213,8 @@ struct BlockDriver {
+     int (*bdrv_debug_resume)(BlockDriverState *bs, const char *tag);
+     bool (*bdrv_debug_is_suspended)(BlockDriverState *bs, const char *tag);
+ 
++    int (*bdrv_refresh_limits)(BlockDriverState *bs);
++
+     /*
+      * Returns 1 if newly created images are guaranteed to contain only
+      * zeros, 0 otherwise.
+-- 
+1.7.1
+

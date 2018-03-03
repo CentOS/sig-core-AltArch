@@ -1,0 +1,46 @@
+From 5e30d941f2fb33b995333fc4bb45368129f8d4bc Mon Sep 17 00:00:00 2001
+From: Eric Blake <eblake@redhat.com>
+Date: Wed, 20 Aug 2014 16:40:08 +0200
+Subject: [PATCH 05/11] mirror: Fix resource leak when bdrv_getlength fails
+
+Message-id: <1408552814-23031-2-git-send-email-eblake@redhat.com>
+Patchwork-id: 60646
+O-Subject: [qemu-kvm-rhev 7.0.z PATCH 1/7] mirror: Fix resource leak when bdrv_getlength fails
+Bugzilla: 1130603
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Fam Zheng <famz@redhat.com>
+
+The direct return will skip releasing of all the resouces at
+immediate_exit, don't miss that.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 373df5b135b4a54e0abb394e9e703fef3ded093c)
+Signed-off-by: Eric Blake <eblake@redhat.com>
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/mirror.c |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/block/mirror.c b/block/mirror.c
+index 47e14cd..9b3e229 100644
+--- a/block/mirror.c
++++ b/block/mirror.c
+@@ -307,8 +307,8 @@ static void coroutine_fn mirror_run(void *opaque)
+ 
+     s->common.len = bdrv_getlength(bs);
+     if (s->common.len <= 0) {
+-        block_job_completed(&s->common, s->common.len);
+-        return;
++        ret = s->common.len;
++        goto immediate_exit;
+     }
+ 
+     length = (bdrv_getlength(bs) + s->granularity - 1) / s->granularity;
+-- 
+1.7.1
+

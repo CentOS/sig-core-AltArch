@@ -1,0 +1,177 @@
+From d40996f249a4e28a0979cd7919192d9f440800b5 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 2 Jun 2014 13:54:45 +0200
+Subject: [PATCH 28/31] qcow1: Check maximum cluster size
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1401717288-3918-4-git-send-email-kwolf@redhat.com>
+Patchwork-id: 59098
+O-Subject: [RHEL-7.1/7.0.z qemu-kvm PATCH 3/6] qcow1: Check maximum cluster size
+Bugzilla: 1097229 1097230
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1097230
+
+Huge values for header.cluster_bits cause unbounded allocations (e.g.
+for s->cluster_cache) and crash qemu this way. Less huge values may
+survive those allocations, but can cause integer overflows later on.
+
+The only cluster sizes that qemu can create are 4k (for standalone
+images) and 512 (for images with backing files), so we can limit it
+to 64k.
+
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+
+Conflicts:
+	tests/qemu-iotests/group
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 7159a45b2bf2dcb9f49f1e27d1d3d135a0247a2f)
+---
+ block/qcow.c               | 10 ++++++--
+ tests/qemu-iotests/092     | 63 ++++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/092.out | 13 ++++++++++
+ tests/qemu-iotests/group   |  1 +
+ 4 files changed, 85 insertions(+), 2 deletions(-)
+ create mode 100755 tests/qemu-iotests/092
+ create mode 100644 tests/qemu-iotests/092.out
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow.c               |   10 +++++-
+ tests/qemu-iotests/092     |   63 ++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/092.out |   13 +++++++++
+ tests/qemu-iotests/group   |    1 +
+ 4 files changed, 85 insertions(+), 2 deletions(-)
+ create mode 100755 tests/qemu-iotests/092
+ create mode 100644 tests/qemu-iotests/092.out
+
+diff --git a/block/qcow.c b/block/qcow.c
+index 220ac04..2efe2fc 100644
+--- a/block/qcow.c
++++ b/block/qcow.c
+@@ -126,11 +126,17 @@ static int qcow_open(BlockDriverState *bs, QDict *options, int flags,
+         goto fail;
+     }
+ 
+-    if (header.size <= 1 || header.cluster_bits < 9) {
+-        error_setg(errp, "invalid value in qcow header");
++    if (header.size <= 1) {
++        error_setg(errp, "Image size is too small (must be at least 2 bytes)");
+         ret = -EINVAL;
+         goto fail;
+     }
++    if (header.cluster_bits < 9 || header.cluster_bits > 16) {
++        error_setg(errp, "Cluster size must be between 512 and 64k");
++        ret = -EINVAL;
++        goto fail;
++    }
++
+     if (header.crypt_method > QCOW_CRYPT_AES) {
+         error_setg(errp, "invalid encryption method in qcow header");
+         ret = -EINVAL;
+diff --git a/tests/qemu-iotests/092 b/tests/qemu-iotests/092
+new file mode 100755
+index 0000000..d060e6f
+--- /dev/null
++++ b/tests/qemu-iotests/092
+@@ -0,0 +1,63 @@
++#!/bin/bash
++#
++# qcow1 format input validation tests
++#
++# Copyright (C) 2014 Red Hat, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++
++# creator
++owner=kwolf@redhat.com
++
++seq=`basename $0`
++echo "QA output created by $seq"
++
++here=`pwd`
++tmp=/tmp/$$
++status=1	# failure is the default!
++
++_cleanup()
++{
++    rm -f $TEST_IMG.snap
++    _cleanup_test_img
++}
++trap "_cleanup; exit \$status" 0 1 2 3 15
++
++# get standard environment, filters and checks
++. ./common.rc
++. ./common.filter
++
++_supported_fmt qcow
++_supported_proto generic
++_supported_os Linux
++
++offset_cluster_bits=32
++
++echo
++echo "== Invalid cluster size =="
++_make_test_img 64M
++poke_file "$TEST_IMG" "$offset_cluster_bits" "\xff"
++{ $QEMU_IO -c "read 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
++poke_file "$TEST_IMG" "$offset_cluster_bits" "\x1f"
++{ $QEMU_IO -c "read 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
++poke_file "$TEST_IMG" "$offset_cluster_bits" "\x08"
++{ $QEMU_IO -c "read 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
++poke_file "$TEST_IMG" "$offset_cluster_bits" "\x11"
++{ $QEMU_IO -c "read 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
++
++# success, all done
++echo "*** done"
++rm -f $seq.full
++status=0
+diff --git a/tests/qemu-iotests/092.out b/tests/qemu-iotests/092.out
+new file mode 100644
+index 0000000..8bf8158
+--- /dev/null
++++ b/tests/qemu-iotests/092.out
+@@ -0,0 +1,13 @@
++QA output created by 092
++
++== Invalid cluster size ==
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++qemu-io: can't open device TEST_DIR/t.qcow: Cluster size must be between 512 and 64k
++no file open, try 'help open'
++qemu-io: can't open device TEST_DIR/t.qcow: Cluster size must be between 512 and 64k
++no file open, try 'help open'
++qemu-io: can't open device TEST_DIR/t.qcow: Cluster size must be between 512 and 64k
++no file open, try 'help open'
++qemu-io: can't open device TEST_DIR/t.qcow: Cluster size must be between 512 and 64k
++no file open, try 'help open'
++*** done
+diff --git a/tests/qemu-iotests/group b/tests/qemu-iotests/group
+index 1c91036..e588404 100644
+--- a/tests/qemu-iotests/group
++++ b/tests/qemu-iotests/group
+@@ -82,3 +82,4 @@
+ 084 img auto
+ 086 rw auto quick
+ 088 rw auto
++092 rw auto quick
+-- 
+1.7.1
+

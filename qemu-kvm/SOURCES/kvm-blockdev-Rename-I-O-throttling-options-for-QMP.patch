@@ -1,0 +1,145 @@
+From 6407962af839506d7dcd956d48986324264a3587 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 9 Sep 2013 14:28:19 +0200
+Subject: [PATCH 28/38] blockdev: Rename I/O throttling options for QMP
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1378736903-18489-29-git-send-email-kwolf@redhat.com>
+Patchwork-id: 54215
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 28/32] blockdev: Rename I/O throttling options for QMP
+Bugzilla: 1005818
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Bugzilla: 1005818
+
+In QMP, we want to use dashes instead of underscores in QMP argument
+names, and use nested options for throttling.
+
+The new option names affect the command line as well, but for
+compatibility drive_init() will convert the old option names before
+calling into the code that will be shared between -drive and
+blockdev-add.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit 57975222b6a928dd4a4a8a7b37093cc8ecba5045)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ blockdev.c | 52 +++++++++++++++++++++++++++++++++++++++-------------
+ 1 file changed, 39 insertions(+), 13 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev.c |   52 +++++++++++++++++++++++++++++++++++++++-------------
+ 1 files changed, 39 insertions(+), 13 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index 1c9ca4d..08b1aaf 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -312,7 +312,8 @@ static bool do_check_io_limits(BlockIOLimit *io_limits, Error **errp)
+     return true;
+ }
+ 
+-DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
++static DriveInfo *blockdev_init(QemuOpts *all_opts,
++                                BlockInterfaceType block_default_type)
+ {
+     const char *buf;
+     const char *file = NULL;
+@@ -485,17 +486,17 @@ DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
+ 
+     /* disk I/O throttling */
+     io_limits.bps[BLOCK_IO_LIMIT_TOTAL]  =
+-                           qemu_opt_get_number(opts, "bps", 0);
++        qemu_opt_get_number(opts, "throttling.bps-total", 0);
+     io_limits.bps[BLOCK_IO_LIMIT_READ]   =
+-                           qemu_opt_get_number(opts, "bps_rd", 0);
++        qemu_opt_get_number(opts, "throttling.bps-read", 0);
+     io_limits.bps[BLOCK_IO_LIMIT_WRITE]  =
+-                           qemu_opt_get_number(opts, "bps_wr", 0);
++        qemu_opt_get_number(opts, "throttling.bps-write", 0);
+     io_limits.iops[BLOCK_IO_LIMIT_TOTAL] =
+-                           qemu_opt_get_number(opts, "iops", 0);
++        qemu_opt_get_number(opts, "throttling.iops-total", 0);
+     io_limits.iops[BLOCK_IO_LIMIT_READ]  =
+-                           qemu_opt_get_number(opts, "iops_rd", 0);
++        qemu_opt_get_number(opts, "throttling.iops-read", 0);
+     io_limits.iops[BLOCK_IO_LIMIT_WRITE] =
+-                           qemu_opt_get_number(opts, "iops_wr", 0);
++        qemu_opt_get_number(opts, "throttling.iops-write", 0);
+ 
+     if (!do_check_io_limits(&io_limits, &error)) {
+         error_report("%s", error_get_pretty(error));
+@@ -726,6 +727,31 @@ err:
+     return NULL;
+ }
+ 
++static void qemu_opt_rename(QemuOpts *opts, const char *from, const char *to)
++{
++    const char *value;
++
++    value = qemu_opt_get(opts, from);
++    if (value) {
++        qemu_opt_set(opts, to, value);
++        qemu_opt_unset(opts, from);
++    }
++}
++
++DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
++{
++    /* Change legacy command line options into QMP ones */
++    qemu_opt_rename(all_opts, "iops", "throttling.iops-total");
++    qemu_opt_rename(all_opts, "iops_rd", "throttling.iops-read");
++    qemu_opt_rename(all_opts, "iops_wr", "throttling.iops-write");
++
++    qemu_opt_rename(all_opts, "bps", "throttling.bps-total");
++    qemu_opt_rename(all_opts, "bps_rd", "throttling.bps-read");
++    qemu_opt_rename(all_opts, "bps_wr", "throttling.bps-write");
++
++    return blockdev_init(all_opts, block_default_type);
++}
++
+ void do_commit(Monitor *mon, const QDict *qdict)
+ {
+     const char *device = qdict_get_str(qdict, "device");
+@@ -1679,27 +1705,27 @@ QemuOptsList qemu_common_drive_opts = {
+             .type = QEMU_OPT_BOOL,
+             .help = "open drive file as read-only",
+         },{
+-            .name = "iops",
++            .name = "throttling.iops-total",
+             .type = QEMU_OPT_NUMBER,
+             .help = "limit total I/O operations per second",
+         },{
+-            .name = "iops_rd",
++            .name = "throttling.iops-read",
+             .type = QEMU_OPT_NUMBER,
+             .help = "limit read operations per second",
+         },{
+-            .name = "iops_wr",
++            .name = "throttling.iops-write",
+             .type = QEMU_OPT_NUMBER,
+             .help = "limit write operations per second",
+         },{
+-            .name = "bps",
++            .name = "throttling.bps-total",
+             .type = QEMU_OPT_NUMBER,
+             .help = "limit total bytes per second",
+         },{
+-            .name = "bps_rd",
++            .name = "throttling.bps-read",
+             .type = QEMU_OPT_NUMBER,
+             .help = "limit read bytes per second",
+         },{
+-            .name = "bps_wr",
++            .name = "throttling.bps-write",
+             .type = QEMU_OPT_NUMBER,
+             .help = "limit write bytes per second",
+         },{
+-- 
+1.7.1
+

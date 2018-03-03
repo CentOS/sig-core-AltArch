@@ -1,0 +1,213 @@
+From 7e3dcd5daa2a5e7350bf3dadacdd6dcd1a2460fc Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Tue, 16 Sep 2014 20:11:45 +0200
+Subject: [PATCH 07/20] block: Use correct width in format strings
+
+Message-id: <a14914e8c76780fe8aa97cf44825a0e7167b9208.1410897407.git.jcody@redhat.com>
+Patchwork-id: 61211
+O-Subject: [PATCH qemu-kvm-rhel RHEL7.1 06/15] block: Use correct width in format strings
+Bugzilla: 1098086
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Max Reitz <mreitz@redhat.com>
+
+Instead of blindly relying on a normal integer having a width of 32 bits
+(which is a pretty good assumption, but we should not rely on it if
+there is no need), use the correct format string macros.
+
+This does not touch DEBUG output.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 521b2b5df0ccad764cf95164c6e428f855067a6f)
+
+Conflicts:
+	block/vdi.c
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/cow.c      |    2 +-
+ block/dmg.c      |    8 ++++----
+ block/qcow.c     |    3 ++-
+ block/qcow2.c    |   12 +++++++-----
+ block/sheepdog.c |    6 +++---
+ block/vdi.c      |   21 +++++++++++----------
+ 6 files changed, 28 insertions(+), 24 deletions(-)
+
+diff --git a/block/cow.c b/block/cow.c
+index 651bdff..c75668b 100644
+--- a/block/cow.c
++++ b/block/cow.c
+@@ -82,7 +82,7 @@ static int cow_open(BlockDriverState *bs, QDict *options, int flags,
+     if (be32_to_cpu(cow_header.version) != COW_VERSION) {
+         char version[64];
+         snprintf(version, sizeof(version),
+-               "COW version %d", cow_header.version);
++               "COW version %" PRIu32, cow_header.version);
+         error_set(errp, QERR_UNKNOWN_BLOCK_FORMAT_FEATURE,
+             bs->device_name, "cow", version);
+         ret = -ENOTSUP;
+diff --git a/block/dmg.c b/block/dmg.c
+index 856402e..1e153cd 100644
+--- a/block/dmg.c
++++ b/block/dmg.c
+@@ -248,8 +248,8 @@ static int dmg_open(BlockDriverState *bs, QDict *options, int flags,
+                 offset += 8;
+ 
+                 if (s->sectorcounts[i] > DMG_SECTORCOUNTS_MAX) {
+-                    error_report("sector count %" PRIu64 " for chunk %u is "
+-                                 "larger than max (%u)",
++                    error_report("sector count %" PRIu64 " for chunk %" PRIu32
++                                 " is larger than max (%u)",
+                                  s->sectorcounts[i], i, DMG_SECTORCOUNTS_MAX);
+                     ret = -EINVAL;
+                     goto fail;
+@@ -269,8 +269,8 @@ static int dmg_open(BlockDriverState *bs, QDict *options, int flags,
+                 offset += 8;
+ 
+                 if (s->lengths[i] > DMG_LENGTHS_MAX) {
+-                    error_report("length %" PRIu64 " for chunk %u is larger "
+-                                 "than max (%u)",
++                    error_report("length %" PRIu64 " for chunk %" PRIu32
++                                 " is larger than max (%u)",
+                                  s->lengths[i], i, DMG_LENGTHS_MAX);
+                     ret = -EINVAL;
+                     goto fail;
+diff --git a/block/qcow.c b/block/qcow.c
+index a5f601f..be5d3e9 100644
+--- a/block/qcow.c
++++ b/block/qcow.c
+@@ -121,7 +121,8 @@ static int qcow_open(BlockDriverState *bs, QDict *options, int flags,
+     }
+     if (header.version != QCOW_VERSION) {
+         char version[64];
+-        snprintf(version, sizeof(version), "QCOW version %d", header.version);
++        snprintf(version, sizeof(version), "QCOW version %" PRIu32,
++                 header.version);
+         error_set(errp, QERR_UNKNOWN_BLOCK_FORMAT_FEATURE,
+                   bs->device_name, "qcow", version);
+         ret = -ENOTSUP;
+diff --git a/block/qcow2.c b/block/qcow2.c
+index 0878d88..a679355 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -124,8 +124,9 @@ static int qcow2_read_extensions(BlockDriverState *bs, uint64_t start_offset,
+ 
+         case QCOW2_EXT_MAGIC_BACKING_FORMAT:
+             if (ext.len >= sizeof(bs->backing_format)) {
+-                error_setg(errp, "ERROR: ext_backing_format: len=%u too large"
+-                           " (>=%zu)", ext.len, sizeof(bs->backing_format));
++                error_setg(errp, "ERROR: ext_backing_format: len=%" PRIu32
++                           " too large (>=%zu)", ext.len,
++                           sizeof(bs->backing_format));
+                 return 2;
+             }
+             ret = bdrv_pread(bs->file, offset, bs->backing_format, ext.len);
+@@ -480,7 +481,7 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
+         goto fail;
+     }
+     if (header.version < 2 || header.version > 3) {
+-        report_unsupported(bs, errp, "QCOW version %d", header.version);
++        report_unsupported(bs, errp, "QCOW version %" PRIu32, header.version);
+         ret = -ENOTSUP;
+         goto fail;
+     }
+@@ -490,7 +491,8 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
+     /* Initialise cluster size */
+     if (header.cluster_bits < MIN_CLUSTER_BITS ||
+         header.cluster_bits > MAX_CLUSTER_BITS) {
+-        error_setg(errp, "Unsupported cluster size: 2^%i", header.cluster_bits);
++        error_setg(errp, "Unsupported cluster size: 2^%" PRIu32,
++                   header.cluster_bits);
+         ret = -EINVAL;
+         goto fail;
+     }
+@@ -587,7 +589,7 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
+     s->refcount_order = header.refcount_order;
+ 
+     if (header.crypt_method > QCOW_CRYPT_AES) {
+-        error_setg(errp, "Unsupported encryption method: %i",
++        error_setg(errp, "Unsupported encryption method: %" PRIu32,
+                    header.crypt_method);
+         ret = -EINVAL;
+         goto fail;
+diff --git a/block/sheepdog.c b/block/sheepdog.c
+index b3a2ae8..f29b4e7 100644
+--- a/block/sheepdog.c
++++ b/block/sheepdog.c
+@@ -995,7 +995,7 @@ static int find_vdi_name(BDRVSheepdogState *s, const char *filename,
+     }
+ 
+     if (rsp->result != SD_RES_SUCCESS) {
+-        error_report("cannot get vdi info, %s, %s %d %s",
++        error_report("cannot get vdi info, %s, %s %" PRIu32 " %s",
+                      sd_strerror(rsp->result), filename, snapid, tag);
+         if (rsp->result == SD_RES_NO_VDI) {
+             ret = -ENOENT;
+@@ -2175,8 +2175,8 @@ static int sd_snapshot_list(BlockDriverState *bs, QEMUSnapshotInfo **psn_tab)
+             sn_tab[found].vm_state_size = inode.vm_state_size;
+             sn_tab[found].vm_clock_nsec = inode.vm_clock_nsec;
+ 
+-            snprintf(sn_tab[found].id_str, sizeof(sn_tab[found].id_str), "%u",
+-                     inode.snap_id);
++            snprintf(sn_tab[found].id_str, sizeof(sn_tab[found].id_str),
++                     "%" PRIu32, inode.snap_id);
+             pstrcpy(sn_tab[found].name,
+                     MIN(sizeof(sn_tab[found].name), sizeof(inode.tag)),
+                     inode.tag);
+diff --git a/block/vdi.c b/block/vdi.c
+index 0f8b294..fecfa14 100644
+--- a/block/vdi.c
++++ b/block/vdi.c
+@@ -408,34 +408,35 @@ static int vdi_open(BlockDriverState *bs, QDict *options, int flags,
+     }
+ 
+     if (header.signature != VDI_SIGNATURE) {
+-        error_setg(errp, "Image not in VDI format (bad signature %08x)", header.signature);
++        error_setg(errp, "Image not in VDI format (bad signature %08" PRIx32
++                   ")", header.signature);
+         ret = -EINVAL;
+         goto fail;
+     } else if (header.version != VDI_VERSION_1_1) {
+-        error_setg(errp, "unsupported VDI image (version %u.%u)",
+-                   header.version >> 16, header.version & 0xffff);
++        error_setg(errp, "unsupported VDI image (version %" PRIu32 ".%" PRIu32
++                   ")", header.version >> 16, header.version & 0xffff);
+         ret = -ENOTSUP;
+         goto fail;
+     } else if (header.offset_bmap % SECTOR_SIZE != 0) {
+         /* We only support block maps which start on a sector boundary. */
+         error_setg(errp, "unsupported VDI image (unaligned block map offset "
+-                   "0x%x)", header.offset_bmap);
++                   "0x%" PRIx32 ")", header.offset_bmap);
+         ret = -ENOTSUP;
+         goto fail;
+     } else if (header.offset_data % SECTOR_SIZE != 0) {
+         /* We only support data blocks which start on a sector boundary. */
+-        error_setg(errp, "unsupported VDI image (unaligned data offset 0x%x)",
+-                   header.offset_data);
++        error_setg(errp, "unsupported VDI image (unaligned data offset 0x%"
++                   PRIx32 ")", header.offset_data);
+         ret = -ENOTSUP;
+         goto fail;
+     } else if (header.sector_size != SECTOR_SIZE) {
+-        error_setg(errp, "unsupported VDI image (sector size %u is not %u)",
+-                   header.sector_size, SECTOR_SIZE);
++        error_setg(errp, "unsupported VDI image (sector size %" PRIu32
++                   " is not %u)", header.sector_size, SECTOR_SIZE);
+         ret = -ENOTSUP;
+         goto fail;
+     } else if (header.block_size != DEFAULT_CLUSTER_SIZE) {
+-        error_setg(errp, "unsupported VDI image (sector size %u is not %u)",
+-                   header.block_size, DEFAULT_CLUSTER_SIZE);
++        error_setg(errp, "unsupported VDI image (block size %" PRIu32
++                   " is not %u)", header.block_size, DEFAULT_CLUSTER_SIZE);
+         ret = -ENOTSUP;
+         goto fail;
+     } else if (header.disk_size >
+-- 
+1.7.1
+

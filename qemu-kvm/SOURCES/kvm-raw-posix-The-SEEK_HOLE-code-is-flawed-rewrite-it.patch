@@ -1,0 +1,197 @@
+From 03b3f6befef3ab33a422d4dad9c2b3892e49b686 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Tue, 18 Nov 2014 15:30:20 +0100
+Subject: [PATCH 41/41] raw-posix: The SEEK_HOLE code is flawed, rewrite it
+
+Message-id: <1416324620-16229-8-git-send-email-mreitz@redhat.com>
+Patchwork-id: 62442
+O-Subject: [RHEL-7.1/7.0.z qemu-kvm PATCH v3 7/7] raw-posix: The SEEK_HOLE code is flawed, rewrite it
+Bugzilla: 1160237
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+On systems where SEEK_HOLE in a trailing hole seeks to EOF (Solaris,
+but not Linux), try_seek_hole() reports trailing data instead.
+
+Additionally, unlikely lseek() failures are treated badly:
+
+* When SEEK_HOLE fails, try_seek_hole() reports trailing data.  For
+  -ENXIO, there's in fact a trailing hole.  Can happen only when
+  something truncated the file since we opened it.
+
+* When SEEK_HOLE succeeds, SEEK_DATA fails, and SEEK_END succeeds,
+  then try_seek_hole() reports a trailing hole.  This is okay only
+  when SEEK_DATA failed with -ENXIO (which means the non-trailing hole
+  found by SEEK_HOLE has since become trailing somehow).  For other
+  failures (unlikely), it's wrong.
+
+* When SEEK_HOLE succeeds, SEEK_DATA fails, SEEK_END fails (unlikely),
+  then try_seek_hole() reports bogus data [-1,start), which its caller
+  raw_co_get_block_status() turns into zero sectors of data.  Could
+  theoretically lead to infinite loops in code that attempts to scan
+  data vs. hole forward.
+
+Rewrite from scratch, with very careful comments.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit d1f06fe665acdd7aa7a46a5ef88172c3d7d3028e)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/raw-posix.c | 111 +++++++++++++++++++++++++++++++++++++++++-------------
+ 1 file changed, 85 insertions(+), 26 deletions(-)
+
+diff --git a/block/raw-posix.c b/block/raw-posix.c
+index aeb8a97..6a50856 100644
+--- a/block/raw-posix.c
++++ b/block/raw-posix.c
+@@ -1302,28 +1302,86 @@ out:
+     return result;
+ }
+ 
+-static int try_seek_hole(BlockDriverState *bs, off_t start, off_t *data,
+-                         off_t *hole)
++/*
++ * Find allocation range in @bs around offset @start.
++ * May change underlying file descriptor's file offset.
++ * If @start is not in a hole, store @start in @data, and the
++ * beginning of the next hole in @hole, and return 0.
++ * If @start is in a non-trailing hole, store @start in @hole and the
++ * beginning of the next non-hole in @data, and return 0.
++ * If @start is in a trailing hole or beyond EOF, return -ENXIO.
++ * If we can't find out, return a negative errno other than -ENXIO.
++ */
++static int find_allocation(BlockDriverState *bs, off_t start,
++                           off_t *data, off_t *hole)
+ {
+ #if defined SEEK_HOLE && defined SEEK_DATA
+     BDRVRawState *s = bs->opaque;
++    off_t offs;
+ 
+-    *hole = lseek(s->fd, start, SEEK_HOLE);
+-    if (*hole == -1) {
+-        return -errno;
++    /*
++     * SEEK_DATA cases:
++     * D1. offs == start: start is in data
++     * D2. offs > start: start is in a hole, next data at offs
++     * D3. offs < 0, errno = ENXIO: either start is in a trailing hole
++     *                              or start is beyond EOF
++     *     If the latter happens, the file has been truncated behind
++     *     our back since we opened it.  All bets are off then.
++     *     Treating like a trailing hole is simplest.
++     * D4. offs < 0, errno != ENXIO: we learned nothing
++     */
++    offs = lseek(s->fd, start, SEEK_DATA);
++    if (offs < 0) {
++        return -errno;          /* D3 or D4 */
++    }
++    assert(offs >= start);
++
++    if (offs > start) {
++        /* D2: in hole, next data at offs */
++        *hole = start;
++        *data = offs;
++        return 0;
+     }
+ 
+-    if (*hole > start) {
++    /* D1: in data, end not yet known */
++
++    /*
++     * SEEK_HOLE cases:
++     * H1. offs == start: start is in a hole
++     *     If this happens here, a hole has been dug behind our back
++     *     since the previous lseek().
++     * H2. offs > start: either start is in data, next hole at offs,
++     *                   or start is in trailing hole, EOF at offs
++     *     Linux treats trailing holes like any other hole: offs ==
++     *     start.  Solaris seeks to EOF instead: offs > start (blech).
++     *     If that happens here, a hole has been dug behind our back
++     *     since the previous lseek().
++     * H3. offs < 0, errno = ENXIO: start is beyond EOF
++     *     If this happens, the file has been truncated behind our
++     *     back since we opened it.  Treat it like a trailing hole.
++     * H4. offs < 0, errno != ENXIO: we learned nothing
++     *     Pretend we know nothing at all, i.e. "forget" about D1.
++     */
++    offs = lseek(s->fd, start, SEEK_HOLE);
++    if (offs < 0) {
++        return -errno;          /* D1 and (H3 or H4) */
++    }
++    assert(offs >= start);
++
++    if (offs > start) {
++        /*
++         * D1 and H2: either in data, next hole at offs, or it was in
++         * data but is now in a trailing hole.  In the latter case,
++         * all bets are off.  Treating it as if it there was data all
++         * the way to EOF is safe, so simply do that.
++         */
+         *data = start;
+-    } else {
+-        /* On a hole.  We need another syscall to find its end.  */
+-        *data = lseek(s->fd, start, SEEK_DATA);
+-        if (*data == -1) {
+-            *data = lseek(s->fd, 0, SEEK_END);
+-        }
++        *hole = offs;
++        return 0;
+     }
+ 
+-    return 0;
++    /* D1 and H1 */
++    return -EBUSY;
+ #else
+     return -ENOTSUP;
+ #endif
+@@ -1368,25 +1426,26 @@ static int64_t coroutine_fn raw_co_get_block_status(BlockDriverState *bs,
+         nb_sectors = DIV_ROUND_UP(total_size - start, BDRV_SECTOR_SIZE);
+     }
+ 
+-    ret = try_seek_hole(bs, start, &data, &hole);
+-    if (ret < 0) {
+-        /* Assume everything is allocated. */
+-        data = 0;
+-        hole = start + nb_sectors * BDRV_SECTOR_SIZE;
+-        ret = 0;
+-    }
+-
+-    assert(ret >= 0);
+-
+-    if (data <= start) {
++    ret = find_allocation(bs, start, &data, &hole);
++    if (ret == -ENXIO) {
++        /* Trailing hole */
++        *pnum = nb_sectors;
++        ret = BDRV_BLOCK_ZERO;
++    } else if (ret < 0) {
++        /* No info available, so pretend there are no holes */
++        *pnum = nb_sectors;
++        ret = BDRV_BLOCK_DATA;
++    } else if (data == start) {
+         /* On a data extent, compute sectors to the end of the extent.  */
+         *pnum = MIN(nb_sectors, (hole - start) / BDRV_SECTOR_SIZE);
+-        return ret | BDRV_BLOCK_DATA | BDRV_BLOCK_OFFSET_VALID | start;
++        ret = BDRV_BLOCK_DATA;
+     } else {
+         /* On a hole, compute sectors to the beginning of the next extent.  */
++        assert(hole == start);
+         *pnum = MIN(nb_sectors, (data - start) / BDRV_SECTOR_SIZE);
+-        return ret | BDRV_BLOCK_ZERO | BDRV_BLOCK_OFFSET_VALID | start;
++        ret = BDRV_BLOCK_ZERO;
+     }
++    return ret | BDRV_BLOCK_OFFSET_VALID | start;
+ }
+ 
+ static coroutine_fn BlockDriverAIOCB *raw_aio_discard(BlockDriverState *bs,
+-- 
+1.8.3.1
+

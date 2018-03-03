@@ -1,0 +1,64 @@
+From 62ba92f33f1d727cff17f5d1b38fabfe0901f7ee Mon Sep 17 00:00:00 2001
+From: Luiz Capitulino <lcapitulino@redhat.com>
+Date: Tue, 30 Sep 2014 01:08:31 +0200
+Subject: [PATCH 3/3] virtio-balloon: fix integer overflow in memory stats
+ feature
+
+Message-id: <20140929210831.1cc65ebe@redhat.com>
+Patchwork-id: 61504
+O-Subject: [RHEL7.1 qemu-kvm PATCH] virtio-balloon: fix integer overflow in memory stats feature
+Bugzilla: 1142290
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+When a QMP client changes the polling interval time by setting
+the guest-stats-polling-interval property, the interval value
+is stored and manipulated as an int64_t variable.
+
+However, the balloon_stats_change_timer() function, which is
+used to set the actual timer with the interval value, takes
+an int instead, causing an overflow for big interval values.
+
+This commit fix this bug by changing balloon_stats_change_timer()
+to take an int64_t and also it limits the polling interval value
+to UINT_MAX to avoid other kinds of overflow.
+
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Markus Armbruster <armbru@redhat.com>
+(cherry picked from commit 1f9296b51a26650916a2c4191268bb64057bdc5f)
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/virtio/virtio-balloon.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/hw/virtio/virtio-balloon.c b/hw/virtio/virtio-balloon.c
+index 76c607f..016dc60 100644
+--- a/hw/virtio/virtio-balloon.c
++++ b/hw/virtio/virtio-balloon.c
+@@ -85,7 +85,7 @@ static void balloon_stats_destroy_timer(VirtIOBalloon *s)
+     }
+ }
+ 
+-static void balloon_stats_change_timer(VirtIOBalloon *s, int secs)
++static void balloon_stats_change_timer(VirtIOBalloon *s, int64_t secs)
+ {
+     qemu_mod_timer(s->stats_timer, qemu_get_clock_ms(vm_clock) + secs * 1000);
+ }
+@@ -154,6 +154,11 @@ static void balloon_stats_set_poll_interval(Object *obj, struct Visitor *v,
+         return;
+     }
+ 
++    if (value > UINT_MAX) {
++        error_setg(errp, "timer value is too big");
++        return;
++    }
++
+     if (value == s->stats_poll_interval) {
+         return;
+     }
+-- 
+1.8.3.1
+

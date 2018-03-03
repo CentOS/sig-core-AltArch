@@ -1,0 +1,68 @@
+From c3f813d2f53fb8f9e2dc7e2b3c6b17d7fadb2de5 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Tue, 27 Jan 2015 17:48:11 +0100
+Subject: [PATCH 08/16] pc_sysfw: prevent pflash and/or mis-sized firmware for
+ rhel6.x.0 machtypes
+
+Message-id: <1422380891-11054-3-git-send-email-lersek@redhat.com>
+Patchwork-id: 63585
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 2/2] pc_sysfw: prevent pflash and/or mis-sized firmware for rhel6.x.0 machtypes
+Bugzilla: 1176283
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+QE tried to boot OVMF on a rhel6.x.0 machine type. The shadow_bios()
+migration hack that is in effect for those machine types is not compatible
+with the OVMF image. An assert() in shadow_bios() catches it, but -- given
+that OVMF has never been intended for rhel6.x.0 machine types -- QE has
+rather requested us to deny such startups cleanly.
+
+The first hunk prevents "-M rhel6.x.0 -bios ..." style invocations where
+the BIOS image is not 128 KB in size. This was suggested by Paolo and it
+prevents the case when someone passes an OVMF binary via -bios.
+
+The second hunk prevents "-M rhel6.x.0 -pflash ...", since that
+configuration (for boot firmware purposes or otherwise) was never
+supported.
+
+Downstream only.
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/pc_sysfw.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/hw/i386/pc_sysfw.c b/hw/i386/pc_sysfw.c
+index 6f5ecde..2f26ff5 100644
+--- a/hw/i386/pc_sysfw.c
++++ b/hw/i386/pc_sysfw.c
+@@ -191,6 +191,11 @@ static void old_pc_system_rom_init(MemoryRegion *rom_memory, bool isapc_ram_fw)
+         (bios_size % 65536) != 0) {
+         goto bios_error;
+     }
++    if (shadow_bios_after_incoming && bios_size != 128 * 1024) {
++        error_report("machine %s only supports a 128KB BIOS image",
++                     current_machine->name);
++        exit(1);
++    }
+     bios = g_malloc(sizeof(*bios));
+     memory_region_init_ram(bios, "pc.bios", bios_size);
+     vmstate_register_ram_global(bios);
+@@ -241,6 +246,12 @@ void pc_system_firmware_init(MemoryRegion *rom_memory, bool isapc_ram_fw)
+         return;
+     }
+ 
++    if (shadow_bios_after_incoming) {
++        error_report("flash-based firmware is not supported by machine %s",
++                     current_machine->name);
++        exit(1);
++    }
++
+     if (kvm_enabled() && !kvm_readonly_mem_enabled()) {
+         /* Older KVM cannot execute from device memory. So, flash memory
+          * cannot be used unless the readonly memory kvm capability is present. */
+-- 
+1.8.3.1
+

@@ -1,0 +1,148 @@
+From 9628ef39a4866417b7c2dc5af81ba12bfeb33630 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Tue, 16 Sep 2014 20:11:51 +0200
+Subject: [PATCH 13/20] block: vdi - use block layer ops in vdi_create, instead of posix calls
+
+Message-id: <f49d9ed2f027b0bee1a3fa4383cfa553d71e54bf.1410897407.git.jcody@redhat.com>
+Patchwork-id: 61217
+O-Subject: [PATCH qemu-kvm-rhel RHEL7.1 12/15] block: vdi - use block layer ops in vdi_create, instead of posix calls
+Bugzilla: 1098086
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+Use the block layer to create, and write to, the image file in the
+VDI .bdrv_create() operation.
+
+This has a couple of benefits: Images can now be created over protocols,
+and hacks such as NOCOW are not needed in the image format driver, and
+the underlying file protocol appropriate for the host OS can be relied
+upon.
+
+Also some minor cleanup for error handling.
+
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 70747862f129ea0af5e3910f204cc93174c549e4)
+
+Conflicts:
+	block/vdi.c
+
+RHEL7 notes: conflicts due to not having the 'nocow' commit, as
+             well as not using QemuOpts yet. Arguments for bdrv_open()
+             are different, and downstream does not have
+             BDRV_O_PROTOCOL.  In addition, bdrv_file_open() must be
+             used instead of just bdrv_open().
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vdi.c |   52 +++++++++++++++++++++++++++++-----------------------
+ 1 files changed, 29 insertions(+), 23 deletions(-)
+
+diff --git a/block/vdi.c b/block/vdi.c
+index fb25424..1f4491f 100644
+--- a/block/vdi.c
++++ b/block/vdi.c
+@@ -673,7 +673,6 @@ static int vdi_co_write(BlockDriverState *bs,
+ static int vdi_create(const char *filename, QEMUOptionParameter *options,
+                       Error **errp)
+ {
+-    int fd;
+     int result = 0;
+     uint64_t bytes = 0;
+     uint32_t blocks;
+@@ -682,6 +681,10 @@ static int vdi_create(const char *filename, QEMUOptionParameter *options,
+     VdiHeader header;
+     size_t i;
+     size_t bmap_size;
++    int64_t offset = 0;
++    Error *local_err = NULL;
++    BlockDriverState *bs = NULL;
++    uint32_t *bmap = NULL;
+ 
+     logout("\n");
+ 
+@@ -714,11 +717,14 @@ static int vdi_create(const char *filename, QEMUOptionParameter *options,
+         goto exit;
+     }
+ 
+-    fd = qemu_open(filename,
+-                   O_WRONLY | O_CREAT | O_TRUNC | O_BINARY | O_LARGEFILE,
+-                   0644);
+-    if (fd < 0) {
+-        result = -errno;
++    result = bdrv_create_file(filename, options, &local_err);
++    if (result < 0) {
++        error_propagate(errp, local_err);
++        goto exit;
++    }
++    result = bdrv_file_open(&bs, filename, NULL, BDRV_O_RDWR, &local_err);
++    if (result < 0) {
++        error_propagate(errp, local_err);
+         goto exit;
+     }
+ 
+@@ -751,13 +757,15 @@ static int vdi_create(const char *filename, QEMUOptionParameter *options,
+     vdi_header_print(&header);
+ #endif
+     vdi_header_to_le(&header);
+-    if (write(fd, &header, sizeof(header)) < 0) {
+-        result = -errno;
+-        goto close_and_exit;
++    result = bdrv_pwrite_sync(bs, offset, &header, sizeof(header));
++    if (result < 0) {
++        error_setg(errp, "Error writing header to %s", filename);
++        goto exit;
+     }
++    offset += sizeof(header);
+ 
+     if (bmap_size > 0) {
+-        uint32_t *bmap = g_malloc0(bmap_size);
++        bmap = g_malloc0(bmap_size);
+         for (i = 0; i < blocks; i++) {
+             if (image_type == VDI_TYPE_STATIC) {
+                 bmap[i] = i;
+@@ -765,27 +773,25 @@ static int vdi_create(const char *filename, QEMUOptionParameter *options,
+                 bmap[i] = VDI_UNALLOCATED;
+             }
+         }
+-        if (write(fd, bmap, bmap_size) < 0) {
+-            result = -errno;
+-            g_free(bmap);
+-            goto close_and_exit;
++        result = bdrv_pwrite_sync(bs, offset, bmap, bmap_size);
++        if (result < 0) {
++            error_setg(errp, "Error writing bmap to %s", filename);
++            goto exit;
+         }
+-        g_free(bmap);
++        offset += bmap_size;
+     }
+ 
+     if (image_type == VDI_TYPE_STATIC) {
+-        if (ftruncate(fd, sizeof(header) + bmap_size + blocks * block_size)) {
+-            result = -errno;
+-            goto close_and_exit;
++        result = bdrv_truncate(bs, offset + blocks * block_size);
++        if (result < 0) {
++            error_setg(errp, "Failed to statically allocate %s", filename);
++            goto exit;
+         }
+     }
+ 
+-close_and_exit:
+-    if ((close(fd) < 0) && !result) {
+-        result = -errno;
+-    }
+-
+ exit:
++    bdrv_unref(bs);
++    g_free(bmap);
+     return result;
+ }
+ 
+-- 
+1.7.1
+

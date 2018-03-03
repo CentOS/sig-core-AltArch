@@ -1,0 +1,208 @@
+From 4a8aa152fc7244b36cae10a64759ec1c50bc9c87 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Mon, 12 Aug 2013 15:59:34 +0200
+Subject: cpu: Turn cpu_get_memory_mapping() into a CPUState hook
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1376323180-12863-5-git-send-email-lersek@redhat.com>
+Patchwork-id: 53163
+O-Subject: [RHEL-7 qemu-kvm PATCH 04/10] cpu: Turn cpu_get_memory_mapping() into a CPUState hook
+Bugzilla: 981582
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Radim Krcmar <rkrcmar@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Andreas Färber <afaerber@suse.de>
+
+Change error reporting from return value to Error argument.
+
+Reviewed-by: Jens Freimann <jfrei@linux.vnet.ibm.com>
+Reviewed-by: Luiz Capitulino <lcapitulino@redhat.com>
+[AF: Fixed cpu_get_memory_mapping() documentation]
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit a23bbfda75118eb738acce84afd64965934828f0)
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+
+diff --git a/include/qom/cpu.h b/include/qom/cpu.h
+index 490f5f1..b555c22 100644
+--- a/include/qom/cpu.h
++++ b/include/qom/cpu.h
+@@ -23,6 +23,7 @@
+ #include <signal.h>
+ #include "hw/qdev-core.h"
+ #include "qemu/thread.h"
++#include "qemu/typedefs.h"
+ 
+ typedef int (*WriteCoreDumpFunction)(void *buf, size_t size, void *opaque);
+ 
+@@ -49,6 +50,7 @@ typedef struct CPUState CPUState;
+  * @do_interrupt: Callback for interrupt handling.
+  * @get_arch_id: Callback for getting architecture-dependent CPU ID.
+  * @get_paging_enabled: Callback for inquiring whether paging is enabled.
++ * @get_memory_mapping: Callback for obtaining the memory mappings.
+  * @vmsd: State description for migration.
+  *
+  * Represents a CPU family or model.
+@@ -64,6 +66,8 @@ typedef struct CPUClass {
+     void (*do_interrupt)(CPUState *cpu);
+     int64_t (*get_arch_id)(CPUState *cpu);
+     bool (*get_paging_enabled)(const CPUState *cpu);
++    void (*get_memory_mapping)(CPUState *cpu, MemoryMappingList *list,
++                               Error **errp);
+ 
+     const struct VMStateDescription *vmsd;
+     int (*write_elf64_note)(WriteCoreDumpFunction f, CPUState *cpu,
+@@ -148,6 +152,15 @@ struct CPUState {
+ bool cpu_paging_enabled(const CPUState *cpu);
+ 
+ /**
++ * cpu_get_memory_mapping:
++ * @cpu: The CPU whose memory mappings are to be obtained.
++ * @list: Where to write the memory mappings to.
++ * @errp: Pointer for reporting an #Error.
++ */
++void cpu_get_memory_mapping(CPUState *cpu, MemoryMappingList *list,
++                            Error **errp);
++
++/**
+  * cpu_write_elf64_note:
+  * @f: pointer to a function that writes memory to a file
+  * @cpu: The CPU whose memory is to be dumped
+diff --git a/include/sysemu/memory_mapping.h b/include/sysemu/memory_mapping.h
+index 1f71c32..c47e6ee 100644
+--- a/include/sysemu/memory_mapping.h
++++ b/include/sysemu/memory_mapping.h
+@@ -31,8 +31,6 @@ struct MemoryMappingList {
+     QTAILQ_HEAD(, MemoryMapping) head;
+ };
+ 
+-int cpu_get_memory_mapping(MemoryMappingList *list, CPUArchState *env);
+-
+ /*
+  * add or merge the memory region [phys_addr, phys_addr + length) into the
+  * memory mapping's list. The region's virtual address starts with virt_addr,
+diff --git a/memory_mapping-stub.c b/memory_mapping-stub.c
+index 6c0dfeb..989dc00 100644
+--- a/memory_mapping-stub.c
++++ b/memory_mapping-stub.c
+@@ -19,9 +19,3 @@ int qemu_get_guest_memory_mapping(MemoryMappingList *list)
+ {
+     return -2;
+ }
+-
+-int cpu_get_memory_mapping(MemoryMappingList *list,
+-					                                          CPUArchState *env)
+-{
+-    return -1;
+-}
+diff --git a/memory_mapping.c b/memory_mapping.c
+index 0790aac..9bd24ce 100644
+--- a/memory_mapping.c
++++ b/memory_mapping.c
+@@ -183,13 +183,14 @@ int qemu_get_guest_memory_mapping(MemoryMappingList *list)
+     CPUArchState *env, *first_paging_enabled_cpu;
+     RAMBlock *block;
+     ram_addr_t offset, length;
+-    int ret;
+ 
+     first_paging_enabled_cpu = find_paging_enabled_cpu(first_cpu);
+     if (first_paging_enabled_cpu) {
+         for (env = first_paging_enabled_cpu; env != NULL; env = env->next_cpu) {
+-            ret = cpu_get_memory_mapping(list, env);
+-            if (ret < 0) {
++            Error *err = NULL;
++            cpu_get_memory_mapping(ENV_GET_CPU(env), list, &err);
++            if (err) {
++                error_free(err);
+                 return -1;
+             }
+         }
+diff --git a/qom/cpu.c b/qom/cpu.c
+index 9f6da0f..b25fbc9 100644
+--- a/qom/cpu.c
++++ b/qom/cpu.c
+@@ -62,6 +62,21 @@ static bool cpu_common_get_paging_enabled(const CPUState *cpu)
+     return true;
+ }
+ 
++void cpu_get_memory_mapping(CPUState *cpu, MemoryMappingList *list,
++                            Error **errp)
++{
++    CPUClass *cc = CPU_GET_CLASS(cpu);
++
++    return cc->get_memory_mapping(cpu, list, errp);
++}
++
++static void cpu_common_get_memory_mapping(CPUState *cpu,
++                                          MemoryMappingList *list,
++                                          Error **errp)
++{
++    error_setg(errp, "Obtaining memory mappings is unsupported on this CPU.");
++}
++
+ /* CPU hot-plug notifiers */
+ static NotifierList cpu_added_notifiers =
+     NOTIFIER_LIST_INITIALIZER(cpu_add_notifiers);
+@@ -189,6 +204,7 @@ static void cpu_class_init(ObjectClass *klass, void *data)
+     k->reset = cpu_common_reset;
+     k->get_arch_id = cpu_common_get_arch_id;
+     k->get_paging_enabled = cpu_common_get_paging_enabled;
++    k->get_memory_mapping = cpu_common_get_memory_mapping;
+     k->write_elf32_qemunote = cpu_common_write_elf32_qemunote;
+     k->write_elf32_note = cpu_common_write_elf32_note;
+     k->write_elf64_qemunote = cpu_common_write_elf64_qemunote;
+diff --git a/target-i386/arch_memory_mapping.c b/target-i386/arch_memory_mapping.c
+index 39def3d..ca47970 100644
+--- a/target-i386/arch_memory_mapping.c
++++ b/target-i386/arch_memory_mapping.c
+@@ -239,11 +239,15 @@ static void walk_pml4e(MemoryMappingList *list,
+ }
+ #endif
+ 
+-int cpu_get_memory_mapping(MemoryMappingList *list, CPUArchState *env)
++void x86_cpu_get_memory_mapping(CPUState *cs, MemoryMappingList *list,
++                                Error **errp)
+ {
+-    if (!cpu_paging_enabled(ENV_GET_CPU(env))) {
++    X86CPU *cpu = X86_CPU(cs);
++    CPUX86State *env = &cpu->env;
++
++    if (!cpu_paging_enabled(cs)) {
+         /* paging is disabled */
+-        return 0;
++        return;
+     }
+ 
+     if (env->cr[4] & CR4_PAE_MASK) {
+@@ -269,7 +273,5 @@ int cpu_get_memory_mapping(MemoryMappingList *list, CPUArchState *env)
+         pse = !!(env->cr[4] & CR4_PSE_MASK);
+         walk_pde2(list, pde_addr, env->a20_mask, pse);
+     }
+-
+-    return 0;
+ }
+ 
+diff --git a/target-i386/cpu-qom.h b/target-i386/cpu-qom.h
+index 5231005..12c7bea 100644
+--- a/target-i386/cpu-qom.h
++++ b/target-i386/cpu-qom.h
+@@ -105,4 +105,7 @@ int x86_cpu_write_elf64_qemunote(WriteCoreDumpFunction f, CPUState *cpu,
+ int x86_cpu_write_elf32_qemunote(WriteCoreDumpFunction f, CPUState *cpu,
+                                  void *opaque);
+ 
++void x86_cpu_get_memory_mapping(CPUState *cpu, MemoryMappingList *list,
++                                Error **errp);
++
+ #endif
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index dfa2a86..e915157 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -2540,6 +2540,7 @@ static void x86_cpu_common_class_init(ObjectClass *oc, void *data)
+     cc->get_arch_id = x86_cpu_get_arch_id;
+     cc->get_paging_enabled = x86_cpu_get_paging_enabled;
+ #ifndef CONFIG_USER_ONLY
++    cc->get_memory_mapping = x86_cpu_get_memory_mapping;
+     cc->write_elf64_note = x86_cpu_write_elf64_note;
+     cc->write_elf64_qemunote = x86_cpu_write_elf64_qemunote;
+     cc->write_elf32_note = x86_cpu_write_elf32_note;

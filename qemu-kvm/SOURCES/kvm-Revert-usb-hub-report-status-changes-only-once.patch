@@ -1,0 +1,67 @@
+From 0808f68d525eca6d44f2f4660c34d953a36ae486 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Thu, 12 Sep 2013 09:39:32 +0200
+Subject: [PATCH 04/25] Revert "usb-hub: report status changes only once"
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1378978772-21612-5-git-send-email-kraxel@redhat.com>
+Patchwork-id: 54340
+O-Subject: [RHEL-7 qemu-kvm PATCH 4/4] Revert "usb-hub: report status changes only once"
+Bugzilla: 1001604
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Hans de Goede <hdegoede@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+This reverts commit a309ee6e0a256f690760abfba44fceaa52a7c2f3.
+
+This isn't in line with the usb specification and adds regressions,
+win7 fails to drive the usb hub for example.
+
+Was added because it "solved" the issue of hubs interacting badly
+with the xhci host controller.  Now with the root cause being fixed
+in xhci (commit <FIXME>) we can revert this one.
+
+[ rhel7 note: Damn, forgot to fill in the final commit hash before
+              sending out the upstream pull request.  It's commit
+              4d7a81c06f5f17e019a2d3a18300500bd64f6f40 ]
+
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit bdebd6ee81f4d849aa8541c289203e3992450db0)
+---
+ hw/usb/dev-hub.c | 6 +-----
+ 1 file changed, 1 insertion(+), 5 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/dev-hub.c |    6 +-----
+ 1 files changed, 1 insertions(+), 5 deletions(-)
+
+diff --git a/hw/usb/dev-hub.c b/hw/usb/dev-hub.c
+index 0b71abd..a5f092b 100644
+--- a/hw/usb/dev-hub.c
++++ b/hw/usb/dev-hub.c
+@@ -33,7 +33,6 @@ typedef struct USBHubPort {
+     USBPort port;
+     uint16_t wPortStatus;
+     uint16_t wPortChange;
+-    uint16_t wPortChange_reported;
+ } USBHubPort;
+ 
+ typedef struct USBHubState {
+@@ -468,11 +467,8 @@ static void usb_hub_handle_data(USBDevice *dev, USBPacket *p)
+             status = 0;
+             for(i = 0; i < NUM_PORTS; i++) {
+                 port = &s->ports[i];
+-                if (port->wPortChange &&
+-                    port->wPortChange_reported != port->wPortChange) {
++                if (port->wPortChange)
+                     status |= (1 << (i + 1));
+-                }
+-                port->wPortChange_reported = port->wPortChange;
+             }
+             if (status != 0) {
+                 for(i = 0; i < n; i++) {
+-- 
+1.7.1
+

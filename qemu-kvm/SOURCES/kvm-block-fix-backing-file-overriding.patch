@@ -1,0 +1,85 @@
+From f50d8d218780ea455bb7dc6d7ccdd0c5b931f4a8 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 5 Nov 2013 14:09:17 +0100
+Subject: [PATCH 64/87] block: fix backing file overriding
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383660558-32096-24-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55402
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 23/24] block: fix backing file overriding
+Bugzilla: 978402
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Fam Zheng <famz@redhat.com>
+
+Providing backing.file.filename doesn't override backing file as expected:
+
+    $ x86_64-softmmu/qemu-system-x86_64 -drive \
+        file=/tmp/child.qcow2,backing.file.filename=/tmp/fake.qcow2
+
+    qemu-system-x86_64: -drive \
+        file=/tmp/child.qcow2,backing.file.filename=/tmp/fake.qcow2: could not
+        open disk image /tmp/child.qcow2: Can't specify 'file' and 'filename'
+        options at the same time
+
+With
+
+    $ qemu-img info /tmp/child.qcow2
+    image: /tmp/child.qcow2
+    file format: qcow2
+    virtual size: 1.0G (1073741824 bytes)
+    disk size: 196K
+    cluster_size: 65536
+    backing file: /tmp/fake.qcow2
+
+This fixes it by calling bdrv_get_full_backing_filename only if
+backing.file.filename is not provided. Also save the backing file name
+to bs->backing_file so the information is correct with HMP "info block".
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit dbecebddfa4932d1c83915bcb9b5ba5984eb91be)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c |    7 +++++--
+ 1 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/block.c b/block.c
+index d11661a..01c11ee 100644
+--- a/block.c
++++ b/block.c
+@@ -956,11 +956,12 @@ int bdrv_open_backing_file(BlockDriverState *bs, QDict *options, Error **errp)
+     } else if (bs->backing_file[0] == '\0' && qdict_size(options) == 0) {
+         QDECREF(options);
+         return 0;
++    } else {
++        bdrv_get_full_backing_filename(bs, backing_filename,
++                                       sizeof(backing_filename));
+     }
+ 
+     bs->backing_hd = bdrv_new("");
+-    bdrv_get_full_backing_filename(bs, backing_filename,
+-                                   sizeof(backing_filename));
+ 
+     if (bs->backing_format[0] != '\0') {
+         back_drv = bdrv_find_format(bs->backing_format);
+@@ -972,6 +973,8 @@ int bdrv_open_backing_file(BlockDriverState *bs, QDict *options, Error **errp)
+     ret = bdrv_open(bs->backing_hd,
+                     *backing_filename ? backing_filename : NULL, options,
+                     back_flags, back_drv, &local_err);
++    pstrcpy(bs->backing_file, sizeof(bs->backing_file),
++            bs->backing_hd->file->filename);
+     if (ret < 0) {
+         bdrv_delete(bs->backing_hd);
+         bs->backing_hd = NULL;
+-- 
+1.7.1
+

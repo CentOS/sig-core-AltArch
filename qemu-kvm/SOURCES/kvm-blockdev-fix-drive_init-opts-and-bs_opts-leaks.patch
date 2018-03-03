@@ -1,0 +1,153 @@
+From 792e58622d0a5c0015673e2929c89b4bd36ef008 Mon Sep 17 00:00:00 2001
+Message-Id: <792e58622d0a5c0015673e2929c89b4bd36ef008.1387288155.git.minovotn@redhat.com>
+In-Reply-To: <527da6c2ce2c09d0183aa8595fc95f136f61b6df.1387288155.git.minovotn@redhat.com>
+References: <527da6c2ce2c09d0183aa8595fc95f136f61b6df.1387288155.git.minovotn@redhat.com>
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Thu, 12 Dec 2013 16:21:23 +0100
+Subject: [PATCH 3/8] blockdev: fix drive_init() opts and bs_opts leaks
+
+RH-Author: Stefan Hajnoczi <stefanha@redhat.com>
+Message-id: <1386865288-1575-4-git-send-email-stefanha@redhat.com>
+Patchwork-id: 56257
+O-Subject: [RHEL7 qemu-kvm PATCH 3/8] blockdev: fix drive_init() opts and bs_opts leaks
+Bugzilla: 1003773
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+These memory leaks also make drive_add if=none,id=drive0 without a file=
+option leak the options list.  This keeps ID "drive0" around forever.
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit ec9c10d29c6bb5613a680af62f5825d3bb2d31d4)
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Conflicts:
+	blockdev.c
+
+s/bdrv_delete/bdrv_unref/ upstream has resulted in a trivial conflict.
+---
+ blockdev.c | 27 +++++++++++++++------------
+ 1 file changed, 15 insertions(+), 12 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ blockdev.c | 27 +++++++++++++++------------
+ 1 file changed, 15 insertions(+), 12 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index cdd453a..f6d607c 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -360,7 +360,7 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+     qemu_opts_absorb_qdict(opts, bs_opts, &error);
+     if (error_is_set(&error)) {
+         error_propagate(errp, error);
+-        return NULL;
++        goto early_err;
+     }
+ 
+     if (id) {
+@@ -380,7 +380,7 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+     if ((buf = qemu_opt_get(opts, "discard")) != NULL) {
+         if (bdrv_parse_discard_flags(buf, &bdrv_flags) != 0) {
+             error_setg(errp, "invalid discard option");
+-            return NULL;
++            goto early_err;
+         }
+     }
+ 
+@@ -402,7 +402,7 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+             /* this is the default */
+         } else {
+            error_setg(errp, "invalid aio option");
+-           return NULL;
++           goto early_err;
+         }
+     }
+ #endif
+@@ -412,13 +412,13 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+             error_printf("Supported formats:");
+             bdrv_iterate_format(bdrv_format_print, NULL);
+             error_printf("\n");
+-            return NULL;
++            goto early_err;
+         }
+ 
+         drv = bdrv_find_whitelisted_format(buf, ro);
+         if (!drv) {
+             error_setg(errp, "'%s' invalid format", buf);
+-            return NULL;
++            goto early_err;
+         }
+     }
+ 
+@@ -438,20 +438,20 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+ 
+     if (!do_check_io_limits(&io_limits, &error)) {
+         error_propagate(errp, error);
+-        return NULL;
++        goto early_err;
+     }
+ 
+     on_write_error = BLOCKDEV_ON_ERROR_ENOSPC;
+     if ((buf = qemu_opt_get(opts, "werror")) != NULL) {
+         if (type != IF_IDE && type != IF_SCSI && type != IF_VIRTIO && type != IF_NONE) {
+             error_setg(errp, "werror is not supported by this bus type");
+-            return NULL;
++            goto early_err;
+         }
+ 
+         on_write_error = parse_block_error_action(buf, 0, &error);
+         if (error_is_set(&error)) {
+             error_propagate(errp, error);
+-            return NULL;
++            goto early_err;
+         }
+     }
+ 
+@@ -459,13 +459,13 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+     if ((buf = qemu_opt_get(opts, "rerror")) != NULL) {
+         if (type != IF_IDE && type != IF_VIRTIO && type != IF_SCSI && type != IF_NONE) {
+             error_report("rerror is not supported by this bus type");
+-            return NULL;
++            goto early_err;
+         }
+ 
+         on_read_error = parse_block_error_action(buf, 1, &error);
+         if (error_is_set(&error)) {
+             error_propagate(errp, error);
+-            return NULL;
++            goto early_err;
+         }
+     }
+ 
+@@ -491,6 +491,8 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+         if (has_driver_specific_opts) {
+             file = NULL;
+         } else {
++            QDECREF(bs_opts);
++            qemu_opts_del(opts);
+             return dinfo;
+         }
+     }
+@@ -529,12 +531,13 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+     return dinfo;
+ 
+ err:
+-    qemu_opts_del(opts);
+-    QDECREF(bs_opts);
+     bdrv_delete(dinfo->bdrv);
+     g_free(dinfo->id);
+     QTAILQ_REMOVE(&drives, dinfo, next);
+     g_free(dinfo);
++early_err:
++    QDECREF(bs_opts);
++    qemu_opts_del(opts);
+     return NULL;
+ }
+ 
+-- 
+1.7.11.7
+

@@ -1,0 +1,332 @@
+From 88ee76fed6344de6cede3bfbb3873423e9a90333 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 27 Jul 2016 07:35:09 +0200
+Subject: [PATCH 11/16] qjson: store tokens in a GQueue
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1469604913-12442-13-git-send-email-armbru@redhat.com>
+Patchwork-id: 71478
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 11/15] qjson: store tokens in a GQueue
+Bugzilla: 1276036
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+Even though we still have the "streamer" concept, the tokens can now
+be deleted as they are read.  While doing so convert from QList to
+GQueue, since the next step will make tokens not a QObject and we
+will have to do the conversion anyway.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Message-Id: <1448300659-23559-4-git-send-email-pbonzini@redhat.com>
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit 95385fe9ace7db156b924da6b6f5c9082b68ba68)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	monitor.c
+
+Trivial context difference because we lack a small cleanup part of the
+(fairly invasive) series b821cbe..489653b.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+---
+ include/qapi/qmp/json-parser.h   |  4 +--
+ include/qapi/qmp/json-streamer.h |  8 ++---
+ monitor.c                        |  2 +-
+ qga/main.c                       |  2 +-
+ qobject/json-parser.c            | 65 +++++++++++++---------------------------
+ qobject/json-streamer.c          | 25 +++++++++-------
+ qobject/qjson.c                  |  2 +-
+ tests/libqtest.c                 |  2 +-
+ 8 files changed, 45 insertions(+), 65 deletions(-)
+
+diff --git a/include/qapi/qmp/json-parser.h b/include/qapi/qmp/json-parser.h
+index 44d88f3..fea89f8 100644
+--- a/include/qapi/qmp/json-parser.h
++++ b/include/qapi/qmp/json-parser.h
+@@ -18,7 +18,7 @@
+ #include "qapi/qmp/qlist.h"
+ #include "qapi/error.h"
+ 
+-QObject *json_parser_parse(QList *tokens, va_list *ap);
+-QObject *json_parser_parse_err(QList *tokens, va_list *ap, Error **errp);
++QObject *json_parser_parse(GQueue *tokens, va_list *ap);
++QObject *json_parser_parse_err(GQueue *tokens, va_list *ap, Error **errp);
+ 
+ #endif
+diff --git a/include/qapi/qmp/json-streamer.h b/include/qapi/qmp/json-streamer.h
+index e901144..e9f2937 100644
+--- a/include/qapi/qmp/json-streamer.h
++++ b/include/qapi/qmp/json-streamer.h
+@@ -15,21 +15,21 @@
+ #define QEMU_JSON_STREAMER_H
+ 
+ #include <stdint.h>
+-#include "qapi/qmp/qlist.h"
++#include "glib-compat.h"
+ #include "qapi/qmp/json-lexer.h"
+ 
+ typedef struct JSONMessageParser
+ {
+-    void (*emit)(struct JSONMessageParser *parser, QList *tokens);
++    void (*emit)(struct JSONMessageParser *parser, GQueue *tokens);
+     JSONLexer lexer;
+     int brace_count;
+     int bracket_count;
+-    QList *tokens;
++    GQueue *tokens;
+     uint64_t token_size;
+ } JSONMessageParser;
+ 
+ void json_message_parser_init(JSONMessageParser *parser,
+-                              void (*func)(JSONMessageParser *, QList *));
++                              void (*func)(JSONMessageParser *, GQueue *));
+ 
+ int json_message_parser_feed(JSONMessageParser *parser,
+                              const char *buffer, size_t size);
+diff --git a/monitor.c b/monitor.c
+index 33c5bc8..1b28ff3 100644
+--- a/monitor.c
++++ b/monitor.c
+@@ -4514,7 +4514,7 @@ static void qmp_call_cmd(Monitor *mon, const mon_cmd_t *cmd,
+     qobject_decref(data);
+ }
+ 
+-static void handle_qmp_command(JSONMessageParser *parser, QList *tokens)
++static void handle_qmp_command(JSONMessageParser *parser, GQueue *tokens)
+ {
+     int err;
+     QObject *obj;
+diff --git a/qga/main.c b/qga/main.c
+index 0e04e73..7e8f9a0 100644
+--- a/qga/main.c
++++ b/qga/main.c
+@@ -569,7 +569,7 @@ static void process_command(GAState *s, QDict *req)
+ }
+ 
+ /* handle requests/control events coming in over the channel */
+-static void process_event(JSONMessageParser *parser, QList *tokens)
++static void process_event(JSONMessageParser *parser, GQueue *tokens)
+ {
+     GAState *s = container_of(parser, GAState, parser);
+     QObject *obj;
+diff --git a/qobject/json-parser.c b/qobject/json-parser.c
+index b242fba..6e5e257 100644
+--- a/qobject/json-parser.c
++++ b/qobject/json-parser.c
+@@ -27,11 +27,8 @@
+ typedef struct JSONParserContext
+ {
+     Error *err;
+-    struct {
+-        QObject **buf;
+-        size_t pos;
+-        size_t count;
+-    } tokens;
++    QObject *current;
++    GQueue *buf;
+ } JSONParserContext;
+ 
+ #define BUG_ON(cond) assert(!(cond))
+@@ -244,56 +241,34 @@ out:
+     return NULL;
+ }
+ 
++/* Note: unless the token object returned by parser_context_peek_token
++ * or parser_context_pop_token is explicitly incref'd, it will be
++ * deleted as soon as parser_context_pop_token is called again.
++ */
+ static QObject *parser_context_pop_token(JSONParserContext *ctxt)
+ {
+-    QObject *token;
+-    g_assert(ctxt->tokens.pos < ctxt->tokens.count);
+-    token = ctxt->tokens.buf[ctxt->tokens.pos];
+-    ctxt->tokens.pos++;
+-    return token;
++    qobject_decref(ctxt->current);
++    assert(!g_queue_is_empty(ctxt->buf));
++    ctxt->current = g_queue_pop_head(ctxt->buf);
++    return ctxt->current;
+ }
+ 
+-/* Note: parser_context_{peek|pop}_token do not increment the
+- * token object's refcount. In both cases the references will continue
+- * to be tracked and cleaned up in parser_context_free(), so do not
+- * attempt to free the token object.
+- */
+ static QObject *parser_context_peek_token(JSONParserContext *ctxt)
+ {
+-    QObject *token;
+-    g_assert(ctxt->tokens.pos < ctxt->tokens.count);
+-    token = ctxt->tokens.buf[ctxt->tokens.pos];
+-    return token;
+-}
+-
+-static void tokens_append_from_iter(QObject *obj, void *opaque)
+-{
+-    JSONParserContext *ctxt = opaque;
+-    g_assert(ctxt->tokens.pos < ctxt->tokens.count);
+-    ctxt->tokens.buf[ctxt->tokens.pos++] = obj;
+-    qobject_incref(obj);
++    assert(!g_queue_is_empty(ctxt->buf));
++    return g_queue_peek_head(ctxt->buf);
+ }
+ 
+-static JSONParserContext *parser_context_new(QList *tokens)
++static JSONParserContext *parser_context_new(GQueue *tokens)
+ {
+     JSONParserContext *ctxt;
+-    size_t count;
+ 
+     if (!tokens) {
+         return NULL;
+     }
+ 
+-    count = qlist_size(tokens);
+-    if (count == 0) {
+-        return NULL;
+-    }
+-
+     ctxt = g_malloc0(sizeof(JSONParserContext));
+-    ctxt->tokens.pos = 0;
+-    ctxt->tokens.count = count;
+-    ctxt->tokens.buf = g_malloc(count * sizeof(QObject *));
+-    qlist_iter(tokens, tokens_append_from_iter, ctxt);
+-    ctxt->tokens.pos = 0;
++    ctxt->buf = tokens;
+ 
+     return ctxt;
+ }
+@@ -301,12 +276,12 @@ static JSONParserContext *parser_context_new(QList *tokens)
+ /* to support error propagation, ctxt->err must be freed separately */
+ static void parser_context_free(JSONParserContext *ctxt)
+ {
+-    int i;
+     if (ctxt) {
+-        for (i = 0; i < ctxt->tokens.count; i++) {
+-            qobject_decref(ctxt->tokens.buf[i]);
++        while (!g_queue_is_empty(ctxt->buf)) {
++            parser_context_pop_token(ctxt);
+         }
+-        g_free(ctxt->tokens.buf);
++        qobject_decref(ctxt->current);
++        g_queue_free(ctxt->buf);
+         g_free(ctxt);
+     }
+ }
+@@ -597,12 +572,12 @@ static QObject *parse_value(JSONParserContext *ctxt, va_list *ap)
+     }
+ }
+ 
+-QObject *json_parser_parse(QList *tokens, va_list *ap)
++QObject *json_parser_parse(GQueue *tokens, va_list *ap)
+ {
+     return json_parser_parse_err(tokens, ap, NULL);
+ }
+ 
+-QObject *json_parser_parse_err(QList *tokens, va_list *ap, Error **errp)
++QObject *json_parser_parse_err(GQueue *tokens, va_list *ap, Error **errp)
+ {
+     JSONParserContext *ctxt = parser_context_new(tokens);
+     QObject *result;
+diff --git a/qobject/json-streamer.c b/qobject/json-streamer.c
+index 7292f3a..f7a3e78 100644
+--- a/qobject/json-streamer.c
++++ b/qobject/json-streamer.c
+@@ -22,6 +22,14 @@
+ #define MAX_TOKEN_SIZE (64ULL << 20)
+ #define MAX_NESTING (1ULL << 10)
+ 
++static void json_message_free_tokens(JSONMessageParser *parser)
++{
++    if (parser->tokens) {
++        g_queue_free(parser->tokens);
++        parser->tokens = NULL;
++    }
++}
++
+ static void json_message_process_token(JSONLexer *lexer, GString *input,
+                                        JSONTokenType type, int x, int y)
+ {
+@@ -53,7 +61,7 @@ static void json_message_process_token(JSONLexer *lexer, GString *input,
+ 
+     parser->token_size += input->len;
+ 
+-    qlist_append(parser->tokens, dict);
++    g_queue_push_tail(parser->tokens, dict);
+ 
+     if (type == JSON_ERROR) {
+         goto out_emit_bad;
+@@ -77,27 +85,24 @@ out_emit_bad:
+      * Clear out token list and tell the parser to emit an error
+      * indication by passing it a NULL list
+      */
+-    QDECREF(parser->tokens);
+-    parser->tokens = NULL;
++    json_message_free_tokens(parser);
+ out_emit:
+     /* send current list of tokens to parser and reset tokenizer */
+     parser->brace_count = 0;
+     parser->bracket_count = 0;
++    /* parser->emit takes ownership of parser->tokens.  */
+     parser->emit(parser, parser->tokens);
+-    if (parser->tokens) {
+-        QDECREF(parser->tokens);
+-    }
+-    parser->tokens = qlist_new();
++    parser->tokens = g_queue_new();
+     parser->token_size = 0;
+ }
+ 
+ void json_message_parser_init(JSONMessageParser *parser,
+-                              void (*func)(JSONMessageParser *, QList *))
++                              void (*func)(JSONMessageParser *, GQueue *))
+ {
+     parser->emit = func;
+     parser->brace_count = 0;
+     parser->bracket_count = 0;
+-    parser->tokens = qlist_new();
++    parser->tokens = g_queue_new();
+     parser->token_size = 0;
+ 
+     json_lexer_init(&parser->lexer, json_message_process_token);
+@@ -117,5 +122,5 @@ int json_message_parser_flush(JSONMessageParser *parser)
+ void json_message_parser_destroy(JSONMessageParser *parser)
+ {
+     json_lexer_destroy(&parser->lexer);
+-    QDECREF(parser->tokens);
++    json_message_free_tokens(parser);
+ }
+diff --git a/qobject/qjson.c b/qobject/qjson.c
+index 6cf2511..fdc274a 100644
+--- a/qobject/qjson.c
++++ b/qobject/qjson.c
+@@ -28,7 +28,7 @@ typedef struct JSONParsingState
+     QObject *result;
+ } JSONParsingState;
+ 
+-static void parse_json(JSONMessageParser *parser, QList *tokens)
++static void parse_json(JSONMessageParser *parser, GQueue *tokens)
+ {
+     JSONParsingState *s = container_of(parser, JSONParsingState, parser);
+     s->result = json_parser_parse(tokens, s->ap);
+diff --git a/tests/libqtest.c b/tests/libqtest.c
+index 359d571..69b7cd6 100644
+--- a/tests/libqtest.c
++++ b/tests/libqtest.c
+@@ -299,7 +299,7 @@ typedef struct {
+     QDict *response;
+ } QMPResponseParser;
+ 
+-static void qmp_response(JSONMessageParser *parser, QList *tokens)
++static void qmp_response(JSONMessageParser *parser, GQueue *tokens)
+ {
+     QMPResponseParser *qmp = container_of(parser, QMPResponseParser, parser);
+     QObject *obj;
+-- 
+1.8.3.1
+

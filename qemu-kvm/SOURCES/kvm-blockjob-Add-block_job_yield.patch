@@ -1,0 +1,77 @@
+From 96f8c9bed66c9c910332d86368b7e0e94c190f62 Mon Sep 17 00:00:00 2001
+From: Eric Blake <eblake@redhat.com>
+Date: Wed, 20 Aug 2014 16:40:09 +0200
+Subject: [PATCH 06/11] blockjob: Add block_job_yield()
+
+Message-id: <1408552814-23031-3-git-send-email-eblake@redhat.com>
+Patchwork-id: 60644
+O-Subject: [qemu-kvm-rhev 7.0.z PATCH 2/7] blockjob: Add block_job_yield()
+Bugzilla: 1130603
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Fam Zheng <famz@redhat.com>
+
+This will unset busy flag and put coroutine to sleep, can be used to
+wait for QMP complete/cancel.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit dc71ce45ded4e872e25c2de32d5e7a71842b0985)
+Signed-off-by: Eric Blake <eblake@redhat.com>
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockjob.c               |   14 ++++++++++++++
+ include/block/blockjob.h |    8 ++++++++
+ 2 files changed, 22 insertions(+), 0 deletions(-)
+
+diff --git a/blockjob.c b/blockjob.c
+index a4430a0..1117ee7 100644
+--- a/blockjob.c
++++ b/blockjob.c
+@@ -206,6 +206,20 @@ void block_job_sleep_ns(BlockJob *job, QEMUClock *clock, int64_t ns)
+     job->busy = true;
+ }
+ 
++void block_job_yield(BlockJob *job)
++{
++    assert(job->busy);
++
++    /* Check cancellation *before* setting busy = false, too!  */
++    if (block_job_is_cancelled(job)) {
++        return;
++    }
++
++    job->busy = false;
++    qemu_coroutine_yield();
++    job->busy = true;
++}
++
+ BlockJobInfo *block_job_query(BlockJob *job)
+ {
+     BlockJobInfo *info = g_new0(BlockJobInfo, 1);
+diff --git a/include/block/blockjob.h b/include/block/blockjob.h
+index 5a7d859..11f7c7e 100644
+--- a/include/block/blockjob.h
++++ b/include/block/blockjob.h
+@@ -144,6 +144,14 @@ void *block_job_create(const BlockJobDriver *driver, BlockDriverState *bs,
+ void block_job_sleep_ns(BlockJob *job, QEMUClock *clock, int64_t ns);
+ 
+ /**
++ * block_job_yield:
++ * @job: The job that calls the function.
++ *
++ * Yield the block job coroutine.
++ */
++void block_job_yield(BlockJob *job);
++
++/**
+  * block_job_completed:
+  * @job: The job being completed.
+  * @ret: The status code.
+-- 
+1.7.1
+

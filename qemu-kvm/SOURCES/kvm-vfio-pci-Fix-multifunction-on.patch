@@ -1,0 +1,58 @@
+From 7197c8b9234f26922ce7c6f3d7784b2604bdaafd Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Thu, 21 Nov 2013 21:08:58 +0100
+Subject: [PATCH 10/14] vfio-pci: Fix multifunction=on
+
+RH-Author: Alex Williamson <alex.williamson@redhat.com>
+Message-id: <20131121210817.12705.22782.stgit@bling.home>
+Patchwork-id: 55844
+O-Subject: [RHEL7 qemu-kvm PATCH] vfio-pci: Fix multifunction=on
+Bugzilla: 1029275
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1029275
+Brew: https://brewweb.devel.redhat.com/taskinfo?taskID=6627360
+Upstream: 187d62327aca39afbb038d13d7cd6bf2d11640d3
+
+When an assigned device is initialized it copies the device config
+space into the emulated config space.  Unfortunately multifunction is
+setup prior to the device initfn and gets clobbered.  We need to
+restore it just like pci-assign does.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+Reviewed-by: Bandan Das <bsd@redhat.com>
+Message-id: 20131112185059.7262.33780.stgit@bling.home
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Anthony Liguori <aliguori@amazon.com>
+---
+ hw/misc/vfio.c |    7 +++++++
+ 1 file changed, 7 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c |    7 +++++++
+ 1 files changed, 7 insertions(+), 0 deletions(-)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index b7f213b..5a6925c 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -3625,6 +3625,13 @@ static int vfio_initfn(PCIDevice *pdev)
+     vdev->emulated_config_bits[PCI_HEADER_TYPE] =
+                                               PCI_HEADER_TYPE_MULTI_FUNCTION;
+ 
++    /* Restore or clear multifunction, this is always controlled by QEMU */
++    if (vdev->pdev.cap_present & QEMU_PCI_CAP_MULTIFUNCTION) {
++        vdev->pdev.config[PCI_HEADER_TYPE] |= PCI_HEADER_TYPE_MULTI_FUNCTION;
++    } else {
++        vdev->pdev.config[PCI_HEADER_TYPE] &= ~PCI_HEADER_TYPE_MULTI_FUNCTION;
++    }
++
+     /*
+      * Clear host resource mapping info.  If we choose not to register a
+      * BAR, such as might be the case with the option ROM, we can get
+-- 
+1.7.1
+

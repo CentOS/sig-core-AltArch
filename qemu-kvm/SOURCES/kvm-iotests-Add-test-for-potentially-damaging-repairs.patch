@@ -1,0 +1,316 @@
+From de5dd97bab0923fdd8cd4ffebbbf3c031446030c Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:22:25 +0200
+Subject: [PATCH 31/42] iotests: Add test for potentially damaging repairs
+
+Message-id: <1434212556-3927-32-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66050
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 31/42] iotests: Add test for potentially damaging repairs
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1129893
+
+There are certain cases where repairing a qcow2 image might actually
+damage it further (or rather, where repairing it has in fact damaged it
+further with the old qcow2 check implementation). This should not
+happen, so add a test for these cases.
+
+Furthermore, the repair function now repairs refblocks beyond the image
+end by resizing the image accordingly. Add several tests for this as
+well.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 234764eed1aab56a657a161e9a0c65730442e6f8)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	tests/qemu-iotests/group
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ tests/qemu-iotests/108     | 141 +++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/108.out | 110 +++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/group   |   1 +
+ 3 files changed, 252 insertions(+)
+ create mode 100755 tests/qemu-iotests/108
+ create mode 100644 tests/qemu-iotests/108.out
+
+diff --git a/tests/qemu-iotests/108 b/tests/qemu-iotests/108
+new file mode 100755
+index 0000000..12fc92a
+--- /dev/null
++++ b/tests/qemu-iotests/108
+@@ -0,0 +1,141 @@
++#!/bin/bash
++#
++# Test case for repairing qcow2 images which cannot be repaired using
++# the on-disk refcount structures
++#
++# Copyright (C) 2014 Red Hat, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++
++# creator
++owner=mreitz@redhat.com
++
++seq="$(basename $0)"
++echo "QA output created by $seq"
++
++here="$PWD"
++tmp=/tmp/$$
++status=1	# failure is the default!
++
++_cleanup()
++{
++	_cleanup_test_img
++}
++trap "_cleanup; exit \$status" 0 1 2 3 15
++
++# get standard environment, filters and checks
++. ./common.rc
++. ./common.filter
++
++# This tests qocw2-specific low-level functionality
++_supported_fmt qcow2
++_supported_proto file
++_supported_os Linux
++
++echo
++echo '=== Repairing an image without any refcount table ==='
++echo
++
++_make_test_img 64M
++# just write some data
++$QEMU_IO -c 'write -P 42 0 64k' "$TEST_IMG" | _filter_qemu_io
++
++# refcount_table_offset
++poke_file "$TEST_IMG" $((0x30)) "\x00\x00\x00\x00\x00\x00\x00\x00"
++# refcount_table_clusters
++poke_file "$TEST_IMG" $((0x38)) "\x00\x00\x00\x00"
++
++_check_test_img -r all
++
++$QEMU_IO -c 'read -P 42 0 64k' "$TEST_IMG" | _filter_qemu_io
++
++echo
++echo '=== Repairing unreferenced data cluster in new refblock area ==='
++echo
++
++IMGOPTS='cluster_size=512' _make_test_img 64M
++# Allocate the first 128 kB in the image (first refblock)
++$QEMU_IO -c 'write 0 0x1b200' "$TEST_IMG" | _filter_qemu_io
++# should be 131072 == 0x20000
++stat -c '%s' "$TEST_IMG"
++
++# Enter a cluster at 128 kB (0x20000)
++# XXX: This should be the first free entry in the last L2 table, but we cannot
++# be certain
++poke_file "$TEST_IMG" $((0x1ccc8)) "\x80\x00\x00\x00\x00\x02\x00\x00"
++
++# Fill the cluster
++truncate -s $((0x20200)) "$TEST_IMG"
++$QEMU_IO -c "open -o driver=raw $TEST_IMG" -c 'write -P 42 128k 512' \
++    | _filter_qemu_io
++
++# The data should now appear at this guest offset
++$QEMU_IO -c 'read -P 42 0x1b200 512' "$TEST_IMG" | _filter_qemu_io
++
++# This cluster is unallocated; fix it
++_check_test_img -r all
++
++# This repair operation must have allocated a new refblock; and that refblock
++# should not overlap with the unallocated data cluster. If it does, the data
++# will be damaged, so check it.
++$QEMU_IO -c 'read -P 42 0x1b200 512' "$TEST_IMG" | _filter_qemu_io
++
++echo
++echo '=== Repairing refblock beyond the image end ==='
++echo
++
++echo
++echo '--- Otherwise clean ---'
++echo
++
++_make_test_img 64M
++# Normally, qemu doesn't create empty refblocks, so we just have to do it by
++# hand
++# XXX: This should be the entry for the second refblock
++poke_file "$TEST_IMG" $((0x10008)) "\x00\x00\x00\x00\x00\x10\x00\x00"
++# Mark that refblock as used
++# XXX: This should be the 17th entry (cluster 16) of the first
++# refblock
++poke_file "$TEST_IMG" $((0x20020)) "\x00\x01"
++_check_test_img -r all
++
++echo
++echo '--- Refblock is unallocated ---'
++echo
++
++_make_test_img 64M
++poke_file "$TEST_IMG" $((0x10008)) "\x00\x00\x00\x00\x00\x10\x00\x00"
++_check_test_img -r all
++
++echo
++echo '--- Signed overflow after the refblock ---'
++echo
++
++_make_test_img 64M
++poke_file "$TEST_IMG" $((0x10008)) "\x7f\xff\xff\xff\xff\xff\x00\x00"
++_check_test_img -r all
++
++echo
++echo '--- Unsigned overflow after the refblock ---'
++echo
++
++_make_test_img 64M
++poke_file "$TEST_IMG" $((0x10008)) "\xff\xff\xff\xff\xff\xff\x00\x00"
++_check_test_img -r all
++
++# success, all done
++echo '*** done'
++rm -f $seq.full
++status=0
+diff --git a/tests/qemu-iotests/108.out b/tests/qemu-iotests/108.out
+new file mode 100644
+index 0000000..824d5cf
+--- /dev/null
++++ b/tests/qemu-iotests/108.out
+@@ -0,0 +1,110 @@
++QA output created by 108
++
++=== Repairing an image without any refcount table ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++wrote 65536/65536 bytes at offset 0
++64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++ERROR cluster 0 refcount=0 reference=1
++ERROR cluster 3 refcount=0 reference=1
++ERROR cluster 4 refcount=0 reference=1
++ERROR cluster 5 refcount=0 reference=1
++Rebuilding refcount structure
++The following inconsistencies were found and repaired:
++
++    0 leaked clusters
++    4 corruptions
++
++Double checking the fixed image now...
++No errors were found on the image.
++read 65536/65536 bytes at offset 0
++64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++=== Repairing unreferenced data cluster in new refblock area ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++wrote 111104/111104 bytes at offset 0
++108.500 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++131072
++wrote 512/512 bytes at offset 131072
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 111104
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++ERROR cluster 256 refcount=0 reference=1
++Rebuilding refcount structure
++Repairing cluster 1 refcount=1 reference=0
++Repairing cluster 2 refcount=1 reference=0
++The following inconsistencies were found and repaired:
++
++    0 leaked clusters
++    1 corruptions
++
++Double checking the fixed image now...
++No errors were found on the image.
++read 512/512 bytes at offset 111104
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++=== Repairing refblock beyond the image end ===
++
++
++--- Otherwise clean ---
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++Repairing refcount block 1 is outside image
++The following inconsistencies were found and repaired:
++
++    0 leaked clusters
++    1 corruptions
++
++Double checking the fixed image now...
++No errors were found on the image.
++
++--- Refblock is unallocated ---
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++Repairing refcount block 1 is outside image
++ERROR cluster 16 refcount=0 reference=1
++Rebuilding refcount structure
++Repairing cluster 1 refcount=1 reference=0
++Repairing cluster 2 refcount=1 reference=0
++Repairing cluster 16 refcount=1 reference=0
++The following inconsistencies were found and repaired:
++
++    0 leaked clusters
++    2 corruptions
++
++Double checking the fixed image now...
++No errors were found on the image.
++
++--- Signed overflow after the refblock ---
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++Repairing refcount block 1 is outside image
++ERROR could not resize image: Invalid argument
++Rebuilding refcount structure
++Repairing cluster 1 refcount=1 reference=0
++Repairing cluster 2 refcount=1 reference=0
++The following inconsistencies were found and repaired:
++
++    0 leaked clusters
++    1 corruptions
++
++Double checking the fixed image now...
++No errors were found on the image.
++
++--- Unsigned overflow after the refblock ---
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++Repairing refcount block 1 is outside image
++ERROR could not resize image: Invalid argument
++Rebuilding refcount structure
++Repairing cluster 1 refcount=1 reference=0
++Repairing cluster 2 refcount=1 reference=0
++The following inconsistencies were found and repaired:
++
++    0 leaked clusters
++    1 corruptions
++
++Double checking the fixed image now...
++No errors were found on the image.
++*** done
+diff --git a/tests/qemu-iotests/group b/tests/qemu-iotests/group
+index dd3c5fe..695ab02 100644
+--- a/tests/qemu-iotests/group
++++ b/tests/qemu-iotests/group
+@@ -87,3 +87,4 @@
+ 092 rw auto quick
+ 105 rw auto quick
+ 107 rw auto quick
++108 rw auto quick
+-- 
+1.8.3.1
+

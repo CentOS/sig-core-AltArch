@@ -1,0 +1,64 @@
+From d13533fb4dada401eb437454ce348caa1ab94fe6 Mon Sep 17 00:00:00 2001
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Fri, 28 Mar 2014 18:46:57 +0100
+Subject: [PATCH 1/2] qcow2: fix dangling refcount table entry
+
+RH-Author: Stefan Hajnoczi <stefanha@redhat.com>
+Message-id: <1396032417-10176-1-git-send-email-stefanha@redhat.com>
+Patchwork-id: 58281
+O-Subject: [RHEL7 qemu-kvm PATCH] qcow2: fix dangling refcount table entry
+Bugzilla: 1081793
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+
+BZ: 1081793
+Upstream: Downstream only but same fix in https://lists.gnu.org/archive/html/qemu-devel/2014-03/msg05605.html
+BREW: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7272001
+
+In qcow2_create2() we first manually populate a minimal image file with
+the qcow2 header, refcount table, and one refcount block.  Then can open
+the minimal image as a valid file and fill in the remaining information.
+
+In commit a2b10eec76a72aa7fe63e797181b93f69de9600e ("qcow2: Don't rely
+on free_cluster_index in alloc_refcount_block() (CVE-2014-0147)") a
+dangling refcount table entry was introduced.  This works for image
+files but fails for host block devices that already contain data because
+we follow the dangling refcount table entry and read bogus data.
+
+This patch zeroes the refcount block so the refcount table entry is
+pointing to initialized data.
+
+This patch is downstream-only because the broken commit was not merged
+yet upstream.  Therefore upstream has a v2 patch but we need a separate
+bugfix for downstream.
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+---
+ block/qcow2.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2.c |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/block/qcow2.c b/block/qcow2.c
+index 3f8febc..66ed906 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -1628,9 +1628,9 @@ static int qcow2_create2(const char *filename, int64_t total_size,
+     }
+ 
+     /* Write a refcount table with one refcount block */
+-    refcount_table = g_malloc0(cluster_size);
++    refcount_table = g_malloc0(2 * cluster_size);
+     refcount_table[0] = cpu_to_be64(2 * cluster_size);
+-    ret = bdrv_pwrite(bs, cluster_size, refcount_table, cluster_size);
++    ret = bdrv_pwrite(bs, cluster_size, refcount_table, 2 * cluster_size);
+     g_free(refcount_table);
+ 
+     if (ret < 0) {
+-- 
+1.7.1
+

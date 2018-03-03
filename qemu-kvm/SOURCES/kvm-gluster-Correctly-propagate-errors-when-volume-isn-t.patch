@@ -1,0 +1,75 @@
+From 22e47c104ff73885357a0be7b94270f3955427ea Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Tue, 17 Jan 2017 19:51:31 +0100
+Subject: [PATCH 2/3] gluster: Correctly propagate errors when volume isn't
+ accessible
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <963a714d4eae919df79e2031e02c77af5a8697e2.1484682588.git.jcody@redhat.com>
+Patchwork-id: 73256
+O-Subject: [RHEL-7.4 qemu-kvm 2/3] gluster: Correctly propagate errors when volume isn't accessible
+Bugzilla: 1151859
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+
+From: Peter Krempa <pkrempa@redhat.com>
+
+The docs for glfs_init suggest that the function sets errno on every
+failure. In fact it doesn't. As other functions such as
+qemu_gluster_open() in the gluster block code report their errors based
+on this fact we need to make sure that errno is set on each failure.
+
+This fixes a crash of qemu-img/qemu when a gluster brick isn't
+accessible from given host while the server serving the volume
+description is.
+
+Thread 1 (Thread 0x7ffff7fba740 (LWP 203880)):
+ #0  0x00007ffff77673f8 in glfs_lseek () from /usr/lib64/libgfapi.so.0
+ #1  0x0000555555574a68 in qemu_gluster_getlength ()
+ #2  0x0000555555565742 in refresh_total_sectors ()
+ #3  0x000055555556914f in bdrv_open_common ()
+ #4  0x000055555556e8e8 in bdrv_open ()
+ #5  0x000055555556f02f in bdrv_open_image ()
+ #6  0x000055555556e5f6 in bdrv_open ()
+ #7  0x00005555555c5775 in bdrv_new_open ()
+ #8  0x00005555555c5b91 in img_info ()
+ #9  0x00007ffff62c9c05 in __libc_start_main () from /lib64/libc.so.6
+ #10 0x00005555555648ad in _start ()
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 4557117d9eed8cadc360aec23b42fc39a7011864)
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/gluster.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/block/gluster.c b/block/gluster.c
+index 248a031..5266dce 100644
+--- a/block/gluster.c
++++ b/block/gluster.c
+@@ -224,6 +224,11 @@ static struct glfs *qemu_gluster_init(GlusterConf *gconf, const char *filename,
+                          "volume=%s image=%s transport=%s", gconf->server,
+                          gconf->port, gconf->volname, gconf->image,
+                          gconf->transport);
++
++        /* glfs_init sometimes doesn't set errno although docs suggest that */
++        if (errno == 0)
++            errno = EINVAL;
++
+         goto out;
+     }
+     return glfs;
+@@ -484,7 +489,7 @@ static int qemu_gluster_create(const char *filename,
+ 
+     glfs = qemu_gluster_init(gconf, filename, errp);
+     if (!glfs) {
+-        ret = -EINVAL;
++        ret = -errno;
+         goto out;
+     }
+ 
+-- 
+1.8.3.1
+

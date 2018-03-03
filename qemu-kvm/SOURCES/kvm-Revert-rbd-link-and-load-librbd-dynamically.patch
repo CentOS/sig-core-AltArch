@@ -1,0 +1,564 @@
+From e2fd1947f5c17139ab279ff155f31f1a74d8d3e0 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Thu, 20 Nov 2014 13:47:23 +0100
+Subject: [PATCH 4/5] Revert "rbd: link and load librbd dynamically"
+
+Message-id: <1416491244-20209-4-git-send-email-kwolf@redhat.com>
+Patchwork-id: 62493
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v2 3/4] Revert "rbd: link and load librbd dynamically"
+Bugzilla: 1140742
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+This reverts commit 64d9964fc97fc525b86e12c5f385dea7e646a3b0.
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	configure
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block/Makefile.objs |   2 +-
+ block/rbd.c         | 218 ++++++++++++----------------------------------------
+ block/rbd_types.h   |  91 ----------------------
+ configure           |  41 +++++++++-
+ 4 files changed, 89 insertions(+), 263 deletions(-)
+ delete mode 100644 block/rbd_types.h
+
+diff --git a/block/Makefile.objs b/block/Makefile.objs
+index 6b578d9..0be180f 100644
+--- a/block/Makefile.objs
++++ b/block/Makefile.objs
+@@ -13,7 +13,7 @@ ifeq ($(CONFIG_POSIX),y)
+ block-obj-y += nbd.o sheepdog.o
+ block-obj-$(CONFIG_LIBISCSI) += iscsi.o
+ block-obj-$(CONFIG_CURL) += curl.o
+-block-obj-y += rbd.o
++block-obj-$(CONFIG_RBD) += rbd.o
+ block-obj-$(CONFIG_GLUSTERFS) += gluster.o
+ block-obj-$(CONFIG_LIBSSH2) += ssh.o
+ endif
+diff --git a/block/rbd.c b/block/rbd.c
+index 89319dc..4eea455 100644
+--- a/block/rbd.c
++++ b/block/rbd.c
+@@ -11,14 +11,13 @@
+  * GNU GPL, version 2 or (at your option) any later version.
+  */
+ 
+-#include <gmodule.h>
+ #include <inttypes.h>
+ 
+ #include "qemu-common.h"
+ #include "qemu/error-report.h"
+ #include "block/block_int.h"
+ 
+-#include "rbd_types.h"
++#include <rbd/librbd.h>
+ 
+ /*
+  * When specifying the image filename use:
+@@ -45,6 +44,13 @@
+  * leading "\".
+  */
+ 
++/* rbd_aio_discard added in 0.1.2 */
++#if LIBRBD_VERSION_CODE >= LIBRBD_VERSION(0, 1, 2)
++#define LIBRBD_SUPPORTS_DISCARD
++#else
++#undef LIBRBD_SUPPORTS_DISCARD
++#endif
++
+ #define OBJ_MAX_SIZE (1UL << OBJ_DEFAULT_OBJ_ORDER)
+ 
+ #define RBD_MAX_CONF_NAME_SIZE 128
+@@ -100,10 +106,6 @@ typedef struct BDRVRBDState {
+     RADOSCB *event_rcb;
+ } BDRVRBDState;
+ 
+-static bool librbd_loaded;
+-static GModule *librbd_handle;
+-
+-static int qemu_rbd_load_libs(void);
+ static void rbd_aio_bh_cb(void *opaque);
+ 
+ static int qemu_rbd_next_tok(char *dst, int dst_len,
+@@ -309,10 +311,6 @@ static int qemu_rbd_create(const char *filename, QEMUOptionParameter *options,
+         return -EINVAL;
+     }
+ 
+-    if (qemu_rbd_load_libs() < 0) {
+-        return -EIO;
+-    }
+-
+     /* Read out options */
+     while (options && options->name) {
+         if (!strcmp(options->name, BLOCK_OPT_SIZE)) {
+@@ -491,10 +489,6 @@ static int qemu_rbd_open(BlockDriverState *bs, QDict *options, int flags,
+         goto failed_opts;
+     }
+ 
+-    if (qemu_rbd_load_libs() < 0) {
+-        return -EIO;
+-    }
+-
+     clientname = qemu_rbd_parse_clientname(conf, clientname_buf);
+     r = rados_create(&s->cluster, clientname);
+     if (r < 0) {
+@@ -686,6 +680,28 @@ static void rbd_aio_bh_cb(void *opaque)
+     }
+ }
+ 
++static int rbd_aio_discard_wrapper(rbd_image_t image,
++                                   uint64_t off,
++                                   uint64_t len,
++                                   rbd_completion_t comp)
++{
++#ifdef LIBRBD_SUPPORTS_DISCARD
++    return rbd_aio_discard(image, off, len, comp);
++#else
++    return -ENOTSUP;
++#endif
++}
++
++static int rbd_aio_flush_wrapper(rbd_image_t image,
++                                 rbd_completion_t comp)
++{
++#ifdef LIBRBD_SUPPORTS_AIO_FLUSH
++    return rbd_aio_flush(image, comp);
++#else
++    return -ENOTSUP;
++#endif
++}
++
+ static BlockDriverAIOCB *rbd_start_aio(BlockDriverState *bs,
+                                        int64_t sector_num,
+                                        QEMUIOVector *qiov,
+@@ -748,10 +764,10 @@ static BlockDriverAIOCB *rbd_start_aio(BlockDriverState *bs,
+         r = rbd_aio_read(s->image, off, size, buf, c);
+         break;
+     case RBD_AIO_DISCARD:
+-        r = rbd_aio_discard(s->image, off, size, c);
++        r = rbd_aio_discard_wrapper(s->image, off, size, c);
+         break;
+     case RBD_AIO_FLUSH:
+-        r = rbd_aio_flush(s->image, c);
++        r = rbd_aio_flush_wrapper(s->image, c);
+         break;
+     default:
+         r = -EINVAL;
+@@ -792,6 +808,7 @@ static BlockDriverAIOCB *qemu_rbd_aio_writev(BlockDriverState *bs,
+                          RBD_AIO_WRITE);
+ }
+ 
++#ifdef LIBRBD_SUPPORTS_AIO_FLUSH
+ static BlockDriverAIOCB *qemu_rbd_aio_flush(BlockDriverState *bs,
+                                             BlockDriverCompletionFunc *cb,
+                                             void *opaque)
+@@ -799,14 +816,19 @@ static BlockDriverAIOCB *qemu_rbd_aio_flush(BlockDriverState *bs,
+     return rbd_start_aio(bs, 0, NULL, 0, cb, opaque, RBD_AIO_FLUSH);
+ }
+ 
++#else
++
+ static int qemu_rbd_co_flush(BlockDriverState *bs)
+ {
++#if LIBRBD_VERSION_CODE >= LIBRBD_VERSION(0, 1, 1)
++    /* rbd_flush added in 0.1.1 */
+     BDRVRBDState *s = bs->opaque;
+-    if (rbd_flush) {
+-        return rbd_flush(s->image);
+-    }
++    return rbd_flush(s->image);
++#else
+     return 0;
++#endif
+ }
++#endif
+ 
+ static int qemu_rbd_getinfo(BlockDriverState *bs, BlockDriverInfo *bdi)
+ {
+@@ -944,6 +966,7 @@ static int qemu_rbd_snap_list(BlockDriverState *bs,
+     return snap_count;
+ }
+ 
++#ifdef LIBRBD_SUPPORTS_DISCARD
+ static BlockDriverAIOCB* qemu_rbd_aio_discard(BlockDriverState *bs,
+                                               int64_t sector_num,
+                                               int nb_sectors,
+@@ -953,6 +976,7 @@ static BlockDriverAIOCB* qemu_rbd_aio_discard(BlockDriverState *bs,
+     return rbd_start_aio(bs, sector_num, NULL, nb_sectors, cb, opaque,
+                          RBD_AIO_DISCARD);
+ }
++#endif
+ 
+ static QEMUOptionParameter qemu_rbd_create_options[] = {
+     {
+@@ -983,9 +1007,16 @@ static BlockDriver bdrv_rbd = {
+ 
+     .bdrv_aio_readv         = qemu_rbd_aio_readv,
+     .bdrv_aio_writev        = qemu_rbd_aio_writev,
++
++#ifdef LIBRBD_SUPPORTS_AIO_FLUSH
+     .bdrv_aio_flush         = qemu_rbd_aio_flush,
++#else
+     .bdrv_co_flush_to_disk  = qemu_rbd_co_flush,
++#endif
++
++#ifdef LIBRBD_SUPPORTS_DISCARD
+     .bdrv_aio_discard       = qemu_rbd_aio_discard,
++#endif
+ 
+     .bdrv_snapshot_create   = qemu_rbd_snap_create,
+     .bdrv_snapshot_delete   = qemu_rbd_snap_remove,
+@@ -998,153 +1029,4 @@ static void bdrv_rbd_init(void)
+     bdrv_register(&bdrv_rbd);
+ }
+ 
+-typedef struct LibSymbol {
+-    const char *name;
+-    gpointer *addr;
+-} LibSymbol;
+-
+-static int qemu_rbd_set_functions(GModule *lib, const LibSymbol *funcs)
+-{
+-    int i = 0;
+-    while (funcs[i].name) {
+-        const char *name = funcs[i].name;
+-        if (!g_module_symbol(lib, name, funcs[i].addr)) {
+-            error_report("%s could not be loaded from librbd or librados: %s",
+-                         name, g_module_error());
+-            return -1;
+-        }
+-        ++i;
+-    }
+-    return 0;
+-}
+-
+-/*
+- * Set function pointers for basic librados and librbd
+- * functions that have always been present in these libraries.
+- */
+-static int qemu_rbd_set_mandatory_functions(void)
+-{
+-    LibSymbol symbols[] = {
+-        {"rados_create",
+-         (gpointer *) &rados_create},
+-        {"rados_connect",
+-         (gpointer *) &rados_connect},
+-        {"rados_shutdown",
+-         (gpointer *) &rados_shutdown},
+-        {"rados_conf_read_file",
+-         (gpointer *) &rados_conf_read_file},
+-        {"rados_conf_set",
+-         (gpointer *) &rados_conf_set},
+-        {"rados_ioctx_create",
+-         (gpointer *) &rados_ioctx_create},
+-        {"rados_ioctx_destroy",
+-         (gpointer *) &rados_ioctx_destroy},
+-        {"rbd_create",
+-         (gpointer *) &rbd_create},
+-        {"rbd_open",
+-         (gpointer *) &rbd_open},
+-        {"rbd_close",
+-         (gpointer *) &rbd_close},
+-        {"rbd_resize",
+-         (gpointer *) &rbd_resize},
+-        {"rbd_stat",
+-         (gpointer *) &rbd_stat},
+-        {"rbd_snap_list",
+-         (gpointer *) &rbd_snap_list},
+-        {"rbd_snap_list_end",
+-         (gpointer *) &rbd_snap_list_end},
+-        {"rbd_snap_create",
+-         (gpointer *) &rbd_snap_create},
+-        {"rbd_snap_remove",
+-         (gpointer *) &rbd_snap_remove},
+-        {"rbd_snap_rollback",
+-         (gpointer *) &rbd_snap_rollback},
+-        {"rbd_aio_write",
+-         (gpointer *) &rbd_aio_write},
+-        {"rbd_aio_read",
+-         (gpointer *) &rbd_aio_read},
+-        {"rbd_aio_create_completion",
+-         (gpointer *) &rbd_aio_create_completion},
+-        {"rbd_aio_get_return_value",
+-         (gpointer *) &rbd_aio_get_return_value},
+-        {"rbd_aio_release",
+-         (gpointer *) &rbd_aio_release},
+-        {NULL}
+-    };
+-
+-    if (qemu_rbd_set_functions(librbd_handle, symbols) < 0) {
+-        return -1;
+-    }
+-
+-    return 0;
+-}
+-
+-/*
+- * Detect whether the installed version of librbd
+- * supports newer functionality, and enable or disable
+- * it appropriately in bdrv_rbd.
+- */
+-static void qemu_rbd_set_optional_functions(void)
+-{
+-    if (g_module_symbol(librbd_handle, "rbd_flush",
+-                         (gpointer *) &rbd_flush)) {
+-        bdrv_rbd.bdrv_aio_flush = NULL;
+-        bdrv_rbd.bdrv_co_flush_to_disk = qemu_rbd_co_flush;
+-    } else {
+-        rbd_flush = NULL;
+-        bdrv_rbd.bdrv_co_flush_to_disk = NULL;
+-    }
+-
+-    if (g_module_symbol(librbd_handle, "rbd_aio_flush",
+-                        (gpointer *) &rbd_aio_flush)) {
+-        bdrv_rbd.bdrv_co_flush_to_disk = NULL;
+-        bdrv_rbd.bdrv_aio_flush = qemu_rbd_aio_flush;
+-    } else {
+-        rbd_aio_flush = NULL;
+-        bdrv_rbd.bdrv_aio_flush = NULL;
+-    }
+-
+-    if (g_module_symbol(librbd_handle, "rbd_aio_discard",
+-                        (gpointer *) &rbd_aio_discard)) {
+-        bdrv_rbd.bdrv_aio_discard = qemu_rbd_aio_discard;
+-    } else {
+-        rbd_aio_discard = NULL;
+-        bdrv_rbd.bdrv_aio_discard = NULL;
+-    }
+-}
+-
+-static int qemu_rbd_load_libs(void)
+-{
+-    if (librbd_loaded) {
+-        return 0;
+-    }
+-
+-    if (!g_module_supported()) {
+-        error_report("modules are not supported on this platform: %s",
+-                     g_module_error());
+-        return -1;
+-    }
+-
+-    librbd_handle = g_module_open("librbd.so.1", 0);
+-    if (!librbd_handle) {
+-        error_report("error loading librbd: %s", g_module_error());
+-        return -1;
+-    }
+-
+-    /*
+-     * Due to c++ templates used in librbd/librados and their
+-     * dependencies, and linker duplicate trimming rules, closing
+-     * librbd would leave it mapped. Make this explicit.
+-     */
+-    g_module_make_resident(librbd_handle);
+-
+-    if (qemu_rbd_set_mandatory_functions() < 0) {
+-        return -1;
+-    }
+-    qemu_rbd_set_optional_functions();
+-    librbd_loaded = true;
+-
+-    return 0;
+-}
+-
+ block_init(bdrv_rbd_init);
+diff --git a/block/rbd_types.h b/block/rbd_types.h
+deleted file mode 100644
+index f327cb4..0000000
+--- a/block/rbd_types.h
++++ /dev/null
+@@ -1,91 +0,0 @@
+-/*
+- * Types and signatures for librados and librbd
+- *
+- * Copyright (C) 2013 Inktank Storage Inc.
+- *
+- * This library is free software; you can redistribute it and/or
+- * modify it under the terms of the GNU Lesser General Public
+- * License as published by the Free Software Foundation; either
+- * version 2 of the License, or (at your option) any later version.
+- *
+- * This library is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+- * Lesser General Public License for more details.
+- *
+- * You should have received a copy of the GNU Lesser General Public
+- * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-#ifndef QEMU_BLOCK_RBD_TYPES_H
+-#define QEMU_BLOCK_RBD_TYPES_H
+-
+-/* types from librados used by the rbd block driver */
+-
+-typedef void *rados_t;
+-typedef void *rados_ioctx_t;
+-
+-static int   (*rados_create)(rados_t *cluster, const char * const id);
+-static int   (*rados_connect)(rados_t cluster);
+-static void  (*rados_shutdown)(rados_t cluster);
+-static int   (*rados_conf_read_file)(rados_t cluster, const char *path);
+-static int   (*rados_conf_set)(rados_t cluster, const char *option,
+-                               const char *value);
+-static int   (*rados_ioctx_create)(rados_t cluster, const char *pool_name,
+-                                   rados_ioctx_t *ioctx);
+-static void  (*rados_ioctx_destroy)(rados_ioctx_t io);
+-
+-/* types from librbd used by the rbd block driver*/
+-
+-typedef void *rbd_image_t;
+-typedef void *rbd_completion_t;
+-typedef void (*rbd_callback_t)(rbd_completion_t cb, void *arg);
+-
+-typedef struct {
+-    uint64_t id;
+-    uint64_t size;
+-    const char *name;
+-} rbd_snap_info_t;
+-
+-#define RBD_MAX_IMAGE_NAME_SIZE 96
+-#define RBD_MAX_BLOCK_NAME_SIZE 24
+-
+-typedef struct {
+-    uint64_t size;
+-    uint64_t obj_size;
+-    uint64_t num_objs;
+-    int order;
+-    char block_name_prefix[RBD_MAX_BLOCK_NAME_SIZE];
+-    int64_t parent_pool;
+-    char parent_name[RBD_MAX_IMAGE_NAME_SIZE];
+-} rbd_image_info_t;
+-
+-static int      (*rbd_create)(rados_ioctx_t io, const char *name, uint64_t size,
+-                              int *order);
+-static int      (*rbd_open)(rados_ioctx_t io, const char *name, rbd_image_t *image,
+-                            const char *snap_name);
+-static int      (*rbd_close)(rbd_image_t image);
+-static int      (*rbd_resize)(rbd_image_t image, uint64_t size);
+-static int      (*rbd_stat)(rbd_image_t image, rbd_image_info_t *info,
+-                            size_t infosize);
+-static int      (*rbd_snap_list)(rbd_image_t image, rbd_snap_info_t *snaps,
+-                                 int *max_snaps);
+-static void     (*rbd_snap_list_end)(rbd_snap_info_t *snaps);
+-static int      (*rbd_snap_create)(rbd_image_t image, const char *snapname);
+-static int      (*rbd_snap_remove)(rbd_image_t image, const char *snapname);
+-static int      (*rbd_snap_rollback)(rbd_image_t image, const char *snapname);
+-static int      (*rbd_aio_write)(rbd_image_t image, uint64_t off, size_t len,
+-                                 const char *buf, rbd_completion_t c);
+-static int      (*rbd_aio_read)(rbd_image_t image, uint64_t off, size_t len,
+-                                char *buf, rbd_completion_t c);
+-static int      (*rbd_aio_discard)(rbd_image_t image, uint64_t off, uint64_t len,
+-                                   rbd_completion_t c);
+-static int      (*rbd_aio_create_completion)(void *cb_arg,
+-                                             rbd_callback_t complete_cb,
+-                                             rbd_completion_t *c);
+-static ssize_t  (*rbd_aio_get_return_value)(rbd_completion_t c);
+-static void     (*rbd_aio_release)(rbd_completion_t c);
+-static int      (*rbd_flush)(rbd_image_t image);
+-static int      (*rbd_aio_flush)(rbd_image_t image, rbd_completion_t c);
+-
+-#endif
+diff --git a/configure b/configure
+index 8db9dbe..1583359 100755
+--- a/configure
++++ b/configure
+@@ -227,6 +227,7 @@ qom_cast_debug="yes"
+ trace_backend="nop"
+ trace_file="trace"
+ spice=""
++rbd=""
+ smartcard_nss=""
+ libusb=""
+ usb_redir=""
+@@ -892,6 +893,10 @@ for opt do
+   ;;
+   --enable-glx) glx="yes"
+   ;;
++  --disable-rbd) rbd="no"
++  ;;
++  --enable-rbd) rbd="yes"
++  ;;
+   --disable-xfsctl) xfs="no"
+   ;;
+   --enable-xfsctl) xfs="yes"
+@@ -1213,6 +1218,7 @@ echo "  --with-trace-file=NAME   Full PATH,NAME of file to store traces"
+ echo "                           Default:trace-<pid>"
+ echo "  --disable-spice          disable spice"
+ echo "  --enable-spice           enable spice"
++echo "  --enable-rbd             enable building the rados block device (rbd)"
+ echo "  --disable-libiscsi       disable iscsi support"
+ echo "  --enable-libiscsi        enable iscsi support"
+ echo "  --disable-smartcard-nss  disable smartcard nss support"
+@@ -2372,10 +2378,10 @@ if test "$mingw32" = yes; then
+ else
+     glib_req_ver=2.12
+ fi
+-if $pkg_config --atleast-version=$glib_req_ver gthread-2.0 gmodule-2.0 > /dev/null 2>&1
++if $pkg_config --atleast-version=$glib_req_ver gthread-2.0 > /dev/null 2>&1
+ then
+-    glib_cflags=`$pkg_config --cflags gthread-2.0 gmodule-2.0 2>/dev/null`
+-    glib_libs=`$pkg_config --libs gthread-2.0 gmodule-2.0 2>/dev/null`
++    glib_cflags=`$pkg_config --cflags gthread-2.0 2>/dev/null`
++    glib_libs=`$pkg_config --libs gthread-2.0 2>/dev/null`
+     CFLAGS="$glib_cflags $CFLAGS"
+     LIBS="$glib_libs $LIBS"
+     libs_qga="$glib_libs $libs_qga"
+@@ -2477,6 +2483,31 @@ if test "$mingw32" != yes -a "$pthread" = no; then
+ fi
+ 
+ ##########################################
++# rbd probe
++if test "$rbd" != "no" ; then
++  cat > $TMPC <<EOF
++#include <stdio.h>
++#include <rbd/librbd.h>
++int main(void) {
++    rados_t cluster;
++    rados_create(&cluster, NULL);
++    return 0;
++}
++EOF
++  rbd_libs="-lrbd -lrados"
++  if compile_prog "" "$rbd_libs" ; then
++    rbd=yes
++    libs_tools="$rbd_libs $libs_tools"
++    libs_softmmu="$rbd_libs $libs_softmmu"
++  else
++    if test "$rbd" = "yes" ; then
++      feature_not_found "rados block device"
++    fi
++    rbd=no
++  fi
++fi
++
++##########################################
+ # libssh2 probe
+ min_libssh2_version=1.2.8
+ if test "$libssh2" != "no" ; then
+@@ -3665,6 +3696,7 @@ echo "vhost-scsi support $vhost_scsi"
+ echo "Trace backend     $trace_backend"
+ echo "Trace output file $trace_file-<pid>"
+ echo "spice support     $spice ($spice_protocol_version/$spice_server_version)"
++echo "rbd support       $rbd"
+ echo "xfsctl support    $xfs"
+ echo "nss used          $smartcard_nss"
+ echo "libusb            $libusb"
+@@ -4035,6 +4067,9 @@ fi
+ if test "$qom_cast_debug" = "yes" ; then
+   echo "CONFIG_QOM_CAST_DEBUG=y" >> $config_host_mak
+ fi
++if test "$rbd" = "yes" ; then
++  echo "CONFIG_RBD=y" >> $config_host_mak
++fi
+ 
+ echo "CONFIG_COROUTINE_BACKEND=$coroutine" >> $config_host_mak
+ 
+-- 
+1.8.3.1
+

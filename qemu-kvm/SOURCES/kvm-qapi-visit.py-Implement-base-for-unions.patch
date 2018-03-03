@@ -1,0 +1,112 @@
+From f1567daa732a9f61641e6089525db0ae7f75aa06 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 9 Sep 2013 14:28:09 +0200
+Subject: [PATCH 18/38] qapi-visit.py: Implement 'base' for unions
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1378736903-18489-19-git-send-email-kwolf@redhat.com>
+Patchwork-id: 54205
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 18/32] qapi-visit.py: Implement 'base' for unions
+Bugzilla: 1005818
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Bugzilla: 1005818
+
+This implements the visitor part of base types for unions. Parsed into
+QMP, this example schema definition...
+
+    { 'type': 'BlockOptionsBase', 'data': { 'read-only': 'bool' } }
+    { 'type': 'BlockOptionsQcow2, 'data': { 'lazy-refcounts': 'bool' } }
+
+    { 'union': 'BlockOptions',
+      'base': 'BlockOptionsBase',
+      'data': {
+          'raw': 'BlockOptionsRaw'
+          'qcow2': 'BlockOptionsQcow2'
+      } }
+
+...would describe the following JSON object:
+
+    { "type": "qcow2",
+      "read-only": true,
+      "data": { "lazy-refcounts": false } }
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit 0aef92b90d24858eea1ebd52a51bc31563f1fb52)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ scripts/qapi-visit.py | 30 +++++++++++++++++++++++++-----
+ 1 file changed, 25 insertions(+), 5 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ scripts/qapi-visit.py |   30 +++++++++++++++++++++++++-----
+ 1 files changed, 25 insertions(+), 5 deletions(-)
+
+diff --git a/scripts/qapi-visit.py b/scripts/qapi-visit.py
+index 5adc2af..be56ba4 100644
+--- a/scripts/qapi-visit.py
++++ b/scripts/qapi-visit.py
+@@ -151,7 +151,13 @@ void visit_type_%(name)s(Visitor *m, %(name)s * obj, const char *name, Error **e
+ ''',
+                  name=name)
+ 
+-def generate_visit_union(name, members):
++def generate_visit_union(expr):
++
++    name = expr['union']
++    members = expr['data']
++
++    base = expr.get('base')
++
+     ret = generate_visit_enum('%sKind' % name, members.keys())
+ 
+     ret += mcgen('''
+@@ -164,14 +170,28 @@ void visit_type_%(name)s(Visitor *m, %(name)s ** obj, const char *name, Error **
+         visit_start_struct(m, (void **)obj, "%(name)s", name, sizeof(%(name)s), &err);
+         if (!err) {
+             if (obj && *obj) {
+-                visit_type_%(name)sKind(m, &(*obj)->kind, "type", &err);
+-                if (!err) {
+-                    switch ((*obj)->kind) {
+ ''',
+                  name=name)
+ 
++
+     push_indent()
+     push_indent()
++    push_indent()
++
++    if base:
++        struct = find_struct(base)
++        push_indent()
++        ret += generate_visit_struct_fields("", struct['data'])
++        pop_indent()
++
++    pop_indent()
++    ret += mcgen('''
++        visit_type_%(name)sKind(m, &(*obj)->kind, "type", &err);
++        if (!err) {
++            switch ((*obj)->kind) {
++''',
++                 name=name)
++
+     for key in members:
+         ret += mcgen('''
+             case %(abbrev)s_KIND_%(enum)s:
+@@ -344,7 +364,7 @@ for expr in exprs:
+         ret = generate_declaration(expr['type'], expr['data'])
+         fdecl.write(ret)
+     elif expr.has_key('union'):
+-        ret = generate_visit_union(expr['union'], expr['data'])
++        ret = generate_visit_union(expr)
+         ret += generate_visit_list(expr['union'], expr['data'])
+         fdef.write(ret)
+ 
+-- 
+1.7.1
+

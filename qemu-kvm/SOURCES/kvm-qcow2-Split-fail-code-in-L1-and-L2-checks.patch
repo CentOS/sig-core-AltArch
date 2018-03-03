@@ -1,0 +1,111 @@
+From f3113f5709ae7c1f1ca25b6075662c49fc415ca7 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:22:16 +0200
+Subject: [PATCH 22/42] qcow2: Split fail code in L1 and L2 checks
+
+Message-id: <1434212556-3927-23-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66041
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 22/42] qcow2: Split fail code in L1 and L2 checks
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1129893
+
+Instead of printing out an error message, incrementing check_errors and
+returning a fixed -errno, just do cleanups and return -ret, with ret set
+by the code which threw the exception (jumped to the fail label).
+
+Also, increment check_errors on error in check_refcounts_l2().
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit ad27390c85c50df402c7ec0d3864fc43e6559fb3)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	block/qcow2-refcount.c
+
+One conflict because of g_malloc() downstream instead of g_try_malloc()
+(contextual); I fixed up the context because there was no real reason
+not to.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2-refcount.c | 29 +++++++++++++++++++----------
+ 1 file changed, 19 insertions(+), 10 deletions(-)
+
+diff --git a/block/qcow2-refcount.c b/block/qcow2-refcount.c
+index 7e2bb7d..0dac4c9 100644
+--- a/block/qcow2-refcount.c
++++ b/block/qcow2-refcount.c
+@@ -1105,14 +1105,18 @@ static int check_refcounts_l2(BlockDriverState *bs, BdrvCheckResult *res,
+     BDRVQcowState *s = bs->opaque;
+     uint64_t *l2_table, l2_entry;
+     uint64_t next_contiguous_offset = 0;
+-    int i, l2_size, nb_csectors;
++    int i, l2_size, nb_csectors, ret;
+ 
+     /* Read L2 table from disk */
+     l2_size = s->l2_size * sizeof(uint64_t);
+     l2_table = g_malloc(l2_size);
+ 
+-    if (bdrv_pread(bs->file, l2_offset, l2_table, l2_size) != l2_size)
++    ret = bdrv_pread(bs->file, l2_offset, l2_table, l2_size);
++    if (ret < 0) {
++        fprintf(stderr, "ERROR: I/O error in check_refcounts_l2\n");
++        res->check_errors++;
+         goto fail;
++    }
+ 
+     /* Do the actual checks */
+     for(i = 0; i < s->l2_size; i++) {
+@@ -1193,9 +1197,8 @@ static int check_refcounts_l2(BlockDriverState *bs, BdrvCheckResult *res,
+     return 0;
+ 
+ fail:
+-    fprintf(stderr, "ERROR: I/O error in check_refcounts_l2\n");
+     g_free(l2_table);
+-    return -EIO;
++    return ret;
+ }
+ 
+ /*
+@@ -1227,10 +1230,18 @@ static int check_refcounts_l1(BlockDriverState *bs,
+     if (l1_size2 == 0) {
+         l1_table = NULL;
+     } else {
+-        l1_table = g_malloc(l1_size2);
+-        if (bdrv_pread(bs->file, l1_table_offset,
+-                       l1_table, l1_size2) != l1_size2)
++        l1_table = g_try_malloc(l1_size2);
++        if (l1_table == NULL) {
++            ret = -ENOMEM;
++            res->check_errors++;
++            goto fail;
++        }
++        ret = bdrv_pread(bs->file, l1_table_offset, l1_table, l1_size2);
++        if (ret < 0) {
++            fprintf(stderr, "ERROR: I/O error in check_refcounts_l1\n");
++            res->check_errors++;
+             goto fail;
++        }
+         for(i = 0;i < l1_size; i++)
+             be64_to_cpus(&l1_table[i]);
+     }
+@@ -1263,10 +1274,8 @@ static int check_refcounts_l1(BlockDriverState *bs,
+     return 0;
+ 
+ fail:
+-    fprintf(stderr, "ERROR: I/O error in check_refcounts_l1\n");
+-    res->check_errors++;
+     g_free(l1_table);
+-    return -EIO;
++    return ret;
+ }
+ 
+ /*
+-- 
+1.8.3.1
+

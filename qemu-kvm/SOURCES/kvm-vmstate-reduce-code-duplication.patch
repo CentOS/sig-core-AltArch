@@ -1,0 +1,159 @@
+From 2bf018e4c436e31188ea61fb767dbcec16495cfd Mon Sep 17 00:00:00 2001
+From: Michael S. Tsirkin <mst@redhat.com>
+Date: Wed, 14 May 2014 08:52:43 +0200
+Subject: [PATCH 20/31] vmstate: reduce code duplication
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1400057538-6975-2-git-send-email-mst@redhat.com>
+Patchwork-id: 58868
+O-Subject: [PATCH qemu-kvm RHEL7.1 1/5] vmstate: reduce code duplication
+Bugzilla: 1095716
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+
+move size offset and number of elements math out
+to functions, to reduce code duplication.
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Cc: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit 35fc1f71899fd42323bd8f33da18f0211e0d2727)
+---
+ savevm.c | 100 +++++++++++++++++++++++++++++++++------------------------------
+ 1 file changed, 52 insertions(+), 48 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ savevm.c |  100 ++++++++++++++++++++++++++++++++-----------------------------
+ 1 files changed, 52 insertions(+), 48 deletions(-)
+
+diff --git a/savevm.c b/savevm.c
+index 6efbb75..707caac 100644
+--- a/savevm.c
++++ b/savevm.c
+@@ -1675,6 +1675,50 @@ static void vmstate_subsection_save(QEMUFile *f, const VMStateDescription *vmsd,
+ static int vmstate_subsection_load(QEMUFile *f, const VMStateDescription *vmsd,
+                                    void *opaque);
+ 
++static int vmstate_n_elems(void *opaque, VMStateField *field)
++{
++    int n_elems = 1;
++
++    if (field->flags & VMS_ARRAY) {
++        n_elems = field->num;
++    } else if (field->flags & VMS_VARRAY_INT32) {
++        n_elems = *(int32_t *)(opaque+field->num_offset);
++    } else if (field->flags & VMS_VARRAY_UINT32) {
++        n_elems = *(uint32_t *)(opaque+field->num_offset);
++    } else if (field->flags & VMS_VARRAY_UINT16) {
++        n_elems = *(uint16_t *)(opaque+field->num_offset);
++    } else if (field->flags & VMS_VARRAY_UINT8) {
++        n_elems = *(uint8_t *)(opaque+field->num_offset);
++    }
++
++    return n_elems;
++}
++
++static int vmstate_size(void *opaque, VMStateField *field)
++{
++    int size = field->size;
++
++    if (field->flags & VMS_VBUFFER) {
++        size = *(int32_t *)(opaque+field->size_offset);
++        if (field->flags & VMS_MULTIPLY) {
++            size *= field->size;
++        }
++    }
++
++    return size;
++}
++
++static void *vmstate_base_addr(void *opaque, VMStateField *field)
++{
++    void *base_addr = opaque + field->offset;
++
++    if (field->flags & VMS_POINTER) {
++        base_addr = *(void **)base_addr + field->start;
++    }
++
++    return base_addr;
++}
++
+ int vmstate_load_state(QEMUFile *f, const VMStateDescription *vmsd,
+                        void *opaque, int version_id)
+ {
+@@ -1700,30 +1744,10 @@ int vmstate_load_state(QEMUFile *f, const VMStateDescription *vmsd,
+              field->field_exists(opaque, version_id)) ||
+             (!field->field_exists &&
+              field->version_id <= version_id)) {
+-            void *base_addr = opaque + field->offset;
+-            int i, n_elems = 1;
+-            int size = field->size;
+-
+-            if (field->flags & VMS_VBUFFER) {
+-                size = *(int32_t *)(opaque+field->size_offset);
+-                if (field->flags & VMS_MULTIPLY) {
+-                    size *= field->size;
+-                }
+-            }
+-            if (field->flags & VMS_ARRAY) {
+-                n_elems = field->num;
+-            } else if (field->flags & VMS_VARRAY_INT32) {
+-                n_elems = *(int32_t *)(opaque+field->num_offset);
+-            } else if (field->flags & VMS_VARRAY_UINT32) {
+-                n_elems = *(uint32_t *)(opaque+field->num_offset);
+-            } else if (field->flags & VMS_VARRAY_UINT16) {
+-                n_elems = *(uint16_t *)(opaque+field->num_offset);
+-            } else if (field->flags & VMS_VARRAY_UINT8) {
+-                n_elems = *(uint8_t *)(opaque+field->num_offset);
+-            }
+-            if (field->flags & VMS_POINTER) {
+-                base_addr = *(void **)base_addr + field->start;
+-            }
++            void *base_addr = vmstate_base_addr(opaque, field);
++            int i, n_elems = vmstate_n_elems(opaque, field);
++            int size = vmstate_size(opaque, field);
++
+             for (i = 0; i < n_elems; i++) {
+                 void *addr = base_addr + size * i;
+ 
+@@ -1764,30 +1788,10 @@ void vmstate_save_state(QEMUFile *f, const VMStateDescription *vmsd,
+     while(field->name) {
+         if (!field->field_exists ||
+             field->field_exists(opaque, vmsd->version_id)) {
+-            void *base_addr = opaque + field->offset;
+-            int i, n_elems = 1;
+-            int size = field->size;
+-
+-            if (field->flags & VMS_VBUFFER) {
+-                size = *(int32_t *)(opaque+field->size_offset);
+-                if (field->flags & VMS_MULTIPLY) {
+-                    size *= field->size;
+-                }
+-            }
+-            if (field->flags & VMS_ARRAY) {
+-                n_elems = field->num;
+-            } else if (field->flags & VMS_VARRAY_INT32) {
+-                n_elems = *(int32_t *)(opaque+field->num_offset);
+-            } else if (field->flags & VMS_VARRAY_UINT32) {
+-                n_elems = *(uint32_t *)(opaque+field->num_offset);
+-            } else if (field->flags & VMS_VARRAY_UINT16) {
+-                n_elems = *(uint16_t *)(opaque+field->num_offset);
+-            } else if (field->flags & VMS_VARRAY_UINT8) {
+-                n_elems = *(uint8_t *)(opaque+field->num_offset);
+-            }
+-            if (field->flags & VMS_POINTER) {
+-                base_addr = *(void **)base_addr + field->start;
+-            }
++            void *base_addr = vmstate_base_addr(opaque, field);
++            int i, n_elems = vmstate_n_elems(opaque, field);
++            int size = vmstate_size(opaque, field);
++
+             for (i = 0; i < n_elems; i++) {
+                 void *addr = base_addr + size * i;
+ 
+-- 
+1.7.1
+

@@ -1,0 +1,57 @@
+From a7cfda7b304697450f0a55c22f4459b25999e9c5 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 13 Mar 2017 17:47:05 +0100
+Subject: [PATCH 17/24] vhdx: Fix zero-fill iov length
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <20170313174706.29316-2-mreitz@redhat.com>
+Patchwork-id: 74279
+O-Subject: [RHEL-7.4 qemu-kvm PATCH 8/9] vhdx: Fix zero-fill iov length
+Bugzilla: 1427176
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+Fix the length of the zero-fill for the back, which was accidentally
+using the same value as for the front. This is caught by qemu-iotests
+033.
+
+For consistency, change the code for the front as well to use the length
+stored in the iov (it is the same value, copied four lines above).
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Acked-by: Jeff Cody <jcody@redhat.com>
+(cherry picked from commit d1a126c53ddc563b7b731cee013e0362f7a5f22f)
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vhdx.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/block/vhdx.c b/block/vhdx.c
+index 21ad6ad..47a872d 100644
+--- a/block/vhdx.c
++++ b/block/vhdx.c
+@@ -1247,7 +1247,7 @@ static coroutine_fn int vhdx_co_writev(BlockDriverState *bs, int64_t sector_num,
+                         iov1.iov_base = qemu_blockalign(bs, iov1.iov_len);
+                         memset(iov1.iov_base, 0, iov1.iov_len);
+                         qemu_iovec_concat_iov(&hd_qiov, &iov1, 1, 0,
+-                                              sinfo.block_offset);
++                                              iov1.iov_len);
+                         sectors_to_write += iov1.iov_len >> BDRV_SECTOR_BITS;
+                     }
+ 
+@@ -1263,7 +1263,7 @@ static coroutine_fn int vhdx_co_writev(BlockDriverState *bs, int64_t sector_num,
+                         iov2.iov_base = qemu_blockalign(bs, iov2.iov_len);
+                         memset(iov2.iov_base, 0, iov2.iov_len);
+                         qemu_iovec_concat_iov(&hd_qiov, &iov2, 1, 0,
+-                                              sinfo.block_offset);
++                                              iov2.iov_len);
+                         sectors_to_write += iov2.iov_len >> BDRV_SECTOR_BITS;
+                     }
+                 }
+-- 
+1.8.3.1
+

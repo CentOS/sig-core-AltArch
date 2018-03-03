@@ -1,0 +1,116 @@
+From bd32da91efdbcccaeb7eb2ad06f3c87946fce903 Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Tue, 5 Nov 2013 15:37:29 +0100
+Subject: [PATCH 13/25] vfio-pci: Test device reset capabilities
+
+RH-Author: Alex Williamson <alex.williamson@redhat.com>
+Message-id: <20131105153729.16057.85790.stgit@bling.home>
+Patchwork-id: 55422
+O-Subject: [RHEL7 qemu-kvm PATCH 1/5] vfio-pci: Test device reset capabilities
+Bugzilla: 1026550
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+
+Bugzilla: 1026550
+Upstream commit: befe5176ef7a0004ba23517c97c804e292273635
+
+Not all resets are created equal.  PM reset is not very reliable,
+especially for GPUs, so we might want to opt for a bus reset if a
+standard reset will only do a D3hot->D0 transition.  We can also
+use this to tell if the standard reset will do a bus reset (if
+neither has_pm_reset or has_flr is probed, but the device still
+supports reset).
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+---
+ hw/misc/vfio.c |   46 ++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 46 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c |   46 ++++++++++++++++++++++++++++++++++++++++++++++
+ 1 files changed, 46 insertions(+), 0 deletions(-)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index 286dad1..8e69182 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -185,6 +185,8 @@ typedef struct VFIODevice {
+     bool reset_works;
+     bool has_vga;
+     bool pci_aer;
++    bool has_flr;
++    bool has_pm_reset;
+ } VFIODevice;
+ 
+ typedef struct VFIOGroup {
+@@ -2508,6 +2510,42 @@ static int vfio_setup_pcie_cap(VFIODevice *vdev, int pos, uint8_t size)
+     return pos;
+ }
+ 
++static void vfio_check_pcie_flr(VFIODevice *vdev, uint8_t pos)
++{
++    uint32_t cap = pci_get_long(vdev->pdev.config + pos + PCI_EXP_DEVCAP);
++
++    if (cap & PCI_EXP_DEVCAP_FLR) {
++        DPRINTF("%04x:%02x:%02x.%x Supports FLR via PCIe cap\n",
++                vdev->host.domain, vdev->host.bus, vdev->host.slot,
++                vdev->host.function);
++        vdev->has_flr = true;
++    }
++}
++
++static void vfio_check_pm_reset(VFIODevice *vdev, uint8_t pos)
++{
++    uint16_t csr = pci_get_word(vdev->pdev.config + pos + PCI_PM_CTRL);
++
++    if (!(csr & PCI_PM_CTRL_NO_SOFT_RESET)) {
++        DPRINTF("%04x:%02x:%02x.%x Supports PM reset\n",
++                vdev->host.domain, vdev->host.bus, vdev->host.slot,
++                vdev->host.function);
++        vdev->has_pm_reset = true;
++    }
++}
++
++static void vfio_check_af_flr(VFIODevice *vdev, uint8_t pos)
++{
++    uint8_t cap = pci_get_byte(vdev->pdev.config + pos + PCI_AF_CAP);
++
++    if ((cap & PCI_AF_CAP_TP) && (cap & PCI_AF_CAP_FLR)) {
++        DPRINTF("%04x:%02x:%02x.%x Supports FLR via AF cap\n",
++                vdev->host.domain, vdev->host.bus, vdev->host.slot,
++                vdev->host.function);
++        vdev->has_flr = true;
++    }
++}
++
+ static int vfio_add_std_cap(VFIODevice *vdev, uint8_t pos)
+ {
+     PCIDevice *pdev = &vdev->pdev;
+@@ -2552,13 +2590,21 @@ static int vfio_add_std_cap(VFIODevice *vdev, uint8_t pos)
+         ret = vfio_setup_msi(vdev, pos);
+         break;
+     case PCI_CAP_ID_EXP:
++        vfio_check_pcie_flr(vdev, pos);
+         ret = vfio_setup_pcie_cap(vdev, pos, size);
+         break;
+     case PCI_CAP_ID_MSIX:
+         ret = vfio_setup_msix(vdev, pos);
+         break;
+     case PCI_CAP_ID_PM:
++        vfio_check_pm_reset(vdev, pos);
+         vdev->pm_cap = pos;
++        ret = pci_add_capability(pdev, cap_id, pos, size);
++        break;
++    case PCI_CAP_ID_AF:
++        vfio_check_af_flr(vdev, pos);
++        ret = pci_add_capability(pdev, cap_id, pos, size);
++        break;
+     default:
+         ret = pci_add_capability(pdev, cap_id, pos, size);
+         break;
+-- 
+1.7.1
+

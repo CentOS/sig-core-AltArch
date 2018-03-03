@@ -1,0 +1,330 @@
+From f0e4ec43a0a3af6f1e385fae17527ed76cdb00e4 Mon Sep 17 00:00:00 2001
+From: John Snow <jsnow@redhat.com>
+Date: Mon, 23 Nov 2015 17:38:32 +0100
+Subject: [PATCH 13/27] qemu-io: Move remaining helpers from cmd.c
+
+RH-Author: John Snow <jsnow@redhat.com>
+Message-id: <1448300320-7772-14-git-send-email-jsnow@redhat.com>
+Patchwork-id: 68437
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 13/21] qemu-io: Move remaining helpers from cmd.c
+Bugzilla: 1272523
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 0b613881ae8fc59359b3d91e666fea6c9b1e731b)
+Signed-off-by: John Snow <jsnow@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ Makefile       |   2 +-
+ cmd.c          | 139 ---------------------------------------------------------
+ cmd.h          |  14 ------
+ qemu-io-cmds.c | 104 ++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 105 insertions(+), 154 deletions(-)
+ delete mode 100644 cmd.c
+
+diff --git a/Makefile b/Makefile
+index f28ce29..f403057 100644
+--- a/Makefile
++++ b/Makefile
+@@ -205,7 +205,7 @@ qemu-img.o: qemu-img-cmds.h
+ 
+ qemu-img$(EXESUF): qemu-img.o $(block-obj-y) libqemuutil.a libqemustub.a
+ qemu-nbd$(EXESUF): qemu-nbd.o $(block-obj-y) libqemuutil.a libqemustub.a
+-qemu-io$(EXESUF): qemu-io.o qemu-io-cmds.o cmd.o $(block-obj-y) libqemuutil.a libqemustub.a
++qemu-io$(EXESUF): qemu-io.o qemu-io-cmds.o $(block-obj-y) libqemuutil.a libqemustub.a
+ 
+ qemu-bridge-helper$(EXESUF): qemu-bridge-helper.o
+ 
+diff --git a/cmd.c b/cmd.c
+deleted file mode 100644
+index 26d38a8..0000000
+--- a/cmd.c
++++ /dev/null
+@@ -1,139 +0,0 @@
+-/*
+- * Copyright (c) 2003-2005 Silicon Graphics, Inc.
+- * All Rights Reserved.
+- *
+- * This program is free software; you can redistribute it and/or
+- * modify it under the terms of the GNU General Public License as
+- * published by the Free Software Foundation.
+- *
+- * This program is distributed in the hope that it would be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program; if not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-#include <stdio.h>
+-#include <stdlib.h>
+-#include <string.h>
+-#include <ctype.h>
+-#include <errno.h>
+-#include <sys/time.h>
+-#include <getopt.h>
+-
+-#include "cmd.h"
+-#include "block/aio.h"
+-#include "qemu/main-loop.h"
+-
+-#define _(x)	x	/* not gettext support yet */
+-
+-/* from libxcmd/command.c */
+-
+-#define EXABYTES(x)	((long long)(x) << 60)
+-#define PETABYTES(x)	((long long)(x) << 50)
+-#define TERABYTES(x)	((long long)(x) << 40)
+-#define GIGABYTES(x)	((long long)(x) << 30)
+-#define MEGABYTES(x)	((long long)(x) << 20)
+-#define KILOBYTES(x)	((long long)(x) << 10)
+-
+-#define TO_EXABYTES(x)	((x) / EXABYTES(1))
+-#define TO_PETABYTES(x)	((x) / PETABYTES(1))
+-#define TO_TERABYTES(x)	((x) / TERABYTES(1))
+-#define TO_GIGABYTES(x)	((x) / GIGABYTES(1))
+-#define TO_MEGABYTES(x)	((x) / MEGABYTES(1))
+-#define TO_KILOBYTES(x)	((x) / KILOBYTES(1))
+-
+-void
+-cvtstr(
+-	double		value,
+-	char		*str,
+-	size_t		size)
+-{
+-	char		*trim;
+-	const char	*suffix;
+-
+-	if (value >= EXABYTES(1)) {
+-		suffix = " EiB";
+-		snprintf(str, size - 4, "%.3f", TO_EXABYTES(value));
+-	} else if (value >= PETABYTES(1)) {
+-		suffix = " PiB";
+-		snprintf(str, size - 4, "%.3f", TO_PETABYTES(value));
+-	} else if (value >= TERABYTES(1)) {
+-		suffix = " TiB";
+-		snprintf(str, size - 4, "%.3f", TO_TERABYTES(value));
+-	} else if (value >= GIGABYTES(1)) {
+-		suffix = " GiB";
+-		snprintf(str, size - 4, "%.3f", TO_GIGABYTES(value));
+-	} else if (value >= MEGABYTES(1)) {
+-		suffix = " MiB";
+-		snprintf(str, size - 4, "%.3f", TO_MEGABYTES(value));
+-	} else if (value >= KILOBYTES(1)) {
+-		suffix = " KiB";
+-		snprintf(str, size - 4, "%.3f", TO_KILOBYTES(value));
+-	} else {
+-		suffix = " bytes";
+-		snprintf(str, size - 6, "%f", value);
+-	}
+-
+-	trim = strstr(str, ".000");
+-	if (trim) {
+-		strcpy(trim, suffix);
+-	} else {
+-		strcat(str, suffix);
+-	}
+-}
+-
+-struct timeval
+-tsub(struct timeval t1, struct timeval t2)
+-{
+-	t1.tv_usec -= t2.tv_usec;
+-	if (t1.tv_usec < 0) {
+-		t1.tv_usec += 1000000;
+-		t1.tv_sec--;
+-	}
+-	t1.tv_sec -= t2.tv_sec;
+-	return t1;
+-}
+-
+-double
+-tdiv(double value, struct timeval tv)
+-{
+-	return value / ((double)tv.tv_sec + ((double)tv.tv_usec / 1000000.0));
+-}
+-
+-#define HOURS(sec)	((sec) / (60 * 60))
+-#define MINUTES(sec)	(((sec) % (60 * 60)) / 60)
+-#define SECONDS(sec)	((sec) % 60)
+-
+-void
+-timestr(
+-	struct timeval	*tv,
+-	char		*ts,
+-	size_t		size,
+-	int		format)
+-{
+-	double		usec = (double)tv->tv_usec / 1000000.0;
+-
+-	if (format & TERSE_FIXED_TIME) {
+-		if (!HOURS(tv->tv_sec)) {
+-			snprintf(ts, size, "%u:%02u.%02u",
+-				(unsigned int) MINUTES(tv->tv_sec),
+-				(unsigned int) SECONDS(tv->tv_sec),
+-				(unsigned int) (usec * 100));
+-			return;
+-		}
+-		format |= VERBOSE_FIXED_TIME;	/* fallback if hours needed */
+-	}
+-
+-	if ((format & VERBOSE_FIXED_TIME) || tv->tv_sec) {
+-		snprintf(ts, size, "%u:%02u:%02u.%02u",
+-			(unsigned int) HOURS(tv->tv_sec),
+-			(unsigned int) MINUTES(tv->tv_sec),
+-			(unsigned int) SECONDS(tv->tv_sec),
+-			(unsigned int) (usec * 100));
+-	} else {
+-		snprintf(ts, size, "0.%04u sec", (unsigned int) (usec * 10000));
+-	}
+-}
+diff --git a/cmd.h b/cmd.h
+index da0c7cf..9907795 100644
+--- a/cmd.h
++++ b/cmd.h
+@@ -43,20 +43,6 @@ void qemuio_add_command(const cmdinfo_t *ci);
+ 
+ int qemuio_command_usage(const cmdinfo_t *ci);
+ 
+-/* from input.h */
+-void cvtstr(double value, char *str, size_t sz);
+-
+-struct timeval tsub(struct timeval t1, struct timeval t2);
+-double tdiv(double value, struct timeval tv);
+-
+-enum {
+-	DEFAULT_TIME		= 0x0,
+-	TERSE_FIXED_TIME	= 0x1,
+-	VERBOSE_FIXED_TIME	= 0x2
+-};
+-
+-void timestr(struct timeval *tv, char *str, size_t sz, int flags);
+-
+ bool qemuio_command(const char *cmd);
+ 
+ #endif	/* __COMMAND_H__ */
+diff --git a/qemu-io-cmds.c b/qemu-io-cmds.c
+index 27a903f..1db7fb9 100644
+--- a/qemu-io-cmds.c
++++ b/qemu-io-cmds.c
+@@ -127,6 +127,110 @@ static int64_t cvtnum(const char *s)
+     return strtosz_suffix(s, &end, STRTOSZ_DEFSUFFIX_B);
+ }
+ 
++#define EXABYTES(x)     ((long long)(x) << 60)
++#define PETABYTES(x)    ((long long)(x) << 50)
++#define TERABYTES(x)    ((long long)(x) << 40)
++#define GIGABYTES(x)    ((long long)(x) << 30)
++#define MEGABYTES(x)    ((long long)(x) << 20)
++#define KILOBYTES(x)    ((long long)(x) << 10)
++
++#define TO_EXABYTES(x)  ((x) / EXABYTES(1))
++#define TO_PETABYTES(x) ((x) / PETABYTES(1))
++#define TO_TERABYTES(x) ((x) / TERABYTES(1))
++#define TO_GIGABYTES(x) ((x) / GIGABYTES(1))
++#define TO_MEGABYTES(x) ((x) / MEGABYTES(1))
++#define TO_KILOBYTES(x) ((x) / KILOBYTES(1))
++
++static void cvtstr(double value, char *str, size_t size)
++{
++    char *trim;
++    const char *suffix;
++
++    if (value >= EXABYTES(1)) {
++        suffix = " EiB";
++        snprintf(str, size - 4, "%.3f", TO_EXABYTES(value));
++    } else if (value >= PETABYTES(1)) {
++        suffix = " PiB";
++        snprintf(str, size - 4, "%.3f", TO_PETABYTES(value));
++    } else if (value >= TERABYTES(1)) {
++        suffix = " TiB";
++        snprintf(str, size - 4, "%.3f", TO_TERABYTES(value));
++    } else if (value >= GIGABYTES(1)) {
++        suffix = " GiB";
++        snprintf(str, size - 4, "%.3f", TO_GIGABYTES(value));
++    } else if (value >= MEGABYTES(1)) {
++        suffix = " MiB";
++        snprintf(str, size - 4, "%.3f", TO_MEGABYTES(value));
++    } else if (value >= KILOBYTES(1)) {
++        suffix = " KiB";
++        snprintf(str, size - 4, "%.3f", TO_KILOBYTES(value));
++    } else {
++        suffix = " bytes";
++        snprintf(str, size - 6, "%f", value);
++    }
++
++    trim = strstr(str, ".000");
++    if (trim) {
++        strcpy(trim, suffix);
++    } else {
++        strcat(str, suffix);
++    }
++}
++
++
++
++static struct timeval tsub(struct timeval t1, struct timeval t2)
++{
++    t1.tv_usec -= t2.tv_usec;
++    if (t1.tv_usec < 0) {
++        t1.tv_usec += 1000000;
++        t1.tv_sec--;
++    }
++    t1.tv_sec -= t2.tv_sec;
++    return t1;
++}
++
++static double tdiv(double value, struct timeval tv)
++{
++    return value / ((double)tv.tv_sec + ((double)tv.tv_usec / 1000000.0));
++}
++
++#define HOURS(sec)      ((sec) / (60 * 60))
++#define MINUTES(sec)    (((sec) % (60 * 60)) / 60)
++#define SECONDS(sec)    ((sec) % 60)
++
++enum {
++    DEFAULT_TIME        = 0x0,
++    TERSE_FIXED_TIME    = 0x1,
++    VERBOSE_FIXED_TIME  = 0x2,
++};
++
++static void timestr(struct timeval *tv, char *ts, size_t size, int format)
++{
++    double usec = (double)tv->tv_usec / 1000000.0;
++
++    if (format & TERSE_FIXED_TIME) {
++        if (!HOURS(tv->tv_sec)) {
++            snprintf(ts, size, "%u:%02u.%02u",
++                    (unsigned int) MINUTES(tv->tv_sec),
++                    (unsigned int) SECONDS(tv->tv_sec),
++                    (unsigned int) (usec * 100));
++            return;
++        }
++        format |= VERBOSE_FIXED_TIME; /* fallback if hours needed */
++    }
++
++    if ((format & VERBOSE_FIXED_TIME) || tv->tv_sec) {
++        snprintf(ts, size, "%u:%02u:%02u.%02u",
++                (unsigned int) HOURS(tv->tv_sec),
++                (unsigned int) MINUTES(tv->tv_sec),
++                (unsigned int) SECONDS(tv->tv_sec),
++                (unsigned int) (usec * 100));
++    } else {
++        snprintf(ts, size, "0.%04u sec", (unsigned int) (usec * 10000));
++    }
++}
++
+ /*
+  * Parse the pattern argument to various sub-commands.
+  *
+-- 
+1.8.3.1
+

@@ -1,0 +1,77 @@
+From bcf0f4b1f226bcb27e154cc14850f67229b22d90 Mon Sep 17 00:00:00 2001
+Message-Id: <bcf0f4b1f226bcb27e154cc14850f67229b22d90.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:09:24 +0100
+Subject: [PATCH 36/50] scsi-disk: reject ANCHOR=1 for UNMAP and WRITE SAME
+ commands
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-39-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56075
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 38/52] scsi-disk: reject ANCHOR=1 for UNMAP and WRITE SAME commands
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Since we report ANC_SUP==0 in VPD page B2h, we need to return
+an error (ILLEGAL REQUEST/INVALID FIELD IN CDB) for all WRITE SAME
+requests with ANCHOR==1.
+
+Inspired by a similar patch to the LIO in-kernel target.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 823bd7391c96ba675f20fd6d952d1cb6e1ffb851)
+---
+ hw/scsi/scsi-disk.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/scsi/scsi-disk.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/hw/scsi/scsi-disk.c b/hw/scsi/scsi-disk.c
+index 4138268..0640bb0 100644
+--- a/hw/scsi/scsi-disk.c
++++ b/hw/scsi/scsi-disk.c
+@@ -1548,6 +1548,11 @@ static void scsi_disk_emulate_unmap(SCSIDiskReq *r, uint8_t *inbuf)
+     int len = r->req.cmd.xfer;
+     UnmapCBData *data;
+ 
++    /* Reject ANCHOR=1.  */
++    if (r->req.cmd.buf[1] & 0x1) {
++        goto invalid_field;
++    }
++
+     if (len < 8) {
+         goto invalid_param_len;
+     }
+@@ -1578,6 +1583,10 @@ static void scsi_disk_emulate_unmap(SCSIDiskReq *r, uint8_t *inbuf)
+ 
+ invalid_param_len:
+     scsi_check_condition(r, SENSE_CODE(INVALID_PARAM_LEN));
++    return;
++
++invalid_field:
++    scsi_check_condition(r, SENSE_CODE(INVALID_FIELD));
+ }
+ 
+ static void scsi_disk_emulate_write_data(SCSIRequest *req)
+@@ -1856,8 +1865,9 @@ static int32_t scsi_disk_emulate_command(SCSIRequest *req, uint8_t *buf)
+ 
+         /*
+          * We only support WRITE SAME with the unmap bit set for now.
++         * Reject UNMAP=0 or ANCHOR=1.
+          */
+-        if (!(req->cmd.buf[1] & 0x8)) {
++        if (!(req->cmd.buf[1] & 0x8) || (req->cmd.buf[1] & 0x10)) {
+             goto illegal_request;
+         }
+ 
+-- 
+1.7.11.7
+

@@ -1,0 +1,72 @@
+From 2f66e62873ef54bd27ec6e063c8b4f3f11e2413d Mon Sep 17 00:00:00 2001
+From: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+Date: Mon, 10 Mar 2014 17:41:43 +0100
+Subject: [PATCH 15/16] qemu_file: use fwrite() correctly
+
+RH-Author: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+Message-id: <1394473304-7190-2-git-send-email-dgilbert@redhat.com>
+Patchwork-id: 58073
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 1/2] qemu_file: use fwrite() correctly
+Bugzilla: 1005103
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Eric Blake <eblake@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+
+From: Juan Quintela <quintela@redhat.com>
+
+fwrite() returns the number of items written.  But when there is one
+error, it can return a short write.
+
+In the particular bug that I was tracking, I did a migration to a
+read-only filesystem.  And it was able to finish the migration
+correctly.  fwrite() never returned a negative error code, nor zero,
+always 4096. (migration writes chunks of about 14000 bytes).  And it
+was able to "complete" the migration with success (yes, reading the
+file was a bit more difficult).
+
+To add insult to injury, if your amount of memory was big enough (12GB
+on my case), it overwrote some important structure, and from them,
+malloc failed.  This check makes the problem go away.
+
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit aded6539d983280212e08d09f14157b1cb4d58cc)
+
+Conflicts:
+	qemu-file.c
+
+Code still in savevm.c
+---
+ savevm.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ savevm.c |    9 ++++++++-
+ 1 files changed, 8 insertions(+), 1 deletions(-)
+
+diff --git a/savevm.c b/savevm.c
+index bd37959..94121a2 100644
+--- a/savevm.c
++++ b/savevm.c
+@@ -211,7 +211,14 @@ static int stdio_get_fd(void *opaque)
+ static int stdio_put_buffer(void *opaque, const uint8_t *buf, int64_t pos, int size)
+ {
+     QEMUFileStdio *s = opaque;
+-    return fwrite(buf, 1, size, s->stdio_file);
++    int res;
++
++    res = fwrite(buf, 1, size, s->stdio_file);
++
++    if (res != size) {
++        return -EIO;	/* fake errno value */
++    }
++    return res;
+ }
+ 
+ static int stdio_get_buffer(void *opaque, uint8_t *buf, int64_t pos, int size)
+-- 
+1.7.1
+

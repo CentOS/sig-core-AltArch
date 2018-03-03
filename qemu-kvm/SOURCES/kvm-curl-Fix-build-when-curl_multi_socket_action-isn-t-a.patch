@@ -1,0 +1,54 @@
+From e1ae27052f1c226e2cabe2199ab98d7e243c8cd2 Mon Sep 17 00:00:00 2001
+From: Richard Jones <rjones@redhat.com>
+Date: Thu, 11 Jun 2015 11:40:19 +0200
+Subject: [PATCH 19/30] curl: Fix build when curl_multi_socket_action isn't
+ available
+
+Message-id: <1434022828-13037-13-git-send-email-rjones@redhat.com>
+Patchwork-id: 65846
+O-Subject: [RHEL-7.2 qemu-kvm v3 PATCH 12/21] curl: Fix build when curl_multi_socket_action isn't available
+Bugzilla: 1226684
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Matthew Booth <mbooth@redhat.com>
+
+Signed-off-by: Matthew Booth <mbooth@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+
+Upstream-status: 9aedd5a5d607216e41bfa6a2c1f7f5d2b17041c3
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/curl.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/block/curl.c b/block/curl.c
+index 1bff71a..be2d3f4 100644
+--- a/block/curl.c
++++ b/block/curl.c
+@@ -37,6 +37,21 @@
+ #if LIBCURL_VERSION_NUM >= 0x071000
+ /* The multi interface timer callback was introduced in 7.16.0 */
+ #define NEED_CURL_TIMER_CALLBACK
++#define HAVE_SOCKET_ACTION
++#endif
++
++#ifndef HAVE_SOCKET_ACTION
++/* If curl_multi_socket_action isn't available, define it statically here in
++ * terms of curl_multi_socket. Note that ev_bitmask will be ignored, which is
++ * less efficient but still safe. */
++static CURLMcode __curl_multi_socket_action(CURLM *multi_handle,
++                                            curl_socket_t sockfd,
++                                            int ev_bitmask,
++                                            int *running_handles)
++{
++    return curl_multi_socket(multi_handle, sockfd, running_handles);
++}
++#define curl_multi_socket_action __curl_multi_socket_action
+ #endif
+ 
+ #define PROTOCOLS (CURLPROTO_HTTP | CURLPROTO_HTTPS | \
+-- 
+1.8.3.1
+

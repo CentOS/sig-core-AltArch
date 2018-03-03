@@ -1,0 +1,100 @@
+From 0ef152ec4827c61924b0e05d32e4ba44a8aa996f Mon Sep 17 00:00:00 2001
+From: Juan Quintela <quintela@redhat.com>
+Date: Tue, 14 Jan 2014 15:07:22 +0100
+Subject: [PATCH 11/40] memory: cpu_physical_memory_set_dirty_range() always dirty all flags
+
+RH-Author: Juan Quintela <quintela@redhat.com>
+Message-id: <1389712071-23303-12-git-send-email-quintela@redhat.com>
+Patchwork-id: 56666
+O-Subject: [RHEL7 qemu-kvm PATCH 11/40] memory: cpu_physical_memory_set_dirty_range() always dirty all flags
+Bugzilla: 997559
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+
+So remove the flag argument and do it directly.  After this change,
+there is nothing else using cpu_physical_memory_set_dirty_flags() so
+remove it.
+
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Orit Wasserman <owasserm@redhat.com>
+(cherry picked from commit 75218e7f2b7f052c6f44489afaf45b3ea4369f45)
+Signed-off-by: Juan Quintela <quintela@trasno.org>
+---
+ exec.c                         |  2 +-
+ include/exec/memory-internal.h | 11 ++---------
+ memory.c                       |  2 +-
+ 3 files changed, 4 insertions(+), 11 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ exec.c                         |    2 +-
+ include/exec/memory-internal.h |   11 ++---------
+ memory.c                       |    2 +-
+ 3 files changed, 4 insertions(+), 11 deletions(-)
+
+diff --git a/exec.c b/exec.c
+index 178ed4a..069e082 100644
+--- a/exec.c
++++ b/exec.c
+@@ -1162,7 +1162,7 @@ ram_addr_t qemu_ram_alloc_from_ptr(ram_addr_t size, void *host,
+                                        last_ram_offset() >> TARGET_PAGE_BITS);
+     memset(ram_list.phys_dirty + (new_block->offset >> TARGET_PAGE_BITS),
+            0, size >> TARGET_PAGE_BITS);
+-    cpu_physical_memory_set_dirty_range(new_block->offset, size, 0xff);
++    cpu_physical_memory_set_dirty_range(new_block->offset, size);
+ 
+     qemu_ram_setup_dump(new_block->host, size);
+     qemu_madvise(new_block->host, size, QEMU_MADV_HUGEPAGE);
+diff --git a/include/exec/memory-internal.h b/include/exec/memory-internal.h
+index 55b4022..794fabd 100644
+--- a/include/exec/memory-internal.h
++++ b/include/exec/memory-internal.h
+@@ -84,12 +84,6 @@ static inline int cpu_physical_memory_get_dirty(ram_addr_t start,
+     return ret;
+ }
+ 
+-static inline void cpu_physical_memory_set_dirty_flags(ram_addr_t addr,
+-                                                      int dirty_flags)
+-{
+-    ram_list.phys_dirty[addr >> TARGET_PAGE_BITS] |= dirty_flags;
+-}
+-
+ static inline void cpu_physical_memory_set_dirty_flag(ram_addr_t addr,
+                                                       int dirty_flag)
+ {
+@@ -112,15 +106,14 @@ static inline int cpu_physical_memory_clear_dirty_flags(ram_addr_t addr,
+ }
+ 
+ static inline void cpu_physical_memory_set_dirty_range(ram_addr_t start,
+-                                                       ram_addr_t length,
+-                                                       int dirty_flags)
++                                                       ram_addr_t length)
+ {
+     ram_addr_t addr, end;
+ 
+     end = TARGET_PAGE_ALIGN(start + length);
+     start &= TARGET_PAGE_MASK;
+     for (addr = start; addr < end; addr += TARGET_PAGE_SIZE) {
+-        cpu_physical_memory_set_dirty_flags(addr, dirty_flags);
++        cpu_physical_memory_set_dirty(addr);
+     }
+     xen_modified_memory(addr, length);
+ }
+diff --git a/memory.c b/memory.c
+index fc11859..e7a454f 100644
+--- a/memory.c
++++ b/memory.c
+@@ -1078,7 +1078,7 @@ void memory_region_set_dirty(MemoryRegion *mr, hwaddr addr,
+                              hwaddr size)
+ {
+     assert(mr->terminates);
+-    cpu_physical_memory_set_dirty_range(mr->ram_addr + addr, size, -1);
++    cpu_physical_memory_set_dirty_range(mr->ram_addr + addr, size);
+ }
+ 
+ bool memory_region_test_and_clear_dirty(MemoryRegion *mr, hwaddr addr,
+-- 
+1.7.1
+

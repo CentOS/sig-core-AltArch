@@ -1,0 +1,60 @@
+From 2aa26696846adf25a41fa082f4d42c98b2b05fe3 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 15 Feb 2016 09:28:17 +0100
+Subject: [PATCH 04/18] vmdk: Clean up descriptor file reading
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1455528511-9357-5-git-send-email-famz@redhat.com>
+Patchwork-id: 69170
+O-Subject: [RHEL-7.3 qemu-kvm PATCH 04/18] vmdk: Clean up descriptor file reading
+Bugzilla: 1299250
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+BZ: https://bugzilla.redhat.com/show_bug.cgi?id=1299250
+
+Zeroing a buffer that will be filled right after is not necessary, and
+allocating a power of two + 1 is naughty.
+
+Suggested-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Don Koch <dkoch@verizon.com>
+Reviewed-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Message-id: 1417649314-13704-4-git-send-email-famz@redhat.com
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 73b7bcad439e0edaced05049897090cc10d84b5b)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vmdk.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 3f34abf..3dfbd41 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -559,8 +559,8 @@ static char *vmdk_read_desc(BlockDriverState *file, uint64_t desc_offset,
+         return NULL;
+     }
+ 
+-    size = MIN(size, 1 << 20);  /* avoid unbounded allocation */
+-    buf = g_malloc0(size + 1);
++    size = MIN(size, (1 << 20) - 1);  /* avoid unbounded allocation */
++    buf = g_malloc(size + 1);
+ 
+     ret = bdrv_pread(file, desc_offset, buf, size);
+     if (ret < 0) {
+@@ -568,6 +568,7 @@ static char *vmdk_read_desc(BlockDriverState *file, uint64_t desc_offset,
+         g_free(buf);
+         return NULL;
+     }
++    buf[ret] = 0;
+ 
+     return buf;
+ }
+-- 
+1.8.3.1
+

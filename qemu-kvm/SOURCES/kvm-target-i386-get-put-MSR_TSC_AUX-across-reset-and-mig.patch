@@ -1,0 +1,93 @@
+From f9a24822687113e34194f05aeb641365b8202e9e Mon Sep 17 00:00:00 2001
+From: Amit Shah <amit.shah@redhat.com>
+Date: Wed, 25 Nov 2015 05:51:34 +0100
+Subject: [PATCH 4/6] target-i386: get/put MSR_TSC_AUX across reset and
+ migration
+
+Message-id: <daab7f1c955ec81df8aff4ab10fd6ae17e16e99e.1448430513.git.amit.shah@redhat.com>
+Patchwork-id: 68467
+O-Subject: [RHEL 7.3 qemu-kvm PATCH 1/1] target-i386: get/put MSR_TSC_AUX across reset and migration
+Bugzilla: 1265427
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+There's one report of migration breaking due to missing MSR_TSC_AUX
+save/restore.  Fix this by adding a new subsection that saves the state
+of this MSR.
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1261797
+
+Reported-by: Xiaoqing Wei <xwei@redhat.com>
+Signed-off-by: Amit Shah <amit.shah@redhat.com>
+CC: Paolo Bonzini <pbonzini@redhat.com>
+CC: Juan Quintela <quintela@redhat.com>
+CC: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+CC: Marcelo Tosatti <mtosatti@redhat.com>
+CC: Richard Henderson <rth@twiddle.net>
+CC: Eduardo Habkost <ehabkost@redhat.com>
+Reviewed-by: Eduardo Habkost <ehabkost@redhat.com>
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+(cherry picked from commit c9b8f6b6210847b4381c5b2ee172b1c7eb9985d6)
+Signed-off-by: Amit Shah <amit.shah@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/kvm.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/target-i386/kvm.c b/target-i386/kvm.c
+index c91bfb8..e1b0ca2 100644
+--- a/target-i386/kvm.c
++++ b/target-i386/kvm.c
+@@ -63,6 +63,7 @@ const KVMCapabilityInfo kvm_arch_required_capabilities[] = {
+ 
+ static bool has_msr_star;
+ static bool has_msr_hsave_pa;
++static bool has_msr_tsc_aux;
+ static bool has_msr_tsc_adjust;
+ static bool has_msr_tsc_deadline;
+ static bool has_msr_async_pf_en;
+@@ -774,6 +775,10 @@ static int kvm_get_supported_msrs(KVMState *s)
+                     has_msr_hsave_pa = true;
+                     continue;
+                 }
++                if (kvm_msr_list->indices[i] == MSR_TSC_AUX) {
++                    has_msr_tsc_aux = true;
++                    continue;
++                }
+                 if (kvm_msr_list->indices[i] == MSR_TSC_ADJUST) {
+                     has_msr_tsc_adjust = true;
+                     continue;
+@@ -1159,6 +1164,9 @@ static int kvm_put_msrs(X86CPU *cpu, int level)
+     if (has_msr_hsave_pa) {
+         kvm_msr_entry_set(&msrs[n++], MSR_VM_HSAVE_PA, env->vm_hsave);
+     }
++    if (has_msr_tsc_aux) {
++        kvm_msr_entry_set(&msrs[n++], MSR_TSC_AUX, env->tsc_aux);
++    }
+     if (has_msr_tsc_adjust) {
+         kvm_msr_entry_set(&msrs[n++], MSR_TSC_ADJUST, env->tsc_adjust);
+     }
+@@ -1507,6 +1515,9 @@ static int kvm_get_msrs(X86CPU *cpu)
+     if (has_msr_hsave_pa) {
+         msrs[n++].index = MSR_VM_HSAVE_PA;
+     }
++    if (has_msr_tsc_aux) {
++        msrs[n++].index = MSR_TSC_AUX;
++    }
+     if (has_msr_tsc_adjust) {
+         msrs[n++].index = MSR_TSC_ADJUST;
+     }
+@@ -1636,6 +1647,9 @@ static int kvm_get_msrs(X86CPU *cpu)
+         case MSR_IA32_TSC:
+             env->tsc = msrs[i].data;
+             break;
++        case MSR_TSC_AUX:
++            env->tsc_aux = msrs[i].data;
++            break;
+         case MSR_TSC_ADJUST:
+             env->tsc_adjust = msrs[i].data;
+             break;
+-- 
+1.8.3.1
+

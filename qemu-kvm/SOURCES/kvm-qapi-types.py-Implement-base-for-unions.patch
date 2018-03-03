@@ -1,0 +1,102 @@
+From da3719ca3f47e716394f3a572f0f1403518a8442 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 9 Sep 2013 14:28:07 +0200
+Subject: [PATCH 16/38] qapi-types.py: Implement 'base' for unions
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1378736903-18489-17-git-send-email-kwolf@redhat.com>
+Patchwork-id: 54203
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 16/32] qapi-types.py: Implement 'base' for unions
+Bugzilla: 1005818
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Bugzilla: 1005818
+
+The new 'base' key in a union definition refers to a struct type, which
+is inlined into the union definition and can represent fields common to
+all kinds.
+
+For example the following schema definition...
+
+    { 'type': 'BlockOptionsBase', 'data': { 'read-only': 'bool' } }
+
+    { 'union': 'BlockOptions',
+      'base': 'BlockOptionsBase',
+      'data': {
+          'raw': 'BlockOptionsRaw'
+          'qcow2': 'BlockOptionsQcow2'
+      } }
+
+...would result in this generated C struct:
+
+    struct BlockOptions
+    {
+        BlockOptionsKind kind;
+        union {
+            void *data;
+            BlockOptionsRaw * raw;
+            BlockOptionsQcow2 * qcow2;
+        };
+        bool read_only;
+    };
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit e2503f5e213e30e3e9a397d454a35c10b5bdc899)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ scripts/qapi-types.py | 16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ scripts/qapi-types.py |   16 ++++++++++++++--
+ 1 files changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/scripts/qapi-types.py b/scripts/qapi-types.py
+index 9e19920..c0684a7 100644
+--- a/scripts/qapi-types.py
++++ b/scripts/qapi-types.py
+@@ -131,7 +131,12 @@ typedef enum %(name)s
+ 
+     return lookup_decl + enum_decl
+ 
+-def generate_union(name, typeinfo):
++def generate_union(expr):
++
++    name = expr['union']
++    typeinfo = expr['data']
++    base = expr.get('base')
++
+     ret = mcgen('''
+ struct %(name)s
+ {
+@@ -150,6 +155,13 @@ struct %(name)s
+ 
+     ret += mcgen('''
+     };
++''')
++
++    if base:
++        struct = find_struct(base)
++        ret += generate_struct_fields(struct['data'])
++
++    ret += mcgen('''
+ };
+ ''')
+ 
+@@ -307,7 +319,7 @@ for expr in exprs:
+         ret += generate_type_cleanup_decl(expr['type'])
+         fdef.write(generate_type_cleanup(expr['type']) + "\n")
+     elif expr.has_key('union'):
+-        ret += generate_union(expr['union'], expr['data'])
++        ret += generate_union(expr)
+         ret += generate_type_cleanup_decl(expr['union'] + "List")
+         fdef.write(generate_type_cleanup(expr['union'] + "List") + "\n")
+         ret += generate_type_cleanup_decl(expr['union'])
+-- 
+1.7.1
+

@@ -1,0 +1,132 @@
+From 6b7e23d3e8ff46e638c9dcd769681b2e1b9da08e Mon Sep 17 00:00:00 2001
+From: John Snow <jsnow@redhat.com>
+Date: Mon, 23 Nov 2015 17:38:35 +0100
+Subject: [PATCH 16/27] Make qemu-io commands available in HMP
+
+RH-Author: John Snow <jsnow@redhat.com>
+Message-id: <1448300320-7772-17-git-send-email-jsnow@redhat.com>
+Patchwork-id: 68443
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 16/21] Make qemu-io commands available in HMP
+Bugzilla: 1272523
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+It was decided to not make this command available in QMP in order to
+make clear that this is not supposed to be a stable API and should be
+used only for testing and debugging purposes.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 587da2c39c9ace168f4d01fa446a54ae998a2553)
+Signed-off-by: John Snow <jsnow@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ Makefile        |  2 +-
+ Makefile.objs   |  1 +
+ hmp-commands.hx | 16 ++++++++++++++++
+ hmp.c           | 18 ++++++++++++++++++
+ hmp.h           |  1 +
+ 5 files changed, 37 insertions(+), 1 deletion(-)
+
+diff --git a/Makefile b/Makefile
+index f403057..76eb694 100644
+--- a/Makefile
++++ b/Makefile
+@@ -205,7 +205,7 @@ qemu-img.o: qemu-img-cmds.h
+ 
+ qemu-img$(EXESUF): qemu-img.o $(block-obj-y) libqemuutil.a libqemustub.a
+ qemu-nbd$(EXESUF): qemu-nbd.o $(block-obj-y) libqemuutil.a libqemustub.a
+-qemu-io$(EXESUF): qemu-io.o qemu-io-cmds.o $(block-obj-y) libqemuutil.a libqemustub.a
++qemu-io$(EXESUF): qemu-io.o $(block-obj-y) libqemuutil.a libqemustub.a
+ 
+ qemu-bridge-helper$(EXESUF): qemu-bridge-helper.o
+ 
+diff --git a/Makefile.objs b/Makefile.objs
+index f83a5b2..74f722e 100644
+--- a/Makefile.objs
++++ b/Makefile.objs
+@@ -13,6 +13,7 @@ block-obj-$(CONFIG_POSIX) += aio-posix.o
+ block-obj-$(CONFIG_WIN32) += aio-win32.o
+ block-obj-y += block/
+ block-obj-y += qapi-types.o qapi-visit.o
++block-obj-y += qemu-io-cmds.o
+ 
+ block-obj-y += qemu-coroutine.o qemu-coroutine-lock.o qemu-coroutine-io.o
+ block-obj-y += qemu-coroutine-sleep.o
+diff --git a/hmp-commands.hx b/hmp-commands.hx
+index 58498f7..7e1855a 100644
+--- a/hmp-commands.hx
++++ b/hmp-commands.hx
+@@ -1592,6 +1592,22 @@ Removes the chardev @var{id}.
+ ETEXI
+ 
+     {
++        .name       = "qemu-io",
++        .args_type  = "device:B,command:s",
++        .params     = "[device] \"[command]\"",
++        .help       = "run a qemu-io command on a block device",
++        .mhandler.cmd = hmp_qemu_io,
++    },
++
++STEXI
++@item qemu-io @var{device} @var{command}
++@findex qemu-io
++
++Executes a qemu-io command on the given block device.
++
++ETEXI
++
++    {
+         .name       = "info",
+         .args_type  = "item:s?",
+         .params     = "[subcommand]",
+diff --git a/hmp.c b/hmp.c
+index 1805926..e1d92f4 100644
+--- a/hmp.c
++++ b/hmp.c
+@@ -22,6 +22,7 @@
+ #include "qemu/sockets.h"
+ #include "monitor/monitor.h"
+ #include "ui/console.h"
++#include "qemu-io.h"
+ 
+ static void hmp_handle_error(Monitor *mon, Error **errp)
+ {
+@@ -1448,3 +1449,20 @@ void hmp_chardev_remove(Monitor *mon, const QDict *qdict)
+     qmp_chardev_remove(qdict_get_str(qdict, "id"), &local_err);
+     hmp_handle_error(mon, &local_err);
+ }
++
++void hmp_qemu_io(Monitor *mon, const QDict *qdict)
++{
++    BlockDriverState *bs;
++    const char* device = qdict_get_str(qdict, "device");
++    const char* command = qdict_get_str(qdict, "command");
++    Error *err = NULL;
++
++    bs = bdrv_find(device);
++    if (bs) {
++        qemuio_command(bs, command);
++    } else {
++        error_set(&err, QERR_DEVICE_NOT_FOUND, device);
++    }
++
++    hmp_handle_error(mon, &err);
++}
+diff --git a/hmp.h b/hmp.h
+index 9b2c9ce..b27ef3d 100644
+--- a/hmp.h
++++ b/hmp.h
+@@ -86,5 +86,6 @@ void hmp_nbd_server_add(Monitor *mon, const QDict *qdict);
+ void hmp_nbd_server_stop(Monitor *mon, const QDict *qdict);
+ void hmp_chardev_add(Monitor *mon, const QDict *qdict);
+ void hmp_chardev_remove(Monitor *mon, const QDict *qdict);
++void hmp_qemu_io(Monitor *mon, const QDict *qdict);
+ 
+ #endif
+-- 
+1.8.3.1
+

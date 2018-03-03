@@ -1,0 +1,98 @@
+From e4927c8d2802be4adeb25fbdfd538d15211d925e Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 18 Sep 2013 09:31:07 +0200
+Subject: [PATCH 23/29] exec: Clean up unnecessary S390 ifdeffery
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1379496669-22778-7-git-send-email-armbru@redhat.com>
+Patchwork-id: 54428
+O-Subject: [PATCH 7.0 qemu-kvm 6/8] exec: Clean up unnecessary S390 ifdeffery
+Bugzilla: 1009328
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Another issue missed in commit fdec991 is -mem-path: it needs to be
+rejected only for old S390 KVM, not for any S390.  Not that I
+personally care, but the ifdeffery in qemu_ram_alloc_from_ptr() annoys
+me.
+
+Note that this doesn't actually make -mem-path work, as the kernel
+doesn't (yet?)  support large pages in the host for KVM guests.  Clean
+it up anyway.
+
+Thanks to Christian Borntraeger for pointing out the S390 kernel
+limitations.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Acked-by: Laszlo Ersek <lersek@redhat.com>
+Acked-by: Stefano Stabellini <stefano.stabellini@eu.citrix.com>
+Acked-by: Christian Borntraeger <borntraeger@de.ibm.com>
+Message-id: 1375276272-15988-7-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <anthony@codemonkey.ws>
+(cherry picked from commit e1e84ba050538bae24393e40b737078ecad99747)
+---
+ exec.c | 25 +++++++++++++++++++------
+ 1 file changed, 19 insertions(+), 6 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ exec.c |   25 +++++++++++++++++++------
+ 1 files changed, 19 insertions(+), 6 deletions(-)
+
+diff --git a/exec.c b/exec.c
+index 185155c..a75c200 100644
+--- a/exec.c
++++ b/exec.c
+@@ -839,7 +839,7 @@ void qemu_mutex_unlock_ramlist(void)
+     qemu_mutex_unlock(&ram_list.mutex);
+ }
+ 
+-#if defined(__linux__) && !defined(TARGET_S390X)
++#ifdef __linux__
+ 
+ #include <sys/vfs.h>
+ 
+@@ -942,6 +942,14 @@ static void *file_ram_alloc(RAMBlock *block,
+     block->fd = fd;
+     return area;
+ }
++#else
++static void *file_ram_alloc(RAMBlock *block,
++                            ram_addr_t memory,
++                            const char *path)
++{
++    fprintf(stderr, "-mem-path not supported on this host\n");
++    exit(1);
++}
+ #endif
+ 
+ static ram_addr_t find_ram_offset(ram_addr_t size)
+@@ -1075,12 +1083,17 @@ ram_addr_t qemu_ram_alloc_from_ptr(ram_addr_t size, void *host,
+         xen_ram_alloc(new_block->offset, size, mr);
+     } else {
+         if (mem_path) {
+-#if defined (__linux__) && !defined(TARGET_S390X)
++            if (phys_mem_alloc != qemu_anon_ram_alloc) {
++                /*
++                 * file_ram_alloc() needs to allocate just like
++                 * phys_mem_alloc, but we haven't bothered to provide
++                 * a hook there.
++                 */
++                fprintf(stderr,
++                        "-mem-path not supported with this accelerator\n");
++                exit(1);
++            }
+             new_block->host = file_ram_alloc(new_block, size, mem_path);
+-#else
+-            fprintf(stderr, "-mem-path option unsupported\n");
+-            exit(1);
+-#endif
+         }
+         if (!new_block->host) {
+             new_block->host = phys_mem_alloc(size);
+-- 
+1.7.1
+

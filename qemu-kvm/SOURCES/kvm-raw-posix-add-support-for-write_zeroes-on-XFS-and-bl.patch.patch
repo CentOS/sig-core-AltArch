@@ -1,0 +1,225 @@
+From adf32529b8b95ed360356f13bd9a7f2a4b707412 Mon Sep 17 00:00:00 2001
+Message-Id: <adf32529b8b95ed360356f13bd9a7f2a4b707412.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:09:29 +0100
+Subject: [PATCH 41/50] raw-posix: add support for write_zeroes on XFS and
+ block devices
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-44-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56080
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 43/52] raw-posix: add support for write_zeroes on XFS and block devices
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+The code is similar to the implementation of discard and write_zeroes
+with UNMAP.  However, failure must be propagated up to block.c.
+
+The stale page cache problem can be reproduced as follows:
+
+    # modprobe scsi-debug lbpws=1 lbprz=1
+    # ./qemu-io /dev/sdXX
+    qemu-io> write -P 0xcc 0 2M
+    qemu-io> write -z 0 1M
+    qemu-io> read -P 0x00 0 512
+    Pattern verification failed at offset 0, 512 bytes
+    qemu-io> read -v 0 512
+    00000000:  cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc  ................
+    ...
+
+    # ./qemu-io --cache=none /dev/sdXX
+    qemu-io> write -P 0xcc 0 2M
+    qemu-io> write -z 0 1M
+    qemu-io> read -P 0x00 0 512
+    qemu-io> read -v 0 512
+    00000000:  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+    ...
+
+And similarly with discard instead of "write -z".
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 97a2ae34537882df34810d538ab1f51085499d2c)
+---
+ block/raw-aio.h   |  3 +-
+ block/raw-posix.c | 84 +++++++++++++++++++++++++++++++++++++++++++++++--------
+ 2 files changed, 74 insertions(+), 13 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ block/raw-aio.h   |  3 +-
+ block/raw-posix.c | 84 +++++++++++++++++++++++++++++++++++++++++++++++--------
+ 2 files changed, 74 insertions(+), 13 deletions(-)
+
+diff --git a/block/raw-aio.h b/block/raw-aio.h
+index c61f159..7ad0a8a 100644
+--- a/block/raw-aio.h
++++ b/block/raw-aio.h
+@@ -21,9 +21,10 @@
+ #define QEMU_AIO_IOCTL        0x0004
+ #define QEMU_AIO_FLUSH        0x0008
+ #define QEMU_AIO_DISCARD      0x0010
++#define QEMU_AIO_WRITE_ZEROES 0x0020
+ #define QEMU_AIO_TYPE_MASK \
+         (QEMU_AIO_READ|QEMU_AIO_WRITE|QEMU_AIO_IOCTL|QEMU_AIO_FLUSH| \
+-         QEMU_AIO_DISCARD)
++         QEMU_AIO_DISCARD|QEMU_AIO_WRITE_ZEROES)
+ 
+ /* AIO flags */
+ #define QEMU_AIO_MISALIGNED   0x1000
+diff --git a/block/raw-posix.c b/block/raw-posix.c
+index 815a80b..f410668 100644
+--- a/block/raw-posix.c
++++ b/block/raw-posix.c
+@@ -142,6 +142,7 @@ typedef struct BDRVRawState {
+     bool is_xfs:1;
+ #endif
+     bool has_discard:1;
++    bool has_write_zeroes:1;
+     bool discard_zeroes:1;
+ } BDRVRawState;
+ 
+@@ -327,6 +328,7 @@ static int raw_open_common(BlockDriverState *bs, QDict *options,
+ #endif
+ 
+     s->has_discard = true;
++    s->has_write_zeroes = true;
+ 
+     if (fstat(s->fd, &st) < 0) {
+         error_setg_errno(errp, errno, "Could not stat file");
+@@ -345,9 +347,11 @@ static int raw_open_common(BlockDriverState *bs, QDict *options,
+ #ifdef __linux__
+         /* On Linux 3.10, BLKDISCARD leaves stale data in the page cache.  Do
+          * not rely on the contents of discarded blocks unless using O_DIRECT.
++         * Same for BLKZEROOUT.
+          */
+         if (!(bs->open_flags & BDRV_O_NOCACHE)) {
+             s->discard_zeroes = false;
++            s->has_write_zeroes = false;
+         }
+ #endif
+     }
+@@ -703,6 +707,23 @@ static ssize_t handle_aiocb_rw(RawPosixAIOData *aiocb)
+ }
+ 
+ #ifdef CONFIG_XFS
++static int xfs_write_zeroes(BDRVRawState *s, int64_t offset, uint64_t bytes)
++{
++    struct xfs_flock64 fl;
++
++    memset(&fl, 0, sizeof(fl));
++    fl.l_whence = SEEK_SET;
++    fl.l_start = offset;
++    fl.l_len = bytes;
++
++    if (xfsctl(NULL, s->fd, XFS_IOC_ZERO_RANGE, &fl) < 0) {
++        DEBUG_BLOCK_PRINT("cannot write zero range (%s)\n", strerror(errno));
++        return -errno;
++    }
++
++    return 0;
++}
++
+ static int xfs_discard(BDRVRawState *s, int64_t offset, uint64_t bytes)
+ {
+     struct xfs_flock64 fl;
+@@ -721,6 +742,42 @@ static int xfs_discard(BDRVRawState *s, int64_t offset, uint64_t bytes)
+ }
+ #endif
+ 
++static ssize_t handle_aiocb_write_zeroes(RawPosixAIOData *aiocb)
++{
++    int ret = -EOPNOTSUPP;
++    BDRVRawState *s = aiocb->bs->opaque;
++
++    if (s->has_write_zeroes == 0) {
++        return -ENOTSUP;
++    }
++
++    if (aiocb->aio_type & QEMU_AIO_BLKDEV) {
++#ifdef BLKZEROOUT
++        do {
++            uint64_t range[2] = { aiocb->aio_offset, aiocb->aio_nbytes };
++            if (ioctl(aiocb->aio_fildes, BLKZEROOUT, range) == 0) {
++                return 0;
++            }
++        } while (errno == EINTR);
++
++        ret = -errno;
++#endif
++    } else {
++#ifdef CONFIG_XFS
++        if (s->is_xfs) {
++            return xfs_write_zeroes(s, aiocb->aio_offset, aiocb->aio_nbytes);
++        }
++#endif
++    }
++
++    if (ret == -ENODEV || ret == -ENOSYS || ret == -EOPNOTSUPP ||
++        ret == -ENOTTY) {
++        s->has_write_zeroes = false;
++        ret = -ENOTSUP;
++    }
++    return ret;
++}
++
+ static ssize_t handle_aiocb_discard(RawPosixAIOData *aiocb)
+ {
+     int ret = -EOPNOTSUPP;
+@@ -805,6 +862,9 @@ static int aio_worker(void *arg)
+     case QEMU_AIO_DISCARD:
+         ret = handle_aiocb_discard(aiocb);
+         break;
++    case QEMU_AIO_WRITE_ZEROES:
++        ret = handle_aiocb_write_zeroes(aiocb);
++        break;
+     default:
+         fprintf(stderr, "invalid aio request (0x%x)\n", aiocb->aio_type);
+         ret = -EINVAL;
+@@ -1257,13 +1317,13 @@ static int coroutine_fn raw_co_write_zeroes(
+     BDRVRawState *s = bs->opaque;
+ 
+     if (!(flags & BDRV_REQ_MAY_UNMAP)) {
+-        return -ENOTSUP;
+-    }
+-    if (!s->discard_zeroes) {
+-        return -ENOTSUP;
++        return paio_submit_co(bs, s->fd, sector_num, NULL, nb_sectors,
++                              QEMU_AIO_WRITE_ZEROES);
++    } else if (s->discard_zeroes) {
++        return paio_submit_co(bs, s->fd, sector_num, NULL, nb_sectors,
++                              QEMU_AIO_DISCARD);
+     }
+-    return paio_submit_co(bs, s->fd, sector_num, NULL, nb_sectors,
+-                          QEMU_AIO_DISCARD);
++    return -ENOTSUP;
+ }
+ 
+ static int raw_get_info(BlockDriverState *bs, BlockDriverInfo *bdi)
+@@ -1613,13 +1673,13 @@ static coroutine_fn int hdev_co_write_zeroes(BlockDriverState *bs,
+         return rc;
+     }
+     if (!(flags & BDRV_REQ_MAY_UNMAP)) {
+-        return -ENOTSUP;
+-    }
+-    if (!s->discard_zeroes) {
+-        return -ENOTSUP;
++        return paio_submit_co(bs, s->fd, sector_num, NULL, nb_sectors,
++                              QEMU_AIO_WRITE_ZEROES|QEMU_AIO_BLKDEV);
++    } else if (s->discard_zeroes) {
++        return paio_submit_co(bs, s->fd, sector_num, NULL, nb_sectors,
++                              QEMU_AIO_DISCARD|QEMU_AIO_BLKDEV);
+     }
+-    return paio_submit_co(bs, s->fd, sector_num, NULL, nb_sectors,
+-                          QEMU_AIO_DISCARD|QEMU_AIO_BLKDEV);
++    return -ENOTSUP;
+ }
+ 
+ static int hdev_create(const char *filename, QEMUOptionParameter *options,
+-- 
+1.7.11.7
+

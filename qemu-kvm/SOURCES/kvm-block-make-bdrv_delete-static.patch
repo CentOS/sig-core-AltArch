@@ -1,0 +1,665 @@
+From 52d7a3ed9170da1248cadbbc746c32dd7c34c568 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Fri, 17 Jan 2014 03:07:48 +0100
+Subject: [PATCH 05/34] block: make bdrv_delete() static
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1389928083-8921-4-git-send-email-famz@redhat.com>
+Patchwork-id: 56765
+O-Subject: [RHEL-7 qemu-kvm PATCH 03/18] block: make bdrv_delete() static
+Bugzilla: 1041301
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Manage BlockDriverState lifecycle with refcnt, so bdrv_delete() is no
+longer public and should be called by bdrv_unref() if refcnt is
+decreased to 0.
+
+This is an identical change because effectively, there's no multiple
+reference of BDS now: no caller of bdrv_ref() yet, only bdrv_new() sets
+bs->refcnt to 1, so all bdrv_unref() now actually delete the BDS.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 4f6fd3491cf0f768b135ed2e242bd1d1d2a2efec)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+
+Conflicts:
+	block/backup.c
+	block/blkverify.c
+	block/vvfat.c
+	blockdev.c
+	hw/block/xen_disk.c
+	qemu-io.c
+
+All are contextual conflicts. We are doing a mechanical replacing here,
+so simply use the downstream code except replace bdrv_delete with
+bdrv_unref.
+
+Several more bdrv_delete's are converted in qemu-img.c, qemu-io.c and
+block/vhdx.c.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ block.c               | 23 ++++++++++++-----------
+ block/blkverify.c     |  4 ++--
+ block/cow.c           |  2 +-
+ block/iscsi.c         |  2 +-
+ block/mirror.c        |  2 +-
+ block/qcow.c          |  2 +-
+ block/qcow2.c         |  2 +-
+ block/qed.c           |  2 +-
+ block/sheepdog.c      |  6 +++---
+ block/snapshot.c      |  2 +-
+ block/stream.c        |  2 +-
+ block/vhdx.c          |  2 +-
+ block/vmdk.c          | 10 +++++-----
+ block/vvfat.c         |  4 ++--
+ blockdev.c            | 10 +++++-----
+ hw/block/xen_disk.c   |  4 ++--
+ include/block/block.h |  1 -
+ qemu-img.c            | 31 +++++++++++++++----------------
+ qemu-io.c             |  6 +++---
+ 19 files changed, 58 insertions(+), 59 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c               |   23 ++++++++++++-----------
+ block/blkverify.c     |    4 ++--
+ block/cow.c           |    2 +-
+ block/iscsi.c         |    2 +-
+ block/mirror.c        |    2 +-
+ block/qcow.c          |    2 +-
+ block/qcow2.c         |    2 +-
+ block/qed.c           |    2 +-
+ block/sheepdog.c      |    6 +++---
+ block/snapshot.c      |    2 +-
+ block/stream.c        |    2 +-
+ block/vhdx.c          |    2 +-
+ block/vmdk.c          |   10 +++++-----
+ block/vvfat.c         |    4 ++--
+ blockdev.c            |   10 +++++-----
+ hw/block/xen_disk.c   |    4 ++--
+ include/block/block.h |    1 -
+ qemu-img.c            |   31 +++++++++++++++----------------
+ qemu-io.c             |    6 +++---
+ 19 files changed, 58 insertions(+), 59 deletions(-)
+
+diff --git a/block.c b/block.c
+index ddf29d0..b4e3ced 100644
+--- a/block.c
++++ b/block.c
+@@ -918,7 +918,7 @@ fail:
+     if (!bs->drv) {
+         QDECREF(bs->options);
+     }
+-    bdrv_delete(bs);
++    bdrv_unref(bs);
+     return ret;
+ }
+ 
+@@ -972,7 +972,7 @@ int bdrv_open_backing_file(BlockDriverState *bs, QDict *options, Error **errp)
+                     *backing_filename ? backing_filename : NULL, options,
+                     back_flags, back_drv, &local_err);
+     if (ret < 0) {
+-        bdrv_delete(bs->backing_hd);
++        bdrv_unref(bs->backing_hd);
+         bs->backing_hd = NULL;
+         bs->open_flags |= BDRV_O_NO_BACKING;
+         error_propagate(errp, local_err);
+@@ -1051,12 +1051,12 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+         bs1 = bdrv_new("");
+         ret = bdrv_open(bs1, filename, NULL, 0, drv, &local_err);
+         if (ret < 0) {
+-            bdrv_delete(bs1);
++            bdrv_unref(bs1);
+             goto fail;
+         }
+         total_size = bdrv_getlength(bs1) & BDRV_SECTOR_MASK;
+ 
+-        bdrv_delete(bs1);
++        bdrv_unref(bs1);
+ 
+         ret = get_tmp_filename(tmp_filename, sizeof(tmp_filename));
+         if (ret < 0) {
+@@ -1137,7 +1137,7 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+     }
+ 
+     if (bs->file != file) {
+-        bdrv_delete(file);
++        bdrv_unref(file);
+         file = NULL;
+     }
+ 
+@@ -1177,7 +1177,7 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+ 
+ unlink_and_fail:
+     if (file != NULL) {
+-        bdrv_delete(file);
++        bdrv_unref(file);
+     }
+     if (bs->is_temporary) {
+         unlink(filename);
+@@ -1444,7 +1444,7 @@ void bdrv_close(BlockDriverState *bs)
+ 
+     if (bs->drv) {
+         if (bs->backing_hd) {
+-            bdrv_delete(bs->backing_hd);
++            bdrv_unref(bs->backing_hd);
+             bs->backing_hd = NULL;
+         }
+         bs->drv->bdrv_close(bs);
+@@ -1469,7 +1469,7 @@ void bdrv_close(BlockDriverState *bs)
+         bs->options = NULL;
+ 
+         if (bs->file != NULL) {
+-            bdrv_delete(bs->file);
++            bdrv_unref(bs->file);
+             bs->file = NULL;
+         }
+     }
+@@ -1667,11 +1667,12 @@ void bdrv_append(BlockDriverState *bs_new, BlockDriverState *bs_top)
+             bs_new->drv ? bs_new->drv->format_name : "");
+ }
+ 
+-void bdrv_delete(BlockDriverState *bs)
++static void bdrv_delete(BlockDriverState *bs)
+ {
+     assert(!bs->dev);
+     assert(!bs->job);
+     assert(!bs->in_use);
++    assert(!bs->refcnt);
+ 
+     /* remove from list, if necessary */
+     bdrv_make_anon(bs);
+@@ -2247,7 +2248,7 @@ int bdrv_drop_intermediate(BlockDriverState *active, BlockDriverState *top,
+     QSIMPLEQ_FOREACH_SAFE(intermediate_state, &states_to_delete, entry, next) {
+         /* so that bdrv_close() does not recursively close the chain */
+         intermediate_state->bs->backing_hd = NULL;
+-        bdrv_delete(intermediate_state->bs);
++        bdrv_unref(intermediate_state->bs);
+     }
+     ret = 0;
+ 
+@@ -4989,7 +4990,7 @@ out:
+     free_option_parameters(param);
+ 
+     if (bs) {
+-        bdrv_delete(bs);
++        bdrv_unref(bs);
+     }
+     if (error_is_set(&local_err)) {
+         error_propagate(errp, local_err);
+diff --git a/block/blkverify.c b/block/blkverify.c
+index 92a452d..4ff7688 100644
+--- a/block/blkverify.c
++++ b/block/blkverify.c
+@@ -159,7 +159,7 @@ static int blkverify_open(BlockDriverState *bs, QDict *options, int flags,
+     ret = bdrv_open(s->test_file, filename, NULL, flags, NULL, &local_err);
+     if (ret < 0) {
+         error_propagate(errp, local_err);
+-        bdrv_delete(s->test_file);
++        bdrv_unref(s->test_file);
+         s->test_file = NULL;
+         goto fail;
+     }
+@@ -173,7 +173,7 @@ static void blkverify_close(BlockDriverState *bs)
+ {
+     BDRVBlkverifyState *s = bs->opaque;
+ 
+-    bdrv_delete(s->test_file);
++    bdrv_unref(s->test_file);
+     s->test_file = NULL;
+ }
+ 
+diff --git a/block/cow.c b/block/cow.c
+index cb9a3b0..909c3e7 100644
+--- a/block/cow.c
++++ b/block/cow.c
+@@ -360,7 +360,7 @@ static int cow_create(const char *filename, QEMUOptionParameter *options,
+     }
+ 
+ exit:
+-    bdrv_delete(cow_bs);
++    bdrv_unref(cow_bs);
+     return ret;
+ }
+ 
+diff --git a/block/iscsi.c b/block/iscsi.c
+index fce909b..fa6f7c4 100644
+--- a/block/iscsi.c
++++ b/block/iscsi.c
+@@ -1576,7 +1576,7 @@ out:
+     }
+     g_free(bs->opaque);
+     bs->opaque = NULL;
+-    bdrv_delete(bs);
++    bdrv_unref(bs);
+     return ret;
+ }
+ 
+diff --git a/block/mirror.c b/block/mirror.c
+index 6fa733e..6843e70 100644
+--- a/block/mirror.c
++++ b/block/mirror.c
+@@ -480,7 +480,7 @@ immediate_exit:
+         bdrv_swap(s->target, s->common.bs);
+     }
+     bdrv_close(s->target);
+-    bdrv_delete(s->target);
++    bdrv_unref(s->target);
+     block_job_completed(&s->common, ret);
+ }
+ 
+diff --git a/block/qcow.c b/block/qcow.c
+index 6bc2358..c470e05 100644
+--- a/block/qcow.c
++++ b/block/qcow.c
+@@ -765,7 +765,7 @@ static int qcow_create(const char *filename, QEMUOptionParameter *options,
+     g_free(tmp);
+     ret = 0;
+ exit:
+-    bdrv_delete(qcow_bs);
++    bdrv_unref(qcow_bs);
+     return ret;
+ }
+ 
+diff --git a/block/qcow2.c b/block/qcow2.c
+index 3f7fd51..f6307af 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -1591,7 +1591,7 @@ static int qcow2_create2(const char *filename, int64_t total_size,
+ 
+     ret = 0;
+ out:
+-    bdrv_delete(bs);
++    bdrv_unref(bs);
+     return ret;
+ }
+ 
+diff --git a/block/qed.c b/block/qed.c
+index 0805ba3..fb8ccd5 100644
+--- a/block/qed.c
++++ b/block/qed.c
+@@ -607,7 +607,7 @@ static int qed_create(const char *filename, uint32_t cluster_size,
+     ret = 0; /* success */
+ out:
+     g_free(l1_table);
+-    bdrv_delete(bs);
++    bdrv_unref(bs);
+     return ret;
+ }
+ 
+diff --git a/block/sheepdog.c b/block/sheepdog.c
+index 09203ad..b3a2ae8 100644
+--- a/block/sheepdog.c
++++ b/block/sheepdog.c
+@@ -1451,7 +1451,7 @@ static int sd_prealloc(const char *filename)
+     }
+ out:
+     if (bs) {
+-        bdrv_delete(bs);
++        bdrv_unref(bs);
+     }
+     g_free(buf);
+ 
+@@ -1534,13 +1534,13 @@ static int sd_create(const char *filename, QEMUOptionParameter *options,
+ 
+         if (!is_snapshot(&s->inode)) {
+             error_report("cannot clone from a non snapshot vdi");
+-            bdrv_delete(bs);
++            bdrv_unref(bs);
+             ret = -EINVAL;
+             goto out;
+         }
+ 
+         base_vid = s->inode.vdi_id;
+-        bdrv_delete(bs);
++        bdrv_unref(bs);
+     }
+ 
+     ret = do_sd_create(s, vdi, vdi_size, base_vid, &vid, 0);
+diff --git a/block/snapshot.c b/block/snapshot.c
+index 51b4b96..b2d7681 100644
+--- a/block/snapshot.c
++++ b/block/snapshot.c
+@@ -99,7 +99,7 @@ int bdrv_snapshot_goto(BlockDriverState *bs,
+         ret = bdrv_snapshot_goto(bs->file, snapshot_id);
+         open_ret = drv->bdrv_open(bs, NULL, bs->open_flags, NULL);
+         if (open_ret < 0) {
+-            bdrv_delete(bs->file);
++            bdrv_unref(bs->file);
+             bs->drv = NULL;
+             return open_ret;
+         }
+diff --git a/block/stream.c b/block/stream.c
+index cbae815..82fb179 100644
+--- a/block/stream.c
++++ b/block/stream.c
+@@ -68,7 +68,7 @@ static void close_unused_images(BlockDriverState *top, BlockDriverState *base,
+         unused = intermediate;
+         intermediate = intermediate->backing_hd;
+         unused->backing_hd = NULL;
+-        bdrv_delete(unused);
++        bdrv_unref(unused);
+     }
+     top->backing_hd = base;
+ }
+diff --git a/block/vhdx.c b/block/vhdx.c
+index 8b1a5c9..1995778 100644
+--- a/block/vhdx.c
++++ b/block/vhdx.c
+@@ -1847,7 +1847,7 @@ static int vhdx_create(const char *filename, QEMUOptionParameter *options,
+ 
+ 
+ delete_and_exit:
+-    bdrv_delete(bs);
++    bdrv_unref(bs);
+ exit:
+     g_free(creator);
+     return ret;
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 8662016..a1994a4 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -219,7 +219,7 @@ static void vmdk_free_extents(BlockDriverState *bs)
+         g_free(e->l1_backup_table);
+         g_free(e->type);
+         if (e->file != bs->file) {
+-            bdrv_delete(e->file);
++            bdrv_unref(e->file);
+         }
+     }
+     g_free(s->extents);
+@@ -784,7 +784,7 @@ static int vmdk_parse_extents(const char *desc, BlockDriverState *bs,
+             /* SPARSE extent and VMFSSPARSE extent are both "COWD" sparse file*/
+             ret = vmdk_open_sparse(bs, extent_file, bs->open_flags, errp);
+             if (ret) {
+-                bdrv_delete(extent_file);
++                bdrv_unref(extent_file);
+                 return ret;
+             }
+             extent = &s->extents[s->num_extents - 1];
+@@ -1703,15 +1703,15 @@ static int vmdk_create(const char *filename, QEMUOptionParameter *options,
+         BlockDriverState *bs = bdrv_new("");
+         ret = bdrv_open(bs, backing_file, NULL, 0, NULL, errp);
+         if (ret != 0) {
+-            bdrv_delete(bs);
++            bdrv_unref(bs);
+             return ret;
+         }
+         if (strcmp(bs->drv->format_name, "vmdk")) {
+-            bdrv_delete(bs);
++            bdrv_unref(bs);
+             return -EINVAL;
+         }
+         parent_cid = vmdk_read_cid(bs, 0);
+-        bdrv_delete(bs);
++        bdrv_unref(bs);
+         snprintf(parent_desc_line, sizeof(parent_desc_line),
+                 "parentFileNameHint=\"%s\"", backing_file);
+     }
+diff --git a/block/vvfat.c b/block/vvfat.c
+index 2c7970d..3ddaa0b 100644
+--- a/block/vvfat.c
++++ b/block/vvfat.c
+@@ -2896,7 +2896,7 @@ static int write_target_commit(BlockDriverState *bs, int64_t sector_num,
+ 
+ static void write_target_close(BlockDriverState *bs) {
+     BDRVVVFATState* s = *((BDRVVVFATState**) bs->opaque);
+-    bdrv_delete(s->qcow);
++    bdrv_unref(s->qcow);
+     g_free(s->qcow_filename);
+ }
+ 
+@@ -2943,7 +2943,7 @@ static int enable_write_target(BDRVVVFATState *s)
+     if (ret < 0) {
+         qerror_report_err(local_err);
+         error_free(local_err);
+-        bdrv_delete(s->qcow);
++        bdrv_unref(s->qcow);
+         goto err;
+     }
+ 
+diff --git a/blockdev.c b/blockdev.c
+index 93fb339..564262a 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -221,7 +221,7 @@ static void drive_uninit(DriveInfo *dinfo)
+         qemu_opts_del(dinfo->opts);
+     }
+ 
+-    bdrv_delete(dinfo->bdrv);
++    bdrv_unref(dinfo->bdrv);
+     g_free(dinfo->id);
+     QTAILQ_REMOVE(&drives, dinfo, next);
+     g_free(dinfo->serial);
+@@ -531,7 +531,7 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+     return dinfo;
+ 
+ err:
+-    bdrv_delete(dinfo->bdrv);
++    bdrv_unref(dinfo->bdrv);
+     g_free(dinfo->id);
+     QTAILQ_REMOVE(&drives, dinfo, next);
+     g_free(dinfo);
+@@ -1086,7 +1086,7 @@ static void external_snapshot_abort(BlkTransactionStates *common)
+     ExternalSnapshotStates *states =
+                              DO_UPCAST(ExternalSnapshotStates, common, common);
+     if (states->new_bs) {
+-        bdrv_delete(states->new_bs);
++        bdrv_unref(states->new_bs);
+     }
+ }
+ 
+@@ -1645,7 +1645,7 @@ void qmp_drive_mirror(const char *device, const char *target,
+     ret = bdrv_open(target_bs, target, NULL, flags | BDRV_O_NO_BACKING, drv,
+                     &local_err);
+     if (ret < 0) {
+-        bdrv_delete(target_bs);
++        bdrv_unref(target_bs);
+         error_propagate(errp, local_err);
+         return;
+     }
+@@ -1654,7 +1654,7 @@ void qmp_drive_mirror(const char *device, const char *target,
+                  on_source_error, on_target_error,
+                  block_job_cb, bs, &local_err);
+     if (local_err != NULL) {
+-        bdrv_delete(target_bs);
++        bdrv_unref(target_bs);
+         error_propagate(errp, local_err);
+         return;
+     }
+diff --git a/hw/block/xen_disk.c b/hw/block/xen_disk.c
+index 498f2e9..138ab94 100644
+--- a/hw/block/xen_disk.c
++++ b/hw/block/xen_disk.c
+@@ -806,7 +806,7 @@ static int blk_connect(struct XenDevice *xendev)
+                 xen_be_printf(&blkdev->xendev, 0, "error: %s\n",
+                               error_get_pretty(local_err));
+                 error_free(local_err);
+-                bdrv_delete(blkdev->bs);
++                bdrv_unref(blkdev->bs);
+                 blkdev->bs = NULL;
+             }
+         }
+@@ -924,7 +924,7 @@ static void blk_disconnect(struct XenDevice *xendev)
+             /* close/delete only if we created it ourself */
+             bdrv_close(blkdev->bs);
+             bdrv_detach_dev(blkdev->bs, blkdev);
+-            bdrv_delete(blkdev->bs);
++            bdrv_unref(blkdev->bs);
+         }
+         blkdev->bs = NULL;
+     }
+diff --git a/include/block/block.h b/include/block/block.h
+index a3b7395..d20d63e 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -182,7 +182,6 @@ BlockDriverState *bdrv_new(const char *device_name);
+ void bdrv_make_anon(BlockDriverState *bs);
+ void bdrv_swap(BlockDriverState *bs_new, BlockDriverState *bs_old);
+ void bdrv_append(BlockDriverState *bs_new, BlockDriverState *bs_top);
+-void bdrv_delete(BlockDriverState *bs);
+ int bdrv_parse_cache_flags(const char *mode, int *flags);
+ int bdrv_parse_discard_flags(const char *mode, int *flags);
+ int bdrv_file_open(BlockDriverState **pbs, const char *filename,
+diff --git a/qemu-img.c b/qemu-img.c
+index f0f70e4..bc48dc1 100644
+--- a/qemu-img.c
++++ b/qemu-img.c
+@@ -305,7 +305,7 @@ static BlockDriverState *bdrv_new_open(const char *filename,
+     return bs;
+ fail:
+     if (bs) {
+-        bdrv_delete(bs);
++        bdrv_unref(bs);
+     }
+     return NULL;
+ }
+@@ -658,7 +658,7 @@ static int img_check(int argc, char **argv)
+ 
+ fail:
+     qapi_free_ImageCheck(check);
+-    bdrv_delete(bs);
++    bdrv_unref(bs);
+ 
+     return ret;
+ }
+@@ -728,7 +728,7 @@ static int img_commit(int argc, char **argv)
+         break;
+     }
+ 
+-    bdrv_delete(bs);
++    bdrv_unref(bs);
+     if (ret) {
+         return 1;
+     }
+@@ -1110,11 +1110,11 @@ static int img_compare(int argc, char **argv)
+     ret = 0;
+ 
+ out:
+-    bdrv_delete(bs2);
++    bdrv_unref(bs2);
+     qemu_vfree(buf1);
+     qemu_vfree(buf2);
+ out2:
+-    bdrv_delete(bs1);
++    bdrv_unref(bs1);
+ out3:
+     qemu_progress_end();
+     return ret;
+@@ -1595,12 +1595,12 @@ out:
+     free_option_parameters(param);
+     qemu_vfree(buf);
+     if (out_bs) {
+-        bdrv_delete(out_bs);
++        bdrv_unref(out_bs);
+     }
+     if (bs) {
+         for (bs_i = 0; bs_i < bs_n; bs_i++) {
+             if (bs[bs_i]) {
+-                bdrv_delete(bs[bs_i]);
++                bdrv_unref(bs[bs_i]);
+             }
+         }
+         g_free(bs);
+@@ -1738,7 +1738,7 @@ static ImageInfoList *collect_image_info_list(const char *filename,
+         *last = elem;
+         last = &elem->next;
+ 
+-        bdrv_delete(bs);
++        bdrv_unref(bs);
+ 
+         filename = fmt = NULL;
+         if (chain) {
+@@ -2024,8 +2024,7 @@ static int img_map(int argc, char **argv)
+     dump_map_entry(output_format, &curr, NULL);
+ 
+ out:
+-    bdrv_close(bs);
+-    bdrv_delete(bs);
++    bdrv_unref(bs);
+     return ret < 0;
+ }
+ 
+@@ -2144,7 +2143,7 @@ static int img_snapshot(int argc, char **argv)
+     }
+ 
+     /* Cleanup */
+-    bdrv_delete(bs);
++    bdrv_unref(bs);
+     if (ret) {
+         return 1;
+     }
+@@ -2428,14 +2427,14 @@ out:
+     /* Cleanup */
+     if (!unsafe) {
+         if (bs_old_backing != NULL) {
+-            bdrv_delete(bs_old_backing);
++            bdrv_unref(bs_old_backing);
+         }
+         if (bs_new_backing != NULL) {
+-            bdrv_delete(bs_new_backing);
++            bdrv_unref(bs_new_backing);
+         }
+     }
+ 
+-    bdrv_delete(bs);
++    bdrv_unref(bs);
+     if (ret) {
+         return 1;
+     }
+@@ -2558,7 +2557,7 @@ static int img_resize(int argc, char **argv)
+     }
+ out:
+     if (bs) {
+-        bdrv_delete(bs);
++        bdrv_unref(bs);
+     }
+     if (ret) {
+         return 1;
+@@ -2640,7 +2639,7 @@ static int img_amend(int argc, char **argv)
+ 
+ out:
+     if (bs) {
+-        bdrv_delete(bs);
++        bdrv_unref(bs);
+     }
+     free_option_parameters(create_options);
+     free_option_parameters(options_param);
+diff --git a/qemu-io.c b/qemu-io.c
+index 64b060c..7e258a5 100644
+--- a/qemu-io.c
++++ b/qemu-io.c
+@@ -1761,7 +1761,7 @@ static const cmdinfo_t abort_cmd = {
+ 
+ static int close_f(int argc, char **argv)
+ {
+-    bdrv_delete(bs);
++    bdrv_unref(bs);
+     bs = NULL;
+     return 0;
+ }
+@@ -1796,7 +1796,7 @@ static int openfile(char *name, int flags, int growable, QDict *opts)
+             fprintf(stderr, "%s: can't open device %s: %s\n", progname, name,
+                     error_get_pretty(local_err));
+             error_free(local_err);
+-            bdrv_delete(bs);
++            bdrv_unref(bs);
+             bs = NULL;
+             return 1;
+         }
+@@ -2072,7 +2072,7 @@ int main(int argc, char **argv)
+     bdrv_drain_all();
+ 
+     if (bs) {
+-        bdrv_delete(bs);
++        bdrv_unref(bs);
+     }
+     return 0;
+ }
+-- 
+1.7.1
+

@@ -1,0 +1,100 @@
+From 5c9aa8edab3724f6a361c98247949d5588f18620 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Sat, 2 Nov 2013 10:01:19 +0100
+Subject: [PATCH 19/29] pc: Don't explode QEMUMachineInitArgs into local variables needlessly
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1383386488-29789-3-git-send-email-armbru@redhat.com>
+Patchwork-id: 55238
+O-Subject: [PATCH 7.0 qemu-kvm 02/11] pc: Don't explode QEMUMachineInitArgs into local variables needlessly
+Bugzilla: 994490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Don't explode when the variable is used just a few times, and never
+changed.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Eduardo Habkost <ehabkost@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 3b6fb9cab2e64804cdab5a61d1298ffd8b8dff85)
+
+Conflicts:
+	hw/i386/pc_q35.c
+---
+ hw/i386/pc_q35.c | 22 +++++++++-------------
+ 1 file changed, 9 insertions(+), 13 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/pc_q35.c |   22 +++++++++-------------
+ 1 files changed, 9 insertions(+), 13 deletions(-)
+
+diff --git a/hw/i386/pc_q35.c b/hw/i386/pc_q35.c
+index 1c4c8a4..99d3a10 100644
+--- a/hw/i386/pc_q35.c
++++ b/hw/i386/pc_q35.c
+@@ -51,12 +51,6 @@ static bool has_pvpanic = true;
+ /* PC hardware initialisation */
+ static void pc_q35_init(QEMUMachineInitArgs *args)
+ {
+-    ram_addr_t ram_size = args->ram_size;
+-    const char *cpu_model = args->cpu_model;
+-    const char *kernel_filename = args->kernel_filename;
+-    const char *kernel_cmdline = args->kernel_cmdline;
+-    const char *initrd_filename = args->initrd_filename;
+-    const char *boot_device = args->boot_device;
+     ram_addr_t below_4g_mem_size, above_4g_mem_size;
+     Q35PCIHost *q35_host;
+     PCIBus *host_bus;
+@@ -82,17 +76,17 @@ static void pc_q35_init(QEMUMachineInitArgs *args)
+     object_property_add_child(qdev_get_machine(), "icc-bridge",
+                               OBJECT(icc_bridge), NULL);
+ 
+-    pc_cpus_init(cpu_model, icc_bridge);
++    pc_cpus_init(args->cpu_model, icc_bridge);
+     pc_acpi_init("q35-acpi-dsdt.aml");
+ 
+     kvmclock_create();
+ 
+-    if (ram_size >= 0xb0000000) {
+-        above_4g_mem_size = ram_size - 0xb0000000;
++    if (args->ram_size >= 0xb0000000) {
++        above_4g_mem_size = args->ram_size - 0xb0000000;
+         below_4g_mem_size = 0xb0000000;
+     } else {
+         above_4g_mem_size = 0;
+-        below_4g_mem_size = ram_size;
++        below_4g_mem_size = args->ram_size;
+     }
+ 
+     /* pci enabled */
+@@ -107,8 +101,10 @@ static void pc_q35_init(QEMUMachineInitArgs *args)
+ 
+     /* allocate ram and load rom/bios */
+     if (!xen_enabled()) {
+-        pc_memory_init(get_system_memory(), kernel_filename, kernel_cmdline,
+-                       initrd_filename, below_4g_mem_size, above_4g_mem_size,
++        pc_memory_init(get_system_memory(),
++                       args->kernel_filename, args->kernel_cmdline,
++                       args->initrd_filename,
++                       below_4g_mem_size, above_4g_mem_size,
+                        rom_memory, &ram_memory);
+     }
+ 
+@@ -193,7 +189,7 @@ static void pc_q35_init(QEMUMachineInitArgs *args)
+                                     0xb100),
+                       8, NULL, 0);
+ 
+-    pc_cmos_init(below_4g_mem_size, above_4g_mem_size, boot_device,
++    pc_cmos_init(below_4g_mem_size, above_4g_mem_size, args->boot_device,
+                  floppy, idebus[0], idebus[1], rtc_state);
+ 
+     /* the rest devices to which pci devfn is automatically assigned */
+-- 
+1.7.1
+

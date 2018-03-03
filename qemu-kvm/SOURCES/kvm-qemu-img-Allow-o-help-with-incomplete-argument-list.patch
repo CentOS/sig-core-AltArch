@@ -1,0 +1,160 @@
+From e8f877d31ff4ffbd7c09744f7244b21c728281be Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 25 Feb 2014 15:00:04 +0100
+Subject: [PATCH 6/7] qemu-img: Allow -o help with incomplete argument list
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1393340405-9936-6-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57796
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 5/6] qemu-img: Allow -o help with incomplete argument list
+Bugzilla: 1065873
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+This patch allows using 'qemu-img $subcmd -o help' for the create,
+convert and amend subcommands, without specifying the previously
+required filename arguments.
+
+Note that it's still allowed and meaningful to specify a filename: An
+invocation like 'qemu-img create -o help sheepdog:foo' will also display
+options that are provided by the Sheepdog driver.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Jeff Cody <jcody@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit a283cb6e58fca846c658360971d23fdd1129db65)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ qemu-img.c | 58 +++++++++++++++++++++++++++++++++++-----------------------
+ 1 file changed, 35 insertions(+), 23 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qemu-img.c |   58 +++++++++++++++++++++++++++++++++++-----------------------
+ 1 files changed, 35 insertions(+), 23 deletions(-)
+
+diff --git a/qemu-img.c b/qemu-img.c
+index 5002a56..3dc325e 100644
+--- a/qemu-img.c
++++ b/qemu-img.c
+@@ -244,16 +244,19 @@ static int print_block_option_help(const char *filename, const char *fmt)
+         return 1;
+     }
+ 
+-    proto_drv = bdrv_find_protocol(filename, true);
+-    if (!proto_drv) {
+-        error_report("Unknown protocol '%s'", filename);
+-        return 1;
+-    }
+-
+     create_options = append_option_parameters(create_options,
+                                               drv->create_options);
+-    create_options = append_option_parameters(create_options,
+-                                              proto_drv->create_options);
++
++    if (filename) {
++        proto_drv = bdrv_find_protocol(filename, true);
++        if (!proto_drv) {
++            error_report("Unknown protocol '%s'", filename);
++            return 1;
++        }
++        create_options = append_option_parameters(create_options,
++                                                  proto_drv->create_options);
++    }
++
+     print_option_help(create_options);
+     free_option_parameters(create_options);
+     return 0;
+@@ -390,10 +393,16 @@ static int img_create(int argc, char **argv)
+     }
+ 
+     /* Get the filename */
++    filename = (optind < argc) ? argv[optind] : NULL;
++    if (options && has_help_option(options)) {
++        g_free(options);
++        return print_block_option_help(filename, fmt);
++    }
++
+     if (optind >= argc) {
+         help();
+     }
+-    filename = argv[optind++];
++    optind++;
+ 
+     /* Get image size, if specified */
+     if (optind < argc) {
+@@ -416,11 +425,6 @@ static int img_create(int argc, char **argv)
+         help();
+     }
+ 
+-    if (options && has_help_option(options)) {
+-        g_free(options);
+-        return print_block_option_help(filename, fmt);
+-    }
+-
+     bdrv_img_create(filename, fmt, base_filename, base_fmt,
+                     options, img_size, BDRV_O_FLAGS, &local_err, quiet);
+     if (error_is_set(&local_err)) {
+@@ -1251,17 +1255,18 @@ static int img_convert(int argc, char **argv)
+     }
+ 
+     bs_n = argc - optind - 1;
+-    if (bs_n < 1) {
+-        help();
+-    }
+-
+-    out_filename = argv[argc - 1];
++    out_filename = bs_n >= 1 ? argv[argc - 1] : NULL;
+ 
+     if (options && has_help_option(options)) {
+         ret = print_block_option_help(out_filename, out_fmt);
+         goto out;
+     }
+ 
++    if (bs_n < 1) {
++        help();
++    }
++
++
+     if (bs_n > 1 && out_baseimg) {
+         error_report("-B makes no sense when concatenating multiple input "
+                      "images");
+@@ -2639,15 +2644,21 @@ static int img_amend(int argc, char **argv)
+         }
+     }
+ 
+-    if (optind != argc - 1) {
++    if (!options) {
+         help();
+     }
+ 
+-    if (!options) {
+-        help();
++    filename = (optind == argc - 1) ? argv[argc - 1] : NULL;
++    if (fmt && has_help_option(options)) {
++        /* If a format is explicitly specified (and possibly no filename is
++         * given), print option help here */
++        ret = print_block_option_help(filename, fmt);
++        goto out;
+     }
+ 
+-    filename = argv[argc - 1];
++    if (optind != argc - 1) {
++        help();
++    }
+ 
+     bs = bdrv_new_open(filename, fmt, BDRV_O_FLAGS | BDRV_O_RDWR, true, quiet);
+     if (!bs) {
+@@ -2659,6 +2670,7 @@ static int img_amend(int argc, char **argv)
+     fmt = bs->drv->format_name;
+ 
+     if (has_help_option(options)) {
++        /* If the format was auto-detected, print option help here */
+         ret = print_block_option_help(filename, fmt);
+         goto out;
+     }
+-- 
+1.7.1
+

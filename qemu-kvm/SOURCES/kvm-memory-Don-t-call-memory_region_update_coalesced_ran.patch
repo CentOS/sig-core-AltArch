@@ -1,0 +1,64 @@
+From 67f736a89722dcaa425c70510c080e95216a165f Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 19 Jun 2014 10:21:56 +0200
+Subject: [PATCH 11/13] memory: Don't call memory_region_update_coalesced_range if nothing changed
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1403173316-12035-1-git-send-email-famz@redhat.com>
+Patchwork-id: 59289
+O-Subject: [RHEL-7.1/7.0.z qemu-kvm PATCH] memory: Don't call memory_region_update_coalesced_range if nothing changed
+Bugzilla: 1096645
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Brew: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7596269
+BZ:   https://bugzilla.redhat.com/show_bug.cgi?id=1096645
+
+With huge number of PCI devices in the system (for example, 200
+virtio-blk-pci), this unconditional call can slow down emulation of
+irrelevant PCI operations drastically, such as a BAR update on a device
+that has no coalescing region. So avoid it.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit ab5b3db5d711b290d63e954dc64647dd51cef962)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ memory.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ memory.c |    7 ++++++-
+ 1 files changed, 6 insertions(+), 1 deletions(-)
+
+diff --git a/memory.c b/memory.c
+index edaf6fd..a71d096 100644
+--- a/memory.c
++++ b/memory.c
+@@ -1210,6 +1210,7 @@ void memory_region_add_coalescing(MemoryRegion *mr,
+ void memory_region_clear_coalescing(MemoryRegion *mr)
+ {
+     CoalescedMemoryRange *cmr;
++    bool updated = false;
+ 
+     qemu_flush_coalesced_mmio_buffer();
+     mr->flush_coalesced_mmio = false;
+@@ -1218,8 +1219,12 @@ void memory_region_clear_coalescing(MemoryRegion *mr)
+         cmr = QTAILQ_FIRST(&mr->coalesced);
+         QTAILQ_REMOVE(&mr->coalesced, cmr, link);
+         g_free(cmr);
++        updated = true;
++    }
++
++    if (updated) {
++        memory_region_update_coalesced_range(mr);
+     }
+-    memory_region_update_coalesced_range(mr);
+ }
+ 
+ void memory_region_set_flush_coalesced(MemoryRegion *mr)
+-- 
+1.7.1
+

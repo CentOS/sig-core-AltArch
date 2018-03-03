@@ -1,0 +1,2058 @@
+From 4d111d7b23baba92ce5a2f7deb7d33f4088d8342 Mon Sep 17 00:00:00 2001
+Message-Id: <4d111d7b23baba92ce5a2f7deb7d33f4088d8342.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:18:12 +0100
+Subject: [PATCH 32/56] i386: add ACPI table files from seabios
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-33-git-send-email-mst@redhat.com>
+Patchwork-id: 56338
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 32/57] i386: add ACPI table files from seabios
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+This adds ASL code as well as scripts for processing it,
+imported from seabios git tree
+commit 51684b7ced75fb76776e8ee84833fcfb6ecf12dd
+
+Will be used for runtime acpi table generation.
+
+Note:
+This patch reuses some code from SeaBIOS, which was originally under
+LGPLv2 and then relicensed to GPLv3 or LGPLv3, in QEMU under GPLv2+. This
+relicensing has been acked by all contributors that had contributed to the
+code since the v2->v3 relicense. ACKs approving the v2+ relicensing are
+listed below. The list might include ACKs from people not holding
+copyright on any parts of the reused code, but it's better to err on the
+side of caution and include them.
+
+Affected SeaBIOS files (GPLv2+ license headers added)
+<http://thread.gmane.org/gmane.comp.bios.coreboot.seabios/5949>:
+
+ src/acpi-dsdt-cpu-hotplug.dsl
+ src/acpi-dsdt-dbug.dsl
+ src/acpi-dsdt-hpet.dsl
+ src/acpi-dsdt-isa.dsl
+ src/acpi-dsdt-pci-crs.dsl
+ src/acpi.c
+ src/acpi.h
+ src/ssdt-misc.dsl
+ src/ssdt-pcihp.dsl
+ src/ssdt-proc.dsl
+ tools/acpi_extract.py
+ tools/acpi_extract_preprocess.py
+
+Each one of the listed people agreed to the following:
+
+> If you allow the use of your contribution in QEMU under the
+> terms of GPLv2 or later as proposed by this patch,
+> please respond to this mail including the line:
+>
+> Acked-by: Name <email address>
+
+  Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+  Acked-by: Jan Kiszka <jan.kiszka@siemens.com>
+  Acked-by: Jason Baron <jbaron@akamai.com>
+  Acked-by: David Woodhouse <David.Woodhouse@intel.com>
+  Acked-by: Gleb Natapov <gleb@redhat.com>
+  Acked-by: Marcelo Tosatti <mtosatti@redhat.com>
+  Acked-by: Dave Frodin <dave.frodin@se-eng.com>
+  Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+  Acked-by: Kevin O'Connor <kevin@koconnor.net>
+  Acked-by: Laszlo Ersek <lersek@redhat.com>
+  Acked-by: Kenji Kaneshige <kaneshige.kenji@jp.fujitsu.com>
+  Acked-by: Isaku Yamahata <yamahata@valinux.co.jp>
+  Acked-by: Magnus Christensson <magnus.christensson@intel.com>
+  Acked-by: Hu Tao <hutao@cn.fujitsu.com>
+  Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Hu Tao <hutao@cn.fujitsu.com>
+Reviewed-by: Gerd Hoffmann <kraxel@redhat.com>
+Tested-by: Gerd Hoffmann <kraxel@redhat.com>
+Reviewed-by: Igor Mammedov <imammedo@redhat.com>
+Tested-by: Igor Mammedov <imammedo@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 74523b850189afc23b608918c458b9242757f6d9)
+---
+ hw/i386/acpi-dsdt-cpu-hotplug.dsl  |  93 ++++++++
+ hw/i386/acpi-dsdt-dbug.dsl         |  41 ++++
+ hw/i386/acpi-dsdt-hpet.dsl         |  51 +++++
+ hw/i386/acpi-dsdt-isa.dsl          | 117 ++++++++++
+ hw/i386/acpi-dsdt-pci-crs.dsl      | 105 +++++++++
+ hw/i386/acpi-dsdt.dsl              | 343 ++++++++++++++++++++++++++++
+ hw/i386/q35-acpi-dsdt.dsl          | 452 +++++++++++++++++++++++++++++++++++++
+ hw/i386/ssdt-misc.dsl              | 119 ++++++++++
+ hw/i386/ssdt-pcihp.dsl             |  51 +++++
+ hw/i386/ssdt-proc.dsl              |  63 ++++++
+ scripts/acpi_extract.py            | 362 +++++++++++++++++++++++++++++
+ scripts/acpi_extract_preprocess.py |  51 +++++
+ 12 files changed, 1848 insertions(+)
+ create mode 100644 hw/i386/acpi-dsdt-cpu-hotplug.dsl
+ create mode 100644 hw/i386/acpi-dsdt-dbug.dsl
+ create mode 100644 hw/i386/acpi-dsdt-hpet.dsl
+ create mode 100644 hw/i386/acpi-dsdt-isa.dsl
+ create mode 100644 hw/i386/acpi-dsdt-pci-crs.dsl
+ create mode 100644 hw/i386/acpi-dsdt.dsl
+ create mode 100644 hw/i386/q35-acpi-dsdt.dsl
+ create mode 100644 hw/i386/ssdt-misc.dsl
+ create mode 100644 hw/i386/ssdt-pcihp.dsl
+ create mode 100644 hw/i386/ssdt-proc.dsl
+ create mode 100755 scripts/acpi_extract.py
+ create mode 100755 scripts/acpi_extract_preprocess.py
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/i386/acpi-dsdt-cpu-hotplug.dsl  |  93 ++++++++
+ hw/i386/acpi-dsdt-dbug.dsl         |  41 ++++
+ hw/i386/acpi-dsdt-hpet.dsl         |  51 +++++
+ hw/i386/acpi-dsdt-isa.dsl          | 117 ++++++++++
+ hw/i386/acpi-dsdt-pci-crs.dsl      | 105 +++++++++
+ hw/i386/acpi-dsdt.dsl              | 343 ++++++++++++++++++++++++++++
+ hw/i386/q35-acpi-dsdt.dsl          | 452 +++++++++++++++++++++++++++++++++++++
+ hw/i386/ssdt-misc.dsl              | 119 ++++++++++
+ hw/i386/ssdt-pcihp.dsl             |  51 +++++
+ hw/i386/ssdt-proc.dsl              |  63 ++++++
+ scripts/acpi_extract.py            | 362 +++++++++++++++++++++++++++++
+ scripts/acpi_extract_preprocess.py |  51 +++++
+ 12 files changed, 1848 insertions(+)
+ create mode 100644 hw/i386/acpi-dsdt-cpu-hotplug.dsl
+ create mode 100644 hw/i386/acpi-dsdt-dbug.dsl
+ create mode 100644 hw/i386/acpi-dsdt-hpet.dsl
+ create mode 100644 hw/i386/acpi-dsdt-isa.dsl
+ create mode 100644 hw/i386/acpi-dsdt-pci-crs.dsl
+ create mode 100644 hw/i386/acpi-dsdt.dsl
+ create mode 100644 hw/i386/q35-acpi-dsdt.dsl
+ create mode 100644 hw/i386/ssdt-misc.dsl
+ create mode 100644 hw/i386/ssdt-pcihp.dsl
+ create mode 100644 hw/i386/ssdt-proc.dsl
+ create mode 100755 scripts/acpi_extract.py
+ create mode 100755 scripts/acpi_extract_preprocess.py
+
+diff --git a/hw/i386/acpi-dsdt-cpu-hotplug.dsl b/hw/i386/acpi-dsdt-cpu-hotplug.dsl
+new file mode 100644
+index 0000000..c96ac42
+--- /dev/null
++++ b/hw/i386/acpi-dsdt-cpu-hotplug.dsl
+@@ -0,0 +1,93 @@
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++/****************************************************************
++ * CPU hotplug
++ ****************************************************************/
++
++Scope(\_SB) {
++    /* Objects filled in by run-time generated SSDT */
++    External(NTFY, MethodObj)
++    External(CPON, PkgObj)
++
++    /* Methods called by run-time generated SSDT Processor objects */
++    Method(CPMA, 1, NotSerialized) {
++        // _MAT method - create an madt apic buffer
++        // Arg0 = Processor ID = Local APIC ID
++        // Local0 = CPON flag for this cpu
++        Store(DerefOf(Index(CPON, Arg0)), Local0)
++        // Local1 = Buffer (in madt apic form) to return
++        Store(Buffer(8) {0x00, 0x08, 0x00, 0x00, 0x00, 0, 0, 0}, Local1)
++        // Update the processor id, lapic id, and enable/disable status
++        Store(Arg0, Index(Local1, 2))
++        Store(Arg0, Index(Local1, 3))
++        Store(Local0, Index(Local1, 4))
++        Return (Local1)
++    }
++    Method(CPST, 1, NotSerialized) {
++        // _STA method - return ON status of cpu
++        // Arg0 = Processor ID = Local APIC ID
++        // Local0 = CPON flag for this cpu
++        Store(DerefOf(Index(CPON, Arg0)), Local0)
++        If (Local0) {
++            Return (0xF)
++        } Else {
++            Return (0x0)
++        }
++    }
++    Method(CPEJ, 2, NotSerialized) {
++        // _EJ0 method - eject callback
++        Sleep(200)
++    }
++
++    /* CPU hotplug notify method */
++    OperationRegion(PRST, SystemIO, 0xaf00, 32)
++    Field(PRST, ByteAcc, NoLock, Preserve) {
++        PRS, 256
++    }
++    Method(PRSC, 0) {
++        // Local5 = active cpu bitmap
++        Store(PRS, Local5)
++        // Local2 = last read byte from bitmap
++        Store(Zero, Local2)
++        // Local0 = Processor ID / APIC ID iterator
++        Store(Zero, Local0)
++        While (LLess(Local0, SizeOf(CPON))) {
++            // Local1 = CPON flag for this cpu
++            Store(DerefOf(Index(CPON, Local0)), Local1)
++            If (And(Local0, 0x07)) {
++                // Shift down previously read bitmap byte
++                ShiftRight(Local2, 1, Local2)
++            } Else {
++                // Read next byte from cpu bitmap
++                Store(DerefOf(Index(Local5, ShiftRight(Local0, 3))), Local2)
++            }
++            // Local3 = active state for this cpu
++            Store(And(Local2, 1), Local3)
++
++            If (LNotEqual(Local1, Local3)) {
++                // State change - update CPON with new state
++                Store(Local3, Index(CPON, Local0))
++                // Do CPU notify
++                If (LEqual(Local3, 1)) {
++                    NTFY(Local0, 1)
++                } Else {
++                    NTFY(Local0, 3)
++                }
++            }
++            Increment(Local0)
++        }
++    }
++}
+diff --git a/hw/i386/acpi-dsdt-dbug.dsl b/hw/i386/acpi-dsdt-dbug.dsl
+new file mode 100644
+index 0000000..86230f7
+--- /dev/null
++++ b/hw/i386/acpi-dsdt-dbug.dsl
+@@ -0,0 +1,41 @@
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++/****************************************************************
++ * Debugging
++ ****************************************************************/
++
++Scope(\) {
++    /* Debug Output */
++    OperationRegion(DBG, SystemIO, 0x0402, 0x01)
++    Field(DBG, ByteAcc, NoLock, Preserve) {
++        DBGB,   8,
++    }
++
++    /* Debug method - use this method to send output to the QEMU
++     * BIOS debug port.  This method handles strings, integers,
++     * and buffers.  For example: DBUG("abc") DBUG(0x123) */
++    Method(DBUG, 1) {
++        ToHexString(Arg0, Local0)
++        ToBuffer(Local0, Local0)
++        Subtract(SizeOf(Local0), 1, Local1)
++        Store(Zero, Local2)
++        While (LLess(Local2, Local1)) {
++            Store(DerefOf(Index(Local0, Local2)), DBGB)
++            Increment(Local2)
++        }
++        Store(0x0A, DBGB)
++    }
++}
+diff --git a/hw/i386/acpi-dsdt-hpet.dsl b/hw/i386/acpi-dsdt-hpet.dsl
+new file mode 100644
+index 0000000..dfde174
+--- /dev/null
++++ b/hw/i386/acpi-dsdt-hpet.dsl
+@@ -0,0 +1,51 @@
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++/****************************************************************
++ * HPET
++ ****************************************************************/
++
++Scope(\_SB) {
++    Device(HPET) {
++        Name(_HID, EISAID("PNP0103"))
++        Name(_UID, 0)
++        OperationRegion(HPTM, SystemMemory, 0xFED00000, 0x400)
++        Field(HPTM, DWordAcc, Lock, Preserve) {
++            VEND, 32,
++            PRD, 32,
++        }
++        Method(_STA, 0, NotSerialized) {
++            Store(VEND, Local0)
++            Store(PRD, Local1)
++            ShiftRight(Local0, 16, Local0)
++            If (LOr(LEqual(Local0, 0), LEqual(Local0, 0xffff))) {
++                Return (0x0)
++            }
++            If (LOr(LEqual(Local1, 0), LGreater(Local1, 100000000))) {
++                Return (0x0)
++            }
++            Return (0x0F)
++        }
++        Name(_CRS, ResourceTemplate() {
++#if 0       /* This makes WinXP BSOD for not yet figured reasons. */
++            IRQNoFlags() {2, 8}
++#endif
++            Memory32Fixed(ReadOnly,
++                0xFED00000,         // Address Base
++                0x00000400,         // Address Length
++                )
++        })
++    }
++}
+diff --git a/hw/i386/acpi-dsdt-isa.dsl b/hw/i386/acpi-dsdt-isa.dsl
+new file mode 100644
+index 0000000..89caa16
+--- /dev/null
++++ b/hw/i386/acpi-dsdt-isa.dsl
+@@ -0,0 +1,117 @@
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++/* Common legacy ISA style devices. */
++Scope(\_SB.PCI0.ISA) {
++
++    Device(RTC) {
++        Name(_HID, EisaId("PNP0B00"))
++        Name(_CRS, ResourceTemplate() {
++            IO(Decode16, 0x0070, 0x0070, 0x10, 0x02)
++            IRQNoFlags() { 8 }
++            IO(Decode16, 0x0072, 0x0072, 0x02, 0x06)
++        })
++    }
++
++    Device(KBD) {
++        Name(_HID, EisaId("PNP0303"))
++        Method(_STA, 0, NotSerialized) {
++            Return (0x0f)
++        }
++        Name(_CRS, ResourceTemplate() {
++            IO(Decode16, 0x0060, 0x0060, 0x01, 0x01)
++            IO(Decode16, 0x0064, 0x0064, 0x01, 0x01)
++            IRQNoFlags() { 1 }
++        })
++    }
++
++    Device(MOU) {
++        Name(_HID, EisaId("PNP0F13"))
++        Method(_STA, 0, NotSerialized) {
++            Return (0x0f)
++        }
++        Name(_CRS, ResourceTemplate() {
++            IRQNoFlags() { 12 }
++        })
++    }
++
++    Device(FDC0) {
++        Name(_HID, EisaId("PNP0700"))
++        Method(_STA, 0, NotSerialized) {
++            Store(FDEN, Local0)
++            If (LEqual(Local0, 0)) {
++                Return (0x00)
++            } Else {
++                Return (0x0F)
++            }
++        }
++        Name(_CRS, ResourceTemplate() {
++            IO(Decode16, 0x03F2, 0x03F2, 0x00, 0x04)
++            IO(Decode16, 0x03F7, 0x03F7, 0x00, 0x01)
++            IRQNoFlags() { 6 }
++            DMA(Compatibility, NotBusMaster, Transfer8) { 2 }
++        })
++    }
++
++    Device(LPT) {
++        Name(_HID, EisaId("PNP0400"))
++        Method(_STA, 0, NotSerialized) {
++            Store(LPEN, Local0)
++            If (LEqual(Local0, 0)) {
++                Return (0x00)
++            } Else {
++                Return (0x0F)
++            }
++        }
++        Name(_CRS, ResourceTemplate() {
++            IO(Decode16, 0x0378, 0x0378, 0x08, 0x08)
++            IRQNoFlags() { 7 }
++        })
++    }
++
++    Device(COM1) {
++        Name(_HID, EisaId("PNP0501"))
++        Name(_UID, 0x01)
++        Method(_STA, 0, NotSerialized) {
++            Store(CAEN, Local0)
++            If (LEqual(Local0, 0)) {
++                Return (0x00)
++            } Else {
++                Return (0x0F)
++            }
++        }
++        Name(_CRS, ResourceTemplate() {
++            IO(Decode16, 0x03F8, 0x03F8, 0x00, 0x08)
++            IRQNoFlags() { 4 }
++        })
++    }
++
++    Device(COM2) {
++        Name(_HID, EisaId("PNP0501"))
++        Name(_UID, 0x02)
++        Method(_STA, 0, NotSerialized) {
++            Store(CBEN, Local0)
++            If (LEqual(Local0, 0)) {
++                Return (0x00)
++            } Else {
++                Return (0x0F)
++            }
++        }
++        Name(_CRS, ResourceTemplate() {
++            IO(Decode16, 0x02F8, 0x02F8, 0x00, 0x08)
++            IRQNoFlags() { 3 }
++        })
++    }
++}
+diff --git a/hw/i386/acpi-dsdt-pci-crs.dsl b/hw/i386/acpi-dsdt-pci-crs.dsl
+new file mode 100644
+index 0000000..b375a19
+--- /dev/null
++++ b/hw/i386/acpi-dsdt-pci-crs.dsl
+@@ -0,0 +1,105 @@
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++/* PCI CRS (current resources) definition. */
++Scope(\_SB.PCI0) {
++
++    Name(CRES, ResourceTemplate() {
++        WordBusNumber(ResourceProducer, MinFixed, MaxFixed, PosDecode,
++            0x0000,             // Address Space Granularity
++            0x0000,             // Address Range Minimum
++            0x00FF,             // Address Range Maximum
++            0x0000,             // Address Translation Offset
++            0x0100,             // Address Length
++            ,, )
++        IO(Decode16,
++            0x0CF8,             // Address Range Minimum
++            0x0CF8,             // Address Range Maximum
++            0x01,               // Address Alignment
++            0x08,               // Address Length
++            )
++        WordIO(ResourceProducer, MinFixed, MaxFixed, PosDecode, EntireRange,
++            0x0000,             // Address Space Granularity
++            0x0000,             // Address Range Minimum
++            0x0CF7,             // Address Range Maximum
++            0x0000,             // Address Translation Offset
++            0x0CF8,             // Address Length
++            ,, , TypeStatic)
++        WordIO(ResourceProducer, MinFixed, MaxFixed, PosDecode, EntireRange,
++            0x0000,             // Address Space Granularity
++            0x0D00,             // Address Range Minimum
++            0xFFFF,             // Address Range Maximum
++            0x0000,             // Address Translation Offset
++            0xF300,             // Address Length
++            ,, , TypeStatic)
++        DWordMemory(ResourceProducer, PosDecode, MinFixed, MaxFixed, Cacheable, ReadWrite,
++            0x00000000,         // Address Space Granularity
++            0x000A0000,         // Address Range Minimum
++            0x000BFFFF,         // Address Range Maximum
++            0x00000000,         // Address Translation Offset
++            0x00020000,         // Address Length
++            ,, , AddressRangeMemory, TypeStatic)
++        DWordMemory(ResourceProducer, PosDecode, MinFixed, MaxFixed, NonCacheable, ReadWrite,
++            0x00000000,         // Address Space Granularity
++            0xE0000000,         // Address Range Minimum
++            0xFEBFFFFF,         // Address Range Maximum
++            0x00000000,         // Address Translation Offset
++            0x1EC00000,         // Address Length
++            ,, PW32, AddressRangeMemory, TypeStatic)
++    })
++
++    Name(CR64, ResourceTemplate() {
++        QWordMemory(ResourceProducer, PosDecode, MinFixed, MaxFixed, Cacheable, ReadWrite,
++            0x00000000,          // Address Space Granularity
++            0x8000000000,        // Address Range Minimum
++            0xFFFFFFFFFF,        // Address Range Maximum
++            0x00000000,          // Address Translation Offset
++            0x8000000000,        // Address Length
++            ,, PW64, AddressRangeMemory, TypeStatic)
++    })
++
++    Method(_CRS, 0) {
++        /* Fields provided by dynamically created ssdt */
++        External(P0S, IntObj)
++        External(P0E, IntObj)
++        External(P1V, IntObj)
++        External(P1S, BuffObj)
++        External(P1E, BuffObj)
++        External(P1L, BuffObj)
++
++        /* fixup 32bit pci io window */
++        CreateDWordField(CRES, \_SB.PCI0.PW32._MIN, PS32)
++        CreateDWordField(CRES, \_SB.PCI0.PW32._MAX, PE32)
++        CreateDWordField(CRES, \_SB.PCI0.PW32._LEN, PL32)
++        Store(P0S, PS32)
++        Store(P0E, PE32)
++        Store(Add(Subtract(P0E, P0S), 1), PL32)
++
++        If (LEqual(P1V, Zero)) {
++            Return (CRES)
++        }
++
++        /* fixup 64bit pci io window */
++        CreateQWordField(CR64, \_SB.PCI0.PW64._MIN, PS64)
++        CreateQWordField(CR64, \_SB.PCI0.PW64._MAX, PE64)
++        CreateQWordField(CR64, \_SB.PCI0.PW64._LEN, PL64)
++        Store(P1S, PS64)
++        Store(P1E, PE64)
++        Store(P1L, PL64)
++        /* add window and return result */
++        ConcatenateResTemplate(CRES, CR64, Local0)
++        Return (Local0)
++    }
++}
+diff --git a/hw/i386/acpi-dsdt.dsl b/hw/i386/acpi-dsdt.dsl
+new file mode 100644
+index 0000000..90efce0
+--- /dev/null
++++ b/hw/i386/acpi-dsdt.dsl
+@@ -0,0 +1,343 @@
++/*
++ * Bochs/QEMU ACPI DSDT ASL definition
++ *
++ * Copyright (c) 2006 Fabrice Bellard
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License version 2 as published by the Free Software Foundation.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
++ */
++
++ACPI_EXTRACT_ALL_CODE AcpiDsdtAmlCode
++
++DefinitionBlock (
++    "acpi-dsdt.aml",    // Output Filename
++    "DSDT",             // Signature
++    0x01,               // DSDT Compliance Revision
++    "BXPC",             // OEMID
++    "BXDSDT",           // TABLE ID
++    0x1                 // OEM Revision
++    )
++{
++
++#include "acpi-dsdt-dbug.dsl"
++
++
++/****************************************************************
++ * PCI Bus definition
++ ****************************************************************/
++
++    Scope(\_SB) {
++        Device(PCI0) {
++            Name(_HID, EisaId("PNP0A03"))
++            Name(_ADR, 0x00)
++            Name(_UID, 1)
++        }
++    }
++
++#include "acpi-dsdt-pci-crs.dsl"
++#include "acpi-dsdt-hpet.dsl"
++
++
++/****************************************************************
++ * VGA
++ ****************************************************************/
++
++    Scope(\_SB.PCI0) {
++        Device(VGA) {
++            Name(_ADR, 0x00020000)
++            OperationRegion(PCIC, PCI_Config, Zero, 0x4)
++            Field(PCIC, DWordAcc, NoLock, Preserve) {
++                VEND, 32
++            }
++            Method(_S1D, 0, NotSerialized) {
++                Return (0x00)
++            }
++            Method(_S2D, 0, NotSerialized) {
++                Return (0x00)
++            }
++            Method(_S3D, 0, NotSerialized) {
++                If (LEqual(VEND, 0x1001b36)) {
++                    Return (0x03)           // QXL
++                } Else {
++                    Return (0x00)
++                }
++            }
++        }
++    }
++
++
++/****************************************************************
++ * PIIX4 PM
++ ****************************************************************/
++
++    Scope(\_SB.PCI0) {
++        Device(PX13) {
++            Name(_ADR, 0x00010003)
++            OperationRegion(P13C, PCI_Config, 0x00, 0xff)
++        }
++    }
++
++
++/****************************************************************
++ * PIIX3 ISA bridge
++ ****************************************************************/
++
++    Scope(\_SB.PCI0) {
++        Device(ISA) {
++            Name(_ADR, 0x00010000)
++
++            /* PIIX PCI to ISA irq remapping */
++            OperationRegion(P40C, PCI_Config, 0x60, 0x04)
++
++            /* enable bits */
++            Field(\_SB.PCI0.PX13.P13C, AnyAcc, NoLock, Preserve) {
++                Offset(0x5f),
++                , 7,
++                LPEN, 1,         // LPT
++                Offset(0x67),
++                , 3,
++                CAEN, 1,         // COM1
++                , 3,
++                CBEN, 1,         // COM2
++            }
++            Name(FDEN, 1)
++        }
++    }
++
++#include "acpi-dsdt-isa.dsl"
++
++
++/****************************************************************
++ * PCI hotplug
++ ****************************************************************/
++
++    Scope(\_SB.PCI0) {
++        OperationRegion(PCST, SystemIO, 0xae00, 0x08)
++        Field(PCST, DWordAcc, NoLock, WriteAsZeros) {
++            PCIU, 32,
++            PCID, 32,
++        }
++
++        OperationRegion(SEJ, SystemIO, 0xae08, 0x04)
++        Field(SEJ, DWordAcc, NoLock, WriteAsZeros) {
++            B0EJ, 32,
++        }
++
++        /* Methods called by bulk generated PCI devices below */
++
++        /* Methods called by hotplug devices */
++        Method(PCEJ, 1, NotSerialized) {
++            // _EJ0 method - eject callback
++            Store(ShiftLeft(1, Arg0), B0EJ)
++            Return (0x0)
++        }
++
++        /* Hotplug notification method supplied by SSDT */
++        External(\_SB.PCI0.PCNT, MethodObj)
++
++        /* PCI hotplug notify method */
++        Method(PCNF, 0) {
++            // Local0 = iterator
++            Store(Zero, Local0)
++            While (LLess(Local0, 31)) {
++                Increment(Local0)
++                If (And(PCIU, ShiftLeft(1, Local0))) {
++                    PCNT(Local0, 1)
++                }
++                If (And(PCID, ShiftLeft(1, Local0))) {
++                    PCNT(Local0, 3)
++                }
++            }
++        }
++    }
++
++
++/****************************************************************
++ * PCI IRQs
++ ****************************************************************/
++
++    Scope(\_SB) {
++        Scope(PCI0) {
++            Name(_PRT, Package() {
++                /* PCI IRQ routing table, example from ACPI 2.0a specification,
++                   section 6.2.8.1 */
++                /* Note: we provide the same info as the PCI routing
++                   table of the Bochs BIOS */
++
++#define prt_slot(nr, lnk0, lnk1, lnk2, lnk3) \
++    Package() { nr##ffff, 0, lnk0, 0 }, \
++    Package() { nr##ffff, 1, lnk1, 0 }, \
++    Package() { nr##ffff, 2, lnk2, 0 }, \
++    Package() { nr##ffff, 3, lnk3, 0 }
++
++#define prt_slot0(nr) prt_slot(nr, LNKD, LNKA, LNKB, LNKC)
++#define prt_slot1(nr) prt_slot(nr, LNKA, LNKB, LNKC, LNKD)
++#define prt_slot2(nr) prt_slot(nr, LNKB, LNKC, LNKD, LNKA)
++#define prt_slot3(nr) prt_slot(nr, LNKC, LNKD, LNKA, LNKB)
++
++                prt_slot0(0x0000),
++                /* Device 1 is power mgmt device, and can only use irq 9 */
++                prt_slot(0x0001, LNKS, LNKB, LNKC, LNKD),
++                prt_slot2(0x0002),
++                prt_slot3(0x0003),
++                prt_slot0(0x0004),
++                prt_slot1(0x0005),
++                prt_slot2(0x0006),
++                prt_slot3(0x0007),
++                prt_slot0(0x0008),
++                prt_slot1(0x0009),
++                prt_slot2(0x000a),
++                prt_slot3(0x000b),
++                prt_slot0(0x000c),
++                prt_slot1(0x000d),
++                prt_slot2(0x000e),
++                prt_slot3(0x000f),
++                prt_slot0(0x0010),
++                prt_slot1(0x0011),
++                prt_slot2(0x0012),
++                prt_slot3(0x0013),
++                prt_slot0(0x0014),
++                prt_slot1(0x0015),
++                prt_slot2(0x0016),
++                prt_slot3(0x0017),
++                prt_slot0(0x0018),
++                prt_slot1(0x0019),
++                prt_slot2(0x001a),
++                prt_slot3(0x001b),
++                prt_slot0(0x001c),
++                prt_slot1(0x001d),
++                prt_slot2(0x001e),
++                prt_slot3(0x001f),
++            })
++        }
++
++        Field(PCI0.ISA.P40C, ByteAcc, NoLock, Preserve) {
++            PRQ0,   8,
++            PRQ1,   8,
++            PRQ2,   8,
++            PRQ3,   8
++        }
++
++        Method(IQST, 1, NotSerialized) {
++            // _STA method - get status
++            If (And(0x80, Arg0)) {
++                Return (0x09)
++            }
++            Return (0x0B)
++        }
++        Method(IQCR, 1, NotSerialized) {
++            // _CRS method - get current settings
++            Name(PRR0, ResourceTemplate() {
++                Interrupt(, Level, ActiveHigh, Shared) { 0 }
++            })
++            CreateDWordField(PRR0, 0x05, PRRI)
++            If (LLess(Arg0, 0x80)) {
++                Store(Arg0, PRRI)
++            }
++            Return (PRR0)
++        }
++
++#define define_link(link, uid, reg)                             \
++        Device(link) {                                          \
++            Name(_HID, EISAID("PNP0C0F"))                       \
++            Name(_UID, uid)                                     \
++            Name(_PRS, ResourceTemplate() {                     \
++                Interrupt(, Level, ActiveHigh, Shared) {        \
++                    5, 10, 11                                   \
++                }                                               \
++            })                                                  \
++            Method(_STA, 0, NotSerialized) {                    \
++                Return (IQST(reg))                              \
++            }                                                   \
++            Method(_DIS, 0, NotSerialized) {                    \
++                Or(reg, 0x80, reg)                              \
++            }                                                   \
++            Method(_CRS, 0, NotSerialized) {                    \
++                Return (IQCR(reg))                              \
++            }                                                   \
++            Method(_SRS, 1, NotSerialized) {                    \
++                CreateDWordField(Arg0, 0x05, PRRI)              \
++                Store(PRRI, reg)                                \
++            }                                                   \
++        }
++
++        define_link(LNKA, 0, PRQ0)
++        define_link(LNKB, 1, PRQ1)
++        define_link(LNKC, 2, PRQ2)
++        define_link(LNKD, 3, PRQ3)
++
++        Device(LNKS) {
++            Name(_HID, EISAID("PNP0C0F"))
++            Name(_UID, 4)
++            Name(_PRS, ResourceTemplate() {
++                Interrupt(, Level, ActiveHigh, Shared) { 9 }
++            })
++
++            // The SCI cannot be disabled and is always attached to GSI 9,
++            // so these are no-ops.  We only need this link to override the
++            // polarity to active high and match the content of the MADT.
++            Method(_STA, 0, NotSerialized) { Return (0x0b) }
++            Method(_DIS, 0, NotSerialized) { }
++            Method(_CRS, 0, NotSerialized) { Return (_PRS) }
++            Method(_SRS, 1, NotSerialized) { }
++        }
++    }
++
++#include "acpi-dsdt-cpu-hotplug.dsl"
++
++
++/****************************************************************
++ * General purpose events
++ ****************************************************************/
++
++    Scope(\_GPE) {
++        Name(_HID, "ACPI0006")
++
++        Method(_L00) {
++        }
++        Method(_E01) {
++            // PCI hotplug event
++            \_SB.PCI0.PCNF()
++        }
++        Method(_E02) {
++            // CPU hotplug event
++            \_SB.PRSC()
++        }
++        Method(_L03) {
++        }
++        Method(_L04) {
++        }
++        Method(_L05) {
++        }
++        Method(_L06) {
++        }
++        Method(_L07) {
++        }
++        Method(_L08) {
++        }
++        Method(_L09) {
++        }
++        Method(_L0A) {
++        }
++        Method(_L0B) {
++        }
++        Method(_L0C) {
++        }
++        Method(_L0D) {
++        }
++        Method(_L0E) {
++        }
++        Method(_L0F) {
++        }
++    }
++}
+diff --git a/hw/i386/q35-acpi-dsdt.dsl b/hw/i386/q35-acpi-dsdt.dsl
+new file mode 100644
+index 0000000..21c89b0
+--- /dev/null
++++ b/hw/i386/q35-acpi-dsdt.dsl
+@@ -0,0 +1,452 @@
++/*
++ * Bochs/QEMU ACPI DSDT ASL definition
++ *
++ * Copyright (c) 2006 Fabrice Bellard
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License version 2 as published by the Free Software Foundation.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
++ */
++/*
++ * Copyright (c) 2010 Isaku Yamahata
++ *                    yamahata at valinux co jp
++ * Based on acpi-dsdt.dsl, but heavily modified for q35 chipset.
++ */
++
++ACPI_EXTRACT_ALL_CODE Q35AcpiDsdtAmlCode
++
++DefinitionBlock (
++    "q35-acpi-dsdt.aml",// Output Filename
++    "DSDT",             // Signature
++    0x01,               // DSDT Compliance Revision
++    "BXPC",             // OEMID
++    "BXDSDT",           // TABLE ID
++    0x2                 // OEM Revision
++    )
++{
++
++#include "acpi-dsdt-dbug.dsl"
++
++    Scope(\_SB) {
++        OperationRegion(PCST, SystemIO, 0xae00, 0x0c)
++        OperationRegion(PCSB, SystemIO, 0xae0c, 0x01)
++        Field(PCSB, AnyAcc, NoLock, WriteAsZeros) {
++            PCIB, 8,
++        }
++    }
++
++
++/****************************************************************
++ * PCI Bus definition
++ ****************************************************************/
++
++    Scope(\_SB) {
++        Device(PCI0) {
++            Name(_HID, EisaId("PNP0A08"))
++            Name(_CID, EisaId("PNP0A03"))
++            Name(_ADR, 0x00)
++            Name(_UID, 1)
++
++            // _OSC: based on sample of ACPI3.0b spec
++            Name(SUPP, 0) // PCI _OSC Support Field value
++            Name(CTRL, 0) // PCI _OSC Control Field value
++            Method(_OSC, 4) {
++                // Create DWORD-addressable fields from the Capabilities Buffer
++                CreateDWordField(Arg3, 0, CDW1)
++
++                // Check for proper UUID
++                If (LEqual(Arg0, ToUUID("33DB4D5B-1FF7-401C-9657-7441C03DD766"))) {
++                    // Create DWORD-addressable fields from the Capabilities Buffer
++                    CreateDWordField(Arg3, 4, CDW2)
++                    CreateDWordField(Arg3, 8, CDW3)
++
++                    // Save Capabilities DWORD2 & 3
++                    Store(CDW2, SUPP)
++                    Store(CDW3, CTRL)
++
++                    // Always allow native PME, AER (no dependencies)
++                    // Never allow SHPC (no SHPC controller in this system)
++                    And(CTRL, 0x1D, CTRL)
++
++#if 0 // For now, nothing to do
++                    If (Not(And(CDW1, 1))) { // Query flag clear?
++                        // Disable GPEs for features granted native control.
++                        If (And(CTRL, 0x01)) { // Hot plug control granted?
++                            Store(0, HPCE) // clear the hot plug SCI enable bit
++                            Store(1, HPCS) // clear the hot plug SCI status bit
++                        }
++                        If (And(CTRL, 0x04)) { // PME control granted?
++                            Store(0, PMCE) // clear the PME SCI enable bit
++                            Store(1, PMCS) // clear the PME SCI status bit
++                        }
++                        If (And(CTRL, 0x10)) { // OS restoring PCI Express cap structure?
++                            // Set status to not restore PCI Express cap structure
++                            // upon resume from S3
++                            Store(1, S3CR)
++                        }
++                    }
++#endif
++                    If (LNotEqual(Arg1, One)) {
++                        // Unknown revision
++                        Or(CDW1, 0x08, CDW1)
++                    }
++                    If (LNotEqual(CDW3, CTRL)) {
++                        // Capabilities bits were masked
++                        Or(CDW1, 0x10, CDW1)
++                    }
++                    // Update DWORD3 in the buffer
++                    Store(CTRL, CDW3)
++                } Else {
++                    Or(CDW1, 4, CDW1) // Unrecognized UUID
++                }
++                Return (Arg3)
++            }
++        }
++    }
++
++#include "acpi-dsdt-pci-crs.dsl"
++#include "acpi-dsdt-hpet.dsl"
++
++
++/****************************************************************
++ * VGA
++ ****************************************************************/
++
++    Scope(\_SB.PCI0) {
++        Device(VGA) {
++            Name(_ADR, 0x00010000)
++            Method(_S1D, 0, NotSerialized) {
++                Return (0x00)
++            }
++            Method(_S2D, 0, NotSerialized) {
++                Return (0x00)
++            }
++            Method(_S3D, 0, NotSerialized) {
++                Return (0x00)
++            }
++        }
++    }
++
++
++/****************************************************************
++ * LPC ISA bridge
++ ****************************************************************/
++
++    Scope(\_SB.PCI0) {
++        /* PCI D31:f0 LPC ISA bridge */
++        Device(ISA) {
++            /* PCI D31:f0 */
++            Name(_ADR, 0x001f0000)
++
++            /* ICH9 PCI to ISA irq remapping */
++            OperationRegion(PIRQ, PCI_Config, 0x60, 0x0C)
++
++            OperationRegion(LPCD, PCI_Config, 0x80, 0x2)
++            Field(LPCD, AnyAcc, NoLock, Preserve) {
++                COMA,   3,
++                    ,   1,
++                COMB,   3,
++
++                Offset(0x01),
++                LPTD,   2,
++                    ,   2,
++                FDCD,   2
++            }
++            OperationRegion(LPCE, PCI_Config, 0x82, 0x2)
++            Field(LPCE, AnyAcc, NoLock, Preserve) {
++                CAEN,   1,
++                CBEN,   1,
++                LPEN,   1,
++                FDEN,   1
++            }
++        }
++    }
++
++#include "acpi-dsdt-isa.dsl"
++
++
++/****************************************************************
++ * PCI IRQs
++ ****************************************************************/
++
++    /* Zero => PIC mode, One => APIC Mode */
++    Name(\PICF, Zero)
++    Method(\_PIC, 1, NotSerialized) {
++        Store(Arg0, \PICF)
++    }
++
++    Scope(\_SB) {
++        Scope(PCI0) {
++#define prt_slot_lnk(nr, lnk0, lnk1, lnk2, lnk3)  \
++    Package() { nr##ffff, 0, lnk0, 0 },           \
++    Package() { nr##ffff, 1, lnk1, 0 },           \
++    Package() { nr##ffff, 2, lnk2, 0 },           \
++    Package() { nr##ffff, 3, lnk3, 0 }
++
++#define prt_slot_lnkA(nr) prt_slot_lnk(nr, LNKA, LNKB, LNKC, LNKD)
++#define prt_slot_lnkB(nr) prt_slot_lnk(nr, LNKB, LNKC, LNKD, LNKA)
++#define prt_slot_lnkC(nr) prt_slot_lnk(nr, LNKC, LNKD, LNKA, LNKB)
++#define prt_slot_lnkD(nr) prt_slot_lnk(nr, LNKD, LNKA, LNKB, LNKC)
++
++#define prt_slot_lnkE(nr) prt_slot_lnk(nr, LNKE, LNKF, LNKG, LNKH)
++#define prt_slot_lnkF(nr) prt_slot_lnk(nr, LNKF, LNKG, LNKH, LNKE)
++#define prt_slot_lnkG(nr) prt_slot_lnk(nr, LNKG, LNKH, LNKE, LNKF)
++#define prt_slot_lnkH(nr) prt_slot_lnk(nr, LNKH, LNKE, LNKF, LNKG)
++
++            Name(PRTP, package() {
++                prt_slot_lnkE(0x0000),
++                prt_slot_lnkF(0x0001),
++                prt_slot_lnkG(0x0002),
++                prt_slot_lnkH(0x0003),
++                prt_slot_lnkE(0x0004),
++                prt_slot_lnkF(0x0005),
++                prt_slot_lnkG(0x0006),
++                prt_slot_lnkH(0x0007),
++                prt_slot_lnkE(0x0008),
++                prt_slot_lnkF(0x0009),
++                prt_slot_lnkG(0x000a),
++                prt_slot_lnkH(0x000b),
++                prt_slot_lnkE(0x000c),
++                prt_slot_lnkF(0x000d),
++                prt_slot_lnkG(0x000e),
++                prt_slot_lnkH(0x000f),
++                prt_slot_lnkE(0x0010),
++                prt_slot_lnkF(0x0011),
++                prt_slot_lnkG(0x0012),
++                prt_slot_lnkH(0x0013),
++                prt_slot_lnkE(0x0014),
++                prt_slot_lnkF(0x0015),
++                prt_slot_lnkG(0x0016),
++                prt_slot_lnkH(0x0017),
++                prt_slot_lnkE(0x0018),
++
++                /* INTA -> PIRQA for slot 25 - 31
++                   see the default value of D<N>IR */
++                prt_slot_lnkA(0x0019),
++                prt_slot_lnkA(0x001a),
++                prt_slot_lnkA(0x001b),
++                prt_slot_lnkA(0x001c),
++                prt_slot_lnkA(0x001d),
++
++                /* PCIe->PCI bridge. use PIRQ[E-H] */
++                prt_slot_lnkE(0x001e),
++
++                prt_slot_lnkA(0x001f)
++            })
++
++#define prt_slot_gsi(nr, gsi0, gsi1, gsi2, gsi3)  \
++    Package() { nr##ffff, 0, gsi0, 0 },           \
++    Package() { nr##ffff, 1, gsi1, 0 },           \
++    Package() { nr##ffff, 2, gsi2, 0 },           \
++    Package() { nr##ffff, 3, gsi3, 0 }
++
++#define prt_slot_gsiA(nr) prt_slot_gsi(nr, GSIA, GSIB, GSIC, GSID)
++#define prt_slot_gsiB(nr) prt_slot_gsi(nr, GSIB, GSIC, GSID, GSIA)
++#define prt_slot_gsiC(nr) prt_slot_gsi(nr, GSIC, GSID, GSIA, GSIB)
++#define prt_slot_gsiD(nr) prt_slot_gsi(nr, GSID, GSIA, GSIB, GSIC)
++
++#define prt_slot_gsiE(nr) prt_slot_gsi(nr, GSIE, GSIF, GSIG, GSIH)
++#define prt_slot_gsiF(nr) prt_slot_gsi(nr, GSIF, GSIG, GSIH, GSIE)
++#define prt_slot_gsiG(nr) prt_slot_gsi(nr, GSIG, GSIH, GSIE, GSIF)
++#define prt_slot_gsiH(nr) prt_slot_gsi(nr, GSIH, GSIE, GSIF, GSIG)
++
++            Name(PRTA, package() {
++                prt_slot_gsiE(0x0000),
++                prt_slot_gsiF(0x0001),
++                prt_slot_gsiG(0x0002),
++                prt_slot_gsiH(0x0003),
++                prt_slot_gsiE(0x0004),
++                prt_slot_gsiF(0x0005),
++                prt_slot_gsiG(0x0006),
++                prt_slot_gsiH(0x0007),
++                prt_slot_gsiE(0x0008),
++                prt_slot_gsiF(0x0009),
++                prt_slot_gsiG(0x000a),
++                prt_slot_gsiH(0x000b),
++                prt_slot_gsiE(0x000c),
++                prt_slot_gsiF(0x000d),
++                prt_slot_gsiG(0x000e),
++                prt_slot_gsiH(0x000f),
++                prt_slot_gsiE(0x0010),
++                prt_slot_gsiF(0x0011),
++                prt_slot_gsiG(0x0012),
++                prt_slot_gsiH(0x0013),
++                prt_slot_gsiE(0x0014),
++                prt_slot_gsiF(0x0015),
++                prt_slot_gsiG(0x0016),
++                prt_slot_gsiH(0x0017),
++                prt_slot_gsiE(0x0018),
++
++                /* INTA -> PIRQA for slot 25 - 31, but 30
++                   see the default value of D<N>IR */
++                prt_slot_gsiA(0x0019),
++                prt_slot_gsiA(0x001a),
++                prt_slot_gsiA(0x001b),
++                prt_slot_gsiA(0x001c),
++                prt_slot_gsiA(0x001d),
++
++                /* PCIe->PCI bridge. use PIRQ[E-H] */
++                prt_slot_gsiE(0x001e),
++
++                prt_slot_gsiA(0x001f)
++            })
++
++            Method(_PRT, 0, NotSerialized) {
++                /* PCI IRQ routing table, example from ACPI 2.0a specification,
++                   section 6.2.8.1 */
++                /* Note: we provide the same info as the PCI routing
++                   table of the Bochs BIOS */
++                If (LEqual(\PICF, Zero)) {
++                    Return (PRTP)
++                } Else {
++                    Return (PRTA)
++                }
++            }
++        }
++
++        Field(PCI0.ISA.PIRQ, ByteAcc, NoLock, Preserve) {
++            PRQA,   8,
++            PRQB,   8,
++            PRQC,   8,
++            PRQD,   8,
++
++            Offset(0x08),
++            PRQE,   8,
++            PRQF,   8,
++            PRQG,   8,
++            PRQH,   8
++        }
++
++        Method(IQST, 1, NotSerialized) {
++            // _STA method - get status
++            If (And(0x80, Arg0)) {
++                Return (0x09)
++            }
++            Return (0x0B)
++        }
++        Method(IQCR, 1, NotSerialized) {
++            // _CRS method - get current settings
++            Name(PRR0, ResourceTemplate() {
++                Interrupt(, Level, ActiveHigh, Shared) { 0 }
++            })
++            CreateDWordField(PRR0, 0x05, PRRI)
++            Store(And(Arg0, 0x0F), PRRI)
++            Return (PRR0)
++        }
++
++#define define_link(link, uid, reg)                             \
++        Device(link) {                                          \
++            Name(_HID, EISAID("PNP0C0F"))                       \
++            Name(_UID, uid)                                     \
++            Name(_PRS, ResourceTemplate() {                     \
++                Interrupt(, Level, ActiveHigh, Shared) {        \
++                    5, 10, 11                                   \
++                }                                               \
++            })                                                  \
++            Method(_STA, 0, NotSerialized) {                    \
++                Return (IQST(reg))                              \
++            }                                                   \
++            Method(_DIS, 0, NotSerialized) {                    \
++                Or(reg, 0x80, reg)                              \
++            }                                                   \
++            Method(_CRS, 0, NotSerialized) {                    \
++                Return (IQCR(reg))                              \
++            }                                                   \
++            Method(_SRS, 1, NotSerialized) {                    \
++                CreateDWordField(Arg0, 0x05, PRRI)              \
++                Store(PRRI, reg)                                \
++            }                                                   \
++        }
++
++        define_link(LNKA, 0, PRQA)
++        define_link(LNKB, 1, PRQB)
++        define_link(LNKC, 2, PRQC)
++        define_link(LNKD, 3, PRQD)
++        define_link(LNKE, 4, PRQE)
++        define_link(LNKF, 5, PRQF)
++        define_link(LNKG, 6, PRQG)
++        define_link(LNKH, 7, PRQH)
++
++#define define_gsi_link(link, uid, gsi)                         \
++        Device(link) {                                          \
++            Name(_HID, EISAID("PNP0C0F"))                       \
++            Name(_UID, uid)                                     \
++            Name(_PRS, ResourceTemplate() {                     \
++                Interrupt(, Level, ActiveHigh, Shared) {        \
++                    gsi                                         \
++                }                                               \
++            })                                                  \
++            Name(_CRS, ResourceTemplate() {                     \
++                Interrupt(, Level, ActiveHigh, Shared) {        \
++                    gsi                                         \
++                }                                               \
++            })                                                  \
++            Method(_SRS, 1, NotSerialized) {                    \
++            }                                                   \
++        }
++
++        define_gsi_link(GSIA, 0, 0x10)
++        define_gsi_link(GSIB, 0, 0x11)
++        define_gsi_link(GSIC, 0, 0x12)
++        define_gsi_link(GSID, 0, 0x13)
++        define_gsi_link(GSIE, 0, 0x14)
++        define_gsi_link(GSIF, 0, 0x15)
++        define_gsi_link(GSIG, 0, 0x16)
++        define_gsi_link(GSIH, 0, 0x17)
++    }
++
++#include "acpi-dsdt-cpu-hotplug.dsl"
++
++
++/****************************************************************
++ * General purpose events
++ ****************************************************************/
++
++    Scope(\_GPE) {
++        Name(_HID, "ACPI0006")
++
++        Method(_L00) {
++        }
++        Method(_L01) {
++            // CPU hotplug event
++            \_SB.PRSC()
++        }
++        Method(_L02) {
++        }
++        Method(_L03) {
++        }
++        Method(_L04) {
++        }
++        Method(_L05) {
++        }
++        Method(_L06) {
++        }
++        Method(_L07) {
++        }
++        Method(_L08) {
++        }
++        Method(_L09) {
++        }
++        Method(_L0A) {
++        }
++        Method(_L0B) {
++        }
++        Method(_L0C) {
++        }
++        Method(_L0D) {
++        }
++        Method(_L0E) {
++        }
++        Method(_L0F) {
++        }
++    }
++}
+diff --git a/hw/i386/ssdt-misc.dsl b/hw/i386/ssdt-misc.dsl
+new file mode 100644
+index 0000000..a4484b8
+--- /dev/null
++++ b/hw/i386/ssdt-misc.dsl
+@@ -0,0 +1,119 @@
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++ACPI_EXTRACT_ALL_CODE ssdp_misc_aml
++
++DefinitionBlock ("ssdt-misc.aml", "SSDT", 0x01, "BXPC", "BXSSDTSUSP", 0x1)
++{
++
++/****************************************************************
++ * PCI memory ranges
++ ****************************************************************/
++
++    Scope(\) {
++       ACPI_EXTRACT_NAME_DWORD_CONST acpi_pci32_start
++       Name(P0S, 0x12345678)
++       ACPI_EXTRACT_NAME_DWORD_CONST acpi_pci32_end
++       Name(P0E, 0x12345678)
++       ACPI_EXTRACT_NAME_BYTE_CONST acpi_pci64_valid
++       Name(P1V, 0x12)
++       ACPI_EXTRACT_NAME_BUFFER8 acpi_pci64_start
++       Name(P1S, Buffer() { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 })
++       ACPI_EXTRACT_NAME_BUFFER8 acpi_pci64_end
++       Name(P1E, Buffer() { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 })
++       ACPI_EXTRACT_NAME_BUFFER8 acpi_pci64_length
++       Name(P1L, Buffer() { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 })
++    }
++
++
++/****************************************************************
++ * Suspend
++ ****************************************************************/
++
++    Scope(\) {
++    /*
++     * S3 (suspend-to-ram), S4 (suspend-to-disk) and S5 (power-off) type codes:
++     * must match piix4 emulation.
++     */
++
++        ACPI_EXTRACT_NAME_STRING acpi_s3_name
++        Name(_S3, Package(0x04) {
++            One,  /* PM1a_CNT.SLP_TYP */
++            One,  /* PM1b_CNT.SLP_TYP */
++            Zero,  /* reserved */
++            Zero   /* reserved */
++        })
++        ACPI_EXTRACT_NAME_STRING acpi_s4_name
++        ACPI_EXTRACT_PKG_START acpi_s4_pkg
++        Name(_S4, Package(0x04) {
++            0x2,  /* PM1a_CNT.SLP_TYP */
++            0x2,  /* PM1b_CNT.SLP_TYP */
++            Zero,  /* reserved */
++            Zero   /* reserved */
++        })
++        Name(_S5, Package(0x04) {
++            Zero,  /* PM1a_CNT.SLP_TYP */
++            Zero,  /* PM1b_CNT.SLP_TYP */
++            Zero,  /* reserved */
++            Zero   /* reserved */
++        })
++    }
++
++    External(\_SB.PCI0, DeviceObj)
++    External(\_SB.PCI0.ISA, DeviceObj)
++
++    Scope(\_SB.PCI0.ISA) {
++        Device(PEVT) {
++            Name(_HID, "QEMU0001")
++            /* PEST will be patched to be Zero if no such device */
++            ACPI_EXTRACT_NAME_WORD_CONST ssdt_isa_pest
++            Name(PEST, 0xFFFF)
++            OperationRegion(PEOR, SystemIO, PEST, 0x01)
++            Field(PEOR, ByteAcc, NoLock, Preserve) {
++                PEPT,   8,
++            }
++
++            Method(_STA, 0, NotSerialized) {
++                Store(PEST, Local0)
++                If (LEqual(Local0, Zero)) {
++                    Return (0x00)
++                } Else {
++                    Return (0x0F)
++                }
++            }
++
++            Method(RDPT, 0, NotSerialized) {
++                Store(PEPT, Local0)
++                Return (Local0)
++            }
++
++            Method(WRPT, 1, NotSerialized) {
++                Store(Arg0, PEPT)
++            }
++
++            Name(_CRS, ResourceTemplate() {
++                IO(Decode16, 0x00, 0x00, 0x01, 0x01, IO)
++            })
++
++            CreateWordField(_CRS, IO._MIN, IOMN)
++            CreateWordField(_CRS, IO._MAX, IOMX)
++
++            Method(_INI, 0, NotSerialized) {
++                Store(PEST, IOMN)
++                Store(PEST, IOMX)
++            }
++        }
++    }
++}
+diff --git a/hw/i386/ssdt-pcihp.dsl b/hw/i386/ssdt-pcihp.dsl
+new file mode 100644
+index 0000000..d29a5b9
+--- /dev/null
++++ b/hw/i386/ssdt-pcihp.dsl
+@@ -0,0 +1,51 @@
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++ACPI_EXTRACT_ALL_CODE ssdp_pcihp_aml
++
++DefinitionBlock ("ssdt-pcihp.aml", "SSDT", 0x01, "BXPC", "BXSSDTPCIHP", 0x1)
++{
++
++/****************************************************************
++ * PCI hotplug
++ ****************************************************************/
++
++    /* Objects supplied by DSDT */
++    External(\_SB.PCI0, DeviceObj)
++    External(\_SB.PCI0.PCEJ, MethodObj)
++
++    Scope(\_SB.PCI0) {
++
++        /* Bulk generated PCI hotplug devices */
++        ACPI_EXTRACT_DEVICE_START ssdt_pcihp_start
++        ACPI_EXTRACT_DEVICE_END ssdt_pcihp_end
++        ACPI_EXTRACT_DEVICE_STRING ssdt_pcihp_name
++
++        // Method _EJ0 can be patched by BIOS to EJ0_
++        // at runtime, if the slot is detected to not support hotplug.
++        // Extract the offset of the address dword and the
++        // _EJ0 name to allow this patching.
++        Device(SAA) {
++            ACPI_EXTRACT_NAME_BYTE_CONST ssdt_pcihp_id
++            Name(_SUN, 0xAA)
++            ACPI_EXTRACT_NAME_DWORD_CONST ssdt_pcihp_adr
++            Name(_ADR, 0xAA0000)
++            ACPI_EXTRACT_METHOD_STRING ssdt_pcihp_ej0
++            Method(_EJ0, 1) {
++                Return (PCEJ(_SUN))
++            }
++        }
++    }
++}
+diff --git a/hw/i386/ssdt-proc.dsl b/hw/i386/ssdt-proc.dsl
+new file mode 100644
+index 0000000..58333c7
+--- /dev/null
++++ b/hw/i386/ssdt-proc.dsl
+@@ -0,0 +1,63 @@
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++/* This file is the basis for the ssdt table generated in src/acpi.c.
++ * It defines the contents of the per-cpu Processor() object.  At
++ * runtime, a dynamically generated SSDT will contain one copy of this
++ * AML snippet for every possible cpu in the system.  The objects will
++ * be placed in the \_SB_ namespace.
++ *
++ * In addition to the aml code generated from this file, the
++ * src/acpi.c file creates a NTFY method with an entry for each cpu:
++ *     Method(NTFY, 2) {
++ *         If (LEqual(Arg0, 0x00)) { Notify(CP00, Arg1) }
++ *         If (LEqual(Arg0, 0x01)) { Notify(CP01, Arg1) }
++ *         ...
++ *     }
++ * and a CPON array with the list of active and inactive cpus:
++ *     Name(CPON, Package() { One, One, ..., Zero, Zero, ... })
++ */
++
++ACPI_EXTRACT_ALL_CODE ssdp_proc_aml
++
++DefinitionBlock ("ssdt-proc.aml", "SSDT", 0x01, "BXPC", "BXSSDT", 0x1)
++{
++    ACPI_EXTRACT_PROCESSOR_START ssdt_proc_start
++    ACPI_EXTRACT_PROCESSOR_END ssdt_proc_end
++    ACPI_EXTRACT_PROCESSOR_STRING ssdt_proc_name
++    Processor(CPAA, 0xAA, 0x0000b010, 0x06) {
++        ACPI_EXTRACT_NAME_BYTE_CONST ssdt_proc_id
++        Name(ID, 0xAA)
++/*
++ * The src/acpi.c code requires the above ACP_EXTRACT tags so that it can update
++ * CPAA and 0xAA with the appropriate CPU id (see
++ * SD_OFFSET_CPUHEX/CPUID1/CPUID2).  Don't change the above without
++ * also updating the C code.
++ */
++        Name(_HID, "ACPI0007")
++        External(CPMA, MethodObj)
++        External(CPST, MethodObj)
++        External(CPEJ, MethodObj)
++        Method(_MAT, 0) {
++            Return (CPMA(ID))
++        }
++        Method(_STA, 0) {
++            Return (CPST(ID))
++        }
++        Method(_EJ0, 1, NotSerialized) {
++            CPEJ(ID, Arg0)
++        }
++    }
++}
+diff --git a/scripts/acpi_extract.py b/scripts/acpi_extract.py
+new file mode 100755
+index 0000000..22ea468
+--- /dev/null
++++ b/scripts/acpi_extract.py
+@@ -0,0 +1,362 @@
++#!/usr/bin/python
++# Copyright (C) 2011 Red Hat, Inc., Michael S. Tsirkin <mst@redhat.com>
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License along
++# with this program; if not, see <http://www.gnu.org/licenses/>.
++
++# Process mixed ASL/AML listing (.lst file) produced by iasl -l
++# Locate and execute ACPI_EXTRACT directives, output offset info
++#
++# Documentation of ACPI_EXTRACT_* directive tags:
++#
++# These directive tags output offset information from AML for BIOS runtime
++# table generation.
++# Each directive is of the form:
++# ACPI_EXTRACT_<TYPE> <array_name> <Operator> (...)
++# and causes the extractor to create an array
++# named <array_name> with offset, in the generated AML,
++# of an object of a given type in the following <Operator>.
++#
++# A directive must fit on a single code line.
++#
++# Object type in AML is verified, a mismatch causes a build failure.
++#
++# Directives and operators currently supported are:
++# ACPI_EXTRACT_NAME_DWORD_CONST - extract a Dword Const object from Name()
++# ACPI_EXTRACT_NAME_WORD_CONST - extract a Word Const object from Name()
++# ACPI_EXTRACT_NAME_BYTE_CONST - extract a Byte Const object from Name()
++# ACPI_EXTRACT_METHOD_STRING - extract a NameString from Method()
++# ACPI_EXTRACT_NAME_STRING - extract a NameString from Name()
++# ACPI_EXTRACT_PROCESSOR_START - start of Processor() block
++# ACPI_EXTRACT_PROCESSOR_STRING - extract a NameString from Processor()
++# ACPI_EXTRACT_PROCESSOR_END - offset at last byte of Processor() + 1
++# ACPI_EXTRACT_PKG_START - start of Package block
++#
++# ACPI_EXTRACT_ALL_CODE - create an array storing the generated AML bytecode
++#
++# ACPI_EXTRACT is not allowed anywhere else in code, except in comments.
++
++import re;
++import sys;
++import fileinput;
++
++aml = []
++asl = []
++output = {}
++debug = ""
++
++class asl_line:
++    line = None
++    lineno = None
++    aml_offset = None
++
++def die(diag):
++    sys.stderr.write("Error: %s; %s\n" % (diag, debug))
++    sys.exit(1)
++
++#Store an ASL command, matching AML offset, and input line (for debugging)
++def add_asl(lineno, line):
++    l = asl_line()
++    l.line = line
++    l.lineno = lineno
++    l.aml_offset = len(aml)
++    asl.append(l)
++
++#Store an AML byte sequence
++#Verify that offset output by iasl matches # of bytes so far
++def add_aml(offset, line):
++    o = int(offset, 16);
++    # Sanity check: offset must match size of code so far
++    if (o != len(aml)):
++        die("Offset 0x%x != 0x%x" % (o, len(aml)))
++    # Strip any trailing dots and ASCII dump after "
++    line = re.sub(r'\s*\.*\s*".*$',"", line)
++    # Strip traling whitespace
++    line = re.sub(r'\s+$',"", line)
++    # Strip leading whitespace
++    line = re.sub(r'^\s+',"", line)
++    # Split on whitespace
++    code = re.split(r'\s+', line)
++    for c in code:
++        # Require a legal hex number, two digits
++        if (not(re.search(r'^[0-9A-Fa-f][0-9A-Fa-f]$', c))):
++            die("Unexpected octet %s" % c);
++        aml.append(int(c, 16));
++
++# Process aml bytecode array, decoding AML
++def aml_pkglen_bytes(offset):
++    # PkgLength can be multibyte. Bits 8-7 give the # of extra bytes.
++    pkglenbytes = aml[offset] >> 6;
++    return pkglenbytes + 1
++
++def aml_pkglen(offset):
++    pkgstart = offset
++    pkglenbytes = aml_pkglen_bytes(offset)
++    pkglen = aml[offset] & 0x3F
++    # If multibyte, first nibble only uses bits 0-3
++    if ((pkglenbytes > 1) and (pkglen & 0x30)):
++        die("PkgLen bytes 0x%x but first nibble 0x%x expected 0x0X" %
++            (pkglen, pkglen))
++    offset += 1
++    pkglenbytes -= 1
++    for i in range(pkglenbytes):
++        pkglen |= aml[offset + i] << (i * 8 + 4)
++    if (len(aml) < pkgstart + pkglen):
++        die("PckgLen 0x%x at offset 0x%x exceeds AML size 0x%x" %
++            (pkglen, offset, len(aml)))
++    return pkglen
++
++# Given method offset, find its NameString offset
++def aml_method_string(offset):
++    #0x14 MethodOp PkgLength NameString MethodFlags TermList
++    if (aml[offset] != 0x14):
++        die( "Method offset 0x%x: expected 0x14 actual 0x%x" %
++             (offset, aml[offset]));
++    offset += 1;
++    pkglenbytes = aml_pkglen_bytes(offset)
++    offset += pkglenbytes;
++    return offset;
++
++# Given name offset, find its NameString offset
++def aml_name_string(offset):
++    #0x08 NameOp NameString DataRef
++    if (aml[offset] != 0x08):
++        die( "Name offset 0x%x: expected 0x08 actual 0x%x" %
++             (offset, aml[offset]));
++    offset += 1
++    # Block Name Modifier. Skip it.
++    if (aml[offset] == 0x5c or aml[offset] == 0x5e):
++        offset += 1
++    return offset;
++
++# Given data offset, find 8 byte buffer offset
++def aml_data_buffer8(offset):
++    #0x08 NameOp NameString DataRef
++    expect = [0x11, 0x0B, 0x0A, 0x08]
++    if (aml[offset:offset+4] != expect):
++        die( "Name offset 0x%x: expected %s actual %s" %
++             (offset, aml[offset:offset+4], expect))
++    return offset + len(expect)
++
++# Given data offset, find dword const offset
++def aml_data_dword_const(offset):
++    #0x08 NameOp NameString DataRef
++    if (aml[offset] != 0x0C):
++        die( "Name offset 0x%x: expected 0x0C actual 0x%x" %
++             (offset, aml[offset]));
++    return offset + 1;
++
++# Given data offset, find word const offset
++def aml_data_word_const(offset):
++    #0x08 NameOp NameString DataRef
++    if (aml[offset] != 0x0B):
++        die( "Name offset 0x%x: expected 0x0B actual 0x%x" %
++             (offset, aml[offset]));
++    return offset + 1;
++
++# Given data offset, find byte const offset
++def aml_data_byte_const(offset):
++    #0x08 NameOp NameString DataRef
++    if (aml[offset] != 0x0A):
++        die( "Name offset 0x%x: expected 0x0A actual 0x%x" %
++             (offset, aml[offset]));
++    return offset + 1;
++
++# Find name'd buffer8
++def aml_name_buffer8(offset):
++    return aml_data_buffer8(aml_name_string(offset) + 4)
++
++# Given name offset, find dword const offset
++def aml_name_dword_const(offset):
++    return aml_data_dword_const(aml_name_string(offset) + 4)
++
++# Given name offset, find word const offset
++def aml_name_word_const(offset):
++    return aml_data_word_const(aml_name_string(offset) + 4)
++
++# Given name offset, find byte const offset
++def aml_name_byte_const(offset):
++    return aml_data_byte_const(aml_name_string(offset) + 4)
++
++def aml_device_start(offset):
++    #0x5B 0x82 DeviceOp PkgLength NameString
++    if ((aml[offset] != 0x5B) or (aml[offset + 1] != 0x82)):
++        die( "Name offset 0x%x: expected 0x5B 0x82 actual 0x%x 0x%x" %
++             (offset, aml[offset], aml[offset + 1]));
++    return offset
++
++def aml_device_string(offset):
++    #0x5B 0x82 DeviceOp PkgLength NameString
++    start = aml_device_start(offset)
++    offset += 2
++    pkglenbytes = aml_pkglen_bytes(offset)
++    offset += pkglenbytes
++    return offset
++
++def aml_device_end(offset):
++    start = aml_device_start(offset)
++    offset += 2
++    pkglenbytes = aml_pkglen_bytes(offset)
++    pkglen = aml_pkglen(offset)
++    return offset + pkglen
++
++def aml_processor_start(offset):
++    #0x5B 0x83 ProcessorOp PkgLength NameString ProcID
++    if ((aml[offset] != 0x5B) or (aml[offset + 1] != 0x83)):
++        die( "Name offset 0x%x: expected 0x5B 0x83 actual 0x%x 0x%x" %
++             (offset, aml[offset], aml[offset + 1]));
++    return offset
++
++def aml_processor_string(offset):
++    #0x5B 0x83 ProcessorOp PkgLength NameString ProcID
++    start = aml_processor_start(offset)
++    offset += 2
++    pkglenbytes = aml_pkglen_bytes(offset)
++    offset += pkglenbytes
++    return offset
++
++def aml_processor_end(offset):
++    start = aml_processor_start(offset)
++    offset += 2
++    pkglenbytes = aml_pkglen_bytes(offset)
++    pkglen = aml_pkglen(offset)
++    return offset + pkglen
++
++def aml_package_start(offset):
++    offset = aml_name_string(offset) + 4
++    # 0x12 PkgLength NumElements PackageElementList
++    if (aml[offset] != 0x12):
++        die( "Name offset 0x%x: expected 0x12 actual 0x%x" %
++             (offset, aml[offset]));
++    offset += 1
++    return offset + aml_pkglen_bytes(offset) + 1
++
++lineno = 0
++for line in fileinput.input():
++    # Strip trailing newline
++    line = line.rstrip();
++    # line number and debug string to output in case of errors
++    lineno = lineno + 1
++    debug = "input line %d: %s" % (lineno, line)
++    #ASL listing: space, then line#, then ...., then code
++    pasl = re.compile('^\s+([0-9]+)(:\s\s|\.\.\.\.)\s*')
++    m = pasl.search(line)
++    if (m):
++        add_asl(lineno, pasl.sub("", line));
++    # AML listing: offset in hex, then ...., then code
++    paml = re.compile('^([0-9A-Fa-f]+)(:\s\s|\.\.\.\.)\s*')
++    m = paml.search(line)
++    if (m):
++        add_aml(m.group(1), paml.sub("", line))
++
++# Now go over code
++# Track AML offset of a previous non-empty ASL command
++prev_aml_offset = -1
++for i in range(len(asl)):
++    debug = "input line %d: %s" % (asl[i].lineno, asl[i].line)
++
++    l = asl[i].line
++
++    # skip if not an extract directive
++    a = len(re.findall(r'ACPI_EXTRACT', l))
++    if (not a):
++        # If not empty, store AML offset. Will be used for sanity checks
++        # IASL seems to put {}. at random places in the listing.
++        # Ignore any non-words for the purpose of this test.
++        m = re.search(r'\w+', l)
++        if (m):
++                prev_aml_offset = asl[i].aml_offset
++        continue
++
++    if (a > 1):
++        die("Expected at most one ACPI_EXTRACT per line, actual %d" % a)
++
++    mext = re.search(r'''
++                      ^\s* # leading whitespace
++                      /\*\s* # start C comment
++                      (ACPI_EXTRACT_\w+) # directive: group(1)
++                      \s+ # whitspace separates directive from array name
++                      (\w+) # array name: group(2)
++                      \s*\*/ # end of C comment
++                      \s*$ # trailing whitespace
++                      ''', l, re.VERBOSE)
++    if (not mext):
++        die("Stray ACPI_EXTRACT in input")
++
++    # previous command must have produced some AML,
++    # otherwise we are in a middle of a block
++    if (prev_aml_offset == asl[i].aml_offset):
++        die("ACPI_EXTRACT directive in the middle of a block")
++
++    directive = mext.group(1)
++    array = mext.group(2)
++    offset = asl[i].aml_offset
++
++    if (directive == "ACPI_EXTRACT_ALL_CODE"):
++        if array in output:
++            die("%s directive used more than once" % directive)
++        output[array] = aml
++        continue
++    if (directive == "ACPI_EXTRACT_NAME_BUFFER8"):
++        offset = aml_name_buffer8(offset)
++    elif (directive == "ACPI_EXTRACT_NAME_DWORD_CONST"):
++        offset = aml_name_dword_const(offset)
++    elif (directive == "ACPI_EXTRACT_NAME_WORD_CONST"):
++        offset = aml_name_word_const(offset)
++    elif (directive == "ACPI_EXTRACT_NAME_BYTE_CONST"):
++        offset = aml_name_byte_const(offset)
++    elif (directive == "ACPI_EXTRACT_NAME_STRING"):
++        offset = aml_name_string(offset)
++    elif (directive == "ACPI_EXTRACT_METHOD_STRING"):
++        offset = aml_method_string(offset)
++    elif (directive == "ACPI_EXTRACT_DEVICE_START"):
++        offset = aml_device_start(offset)
++    elif (directive == "ACPI_EXTRACT_DEVICE_STRING"):
++        offset = aml_device_string(offset)
++    elif (directive == "ACPI_EXTRACT_DEVICE_END"):
++        offset = aml_device_end(offset)
++    elif (directive == "ACPI_EXTRACT_PROCESSOR_START"):
++        offset = aml_processor_start(offset)
++    elif (directive == "ACPI_EXTRACT_PROCESSOR_STRING"):
++        offset = aml_processor_string(offset)
++    elif (directive == "ACPI_EXTRACT_PROCESSOR_END"):
++        offset = aml_processor_end(offset)
++    elif (directive == "ACPI_EXTRACT_PKG_START"):
++        offset = aml_package_start(offset)
++    else:
++        die("Unsupported directive %s" % directive)
++
++    if array not in output:
++        output[array] = []
++    output[array].append(offset)
++
++debug = "at end of file"
++
++def get_value_type(maxvalue):
++    #Use type large enough to fit the table
++    if (maxvalue >= 0x10000):
++            return "int"
++    elif (maxvalue >= 0x100):
++            return "short"
++    else:
++            return "char"
++
++# Pretty print output
++for array in output.keys():
++    otype = get_value_type(max(output[array]))
++    odata = []
++    for value in output[array]:
++        odata.append("0x%x" % value)
++    sys.stdout.write("static unsigned %s %s[] = {\n" % (otype, array))
++    sys.stdout.write(",\n".join(odata))
++    sys.stdout.write('\n};\n');
+diff --git a/scripts/acpi_extract_preprocess.py b/scripts/acpi_extract_preprocess.py
+new file mode 100755
+index 0000000..69d10d6
+--- /dev/null
++++ b/scripts/acpi_extract_preprocess.py
+@@ -0,0 +1,51 @@
++#!/usr/bin/python
++# Copyright (C) 2011 Red Hat, Inc., Michael S. Tsirkin <mst@redhat.com>
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License along
++# with this program; if not, see <http://www.gnu.org/licenses/>.
++
++# Read a preprocessed ASL listing and put each ACPI_EXTRACT
++# directive in a comment, to make iasl skip it.
++# We also put each directive on a new line, the machinery
++# in tools/acpi_extract.py requires this.
++
++import re;
++import sys;
++import fileinput;
++
++def die(diag):
++    sys.stderr.write("Error: %s\n" % (diag))
++    sys.exit(1)
++
++# Note: () around pattern make split return matched string as part of list
++psplit = re.compile(r''' (
++                          \b # At word boundary
++                          ACPI_EXTRACT_\w+ # directive
++                          \s+ # some whitespace
++                          \w+ # array name
++                         )''', re.VERBOSE);
++
++lineno = 0
++for line in fileinput.input():
++    # line number and debug string to output in case of errors
++    lineno = lineno + 1
++    debug = "input line %d: %s" % (lineno, line.rstrip())
++
++    s = psplit.split(line);
++    # The way split works, each odd item is the matching ACPI_EXTRACT directive.
++    # Put each in a comment, and on a line by itself.
++    for i in range(len(s)):
++        if (i % 2):
++            sys.stdout.write("\n/* %s */\n" % s[i])
++        else:
++            sys.stdout.write(s[i])
+-- 
+1.7.11.7
+

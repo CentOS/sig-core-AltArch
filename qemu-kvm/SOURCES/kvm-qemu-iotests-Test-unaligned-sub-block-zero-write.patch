@@ -1,0 +1,101 @@
+From daca4d834e727c73565aa0659da6fab52ab7cc6b Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 25 May 2015 04:45:57 +0200
+Subject: [PATCH 5/6] qemu-iotests: Test unaligned sub-block zero write
+
+Message-id: <1432529157-20381-4-git-send-email-famz@redhat.com>
+Patchwork-id: 65121
+O-Subject: [RHEL-7.2 qemu-kvm PATCH v2 3/3] qemu-iotests: Test unaligned sub-block zero write
+Bugzilla: 1200295
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Test zero write in byte range 512~1024 for 4k alignment.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+Reviewed-by: Kevin Wolf <kwolf@redhat.com>
+Message-id: 1431522721-3266-4-git-send-email-famz@redhat.com
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit ab53c44718305d3fde3d9d2251889f1cab694be2)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/033     | 13 +++++++++++++
+ tests/qemu-iotests/033.out | 30 ++++++++++++++++++++++++++++++
+ 2 files changed, 43 insertions(+)
+
+diff --git a/tests/qemu-iotests/033 b/tests/qemu-iotests/033
+index 4008f10..a61d8ce 100755
+--- a/tests/qemu-iotests/033
++++ b/tests/qemu-iotests/033
+@@ -78,6 +78,19 @@ for align in 512 4k; do
+ 	echo
+ 	echo "== verifying patterns (2) =="
+ 	do_test $align "read -P 0x0 0x400 0x20000" "$TEST_IMG" | _filter_qemu_io
++
++	echo
++	echo "== rewriting unaligned zeroes =="
++	do_test $align "write -P 0xb 0x0 0x1000" "$TEST_IMG" | _filter_qemu_io
++	do_test $align "write -z 0x200 0x200" "$TEST_IMG" | _filter_qemu_io
++
++	echo
++	echo "== verifying patterns (3) =="
++	do_test $align "read -P 0xb 0x0 0x200" "$TEST_IMG" | _filter_qemu_io
++	do_test $align "read -P 0x0 0x200 0x200" "$TEST_IMG" | _filter_qemu_io
++	do_test $align "read -P 0xb 0x400 0xc00" "$TEST_IMG" | _filter_qemu_io
++
++	echo
+ done
+ 
+ # success, all done
+diff --git a/tests/qemu-iotests/033.out b/tests/qemu-iotests/033.out
+index 344065f..6896d73 100644
+--- a/tests/qemu-iotests/033.out
++++ b/tests/qemu-iotests/033.out
+@@ -27,6 +27,21 @@ wrote 65536/65536 bytes at offset 65536
+ read 131072/131072 bytes at offset 1024
+ 128 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ 
++== rewriting unaligned zeroes ==
++wrote 4096/4096 bytes at offset 0
++4 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote 512/512 bytes at offset 512
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++== verifying patterns (3) ==
++read 512/512 bytes at offset 0
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 512
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 3072/3072 bytes at offset 1024
++3 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++
+ == preparing image ==
+ wrote 1024/1024 bytes at offset 512
+ 1 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+@@ -52,4 +67,19 @@ wrote 65536/65536 bytes at offset 65536
+ == verifying patterns (2) ==
+ read 131072/131072 bytes at offset 1024
+ 128 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++== rewriting unaligned zeroes ==
++wrote 4096/4096 bytes at offset 0
++4 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote 512/512 bytes at offset 512
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++== verifying patterns (3) ==
++read 512/512 bytes at offset 0
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 512
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 3072/3072 bytes at offset 1024
++3 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
+ *** done
+-- 
+1.8.3.1
+

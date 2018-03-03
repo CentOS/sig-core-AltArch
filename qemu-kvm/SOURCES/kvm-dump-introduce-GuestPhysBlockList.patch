@@ -1,0 +1,186 @@
+From 0c26814e42d1090b3ad3a20ca97b5a74accee7e9 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Mon, 12 Aug 2013 15:59:38 +0200
+Subject: dump: introduce GuestPhysBlockList
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1376323180-12863-9-git-send-email-lersek@redhat.com>
+Patchwork-id: 53166
+O-Subject: [RHEL-7 qemu-kvm PATCH 08/10] dump: introduce GuestPhysBlockList
+Bugzilla: 981582
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Radim Krcmar <rkrcmar@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+The vmcore must use physical addresses that are visible to the guest, not
+addresses that point into linear RAMBlocks. As first step, introduce the
+list type into which we'll collect the physical mappings in effect at the
+time of the dump.
+
+Related RHBZ: https://bugzilla.redhat.com/show_bug.cgi?id=981582
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit 5ee163e8ea2fb6610339f494e039159e08a69066)
+
+Conflicts:
+
+	dump.c
+	memory_mapping.c
+
+The conflicts are due to RHEL-7 not having upstream commit 182735ef ("cpu:
+Make first_cpu and next_cpu CPUState"), whose backport I rejected due to
+its many dependencies.
+
+diff --git a/dump.c b/dump.c
+index cbfad1c..351233b 100644
+--- a/dump.c
++++ b/dump.c
+@@ -59,6 +59,7 @@ static uint64_t cpu_convert_to_target64(uint64_t val, int endian)
+ }
+ 
+ typedef struct DumpState {
++    GuestPhysBlockList guest_phys_blocks;
+     ArchDumpInfo dump_info;
+     MemoryMappingList list;
+     uint16_t phdr_num;
+@@ -81,6 +82,7 @@ static int dump_cleanup(DumpState *s)
+ {
+     int ret = 0;
+ 
++    guest_phys_blocks_free(&s->guest_phys_blocks);
+     memory_mapping_list_free(&s->list);
+     if (s->fd != -1) {
+         close(s->fd);
+@@ -732,31 +734,34 @@ static int dump_init(DumpState *s, int fd, bool paging, bool has_filter,
+         s->resume = false;
+     }
+ 
++    /* If we use KVM, we should synchronize the registers before we get dump
++     * info or physmap info.
++     */
++    cpu_synchronize_all_states();
++    nr_cpus = 0;
++    for (env = first_cpu; env != NULL; env = env->next_cpu) {
++        nr_cpus++;
++    }
++
+     s->errp = errp;
+     s->fd = fd;
+     s->has_filter = has_filter;
+     s->begin = begin;
+     s->length = length;
++
++    guest_phys_blocks_init(&s->guest_phys_blocks);
++    /* FILL LIST */
++
+     s->start = get_start_block(s);
+     if (s->start == -1) {
+         error_set(errp, QERR_INVALID_PARAMETER, "begin");
+         goto cleanup;
+     }
+ 
+-    /*
+-     * get dump info: endian, class and architecture.
++    /* get dump info: endian, class and architecture.
+      * If the target architecture is not supported, cpu_get_dump_info() will
+      * return -1.
+-     *
+-     * If we use KVM, we should synchronize the registers before we get dump
+-     * info.
+      */
+-    cpu_synchronize_all_states();
+-    nr_cpus = 0;
+-    for (env = first_cpu; env != NULL; env = env->next_cpu) {
+-        nr_cpus++;
+-    }
+-
+     ret = cpu_get_dump_info(&s->dump_info);
+     if (ret < 0) {
+         error_set(errp, QERR_UNSUPPORTED);
+@@ -831,6 +836,8 @@ static int dump_init(DumpState *s, int fd, bool paging, bool has_filter,
+     return 0;
+ 
+ cleanup:
++    guest_phys_blocks_free(&s->guest_phys_blocks);
++
+     if (s->resume) {
+         vm_start();
+     }
+@@ -878,7 +885,7 @@ void qmp_dump_guest_memory(bool paging, const char *file, bool has_begin,
+         return;
+     }
+ 
+-    s = g_malloc(sizeof(DumpState));
++    s = g_malloc0(sizeof(DumpState));
+ 
+     ret = dump_init(s, fd, paging, has_begin, begin, length, errp);
+     if (ret < 0) {
+diff --git a/include/sysemu/memory_mapping.h b/include/sysemu/memory_mapping.h
+index 6dfb68d..d2d06cd 100644
+--- a/include/sysemu/memory_mapping.h
++++ b/include/sysemu/memory_mapping.h
+@@ -17,6 +17,25 @@
+ #include "qemu/queue.h"
+ #include "qemu/typedefs.h"
+ 
++typedef struct GuestPhysBlock {
++    /* visible to guest, reflects PCI hole, etc */
++    hwaddr target_start;
++
++    /* implies size */
++    hwaddr target_end;
++
++    /* points into host memory */
++    uint8_t *host_addr;
++
++    QTAILQ_ENTRY(GuestPhysBlock) next;
++} GuestPhysBlock;
++
++/* point-in-time snapshot of guest-visible physical mappings */
++typedef struct GuestPhysBlockList {
++    unsigned num;
++    QTAILQ_HEAD(GuestPhysBlockHead, GuestPhysBlock) head;
++} GuestPhysBlockList;
++
+ /* The physical and virtual address in the memory mapping are contiguous. */
+ typedef struct MemoryMapping {
+     hwaddr phys_addr;
+@@ -45,6 +64,9 @@ void memory_mapping_list_free(MemoryMappingList *list);
+ 
+ void memory_mapping_list_init(MemoryMappingList *list);
+ 
++void guest_phys_blocks_free(GuestPhysBlockList *list);
++void guest_phys_blocks_init(GuestPhysBlockList *list);
++
+ void qemu_get_guest_memory_mapping(MemoryMappingList *list, Error **errp);
+ 
+ /* get guest's memory mapping without do paging(virtual address is 0). */
+diff --git a/memory_mapping.c b/memory_mapping.c
+index 5634f81..78a9829 100644
+--- a/memory_mapping.c
++++ b/memory_mapping.c
+@@ -165,6 +165,23 @@ void memory_mapping_list_init(MemoryMappingList *list)
+     QTAILQ_INIT(&list->head);
+ }
+ 
++void guest_phys_blocks_free(GuestPhysBlockList *list)
++{
++    GuestPhysBlock *p, *q;
++
++    QTAILQ_FOREACH_SAFE(p, &list->head, next, q) {
++        QTAILQ_REMOVE(&list->head, p, next);
++        g_free(p);
++    }
++    list->num = 0;
++}
++
++void guest_phys_blocks_init(GuestPhysBlockList *list)
++{
++    list->num = 0;
++    QTAILQ_INIT(&list->head);
++}
++
+ static CPUArchState *find_paging_enabled_cpu(CPUArchState *start_cpu)
+ {
+     CPUArchState *env;

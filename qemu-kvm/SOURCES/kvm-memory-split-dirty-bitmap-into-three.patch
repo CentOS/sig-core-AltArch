@@ -1,0 +1,169 @@
+From e6b7d9c30dfcdf22dcf87eab667a4212e803ec54 Mon Sep 17 00:00:00 2001
+From: Juan Quintela <quintela@redhat.com>
+Date: Tue, 14 Jan 2014 15:07:29 +0100
+Subject: [PATCH 18/40] memory: split dirty bitmap into three
+
+RH-Author: Juan Quintela <quintela@redhat.com>
+Message-id: <1389712071-23303-19-git-send-email-quintela@redhat.com>
+Patchwork-id: 56673
+O-Subject: [RHEL7 qemu-kvm PATCH 18/40] memory: split dirty bitmap into three
+Bugzilla: 997559
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+
+After all the previous patches, spliting the bitmap gets direct.
+
+Note: For some reason, I have to move DIRTY_MEMORY_* definitions to
+the beginning of memory.h to make compilation work.
+
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Orit Wasserman <owasserm@redhat.com>
+(cherry picked from commit 1ab4c8ceaa5ec55af9bb25e88e46d461a8550280)
+
+Manual compilation fix:
+
+- For some reason includes get completely wrong, I had to change the
+  order of memory.h in ioport.c
+  Upstream has a much saner layout of include dependences
+
+Signed-off-by: Juan Quintela <quintela@trasno.org>
+---
+ exec.c                         |  9 ++++++---
+ include/exec/cpu-all.h         |  3 ++-
+ include/exec/memory-internal.h |  9 +++------
+ include/exec/memory.h          | 10 +++++-----
+ ioport.c                       |  2 +-
+ 5 files changed, 17 insertions(+), 16 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ exec.c                         |    9 ++++++---
+ include/exec/cpu-all.h         |    3 ++-
+ include/exec/memory-internal.h |    9 +++------
+ include/exec/memory.h          |   10 +++++-----
+ ioport.c                       |    2 +-
+ 5 files changed, 17 insertions(+), 16 deletions(-)
+
+diff --git a/exec.c b/exec.c
+index be99d45..45b2c46 100644
+--- a/exec.c
++++ b/exec.c
+@@ -1164,9 +1164,12 @@ ram_addr_t qemu_ram_alloc_from_ptr(ram_addr_t size, void *host,
+     new_ram_size = last_ram_offset() >> TARGET_PAGE_BITS;
+ 
+     if (new_ram_size > old_ram_size) {
+-        ram_list.phys_dirty = g_realloc(ram_list.phys_dirty, new_ram_size);
+-        memset(ram_list.phys_dirty + (new_block->offset >> TARGET_PAGE_BITS),
+-           0, size >> TARGET_PAGE_BITS);
++        int i;
++        for (i = 0; i < DIRTY_MEMORY_NUM; i++) {
++            ram_list.dirty_memory[i] =
++                bitmap_zero_extend(ram_list.dirty_memory[i],
++                                   old_ram_size, new_ram_size);
++       }
+     }
+     cpu_physical_memory_set_dirty_range(new_block->offset, size);
+ 
+diff --git a/include/exec/cpu-all.h b/include/exec/cpu-all.h
+index c369b25..9c85c1c 100644
+--- a/include/exec/cpu-all.h
++++ b/include/exec/cpu-all.h
+@@ -22,6 +22,7 @@
+ #include "qemu-common.h"
+ #include "qemu/tls.h"
+ #include "exec/cpu-common.h"
++#include "exec/memory.h"
+ #include "qemu/thread.h"
+ 
+ /* some important defines:
+@@ -482,7 +483,7 @@ typedef struct RAMBlock {
+ typedef struct RAMList {
+     QemuMutex mutex;
+     /* Protected by the iothread lock.  */
+-    uint8_t *phys_dirty;
++    unsigned long *dirty_memory[DIRTY_MEMORY_NUM];
+     RAMBlock *mru_block;
+     /* Protected by the ramlist lock.  */
+     QTAILQ_HEAD(, RAMBlock) blocks;
+diff --git a/include/exec/memory-internal.h b/include/exec/memory-internal.h
+index 2c86add..962b292 100644
+--- a/include/exec/memory-internal.h
++++ b/include/exec/memory-internal.h
+@@ -53,7 +53,7 @@ static inline bool cpu_physical_memory_get_dirty_flag(ram_addr_t addr,
+                                                       unsigned client)
+ {
+     assert(client < DIRTY_MEMORY_NUM);
+-    return ram_list.phys_dirty[addr >> TARGET_PAGE_BITS] & (1 << client);
++    return test_bit(addr >> TARGET_PAGE_BITS, ram_list.dirty_memory[client]);
+ }
+ 
+ /* read dirty bit (return 0 or 1) */
+@@ -85,7 +85,7 @@ static inline void cpu_physical_memory_set_dirty_flag(ram_addr_t addr,
+                                                       unsigned client)
+ {
+     assert(client < DIRTY_MEMORY_NUM);
+-    ram_list.phys_dirty[addr >> TARGET_PAGE_BITS] |= (1 << client);
++    set_bit(addr >> TARGET_PAGE_BITS, ram_list.dirty_memory[client]);
+ }
+ 
+ static inline void cpu_physical_memory_set_dirty(ram_addr_t addr)
+@@ -98,11 +98,8 @@ static inline void cpu_physical_memory_set_dirty(ram_addr_t addr)
+ static inline void cpu_physical_memory_clear_dirty_flag(ram_addr_t addr,
+                                                        unsigned client)
+ {
+-    int mask = ~(1 << client);
+-
+     assert(client < DIRTY_MEMORY_NUM);
+-
+-    ram_list.phys_dirty[addr >> TARGET_PAGE_BITS] &= mask;
++    clear_bit(addr >> TARGET_PAGE_BITS, ram_list.dirty_memory[client]);
+ }
+ 
+ static inline void cpu_physical_memory_set_dirty_range(ram_addr_t start,
+diff --git a/include/exec/memory.h b/include/exec/memory.h
+index 0023edf..bd6d31a 100644
+--- a/include/exec/memory.h
++++ b/include/exec/memory.h
+@@ -16,6 +16,11 @@
+ 
+ #ifndef CONFIG_USER_ONLY
+ 
++#define DIRTY_MEMORY_VGA       0
++#define DIRTY_MEMORY_CODE      1
++#define DIRTY_MEMORY_MIGRATION 2
++#define DIRTY_MEMORY_NUM       3        /* num of dirty bits */
++
+ #include <stdint.h>
+ #include <stdbool.h>
+ #include "qemu-common.h"
+@@ -30,11 +35,6 @@ typedef struct MemoryRegionOps MemoryRegionOps;
+ typedef struct MemoryRegionPortio MemoryRegionPortio;
+ typedef struct MemoryRegionMmio MemoryRegionMmio;
+ 
+-#define DIRTY_MEMORY_VGA       0
+-#define DIRTY_MEMORY_CODE      1
+-#define DIRTY_MEMORY_MIGRATION 2
+-#define DIRTY_MEMORY_NUM       3        /* num of dirty bits */
+-
+ struct MemoryRegionMmio {
+     CPUReadMemoryFunc *read[3];
+     CPUWriteMemoryFunc *write[3];
+diff --git a/ioport.c b/ioport.c
+index a0ac2a0..957e980 100644
+--- a/ioport.c
++++ b/ioport.c
+@@ -25,8 +25,8 @@
+  * splitted out ioport related stuffs from vl.c.
+  */
+ 
+-#include "exec/ioport.h"
+ #include "trace.h"
++#include "exec/ioport.h"
+ #include "exec/memory.h"
+ 
+ /***********************************************************/
+-- 
+1.7.1
+

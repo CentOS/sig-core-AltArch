@@ -1,0 +1,62 @@
+From ba9229d280e035872ac2258873c1b9f34cc8c4a9 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 27 Jul 2016 07:35:01 +0200
+Subject: [PATCH 03/16] qjson: Don't crash when input exceeds nesting limit
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1469604913-12442-5-git-send-email-armbru@redhat.com>
+Patchwork-id: 71472
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 03/15] qjson: Don't crash when input exceeds nesting limit
+Bugzilla: 1276036
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+We limit nesting depth and input size to defend against input
+triggering excessive heap or stack memory use (commit 29c75dd
+json-streamer: limit the maximum recursion depth and maximum token
+count).  However, when the nesting limit is exceeded,
+parser_context_peek_token()'s assertion fails.
+
+Broken in commit 65c0f1e "json-parser: don't replicate tokens at each
+level of recursion".
+
+To reproduce stuff 1025 open braces or brackets into QMP.
+
+Fix by taking the error exit instead of the normal one.
+
+Reported-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Message-Id: <1448486613-17634-3-git-send-email-armbru@redhat.com>
+(cherry picked from commit 0753113a26bb8c77f951b1ea91fd4f36d099c37a)
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qobject/json-streamer.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/qobject/json-streamer.c b/qobject/json-streamer.c
+index dced2c7..2bd22a7 100644
+--- a/qobject/json-streamer.c
++++ b/qobject/json-streamer.c
+@@ -68,13 +68,14 @@ static void json_message_process_token(JSONLexer *lexer, QString *token, JSONTok
+         /* Security consideration, we limit total memory allocated per object
+          * and the maximum recursion depth that a message can force.
+          */
+-        goto out_emit;
++        goto out_emit_bad;
+     }
+ 
+     return;
+ 
+ out_emit_bad:
+-    /* clear out token list and tell the parser to emit and error
++    /*
++     * Clear out token list and tell the parser to emit an error
+      * indication by passing it a NULL list
+      */
+     QDECREF(parser->tokens);
+-- 
+1.8.3.1
+

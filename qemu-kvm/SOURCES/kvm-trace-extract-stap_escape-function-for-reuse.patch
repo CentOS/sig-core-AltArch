@@ -1,0 +1,66 @@
+From 7c6cf82e285a657b38a2b2c85e26d975b7e91ae0 Mon Sep 17 00:00:00 2001
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Tue, 7 Oct 2014 14:06:54 +0200
+Subject: [PATCH 36/43] trace: extract stap_escape() function for reuse
+
+Message-id: <1412690820-31016-6-git-send-email-stefanha@redhat.com>
+Patchwork-id: 61610
+O-Subject: [RHEL7.1 qemu-kvm PATCH 05/11] trace: extract stap_escape() function for reuse
+Bugzilla: 1088112
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+SystemTap reserved words sometimes conflict with QEMU variable names.
+We escape them to prevent conflicts.
+
+Move escaping into its own function so the next patch can reuse it.
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit a76ccf3c1cb06576af091c5ac8bc264515b1bb7f)
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	scripts/tracetool/format/stap.py
+
+The tracetool downstream code is missing the TCG instrumentation and
+multi-backend tracing, which involved a reorganization of the code.
+The upstream patch modified scripts/tracetool/format/stap.py but
+downstream the right file is scripts/tracetool/backend/dtrace.py.
+---
+ scripts/tracetool/backend/dtrace.py | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/scripts/tracetool/backend/dtrace.py b/scripts/tracetool/backend/dtrace.py
+index e31bc79..614316f 100644
+--- a/scripts/tracetool/backend/dtrace.py
++++ b/scripts/tracetool/backend/dtrace.py
+@@ -35,6 +35,13 @@ def _binary():
+     return BINARY
+ 
+ 
++def stap_escape(identifier):
++    # Append underscore to reserved keywords
++    if identifier in RESERVED_WORDS:
++        return identifier + '_'
++    return identifier
++
++
+ def c(events):
+     pass
+ 
+@@ -98,9 +105,7 @@ def stap(events):
+         i = 1
+         if len(e.args) > 0:
+             for name in e.args.names():
+-                # Append underscore to reserved keywords
+-                if name in RESERVED_WORDS:
+-                    name += '_'
++                name = stap_escape(name)
+                 out('  %s = $arg%d;' % (name, i))
+                 i += 1
+ 
+-- 
+1.8.3.1
+

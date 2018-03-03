@@ -1,0 +1,88 @@
+From 7471a0a26dde86aa466e2183c6e43df9c01250d6 Mon Sep 17 00:00:00 2001
+From: Juan Quintela <quintela@redhat.com>
+Date: Tue, 14 Jan 2014 15:07:51 +0100
+Subject: [PATCH 40/40] migration: synchronize memory bitmap 64bits at a time
+
+RH-Author: Juan Quintela <quintela@redhat.com>
+Message-id: <1389712071-23303-41-git-send-email-quintela@redhat.com>
+Patchwork-id: 56695
+O-Subject: [RHEL7 qemu-kvm PATCH 40/40] migration: synchronize memory bitmap 64bits at a time
+Bugzilla: 997559
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+
+We use the old code if the bitmaps are not aligned
+
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+Reviewed-by: Orit Wasserman <owasserm@redhat.com>
+(cherry picked from commit aa8dc044772ba156cbcf2174b5673cfa11f566a7)
+Signed-off-by: Juan Quintela <quintela@trasno.org>
+---
+ arch_init.c | 38 +++++++++++++++++++++++++++++---------
+ 1 file changed, 29 insertions(+), 9 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ arch_init.c |   38 +++++++++++++++++++++++++++++---------
+ 1 files changed, 29 insertions(+), 9 deletions(-)
+
+diff --git a/arch_init.c b/arch_init.c
+index 23650e7..31aac84 100644
+--- a/arch_init.c
++++ b/arch_init.c
+@@ -50,6 +50,7 @@
+ #include "exec/cpu-all.h"
+ #include "exec/ram_addr.h"
+ #include "hw/acpi/acpi.h"
++#include "qemu/host-utils.h"
+ 
+ #ifdef DEBUG_ARCH_INIT
+ #define DPRINTF(fmt, ...) \
+@@ -376,15 +377,34 @@ static inline bool migration_bitmap_set_dirty(ram_addr_t addr)
+ static void migration_bitmap_sync_range(ram_addr_t start, ram_addr_t length)
+ {
+     ram_addr_t addr;
+-
+-    for (addr = 0; addr < length; addr += TARGET_PAGE_SIZE) {
+-        if (cpu_physical_memory_get_dirty(start + addr,
+-                                          TARGET_PAGE_SIZE,
+-                                          DIRTY_MEMORY_MIGRATION)) {
+-            cpu_physical_memory_reset_dirty(start + addr,
+-                                            TARGET_PAGE_SIZE,
+-                                            DIRTY_MEMORY_MIGRATION);
+-            migration_bitmap_set_dirty(start + addr);
++    unsigned long page = BIT_WORD(start >> TARGET_PAGE_BITS);
++
++    /* start address is aligned at the start of a word? */
++    if (((page * BITS_PER_LONG) << TARGET_PAGE_BITS) == start) {
++        int k;
++        int nr = BITS_TO_LONGS(length >> TARGET_PAGE_BITS);
++        unsigned long *src = ram_list.dirty_memory[DIRTY_MEMORY_MIGRATION];
++
++        for (k = page; k < page + nr; k++) {
++            if (src[k]) {
++                unsigned long new_dirty;
++                new_dirty = ~migration_bitmap[k];
++                migration_bitmap[k] |= src[k];
++                new_dirty &= src[k];
++                migration_dirty_pages += ctpopl(new_dirty);
++                src[k] = 0;
++            }
++        }
++    } else {
++        for (addr = 0; addr < length; addr += TARGET_PAGE_SIZE) {
++            if (cpu_physical_memory_get_dirty(start + addr,
++                                              TARGET_PAGE_SIZE,
++                                              DIRTY_MEMORY_MIGRATION)) {
++                cpu_physical_memory_reset_dirty(start + addr,
++                                                TARGET_PAGE_SIZE,
++                                                DIRTY_MEMORY_MIGRATION);
++                migration_bitmap_set_dirty(start + addr);
++            }
+         }
+     }
+ }
+-- 
+1.7.1
+

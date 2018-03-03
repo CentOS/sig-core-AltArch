@@ -1,0 +1,115 @@
+From b5a3f9ac5db568ddfb572d11fb4d6a659c0f5bfa Mon Sep 17 00:00:00 2001
+From: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+Date: Wed, 15 Jan 2014 19:42:28 +0100
+Subject: [PATCH 02/34] introduce MIG_STATE_CANCELLING state
+
+RH-Author: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+Message-id: <1389814948-3983-3-git-send-email-dgilbert@redhat.com>
+Patchwork-id: 56731
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 2/2] introduce MIG_STATE_CANCELLING state
+Bugzilla: 1053699
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: "Zhanghaoyu (A)" <haoyu.zhang@huawei.com>
+
+Introduce MIG_STATE_CANCELLING state to avoid starting a new migration task while the previous one still exist.
+
+Signed-off-by: Zeng Junliang <zengjunliang@huawei.com>
+Signed-off-by: Zhang Haoyu <haoyu.zhang@huawei.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit 51cf4c1a99a172679c2949a2d58a2a4ee307b557)
+
+Conflicts:
+	migration.c
+---
+ migration.c | 26 ++++++++++++++++----------
+ 1 file changed, 16 insertions(+), 10 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ migration.c |   26 ++++++++++++++++----------
+ 1 files changed, 16 insertions(+), 10 deletions(-)
+
+diff --git a/migration.c b/migration.c
+index 735f7ca..21f7247 100644
+--- a/migration.c
++++ b/migration.c
+@@ -39,6 +39,7 @@ enum {
+     MIG_STATE_ERROR = -1,
+     MIG_STATE_NONE,
+     MIG_STATE_SETUP,
++    MIG_STATE_CANCELLING,
+     MIG_STATE_CANCELLED,
+     MIG_STATE_ACTIVE,
+     MIG_STATE_COMPLETED,
+@@ -194,6 +195,7 @@ MigrationInfo *qmp_query_migrate(Error **errp)
+         info->has_total_time = false;
+         break;
+     case MIG_STATE_ACTIVE:
++    case MIG_STATE_CANCELLING:
+         info->has_status = true;
+         info->status = g_strdup("active");
+         info->has_total_time = true;
+@@ -280,6 +282,13 @@ void qmp_migrate_set_capabilities(MigrationCapabilityStatusList *params,
+ 
+ /* shared migration helpers */
+ 
++static void migrate_set_state(MigrationState *s, int old_state, int new_state)
++{
++    if (atomic_cmpxchg(&s->state, old_state, new_state) == new_state) {
++        trace_migrate_set_state(new_state);
++    }
++}
++
+ static void migrate_fd_cleanup(void *opaque)
+ {
+     MigrationState *s = opaque;
+@@ -301,18 +310,14 @@ static void migrate_fd_cleanup(void *opaque)
+ 
+     if (s->state != MIG_STATE_COMPLETED) {
+         qemu_savevm_state_cancel();
++        if (s->state == MIG_STATE_CANCELLING) {
++            migrate_set_state(s, MIG_STATE_CANCELLING, MIG_STATE_CANCELLED);
++        }
+     }
+ 
+     notifier_list_notify(&migration_state_notifiers, s);
+ }
+ 
+-static void migrate_set_state(MigrationState *s, int old_state, int new_state)
+-{
+-    if (atomic_cmpxchg(&s->state, old_state, new_state) == new_state) {
+-        trace_migrate_set_state(new_state);
+-    }
+-}
+-
+ void migrate_fd_error(MigrationState *s)
+ {
+     DPRINTF("setting error state\n");
+@@ -332,8 +337,8 @@ static void migrate_fd_cancel(MigrationState *s)
+         if (old_state != MIG_STATE_SETUP && old_state != MIG_STATE_ACTIVE) {
+             break;
+         }
+-        migrate_set_state(s, old_state, MIG_STATE_CANCELLED);
+-    } while (s->state != MIG_STATE_CANCELLED);
++        migrate_set_state(s, old_state, MIG_STATE_CANCELLING);
++    } while (s->state != MIG_STATE_CANCELLING);
+ }
+ 
+ void add_migration_state_change_notifier(Notifier *notify)
+@@ -418,7 +423,8 @@ void qmp_migrate(const char *uri, bool has_blk, bool blk,
+     }
+ #endif
+ 
+-    if (s->state == MIG_STATE_ACTIVE || s->state == MIG_STATE_SETUP) {
++    if (s->state == MIG_STATE_ACTIVE || s->state == MIG_STATE_SETUP ||
++        s->state == MIG_STATE_CANCELLING) {
+         error_set(errp, QERR_MIGRATION_ACTIVE);
+         return;
+     }
+-- 
+1.7.1
+

@@ -1,0 +1,64 @@
+From a781053c1b5084ba32b86229b98b9601c990722c Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 27 Jul 2016 07:35:13 +0200
+Subject: [PATCH 15/16] json-streamer: fix double-free on exiting during a
+ parse
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1469604913-12442-17-git-send-email-armbru@redhat.com>
+Patchwork-id: 71484
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 15/15] json-streamer: fix double-free on exiting during a parse
+Bugzilla: 1276036
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+Now that json-streamer tries not to leak tokens on incomplete parse,
+the tokens can be freed twice if QEMU destroys the json-streamer
+object during the parser->emit call.  To fix this, create the new
+empty GQueue earlier, so that it is already in place when the old
+one is passed to parser->emit.
+
+Reported-by: Changlong Xie <xiecl.fnst@cn.fujitsu.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Message-Id: <1467636059-12557-1-git-send-email-pbonzini@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit a942d8fa01f65279cdc135f4294db611bbc088ef)
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qobject/json-streamer.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/qobject/json-streamer.c b/qobject/json-streamer.c
+index 3c7d6be..7d041e1 100644
+--- a/qobject/json-streamer.c
++++ b/qobject/json-streamer.c
+@@ -38,6 +38,7 @@ static void json_message_process_token(JSONLexer *lexer, GString *input,
+ {
+     JSONMessageParser *parser = container_of(lexer, JSONMessageParser, lexer);
+     JSONToken *token;
++    GQueue *tokens;
+ 
+     switch (type) {
+     case JSON_LCURLY:
+@@ -95,9 +96,12 @@ out_emit:
+     /* send current list of tokens to parser and reset tokenizer */
+     parser->brace_count = 0;
+     parser->bracket_count = 0;
+-    /* parser->emit takes ownership of parser->tokens.  */
+-    parser->emit(parser, parser->tokens);
++    /* parser->emit takes ownership of parser->tokens.  Remove our own
++     * reference to parser->tokens before handing it out to parser->emit.
++     */
++    tokens = parser->tokens;
+     parser->tokens = g_queue_new();
++    parser->emit(parser, tokens);
+     parser->token_size = 0;
+ }
+ 
+-- 
+1.8.3.1
+

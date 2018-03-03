@@ -1,0 +1,188 @@
+From 0bf037188149824a8ae161ad9dea7d650b6f7346 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Tue, 21 Jan 2014 11:25:16 -0500
+Subject: [PATCH 5/6] QEMUBH: make AioContext's bh re-entrant
+
+Message-id: <1390303517-20167-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 56866
+O-Subject: [RHEL-7 qemu-kvm PATCH 1/2] QEMUBH: make AioContext's bh re-entrant
+Bugzilla: 1009297
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Liu Ping Fan <qemulist@gmail.com>
+
+BH will be used outside big lock, so introduce lock to protect
+between the writers, ie, bh's adders and deleter. The lock only
+affects the writers and bh's callback does not take this extra lock.
+Note that for the same AioContext, aio_bh_poll() can not run in
+parallel yet.
+
+Signed-off-by: Liu Ping Fan <pingfank@linux.vnet.ibm.com>
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit dcc772e2f2b7c2a68644133fea2b874f6751a57b)
+---
+ async.c             | 33 +++++++++++++++++++++++++++++++--
+ include/block/aio.h |  7 +++++++
+ 2 files changed, 38 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ async.c             | 33 +++++++++++++++++++++++++++++++--
+ include/block/aio.h |  7 +++++++
+ 2 files changed, 38 insertions(+), 2 deletions(-)
+
+diff --git a/async.c b/async.c
+index 90fe906..5ce3633 100644
+--- a/async.c
++++ b/async.c
+@@ -47,11 +47,16 @@ QEMUBH *aio_bh_new(AioContext *ctx, QEMUBHFunc *cb, void *opaque)
+     bh->ctx = ctx;
+     bh->cb = cb;
+     bh->opaque = opaque;
++    qemu_mutex_lock(&ctx->bh_lock);
+     bh->next = ctx->first_bh;
++    /* Make sure that the members are ready before putting bh into list */
++    smp_wmb();
+     ctx->first_bh = bh;
++    qemu_mutex_unlock(&ctx->bh_lock);
+     return bh;
+ }
+ 
++/* Multiple occurrences of aio_bh_poll cannot be called concurrently */
+ int aio_bh_poll(AioContext *ctx)
+ {
+     QEMUBH *bh, **bhp, *next;
+@@ -61,9 +66,15 @@ int aio_bh_poll(AioContext *ctx)
+ 
+     ret = 0;
+     for (bh = ctx->first_bh; bh; bh = next) {
++        /* Make sure that fetching bh happens before accessing its members */
++        smp_read_barrier_depends();
+         next = bh->next;
+         if (!bh->deleted && bh->scheduled) {
+             bh->scheduled = 0;
++            /* Paired with write barrier in bh schedule to ensure reading for
++             * idle & callbacks coming after bh's scheduling.
++             */
++            smp_rmb();
+             if (!bh->idle)
+                 ret = 1;
+             bh->idle = 0;
+@@ -75,6 +86,7 @@ int aio_bh_poll(AioContext *ctx)
+ 
+     /* remove deleted bhs */
+     if (!ctx->walking_bh) {
++        qemu_mutex_lock(&ctx->bh_lock);
+         bhp = &ctx->first_bh;
+         while (*bhp) {
+             bh = *bhp;
+@@ -85,6 +97,7 @@ int aio_bh_poll(AioContext *ctx)
+                 bhp = &bh->next;
+             }
+         }
++        qemu_mutex_unlock(&ctx->bh_lock);
+     }
+ 
+     return ret;
+@@ -94,24 +107,38 @@ void qemu_bh_schedule_idle(QEMUBH *bh)
+ {
+     if (bh->scheduled)
+         return;
+-    bh->scheduled = 1;
+     bh->idle = 1;
++    /* Make sure that idle & any writes needed by the callback are done
++     * before the locations are read in the aio_bh_poll.
++     */
++    smp_wmb();
++    bh->scheduled = 1;
+ }
+ 
+ void qemu_bh_schedule(QEMUBH *bh)
+ {
+     if (bh->scheduled)
+         return;
+-    bh->scheduled = 1;
+     bh->idle = 0;
++    /* Make sure that idle & any writes needed by the callback are done
++     * before the locations are read in the aio_bh_poll.
++     */
++    smp_wmb();
++    bh->scheduled = 1;
+     aio_notify(bh->ctx);
+ }
+ 
++
++/* This func is async.
++ */
+ void qemu_bh_cancel(QEMUBH *bh)
+ {
+     bh->scheduled = 0;
+ }
+ 
++/* This func is async.The bottom half will do the delete action at the finial
++ * end.
++ */
+ void qemu_bh_delete(QEMUBH *bh)
+ {
+     bh->scheduled = 0;
+@@ -176,6 +203,7 @@ aio_ctx_finalize(GSource     *source)
+     thread_pool_free(ctx->thread_pool);
+     aio_set_event_notifier(ctx, &ctx->notifier, NULL, NULL);
+     event_notifier_cleanup(&ctx->notifier);
++    qemu_mutex_destroy(&ctx->bh_lock);
+     g_array_free(ctx->pollfds, TRUE);
+ }
+ 
+@@ -211,6 +239,7 @@ AioContext *aio_context_new(void)
+     ctx = (AioContext *) g_source_new(&aio_source_funcs, sizeof(AioContext));
+     ctx->pollfds = g_array_new(FALSE, FALSE, sizeof(GPollFD));
+     ctx->thread_pool = NULL;
++    qemu_mutex_init(&ctx->bh_lock);
+     event_notifier_init(&ctx->notifier, false);
+     aio_set_event_notifier(ctx, &ctx->notifier, 
+                            (EventNotifierHandler *)
+diff --git a/include/block/aio.h b/include/block/aio.h
+index 1836793..cc77771 100644
+--- a/include/block/aio.h
++++ b/include/block/aio.h
+@@ -17,6 +17,7 @@
+ #include "qemu-common.h"
+ #include "qemu/queue.h"
+ #include "qemu/event_notifier.h"
++#include "qemu/thread.h"
+ 
+ typedef struct BlockDriverAIOCB BlockDriverAIOCB;
+ typedef void BlockDriverCompletionFunc(void *opaque, int ret);
+@@ -53,6 +54,8 @@ typedef struct AioContext {
+      */
+     int walking_handlers;
+ 
++    /* lock to protect between bh's adders and deleter */
++    QemuMutex bh_lock;
+     /* Anchor of the list of Bottom Halves belonging to the context */
+     struct QEMUBH *first_bh;
+ 
+@@ -127,6 +130,8 @@ void aio_notify(AioContext *ctx);
+  * aio_bh_poll: Poll bottom halves for an AioContext.
+  *
+  * These are internal functions used by the QEMU main loop.
++ * And notice that multiple occurrences of aio_bh_poll cannot
++ * be called concurrently
+  */
+ int aio_bh_poll(AioContext *ctx);
+ 
+@@ -163,6 +168,8 @@ void qemu_bh_cancel(QEMUBH *bh);
+  * Deleting a bottom half frees the memory that was allocated for it by
+  * qemu_bh_new.  It also implies canceling the bottom half if it was
+  * scheduled.
++ * This func is async. The bottom half will do the delete action at the finial
++ * end.
+  *
+  * @bh: The bottom half to be deleted.
+  */
+-- 
+1.8.3.1
+

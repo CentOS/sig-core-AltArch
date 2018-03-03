@@ -1,0 +1,125 @@
+From 1b37b298fc1f0d69e24229191e4bbe741e4d96ab Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 18 May 2017 09:21:25 +0200
+Subject: [PATCH 12/18] serial: clean up THRE/TEMT handling
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <20170518092131.16571-13-famz@redhat.com>
+Patchwork-id: 75303
+O-Subject: [RHEL-7.4 qemu-kvm PATCH v3 12/18] serial: clean up THRE/TEMT handling
+Bugzilla: 1451470
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+- assert TEMT is cleared before sending a character; we'll get one from
+TSR if tsr_retry > 0, from the FIFO or THR otherwise
+
+- assert THRE cleared and FIFO not empty (if enabled) before fetching a
+character to send.  This effectively reverts dffacd46, but the check
+makes no sense and commit f702e62 (serial: change retry logic to avoid
+concurrency, 2014-07-11) must have made it unnecessary.  The commit
+message for f702e62 talks about multiple calls to qemu_chr_fe_add_watch
+triggering s->tsr_retry >= MAX_XMIT_RETRY, but other failures were
+possible.  For example, if you have multiple calls, the subsequent ones
+will see s->tsr_retry == 0 and will find THRE and/or TEMT on entry.
+
+- for clarity, raise THRI immediately after the code sets THRE
+
+- check THRE to see if another character has to be sent.  This makes
+the assertions more obvious and also means TEMT has to be set as soon as
+the loop ends.  It makes the loop send both TSR and THR if flow-control
+happens in non-FIFO mode.  Previously, THR would be lost.
+
+- clear TEMT together with THRE even in the non-FIFO case
+
+The last two items are bugfixes, but they were just found by inspection
+and do not squash known bugs.
+
+Reviewed-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 0d931d706266d6ada3bf22d3afca1afdc8d12fa9)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	hw/char/serial.c
+
+Contextual conflict because upstream has the new timer API
+qemu_clock_get_ns, but downstream still uses qemu_get_clock_ns.
+---
+ hw/char/serial.c | 26 ++++++++++++--------------
+ 1 file changed, 12 insertions(+), 14 deletions(-)
+
+diff --git a/hw/char/serial.c b/hw/char/serial.c
+index 15c628f..c2be4bd 100644
+--- a/hw/char/serial.c
++++ b/hw/char/serial.c
+@@ -224,21 +224,23 @@ static gboolean serial_xmit(GIOChannel *chan, GIOCondition cond, void *opaque)
+     SerialState *s = opaque;
+ 
+     do {
++        assert(!(s->lsr & UART_LSR_TEMT));
+         if (s->tsr_retry <= 0) {
++            assert(!(s->lsr & UART_LSR_THRE));
++
+             if (s->fcr & UART_FCR_FE) {
+-                if (fifo8_is_empty(&s->xmit_fifo)) {
+-                    return FALSE;
+-                }
++                assert(!fifo8_is_empty(&s->xmit_fifo));
+                 s->tsr = fifo8_pop(&s->xmit_fifo);
+                 if (!s->xmit_fifo.num) {
+                     s->lsr |= UART_LSR_THRE;
+                 }
+-            } else if ((s->lsr & UART_LSR_THRE)) {
+-                return FALSE;
+             } else {
+                 s->tsr = s->thr;
+                 s->lsr |= UART_LSR_THRE;
+-                s->lsr &= ~UART_LSR_TEMT;
++            }
++            if ((s->lsr & UART_LSR_THRE) && !s->thr_ipending) {
++                s->thr_ipending = 1;
++                serial_update_irq(s);
+             }
+         }
+ 
+@@ -256,17 +258,13 @@ static gboolean serial_xmit(GIOChannel *chan, GIOCondition cond, void *opaque)
+         } else {
+             s->tsr_retry = 0;
+         }
++
+         /* Transmit another byte if it is already available. It is only
+            possible when FIFO is enabled and not empty. */
+-    } while ((s->fcr & UART_FCR_FE) && !fifo8_is_empty(&s->xmit_fifo));
++    } while (!(s->lsr & UART_LSR_THRE));
+ 
+     s->last_xmit_ts = qemu_get_clock_ns(vm_clock);
+-
+-    if (s->lsr & UART_LSR_THRE) {
+-        s->lsr |= UART_LSR_TEMT;
+-        s->thr_ipending = 1;
+-        serial_update_irq(s);
+-    }
++    s->lsr |= UART_LSR_TEMT;
+ 
+     return FALSE;
+ }
+@@ -293,10 +291,10 @@ static void serial_ioport_write(void *opaque, hwaddr addr, uint64_t val,
+                     fifo8_pop(&s->xmit_fifo);
+                 }
+                 fifo8_push(&s->xmit_fifo, s->thr);
+-                s->lsr &= ~UART_LSR_TEMT;
+             }
+             s->thr_ipending = 0;
+             s->lsr &= ~UART_LSR_THRE;
++            s->lsr &= ~UART_LSR_TEMT;
+             serial_update_irq(s);
+             if (s->tsr_retry <= 0) {
+                 serial_xmit(NULL, G_IO_OUT, s);
+-- 
+1.8.3.1
+

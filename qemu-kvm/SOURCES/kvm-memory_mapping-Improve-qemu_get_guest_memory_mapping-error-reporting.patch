@@ -1,0 +1,107 @@
+From 810b9028eba23f399b2dcd22e746f99f2577150f Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Mon, 12 Aug 2013 15:59:36 +0200
+Subject: memory_mapping: Improve qemu_get_guest_memory_mapping() error reporting
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1376323180-12863-7-git-send-email-lersek@redhat.com>
+Patchwork-id: 53165
+O-Subject: [RHEL-7 qemu-kvm PATCH 06/10] memory_mapping: Improve qemu_get_guest_memory_mapping() error reporting
+Bugzilla: 981582
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Radim Krcmar <rkrcmar@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Andreas Färber <afaerber@suse.de>
+
+Pass any Error out into dump_init() and have it actually stop on errors.
+Whether it is unsupported on a certain CPU can be checked by looking for
+a NULL CPUClass::get_memory_mapping field.
+
+Reviewed-by: Luiz Capitulino <lcapitulino@redhat.com>
+[AF: Reverted changes to CPU loops]
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit 11ed09cf0753c1288a97f00138fc4534135442bb)
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+
+diff --git a/dump.c b/dump.c
+index 87ca12c..44a1339 100644
+--- a/dump.c
++++ b/dump.c
+@@ -707,6 +707,7 @@ static int dump_init(DumpState *s, int fd, bool paging, bool has_filter,
+ {
+     CPUArchState *env;
+     int nr_cpus;
++    Error *err = NULL;
+     int ret;
+ 
+     if (runstate_is_running()) {
+@@ -757,7 +758,11 @@ static int dump_init(DumpState *s, int fd, bool paging, bool has_filter,
+     /* get memory mapping */
+     memory_mapping_list_init(&s->list);
+     if (paging) {
+-        qemu_get_guest_memory_mapping(&s->list);
++        qemu_get_guest_memory_mapping(&s->list, &err);
++        if (err != NULL) {
++            error_propagate(errp, err);
++            goto cleanup;
++        }
+     } else {
+         qemu_get_guest_simple_memory_mapping(&s->list);
+     }
+diff --git a/include/sysemu/memory_mapping.h b/include/sysemu/memory_mapping.h
+index c47e6ee..6dfb68d 100644
+--- a/include/sysemu/memory_mapping.h
++++ b/include/sysemu/memory_mapping.h
+@@ -45,13 +45,7 @@ void memory_mapping_list_free(MemoryMappingList *list);
+ 
+ void memory_mapping_list_init(MemoryMappingList *list);
+ 
+-/*
+- * Return value:
+- *    0: success
+- *   -1: failed
+- *   -2: unsupported
+- */
+-int qemu_get_guest_memory_mapping(MemoryMappingList *list);
++void qemu_get_guest_memory_mapping(MemoryMappingList *list, Error **errp);
+ 
+ /* get guest's memory mapping without do paging(virtual address is 0). */
+ void qemu_get_guest_simple_memory_mapping(MemoryMappingList *list);
+diff --git a/memory_mapping.c b/memory_mapping.c
+index 9bd24ce..5634f81 100644
+--- a/memory_mapping.c
++++ b/memory_mapping.c
+@@ -178,7 +178,7 @@ static CPUArchState *find_paging_enabled_cpu(CPUArchState *start_cpu)
+     return NULL;
+ }
+ 
+-int qemu_get_guest_memory_mapping(MemoryMappingList *list)
++void qemu_get_guest_memory_mapping(MemoryMappingList *list, Error **errp)
+ {
+     CPUArchState *env, *first_paging_enabled_cpu;
+     RAMBlock *block;
+@@ -190,11 +190,11 @@ int qemu_get_guest_memory_mapping(MemoryMappingList *list)
+             Error *err = NULL;
+             cpu_get_memory_mapping(ENV_GET_CPU(env), list, &err);
+             if (err) {
+-                error_free(err);
+-                return -1;
++                error_propagate(errp, err);
++                return;
+             }
+         }
+-        return 0;
++        return;
+     }
+ 
+     /*
+@@ -206,8 +206,6 @@ int qemu_get_guest_memory_mapping(MemoryMappingList *list)
+         length = block->length;
+         create_new_memory_mapping(list, offset, offset, length);
+     }
+-
+-    return 0;
+ }
+ 
+ void qemu_get_guest_simple_memory_mapping(MemoryMappingList *list)

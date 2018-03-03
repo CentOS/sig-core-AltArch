@@ -1,0 +1,93 @@
+From b6a8c4f1ada2c7d31bdd2438163f11026a0a0711 Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Fri, 17 Jul 2015 20:46:43 +0200
+Subject: [PATCH 2/5] vfio/pci : Add pba_offset PCI quirk for Chelsio T5
+ devices
+
+Message-id: <20150717203953.606.815.stgit@gimli.home>
+Patchwork-id: 67057
+O-Subject: [RHEL7.2 qemu-kvm PATCH] vfio/pci : Add pba_offset PCI quirk for Chelsio T5 devices
+Bugzilla: 1244347
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Gabriel Laupre <glaupre@chelsio.com>
+
+Upstream: 43302969966bc3a95470bfc300289a83068ef5d9
+
+Fix pba_offset initialization value for Chelsio T5 Virtual Function
+device. The T5 hardware has a bug in it where it reports a Pending Interrupt
+Bit Array Offset of 0x8000 for its SR-IOV Virtual Functions instead
+of the 0x1000 that the hardware actually uses internally. As the hardware
+doesn't return the correct pba_offset value, add a quirk to instead
+return a hardcoded value of 0x1000 when a Chelsio T5 VF device is
+detected.
+
+This bug has been fixed in the Chelsio's next chip series T6 but there are
+no plans to respin the T5 ASIC for this bug. It is just documented in the
+T5 Errata and left it at that.
+
+Signed-off-by: Gabriel Laupre <glaupre@chelsio.com>
+Reviewed-by: Bandan Das <bsd@redhat.com>
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c           | 27 +++++++++++++++++++++++++++
+ include/hw/pci/pci_ids.h |  2 ++
+ 2 files changed, 29 insertions(+)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index 118489c..36b9832 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -2466,6 +2466,33 @@ static int vfio_early_setup_msix(VFIODevice *vdev)
+             vdev->host.function, pos, vdev->msix->table_bar,
+             vdev->msix->table_offset, vdev->msix->entries);
+ 
++    /*
++     * Test the size of the pba_offset variable and catch if it extends outside
++     * of the specified BAR. If it is the case, we need to apply a hardware
++     * specific quirk if the device is known or we have a broken configuration.
++     */
++    if (vdev->msix->pba_offset >=
++        vdev->bars[vdev->msix->pba_bar].size) {
++
++        PCIDevice *pdev = &vdev->pdev;
++        uint16_t vendor = pci_get_word(pdev->config + PCI_VENDOR_ID);
++        uint16_t device = pci_get_word(pdev->config + PCI_DEVICE_ID);
++
++        /*
++         * Chelsio T5 Virtual Function devices are encoded as 0x58xx for T5
++         * adapters. The T5 hardware returns an incorrect value of 0x8000 for
++         * the VF PBA offset while the BAR itself is only 8k. The correct value
++         * is 0x1000, so we hard code that here.
++         */
++        if (vendor == PCI_VENDOR_ID_CHELSIO && (device & 0xff00) == 0x5800) {
++            vdev->msix->pba_offset = 0x1000;
++        } else {
++            error_report("vfio: Hardware reports invalid configuration, "
++                         "MSIX PBA outside of specified BAR");
++            return -EINVAL;
++        }
++    }
++
+     return 0;
+ }
+ 
+diff --git a/include/hw/pci/pci_ids.h b/include/hw/pci/pci_ids.h
+index d8dc2f1..3792255 100644
+--- a/include/hw/pci/pci_ids.h
++++ b/include/hw/pci/pci_ids.h
+@@ -102,6 +102,8 @@
+ #define PCI_VENDOR_ID_ENSONIQ            0x1274
+ #define PCI_DEVICE_ID_ENSONIQ_ES1370     0x5000
+ 
++#define PCI_VENDOR_ID_CHELSIO            0x1425
++
+ #define PCI_VENDOR_ID_FREESCALE          0x1957
+ #define PCI_DEVICE_ID_MPC8533E           0x0030
+ 
+-- 
+1.8.3.1
+

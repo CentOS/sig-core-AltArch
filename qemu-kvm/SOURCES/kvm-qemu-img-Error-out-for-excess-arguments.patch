@@ -1,0 +1,108 @@
+From 00e5b1ffe79264929ea0dab871e5e797ab85497f Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 19 Aug 2013 11:09:45 +0200
+Subject: qemu-img: Error out for excess arguments
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1376910585-8875-1-git-send-email-mreitz@redhat.com>
+Patchwork-id: 53597
+O-Subject: [RHEL-7 qemu-kvm PATCH] qemu-img: Error out for excess arguments
+Bugzilla: 992935
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+Don't silently ignore excess arguments at the end of the command line,
+but error out instead. This can catch typos like 'resize test.img + 1G',
+which doesn't increase the image size by 1G as intended, but truncates
+the image to 1G. Even for less dangerous commands, the old behaviour is
+confusing.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit fc11eb26cee7e3621645dd40cd9de944201f590b)
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+
+BZ: https://bugzilla.redhat.com/show_bug.cgi?id=992935
+Brew: https://brewweb.devel.redhat.com/taskinfo?taskID=6181030
+
+diff --git a/qemu-img.c b/qemu-img.c
+index cd096a1..c20ff66 100644
+--- a/qemu-img.c
++++ b/qemu-img.c
+@@ -393,6 +393,9 @@ static int img_create(int argc, char **argv)
+         }
+         img_size = (uint64_t)sval;
+     }
++    if (optind != argc) {
++        help();
++    }
+ 
+     if (options && is_help_option(options)) {
+         return print_block_option_help(filename, fmt);
+@@ -570,7 +573,7 @@ static int img_check(int argc, char **argv)
+             break;
+         }
+     }
+-    if (optind >= argc) {
++    if (optind != argc - 1) {
+         help();
+     }
+     filename = argv[optind++];
+@@ -681,7 +684,7 @@ static int img_commit(int argc, char **argv)
+             break;
+         }
+     }
+-    if (optind >= argc) {
++    if (optind != argc - 1) {
+         help();
+     }
+     filename = argv[optind++];
+@@ -927,7 +930,7 @@ static int img_compare(int argc, char **argv)
+     }
+ 
+ 
+-    if (optind > argc - 2) {
++    if (optind != argc - 2) {
+         help();
+     }
+     filename1 = argv[optind++];
+@@ -1882,7 +1885,7 @@ static int img_info(int argc, char **argv)
+             break;
+         }
+     }
+-    if (optind >= argc) {
++    if (optind != argc - 1) {
+         help();
+     }
+     filename = argv[optind++];
+@@ -1983,7 +1986,7 @@ static int img_snapshot(int argc, char **argv)
+         }
+     }
+ 
+-    if (optind >= argc) {
++    if (optind != argc - 1) {
+         help();
+     }
+     filename = argv[optind++];
+@@ -2094,7 +2097,7 @@ static int img_rebase(int argc, char **argv)
+         progress = 0;
+     }
+ 
+-    if ((optind >= argc) || (!unsafe && !out_baseimg)) {
++    if ((optind != argc - 1) || (!unsafe && !out_baseimg)) {
+         help();
+     }
+     filename = argv[optind++];
+@@ -2373,7 +2376,7 @@ static int img_resize(int argc, char **argv)
+             break;
+         }
+     }
+-    if (optind >= argc) {
++    if (optind != argc - 1) {
+         help();
+     }
+     filename = argv[optind++];

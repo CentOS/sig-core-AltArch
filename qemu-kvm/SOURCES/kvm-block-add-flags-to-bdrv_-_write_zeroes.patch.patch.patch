@@ -1,0 +1,256 @@
+From 0f795e4e9e128f9ff88a128ed8590d2357228b80 Mon Sep 17 00:00:00 2001
+Message-Id: <0f795e4e9e128f9ff88a128ed8590d2357228b80.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:08:55 +0100
+Subject: [PATCH 07/50] block: add flags to bdrv_*_write_zeroes
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-10-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56046
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 09/52] block: add flags to bdrv_*_write_zeroes
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Peter Lieven <pl@kamp.de>
+
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit aa7bfbfff792538a9eeefe879fc4c629aa0b4203)
+
+Conflicts:
+	block.c [missing before_write notifier]
+	block/backup.c [missing]
+	block/qcow2-cluster.c [missing function to expand zero clusters]
+	block/raw_bsd.c [replaced by block/raw.c]
+	qemu-io-cmds.c [replaced by qemu-io.c]
+---
+ block-migration.c         |  2 +-
+ block.c                   | 20 +++++++++++---------
+ block/qcow2.c             |  2 +-
+ block/qed.c               |  3 ++-
+ block/raw.c               |  5 +++--
+ block/vmdk.c              |  3 ++-
+ include/block/block.h     |  4 ++--
+ include/block/block_int.h |  2 +-
+ qemu-io.c                 |  2 +-
+ 9 files changed, 24 insertions(+), 19 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ block-migration.c         |  2 +-
+ block.c                   | 20 +++++++++++---------
+ block/qcow2.c             |  2 +-
+ block/qed.c               |  3 ++-
+ block/raw.c               |  5 +++--
+ block/vmdk.c              |  3 ++-
+ include/block/block.h     |  4 ++--
+ include/block/block_int.h |  2 +-
+ qemu-io.c                 |  2 +-
+ 9 files changed, 24 insertions(+), 19 deletions(-)
+
+diff --git a/block-migration.c b/block-migration.c
+index f803f20..3b22db6 100644
+--- a/block-migration.c
++++ b/block-migration.c
+@@ -780,7 +780,7 @@ static int block_load(QEMUFile *f, void *opaque, int version_id)
+             }
+ 
+             if (flags & BLK_MIG_FLAG_ZERO_BLOCK) {
+-                ret = bdrv_write_zeroes(bs, addr, nr_sectors);
++                ret = bdrv_write_zeroes(bs, addr, nr_sectors, 0);
+             } else {
+                 buf = g_malloc(BLOCK_SIZE);
+                 qemu_get_buffer(f, buf, BLOCK_SIZE);
+diff --git a/block.c b/block.c
+index b7ca799..698334a 100644
+--- a/block.c
++++ b/block.c
+@@ -79,7 +79,7 @@ static BlockDriverAIOCB *bdrv_co_aio_rw_vector(BlockDriverState *bs,
+                                                bool is_write);
+ static void coroutine_fn bdrv_co_do_rw(void *opaque);
+ static int coroutine_fn bdrv_co_do_write_zeroes(BlockDriverState *bs,
+-    int64_t sector_num, int nb_sectors);
++    int64_t sector_num, int nb_sectors, BdrvRequestFlags flags);
+ 
+ static bool bdrv_exceed_bps_limits(BlockDriverState *bs, int nb_sectors,
+         bool is_write, double elapsed_time, uint64_t *wait);
+@@ -2405,10 +2405,11 @@ int bdrv_writev(BlockDriverState *bs, int64_t sector_num, QEMUIOVector *qiov)
+     return bdrv_rwv_co(bs, sector_num, qiov, true, 0);
+ }
+ 
+-int bdrv_write_zeroes(BlockDriverState *bs, int64_t sector_num, int nb_sectors)
++int bdrv_write_zeroes(BlockDriverState *bs, int64_t sector_num,
++                      int nb_sectors, BdrvRequestFlags flags)
+ {
+     return bdrv_rw_co(bs, sector_num, NULL, nb_sectors, true,
+-                      BDRV_REQ_ZERO_WRITE);
++                      BDRV_REQ_ZERO_WRITE | flags);
+ }
+ 
+ int bdrv_pread(BlockDriverState *bs, int64_t offset,
+@@ -2590,7 +2591,7 @@ static int coroutine_fn bdrv_co_do_copy_on_readv(BlockDriverState *bs,
+     if (drv->bdrv_co_write_zeroes &&
+         buffer_is_zero(bounce_buffer, iov.iov_len)) {
+         ret = bdrv_co_do_write_zeroes(bs, cluster_sector_num,
+-                                      cluster_nb_sectors);
++                                      cluster_nb_sectors, 0);
+     } else {
+         /* This does not change the data on the disk, it is not necessary
+          * to flush even in cache=writethrough mode.
+@@ -2724,7 +2725,7 @@ int coroutine_fn bdrv_co_copy_on_readv(BlockDriverState *bs,
+ }
+ 
+ static int coroutine_fn bdrv_co_do_write_zeroes(BlockDriverState *bs,
+-    int64_t sector_num, int nb_sectors)
++    int64_t sector_num, int nb_sectors, BdrvRequestFlags flags)
+ {
+     BlockDriver *drv = bs->drv;
+     QEMUIOVector qiov;
+@@ -2736,7 +2737,7 @@ static int coroutine_fn bdrv_co_do_write_zeroes(BlockDriverState *bs,
+ 
+     /* First try the efficient write zeroes operation */
+     if (drv->bdrv_co_write_zeroes) {
+-        ret = drv->bdrv_co_write_zeroes(bs, sector_num, nb_sectors);
++        ret = drv->bdrv_co_write_zeroes(bs, sector_num, nb_sectors, flags);
+         if (ret != -ENOTSUP) {
+             return ret;
+         }
+@@ -2787,7 +2788,7 @@ static int coroutine_fn bdrv_co_do_writev(BlockDriverState *bs,
+     tracked_request_begin(&req, bs, sector_num, nb_sectors, true);
+ 
+     if (flags & BDRV_REQ_ZERO_WRITE) {
+-        ret = bdrv_co_do_write_zeroes(bs, sector_num, nb_sectors);
++        ret = bdrv_co_do_write_zeroes(bs, sector_num, nb_sectors, flags);
+     } else {
+         ret = drv->bdrv_co_writev(bs, sector_num, nb_sectors, qiov);
+     }
+@@ -2821,12 +2822,13 @@ int coroutine_fn bdrv_co_writev(BlockDriverState *bs, int64_t sector_num,
+ }
+ 
+ int coroutine_fn bdrv_co_write_zeroes(BlockDriverState *bs,
+-                                      int64_t sector_num, int nb_sectors)
++                                      int64_t sector_num, int nb_sectors,
++                                      BdrvRequestFlags flags)
+ {
+     trace_bdrv_co_write_zeroes(bs, sector_num, nb_sectors);
+ 
+     return bdrv_co_do_writev(bs, sector_num, nb_sectors, NULL,
+-                             BDRV_REQ_ZERO_WRITE);
++                             BDRV_REQ_ZERO_WRITE | flags);
+ }
+ 
+ /**
+diff --git a/block/qcow2.c b/block/qcow2.c
+index 8de8892..c109646 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -1685,7 +1685,7 @@ static int qcow2_make_empty(BlockDriverState *bs)
+ }
+ 
+ static coroutine_fn int qcow2_co_write_zeroes(BlockDriverState *bs,
+-    int64_t sector_num, int nb_sectors)
++    int64_t sector_num, int nb_sectors, BdrvRequestFlags flags)
+ {
+     int ret;
+     BDRVQcowState *s = bs->opaque;
+diff --git a/block/qed.c b/block/qed.c
+index 084dc0a..e163372 100644
+--- a/block/qed.c
++++ b/block/qed.c
+@@ -1397,7 +1397,8 @@ static void coroutine_fn qed_co_write_zeroes_cb(void *opaque, int ret)
+ 
+ static int coroutine_fn bdrv_qed_co_write_zeroes(BlockDriverState *bs,
+                                                  int64_t sector_num,
+-                                                 int nb_sectors)
++                                                 int nb_sectors,
++                                                 BdrvRequestFlags flags)
+ {
+     BlockDriverAIOCB *blockacb;
+     BDRVQEDState *s = bs->opaque;
+diff --git a/block/raw.c b/block/raw.c
+index e1ed8cc..67d6445 100644
+--- a/block/raw.c
++++ b/block/raw.c
+@@ -47,9 +47,10 @@ static int64_t coroutine_fn raw_co_get_block_status(BlockDriverState *bs,
+ 
+ static int coroutine_fn raw_co_write_zeroes(BlockDriverState *bs,
+                                             int64_t sector_num,
+-                                            int nb_sectors)
++                                            int nb_sectors,
++                                            BdrvRequestFlags flags)
+ {
+-    return bdrv_co_write_zeroes(bs->file, sector_num, nb_sectors);
++    return bdrv_co_write_zeroes(bs->file, sector_num, nb_sectors, flags);
+ }
+ 
+ static int64_t raw_getlength(BlockDriverState *bs)
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 7ec6427..6d676e4 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -1426,7 +1426,8 @@ static coroutine_fn int vmdk_co_write(BlockDriverState *bs, int64_t sector_num,
+ 
+ static int coroutine_fn vmdk_co_write_zeroes(BlockDriverState *bs,
+                                              int64_t sector_num,
+-                                             int nb_sectors)
++                                             int nb_sectors,
++                                             BdrvRequestFlags flags)
+ {
+     int ret;
+     BDRVVmdkState *s = bs->opaque;
+diff --git a/include/block/block.h b/include/block/block.h
+index ce6e897..2d78a84 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -194,7 +194,7 @@ int bdrv_read_unthrottled(BlockDriverState *bs, int64_t sector_num,
+ int bdrv_write(BlockDriverState *bs, int64_t sector_num,
+                const uint8_t *buf, int nb_sectors);
+ int bdrv_write_zeroes(BlockDriverState *bs, int64_t sector_num,
+-               int nb_sectors);
++               int nb_sectors, BdrvRequestFlags flags);
+ int bdrv_writev(BlockDriverState *bs, int64_t sector_num, QEMUIOVector *qiov);
+ int bdrv_pread(BlockDriverState *bs, int64_t offset,
+                void *buf, int count);
+@@ -216,7 +216,7 @@ int coroutine_fn bdrv_co_writev(BlockDriverState *bs, int64_t sector_num,
+  * because it may allocate memory for the entire region.
+  */
+ int coroutine_fn bdrv_co_write_zeroes(BlockDriverState *bs, int64_t sector_num,
+-    int nb_sectors);
++    int nb_sectors, BdrvRequestFlags flags);
+ BlockDriverState *bdrv_find_backing_image(BlockDriverState *bs,
+     const char *backing_file);
+ int bdrv_get_backing_file_depth(BlockDriverState *bs);
+diff --git a/include/block/block_int.h b/include/block/block_int.h
+index 8223f5b..236c0c2 100644
+--- a/include/block/block_int.h
++++ b/include/block/block_int.h
+@@ -125,7 +125,7 @@ struct BlockDriver {
+      * instead.
+      */
+     int coroutine_fn (*bdrv_co_write_zeroes)(BlockDriverState *bs,
+-        int64_t sector_num, int nb_sectors);
++        int64_t sector_num, int nb_sectors, BdrvRequestFlags flags);
+     int coroutine_fn (*bdrv_co_discard)(BlockDriverState *bs,
+         int64_t sector_num, int nb_sectors);
+     int64_t coroutine_fn (*bdrv_co_get_block_status)(BlockDriverState *bs,
+diff --git a/qemu-io.c b/qemu-io.c
+index df21022..393c2c8 100644
+--- a/qemu-io.c
++++ b/qemu-io.c
+@@ -234,7 +234,7 @@ static void coroutine_fn co_write_zeroes_entry(void *opaque)
+     CoWriteZeroes *data = opaque;
+ 
+     data->ret = bdrv_co_write_zeroes(bs, data->offset / BDRV_SECTOR_SIZE,
+-                                     data->count / BDRV_SECTOR_SIZE);
++                                     data->count / BDRV_SECTOR_SIZE, 0);
+     data->done = true;
+     if (data->ret < 0) {
+         *data->total = data->ret;
+-- 
+1.7.11.7
+

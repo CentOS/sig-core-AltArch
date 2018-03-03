@@ -1,0 +1,116 @@
+From 6c473bbd42becf52b10677500bb509fbfa077140 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Fri, 17 Jan 2014 03:07:47 +0100
+Subject: [PATCH 04/34] block: implement reference count for BlockDriverState
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1389928083-8921-3-git-send-email-famz@redhat.com>
+Patchwork-id: 56764
+O-Subject: [RHEL-7 qemu-kvm PATCH 02/18] block: implement reference count for BlockDriverState
+Bugzilla: 1041301
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Introduce bdrv_ref/bdrv_unref to manage the lifecycle of
+BlockDriverState. They are unused for now but will used to replace
+bdrv_delete() later.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 9fcb025146676ab376e6159b58f5a5ddb67bf03c)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+
+Conflicts:
+	block.c
+        Context conflict because throttling and before_write notifier
+        are not backported yet.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ block.c                   | 21 +++++++++++++++++++++
+ include/block/block.h     |  2 ++
+ include/block/block_int.h |  1 +
+ 3 files changed, 24 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c                   |   21 +++++++++++++++++++++
+ include/block/block.h     |    2 ++
+ include/block/block_int.h |    1 +
+ 3 files changed, 24 insertions(+), 0 deletions(-)
+
+diff --git a/block.c b/block.c
+index cc7afd4..ddf29d0 100644
+--- a/block.c
++++ b/block.c
+@@ -301,6 +301,7 @@ BlockDriverState *bdrv_new(const char *device_name)
+     }
+     bdrv_iostatus_disable(bs);
+     notifier_list_init(&bs->close_notifiers);
++    bs->refcnt = 1;
+ 
+     return bs;
+ }
+@@ -1580,6 +1581,9 @@ static void bdrv_move_feature_fields(BlockDriverState *bs_dest,
+     /* dirty bitmap */
+     bs_dest->dirty_bitmap       = bs_src->dirty_bitmap;
+ 
++    /* reference count */
++    bs_dest->refcnt             = bs_src->refcnt;
++
+     /* job */
+     bs_dest->in_use             = bs_src->in_use;
+     bs_dest->job                = bs_src->job;
+@@ -4754,6 +4758,23 @@ int64_t bdrv_get_dirty_count(BlockDriverState *bs)
+     }
+ }
+ 
++/* Get a reference to bs */
++void bdrv_ref(BlockDriverState *bs)
++{
++    bs->refcnt++;
++}
++
++/* Release a previously grabbed reference to bs.
++ * If after releasing, reference count is zero, the BlockDriverState is
++ * deleted. */
++void bdrv_unref(BlockDriverState *bs)
++{
++    assert(bs->refcnt > 0);
++    if (--bs->refcnt == 0) {
++        bdrv_delete(bs);
++    }
++}
++
+ void bdrv_set_in_use(BlockDriverState *bs, int in_use)
+ {
+     assert(bs->in_use != in_use);
+diff --git a/include/block/block.h b/include/block/block.h
+index e7f718c..a3b7395 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -421,6 +421,8 @@ int64_t bdrv_get_dirty_count(BlockDriverState *bs);
+ void bdrv_enable_copy_on_read(BlockDriverState *bs);
+ void bdrv_disable_copy_on_read(BlockDriverState *bs);
+ 
++void bdrv_ref(BlockDriverState *bs);
++void bdrv_unref(BlockDriverState *bs);
+ void bdrv_set_in_use(BlockDriverState *bs, int in_use);
+ int bdrv_in_use(BlockDriverState *bs);
+ 
+diff --git a/include/block/block_int.h b/include/block/block_int.h
+index d49a317..fbfdab7 100644
+--- a/include/block/block_int.h
++++ b/include/block/block_int.h
+@@ -315,6 +315,7 @@ struct BlockDriverState {
+     BlockDeviceIoStatus iostatus;
+     char device_name[32];
+     HBitmap *dirty_bitmap;
++    int refcnt;
+     int in_use; /* users other than guest access, eg. block migration */
+     QTAILQ_ENTRY(BlockDriverState) list;
+ 
+-- 
+1.7.1
+

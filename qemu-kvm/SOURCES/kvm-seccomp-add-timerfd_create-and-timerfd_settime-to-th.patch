@@ -1,0 +1,88 @@
+From 982a3d6d0569bed08ee7d31380271abe69d836b4 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Thu, 30 Apr 2015 10:31:57 +0200
+Subject: [PATCH 1/4] seccomp: add timerfd_create and timerfd_settime to the
+ whitelist
+
+Message-id: <1430389917-29237-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 64959
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 1/1] seccomp: add timerfd_create and timerfd_settime to the whitelist
+Bugzilla: 1185737
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+From: Felix Geyer <debfx@fobos.de>
+
+libusb calls timerfd_create() and timerfd_settime() when it's built with
+timerfd support.
+
+Command to reproduce:
+
+       -device usb-host,hostbus=1,hostaddr=3,id=hostdev0
+
+Log messages:
+
+audit(1390730418.924:135): auid=4294967295 uid=121 gid=103 ses=4294967295
+                           pid=5232 comm="qemu-system-x86" sig=31 syscall=283
+                           compat=0 ip=0x7f2b0f4e96a7 code=0x0
+audit(1390733100.580:142): auid=4294967295 uid=121 gid=103 ses=4294967295
+                           pid=16909 comm="qemu-system-x86" sig=31 syscall=286
+                           compat=0 ip=0x7f03513a06da code=0x0
+
+Reading a few hundred MB from a USB drive on x86_64 shows this syscall distribution.
+Therefore the timerfd_settime priority is set to 242.
+
+    calls  syscall
+ --------- ----------------
+   5303600 write
+   2240554 read
+   2167030 ppoll
+   2134828 ioctl
+    704023 timerfd_settime
+    689105 poll
+     83122 futex
+       803 writev
+       476 rt_sigprocmask
+       287 recvmsg
+       178 brk
+
+Signed-off-by: Felix Geyer <debfx@fobos.de>
+Signed-off-by: Eduardo Otubo <otubo@linux.vnet.ibm.com>
+(cherry picked from commit 84397618529f920bea45d0bab22ec097766244fc)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	qemu-seccomp.c
+---
+ qemu-seccomp.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+---
+ qemu-seccomp.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/qemu-seccomp.c b/qemu-seccomp.c
+index 59cae8e..5e60fce 100644
+--- a/qemu-seccomp.c
++++ b/qemu-seccomp.c
+@@ -154,6 +154,7 @@ static const struct QemuSeccompSyscall seccomp_whitelist[] = {
+     { SCMP_SYS(getsockname), 242 },
+     { SCMP_SYS(getpeername), 242 },
+     { SCMP_SYS(accept4), 242 },
++    { SCMP_SYS(timerfd_settime), 242 },
+     { SCMP_SYS(newfstatat), 241 },
+     { SCMP_SYS(shutdown), 241 },
+     { SCMP_SYS(getsockopt), 241 },
+@@ -246,7 +247,8 @@ static const struct QemuSeccompSyscall seccomp_whitelist[] = {
+     { SCMP_SYS(shmctl), 240 },
+     { SCMP_SYS(mlock), 240 },
+     { SCMP_SYS(munlock), 240 },
+-    { SCMP_SYS(semctl), 240 }
++    { SCMP_SYS(semctl), 240 },
++    { SCMP_SYS(timerfd_create), 240 },
+ };
+ 
+ int seccomp_start(void)
+-- 
+1.8.3.1
+

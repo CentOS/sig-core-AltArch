@@ -1,0 +1,67 @@
+From e865b795a4b0eaae50745ad7dd694447c72600c9 Mon Sep 17 00:00:00 2001
+Message-Id: <e865b795a4b0eaae50745ad7dd694447c72600c9.1418766606.git.jen@redhat.com>
+In-Reply-To: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+References: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 4 Dec 2014 00:05:13 -0600
+Subject: [CHANGE 19/31] vmdk: Implement .bdrv_write_compressed
+To: rhvirt-patches@redhat.com,
+    jen@redhat.com
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1417651524-18041-20-git-send-email-famz@redhat.com>
+Patchwork-id: 62692
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v5 19/30] vmdk: Implement .bdrv_write_compressed
+Bugzilla: 1134283
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+Add a wrapper function to support "compressed" path in qemu-img convert.
+Only support streamOptimized subformat case for now (num_extents == 1
+and extent compression is true).
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit ba0ad89e2c3316ce26ca6576a3c5051f91bfc0fe)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Jeff E. Nelson <jen@redhat.com>
+---
+ block/vmdk.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 4cd2795..157db7e 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -1495,6 +1495,19 @@ static coroutine_fn int vmdk_co_write(BlockDriverState *bs, int64_t sector_num,
+     return ret;
+ }
+ 
++static int vmdk_write_compressed(BlockDriverState *bs,
++                                 int64_t sector_num,
++                                 const uint8_t *buf,
++                                 int nb_sectors)
++{
++    BDRVVmdkState *s = bs->opaque;
++    if (s->num_extents == 1 && s->extents[0].compressed) {
++        return vmdk_write(bs, sector_num, buf, nb_sectors, false, false);
++    } else {
++        return -ENOTSUP;
++    }
++}
++
+ static int coroutine_fn vmdk_co_write_zeroes(BlockDriverState *bs,
+                                              int64_t sector_num,
+                                              int nb_sectors,
+@@ -2104,6 +2117,7 @@ static BlockDriver bdrv_vmdk = {
+     .bdrv_reopen_prepare          = vmdk_reopen_prepare,
+     .bdrv_read                    = vmdk_co_read,
+     .bdrv_write                   = vmdk_co_write,
++    .bdrv_write_compressed        = vmdk_write_compressed,
+     .bdrv_co_write_zeroes         = vmdk_co_write_zeroes,
+     .bdrv_close                   = vmdk_close,
+     .bdrv_create                  = vmdk_create,
+-- 
+2.1.0
+

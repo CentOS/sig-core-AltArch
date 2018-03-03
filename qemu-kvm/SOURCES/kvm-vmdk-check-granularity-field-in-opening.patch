@@ -1,0 +1,157 @@
+From c85b3af7587973944c28b859dfefa91c21852971 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Tue, 6 Aug 2013 15:44:51 +0800
+Subject: [PATCH 05/13] vmdk: check granularity field in opening
+
+Message-id: <1377573001-27070-6-git-send-email-famz@redhat.com>
+Patchwork-id: 53785
+O-Subject: [RHEL-7 qemu-kvm PATCH 05/13] vmdk: check granularity field in opening
+Bugzilla: 995866
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+Granularity is used to calculate the cluster size and allocate r/w
+buffer. Check the value from image before using it, so we don't abort()
+for unbounded memory allocation.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 8aa1331c09a9b899f48d97f097bb49b7d458be1c)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ block/vmdk.c               |   40 +++++++++++++++++++++++++++++++---------
+ tests/qemu-iotests/059     |    8 +++++++-
+ tests/qemu-iotests/059.out |    6 ++++++
+ 3 files changed, 44 insertions(+), 10 deletions(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 78ea480..8f59697 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -385,15 +385,22 @@ static int vmdk_parent_open(BlockDriverState *bs)
+ 
+ /* Create and append extent to the extent array. Return the added VmdkExtent
+  * address. return NULL if allocation failed. */
+-static VmdkExtent *vmdk_add_extent(BlockDriverState *bs,
++static int vmdk_add_extent(BlockDriverState *bs,
+                            BlockDriverState *file, bool flat, int64_t sectors,
+                            int64_t l1_offset, int64_t l1_backup_offset,
+                            uint32_t l1_size,
+-                           int l2_size, unsigned int cluster_sectors)
++                           int l2_size, uint64_t cluster_sectors,
++                           VmdkExtent **new_extent)
+ {
+     VmdkExtent *extent;
+     BDRVVmdkState *s = bs->opaque;
+ 
++    if (cluster_sectors > 0x200000) {
++        /* 0x200000 * 512Bytes = 1GB for one cluster is unrealistic */
++        error_report("invalid granularity, image may be corrupt");
++        return -EINVAL;
++    }
++
+     s->extents = g_realloc(s->extents,
+                               (s->num_extents + 1) * sizeof(VmdkExtent));
+     extent = &s->extents[s->num_extents];
+@@ -416,7 +423,10 @@ static VmdkExtent *vmdk_add_extent(BlockDriverState *bs,
+         extent->end_sector = extent->sectors;
+     }
+     bs->total_sectors = extent->end_sector;
+-    return extent;
++    if (new_extent) {
++        *new_extent = extent;
++    }
++    return 0;
+ }
+ 
+ static int vmdk_init_tables(BlockDriverState *bs, VmdkExtent *extent)
+@@ -475,12 +485,17 @@ static int vmdk_open_vmdk3(BlockDriverState *bs,
+     if (ret < 0) {
+         return ret;
+     }
+-    extent = vmdk_add_extent(bs,
++
++    ret = vmdk_add_extent(bs,
+                              bs->file, false,
+                              le32_to_cpu(header.disk_sectors),
+                              le32_to_cpu(header.l1dir_offset) << 9,
+                              0, 1 << 6, 1 << 9,
+-                             le32_to_cpu(header.granularity));
++                             le32_to_cpu(header.granularity),
++                             &extent);
++    if (ret < 0) {
++        return ret;
++    }
+     ret = vmdk_init_tables(bs, extent);
+     if (ret) {
+         /* free extent allocated by vmdk_add_extent */
+@@ -580,13 +595,17 @@ static int vmdk_open_vmdk4(BlockDriverState *bs,
+     if (le32_to_cpu(header.flags) & VMDK4_FLAG_RGD) {
+         l1_backup_offset = le64_to_cpu(header.rgd_offset) << 9;
+     }
+-    extent = vmdk_add_extent(bs, file, false,
++    ret = vmdk_add_extent(bs, file, false,
+                           le64_to_cpu(header.capacity),
+                           le64_to_cpu(header.gd_offset) << 9,
+                           l1_backup_offset,
+                           l1_size,
+                           le32_to_cpu(header.num_gtes_per_gte),
+-                          le64_to_cpu(header.granularity));
++                          le64_to_cpu(header.granularity),
++                          &extent);
++    if (ret < 0) {
++        return ret;
++    }
+     extent->compressed =
+         le16_to_cpu(header.compressAlgorithm) == VMDK4_COMPRESSION_DEFLATE;
+     extent->has_marker = le32_to_cpu(header.flags) & VMDK4_FLAG_MARKER;
+@@ -702,8 +721,11 @@ static int vmdk_parse_extents(const char *desc, BlockDriverState *bs,
+             /* FLAT extent */
+             VmdkExtent *extent;
+ 
+-            extent = vmdk_add_extent(bs, extent_file, true, sectors,
+-                            0, 0, 0, 0, sectors);
++            ret = vmdk_add_extent(bs, extent_file, true, sectors,
++                            0, 0, 0, 0, sectors, &extent);
++            if (ret < 0) {
++                return ret;
++            }
+             extent->flat_start_offset = flat_offset << 9;
+         } else if (!strcmp(type, "SPARSE")) {
+             /* SPARSE extent */
+diff --git a/tests/qemu-iotests/059 b/tests/qemu-iotests/059
+index 9dc7f64..9545e82 100755
+--- a/tests/qemu-iotests/059
++++ b/tests/qemu-iotests/059
+@@ -43,7 +43,13 @@ _supported_fmt vmdk
+ _supported_proto generic
+ _supported_os Linux
+ 
+-granularity_offset=16
++granularity_offset=20
++
++echo "=== Testing invalid granularity ==="
++echo
++_make_test_img 64M
++poke_file "$TEST_IMG" "$granularity_offset" "\xff\xff\xff\xff\xff\xff\xff\xff"
++{ $QEMU_IO -c "read 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
+ 
+ # success, all done
+ echo "*** done"
+diff --git a/tests/qemu-iotests/059.out b/tests/qemu-iotests/059.out
+index 4ca7f29..380ca3d 100644
+--- a/tests/qemu-iotests/059.out
++++ b/tests/qemu-iotests/059.out
+@@ -1,2 +1,8 @@
+ QA output created by 059
++=== Testing invalid granularity ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864
++invalid granularity, image may be corrupt
++qemu-io: can't open device TEST_DIR/t.vmdk
++no file open, try 'help open'
+ *** done
+-- 
+1.7.1
+

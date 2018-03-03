@@ -1,0 +1,115 @@
+From 2eb03118784d98cc6cd1d1cadd2badc0cfd19469 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Fri, 11 Jul 2014 14:21:08 +0200
+Subject: [PATCH 28/43] usb: add usb_pick_speed
+
+Message-id: <1405088470-24115-36-git-send-email-kraxel@redhat.com>
+Patchwork-id: 59839
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 35/37] usb: add usb_pick_speed
+Bugzilla: 1075846
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+We can pick the usb port speed in generic code, by looking at the port
+and device speed masks and looking for the fastest match.  So add a
+function to do exactly that, and drop the speed setting code from
+usb_desc_attach as it isn't needed any more.
+
+This way we can set the device speed before calling port->ops->attach,
+which fixes some xhci hotplug issues.
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1046873
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit b791c3b38c7969cb9f4acda8229e19fd865a1c08)
+---
+ hw/usb/core.c    | 21 +++++++++++++++++++++
+ hw/usb/desc.c    | 12 ------------
+ include/hw/usb.h |  1 +
+ 3 files changed, 22 insertions(+), 12 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/core.c    | 21 +++++++++++++++++++++
+ hw/usb/desc.c    | 12 ------------
+ include/hw/usb.h |  1 +
+ 3 files changed, 22 insertions(+), 12 deletions(-)
+
+diff --git a/hw/usb/core.c b/hw/usb/core.c
+index 67ba7d6..cf34755 100644
+--- a/hw/usb/core.c
++++ b/hw/usb/core.c
+@@ -28,6 +28,26 @@
+ #include "qemu/iov.h"
+ #include "trace.h"
+ 
++void usb_pick_speed(USBPort *port)
++{
++    static const int speeds[] = {
++        USB_SPEED_SUPER,
++        USB_SPEED_HIGH,
++        USB_SPEED_FULL,
++        USB_SPEED_LOW,
++    };
++    USBDevice *udev = port->dev;
++    int i;
++
++    for (i = 0; i < ARRAY_SIZE(speeds); i++) {
++        if ((udev->speedmask & (1 << speeds[i])) &&
++            (port->speedmask & (1 << speeds[i]))) {
++            udev->speed = speeds[i];
++            return;
++        }
++    }
++}
++
+ void usb_attach(USBPort *port)
+ {
+     USBDevice *dev = port->dev;
+@@ -35,6 +55,7 @@ void usb_attach(USBPort *port)
+     assert(dev != NULL);
+     assert(dev->attached);
+     assert(dev->state == USB_STATE_NOTATTACHED);
++    usb_pick_speed(port);
+     port->ops->attach(port);
+     dev->state = USB_STATE_ATTACHED;
+     usb_device_handle_attach(dev);
+diff --git a/hw/usb/desc.c b/hw/usb/desc.c
+index f133ddb..138881f 100644
+--- a/hw/usb/desc.c
++++ b/hw/usb/desc.c
+@@ -518,18 +518,6 @@ void usb_desc_init(USBDevice *dev)
+ 
+ void usb_desc_attach(USBDevice *dev)
+ {
+-    const USBDesc *desc = usb_device_get_usb_desc(dev);
+-
+-    assert(desc != NULL);
+-    if (desc->super && (dev->port->speedmask & USB_SPEED_MASK_SUPER)) {
+-        dev->speed = USB_SPEED_SUPER;
+-    } else if (desc->high && (dev->port->speedmask & USB_SPEED_MASK_HIGH)) {
+-        dev->speed = USB_SPEED_HIGH;
+-    } else if (desc->full && (dev->port->speedmask & USB_SPEED_MASK_FULL)) {
+-        dev->speed = USB_SPEED_FULL;
+-    } else {
+-        return;
+-    }
+     usb_desc_setdefaults(dev);
+ }
+ 
+diff --git a/include/hw/usb.h b/include/hw/usb.h
+index 000001b..ebbff47 100644
+--- a/include/hw/usb.h
++++ b/include/hw/usb.h
+@@ -453,6 +453,7 @@ void usb_ep_combine_input_packets(USBEndpoint *ep);
+ void usb_combined_input_packet_complete(USBDevice *dev, USBPacket *p);
+ void usb_combined_packet_cancel(USBDevice *dev, USBPacket *p);
+ 
++void usb_pick_speed(USBPort *port);
+ void usb_attach(USBPort *port);
+ void usb_detach(USBPort *port);
+ void usb_port_reset(USBPort *port);
+-- 
+1.8.3.1
+

@@ -1,0 +1,243 @@
+From 85b14be2b92e75320728a450635c80053d8cd374 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Wed, 6 Nov 2013 16:53:36 +0100
+Subject: [PATCH 79/87] block/qapi: Human-readable ImageInfoSpecific dump
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383756824-6921-14-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55568
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 13/21] block/qapi: Human-readable ImageInfoSpecific dump
+Bugzilla: 980771
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+BZ: 980771
+
+Add a function for generically dumping the ImageInfoSpecific information
+in a human-readable format to block/qapi.c.
+
+Use this function in bdrv_image_info_dump and qemu-io-cmds.c:info_f to
+allow qemu-img info resp. qemu-io -c info to print that format specific
+information.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit a8d8ecb77fc16da49ea2c1edae267dc9d0c01dfd)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+
+Conflicts:
+	qemu-io.c
+	qemu-io-cmds.c
+
+Conflicts because 797ac58cb2093ab9192d8998a1fef85d87cc8661 has not been
+backported, which splits qemu-io-cmds.c from qemu-io.c.
+---
+ block/qapi.c         | 121 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ include/block/qapi.h |   2 +
+ qemu-io.c            |   9 ++++
+ 3 files changed, 132 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qapi.c         |  121 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ include/block/qapi.h |    2 +
+ qemu-io.c            |    9 ++++
+ 3 files changed, 132 insertions(+), 0 deletions(-)
+
+diff --git a/block/qapi.c b/block/qapi.c
+index 896cd37..87423fb 100644
+--- a/block/qapi.c
++++ b/block/qapi.c
+@@ -25,6 +25,9 @@
+ #include "block/qapi.h"
+ #include "block/block_int.h"
+ #include "qmp-commands.h"
++#include "qapi-visit.h"
++#include "qapi/qmp-output-visitor.h"
++#include "qapi/qmp/types.h"
+ 
+ /*
+  * Returns 0 on success, with *p_list either set to describe snapshot
+@@ -400,6 +403,119 @@ void bdrv_snapshot_dump(fprintf_function func_fprintf, void *f,
+     }
+ }
+ 
++static void dump_qdict(fprintf_function func_fprintf, void *f, int indentation,
++                       QDict *dict);
++static void dump_qlist(fprintf_function func_fprintf, void *f, int indentation,
++                       QList *list);
++
++static void dump_qobject(fprintf_function func_fprintf, void *f,
++                         int comp_indent, QObject *obj)
++{
++    switch (qobject_type(obj)) {
++        case QTYPE_QINT: {
++            QInt *value = qobject_to_qint(obj);
++            func_fprintf(f, "%" PRId64, qint_get_int(value));
++            break;
++        }
++        case QTYPE_QSTRING: {
++            QString *value = qobject_to_qstring(obj);
++            func_fprintf(f, "%s", qstring_get_str(value));
++            break;
++        }
++        case QTYPE_QDICT: {
++            QDict *value = qobject_to_qdict(obj);
++            dump_qdict(func_fprintf, f, comp_indent, value);
++            break;
++        }
++        case QTYPE_QLIST: {
++            QList *value = qobject_to_qlist(obj);
++            dump_qlist(func_fprintf, f, comp_indent, value);
++            break;
++        }
++        case QTYPE_QFLOAT: {
++            QFloat *value = qobject_to_qfloat(obj);
++            func_fprintf(f, "%g", qfloat_get_double(value));
++            break;
++        }
++        case QTYPE_QBOOL: {
++            QBool *value = qobject_to_qbool(obj);
++            func_fprintf(f, "%s", qbool_get_int(value) ? "true" : "false");
++            break;
++        }
++        case QTYPE_QERROR: {
++            QString *value = qerror_human((QError *)obj);
++            func_fprintf(f, "%s", qstring_get_str(value));
++            break;
++        }
++        case QTYPE_NONE:
++            break;
++        case QTYPE_MAX:
++        default:
++            abort();
++    }
++}
++
++static void dump_qlist(fprintf_function func_fprintf, void *f, int indentation,
++                       QList *list)
++{
++    const QListEntry *entry;
++    int i = 0;
++
++    for (entry = qlist_first(list); entry; entry = qlist_next(entry), i++) {
++        qtype_code type = qobject_type(entry->value);
++        bool composite = (type == QTYPE_QDICT || type == QTYPE_QLIST);
++        const char *format = composite ? "%*s[%i]:\n" : "%*s[%i]: ";
++
++        func_fprintf(f, format, indentation * 4, "", i);
++        dump_qobject(func_fprintf, f, indentation + 1, entry->value);
++        if (!composite) {
++            func_fprintf(f, "\n");
++        }
++    }
++}
++
++static void dump_qdict(fprintf_function func_fprintf, void *f, int indentation,
++                       QDict *dict)
++{
++    const QDictEntry *entry;
++
++    for (entry = qdict_first(dict); entry; entry = qdict_next(dict, entry)) {
++        qtype_code type = qobject_type(entry->value);
++        bool composite = (type == QTYPE_QDICT || type == QTYPE_QLIST);
++        const char *format = composite ? "%*s%s:\n" : "%*s%s: ";
++        char key[strlen(entry->key) + 1];
++        int i;
++
++        /* replace dashes with spaces in key (variable) names */
++        for (i = 0; entry->key[i]; i++) {
++            key[i] = entry->key[i] == '-' ? ' ' : entry->key[i];
++        }
++        key[i] = 0;
++
++        func_fprintf(f, format, indentation * 4, "", key);
++        dump_qobject(func_fprintf, f, indentation + 1, entry->value);
++        if (!composite) {
++            func_fprintf(f, "\n");
++        }
++    }
++}
++
++void bdrv_image_info_specific_dump(fprintf_function func_fprintf, void *f,
++                                   ImageInfoSpecific *info_spec)
++{
++    Error *local_err = NULL;
++    QmpOutputVisitor *ov = qmp_output_visitor_new();
++    QObject *obj, *data;
++
++    visit_type_ImageInfoSpecific(qmp_output_get_visitor(ov), &info_spec, NULL,
++                                 &local_err);
++    obj = qmp_output_get_qobject(ov);
++    assert(qobject_type(obj) == QTYPE_QDICT);
++    data = qdict_get(qobject_to_qdict(obj), "data");
++    dump_qobject(func_fprintf, f, 1, data);
++    qmp_output_visitor_cleanup(ov);
++}
++
+ void bdrv_image_info_dump(fprintf_function func_fprintf, void *f,
+                           ImageInfo *info)
+ {
+@@ -470,4 +586,9 @@ void bdrv_image_info_dump(fprintf_function func_fprintf, void *f,
+             func_fprintf(f, "\n");
+         }
+     }
++
++    if (info->has_format_specific) {
++        func_fprintf(f, "Format specific information:\n");
++        bdrv_image_info_specific_dump(func_fprintf, f, info->format_specific);
++    }
+ }
+diff --git a/include/block/qapi.h b/include/block/qapi.h
+index 0496cc9..9518ee4 100644
+--- a/include/block/qapi.h
++++ b/include/block/qapi.h
+@@ -42,6 +42,8 @@ BlockStats *bdrv_query_stats(const BlockDriverState *bs);
+ 
+ void bdrv_snapshot_dump(fprintf_function func_fprintf, void *f,
+                         QEMUSnapshotInfo *sn);
++void bdrv_image_info_specific_dump(fprintf_function func_fprintf, void *f,
++                                   ImageInfoSpecific *info_spec);
+ void bdrv_image_info_dump(fprintf_function func_fprintf, void *f,
+                           ImageInfo *info);
+ #endif
+diff --git a/qemu-io.c b/qemu-io.c
+index 116bb1b..df21022 100644
+--- a/qemu-io.c
++++ b/qemu-io.c
+@@ -17,6 +17,7 @@
+ #include "qemu-common.h"
+ #include "qemu/main-loop.h"
+ #include "block/block_int.h"
++#include "block/qapi.h"
+ #include "cmd.h"
+ #include "trace/control.h"
+ 
+@@ -1462,6 +1463,7 @@ static const cmdinfo_t length_cmd = {
+ static int info_f(int argc, char **argv)
+ {
+     BlockDriverInfo bdi;
++    ImageInfoSpecific *spec_info;
+     char s1[64], s2[64];
+     int ret;
+ 
+@@ -1483,6 +1485,13 @@ static int info_f(int argc, char **argv)
+     printf("cluster size: %s\n", s1);
+     printf("vm state offset: %s\n", s2);
+ 
++    spec_info = bdrv_get_specific_info(bs);
++    if (spec_info) {
++        printf("Format specific information:\n");
++        bdrv_image_info_specific_dump(fprintf, stdout, spec_info);
++        qapi_free_ImageInfoSpecific(spec_info);
++    }
++
+     return 0;
+ }
+ 
+-- 
+1.7.1
+

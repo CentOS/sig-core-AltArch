@@ -1,0 +1,92 @@
+From ba5bef1bb19b97c88b2e99071ffab067b7f3b9d3 Mon Sep 17 00:00:00 2001
+Message-Id: <ba5bef1bb19b97c88b2e99071ffab067b7f3b9d3.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:09:36 +0100
+Subject: [PATCH 48/50] qemu-img: dynamically adjust iobuffer size during
+ convert
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-51-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56087
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 50/52] qemu-img: dynamically adjust iobuffer size during convert
+Bugzilla: 1039557
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Peter Lieven <pl@kamp.de>
+
+since the convert process is basically a sync operation it might
+be benificial in some case to change the hardcoded I/O buffer
+size to a greater value.
+
+This patch increases the I/O buffer size if the output
+driver advertises an optimal transfer length or discard alignment
+that is greater than the default buffer size of 2M.
+
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit f2521c9023067a007d18b844fe7639c1c5b6f2ac)
+---
+ qemu-img.c | 16 +++++++++++++---
+ 1 file changed, 13 insertions(+), 3 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ qemu-img.c | 16 +++++++++++++---
+ 1 file changed, 13 insertions(+), 3 deletions(-)
+
+diff --git a/qemu-img.c b/qemu-img.c
+index c81d70a..6890bb1 100644
+--- a/qemu-img.c
++++ b/qemu-img.c
+@@ -1133,6 +1133,7 @@ static int img_convert(int argc, char **argv)
+             sector_num_next_status = 0;
+     uint64_t bs_sectors;
+     uint8_t * buf = NULL;
++    size_t bufsectors = IO_BUF_SIZE / BDRV_SECTOR_SIZE;
+     const uint8_t *buf1;
+     BlockDriverInfo bdi;
+     QEMUOptionParameter *param = NULL, *create_options = NULL;
+@@ -1369,7 +1370,16 @@ static int img_convert(int argc, char **argv)
+     bs_i = 0;
+     bs_offset = 0;
+     bdrv_get_geometry(bs[0], &bs_sectors);
+-    buf = qemu_blockalign(out_bs, IO_BUF_SIZE);
++
++    /* increase bufsectors from the default 4096 (2M) if opt_transfer_length
++     * or discard_alignment of the out_bs is greater. Limit to 32768 (16MB)
++     * as maximum. */
++    bufsectors = MIN(32768,
++                     MAX(bufsectors, MAX(out_bs->bl.opt_transfer_length,
++                                         out_bs->bl.discard_alignment))
++                    );
++
++    buf = qemu_blockalign(out_bs, bufsectors * BDRV_SECTOR_SIZE);
+ 
+     if (skip_create) {
+         int64_t output_length = bdrv_getlength(out_bs);
+@@ -1392,7 +1402,7 @@ static int img_convert(int argc, char **argv)
+             goto out;
+         }
+         cluster_size = bdi.cluster_size;
+-        if (cluster_size <= 0 || cluster_size > IO_BUF_SIZE) {
++        if (cluster_size <= 0 || cluster_size > bufsectors * BDRV_SECTOR_SIZE) {
+             error_report("invalid cluster size");
+             ret = -1;
+             goto out;
+@@ -1529,7 +1539,7 @@ static int img_convert(int argc, char **argv)
+                 sector_num_next_status = sector_num + n1;
+             }
+ 
+-            n = MIN(nb_sectors, IO_BUF_SIZE / 512);
++            n = MIN(nb_sectors, bufsectors);
+             n = MIN(n, bs_sectors - (sector_num - bs_offset));
+             n1 = n;
+ 
+-- 
+1.7.11.7
+

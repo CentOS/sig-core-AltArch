@@ -1,0 +1,46 @@
+From 06989fa543551f16e41b0218e10125df31ccbc0b Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Wed, 31 Jul 2013 09:54:55 +0200
+Subject: vmdk: refuse to open higher version than supported
+
+Message-id: <1374654509-5535-4-git-send-email-famz@redhat.com>
+Patchwork-id: 52675
+O-Subject: [RHEL-7 qemu-kvm PATCH 3/5] vmdk: refuse to open higher version than supported
+Bugzilla: 836675
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Michal Novotny <minovotn@redhat.com>
+
+Refuse to open higher version for safety.
+
+Although we try to be compatible with published VMDK spec, VMware has
+newer version from ESXi 5.1 exported OVF/OVA, which we have no knowledge
+what's changed in it. And it is very likely to have more new versions in
+the future, so it's not safe to open them blindly.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 96c51eb5e46af2312b33f745ad72acb20e799aea)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 65ae011..975e1d4 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -561,6 +561,15 @@ static int vmdk_open_vmdk4(BlockDriverState *bs,
+         header = footer.header;
+     }
+ 
++    if (le32_to_cpu(header.version) >= 3) {
++        char buf[64];
++        snprintf(buf, sizeof(buf), "VMDK version %d",
++                 le32_to_cpu(header.version));
++        qerror_report(QERR_UNKNOWN_BLOCK_FORMAT_FEATURE,
++                bs->device_name, "vmdk", buf);
++        return -ENOTSUP;
++    }
++
+     l1_entry_sectors = le32_to_cpu(header.num_gtes_per_gte)
+                         * le64_to_cpu(header.granularity);
+     if (l1_entry_sectors == 0) {

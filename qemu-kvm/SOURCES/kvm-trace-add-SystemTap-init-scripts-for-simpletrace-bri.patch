@@ -1,0 +1,107 @@
+From a8ebb2f69df031099116afebca2fb2a2cb3ec678 Mon Sep 17 00:00:00 2001
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Tue, 7 Oct 2014 14:06:58 +0200
+Subject: [PATCH 40/43] trace: add SystemTap init scripts for simpletrace
+ bridge
+
+Message-id: <1412690820-31016-10-git-send-email-stefanha@redhat.com>
+Patchwork-id: 61614
+O-Subject: [RHEL7.1 qemu-kvm PATCH 09/11] trace: add SystemTap init scripts for simpletrace bridge
+Bugzilla: 1088112
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Add example files for use with the systemtap-initscript package.  These
+example files set up the SystemTap flight recorder with our simpletrace
+bridge script.  In other words, they set up always-on simpletrace.
+
+The example file enables a small subset of trace events across all
+qemu-kvm processes with 4MB per CPU trace buffers.  This example
+configuration may be useful to customers who wish to run with always-on
+tracing.
+
+To enable it:
+
+  # yum install systemtap-initscript
+  # cp /usr/share/qemu-kvm/systemtap/conf.d/qemu_kvm.conf /etc/systemtap/conf.d/
+  # cp /usr/share/qemu-kvm/systemtap/script.d/qemu_kvm.stp /etc/systemtap/script.d/
+  # service systemtap start qemu_kvm
+
+Note that due to systemtap-initscript naming restrictions the scripts
+are called "qemu_kvm" instead of "qemu-kvm".
+
+Once installed the script will be activated on boot.
+
+Note that since gitignore(1) hides *.d we explicitly unhide
+scripts/systemtap/{conf.d,script.d} in this patch.
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 3a83a60ee0fd25580499695e4781fc473de147c5)
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	Makefile
+	redhat/qemu-kvm.spec.template
+
+This downstream commit from RHEL 6.6 was forwarded-ported to RHEL 7.1
+where the Makefile and qemu-kvm.spec.template are organized differently.
+---
+ .gitignore                              | 2 ++
+ Makefile                                | 4 ++++
+ redhat/qemu-kvm.spec.template           | 4 +++-
+ scripts/systemtap/conf.d/qemu_kvm.conf  | 4 ++++
+ scripts/systemtap/script.d/qemu_kvm.stp | 1 +
+ 5 files changed, 14 insertions(+), 1 deletion(-)
+ create mode 100644 scripts/systemtap/conf.d/qemu_kvm.conf
+ create mode 100644 scripts/systemtap/script.d/qemu_kvm.stp
+
+diff --git a/.gitignore b/.gitignore
+index 4f2345c..454561e 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -74,6 +74,8 @@ fsdev/virtfs-proxy-helper.pod
+ *.vr
+ *.d
+ !scripts/qemu-guest-agent/fsfreeze-hook.d
++!scripts/systemtap/script.d
++!scripts/systemtap/conf.d
+ *.o
+ *.lo
+ *.la
+diff --git a/Makefile b/Makefile
+index 1b0b4f7..8407945 100644
+--- a/Makefile
++++ b/Makefile
+@@ -407,6 +407,10 @@ endif
+ 		$(INSTALL_DATA) $(SRC_PATH)/pc-bios/keymaps/$$x "$(DESTDIR)$(qemu_datadir)/keymaps"; \
+ 	done
+ 	$(INSTALL_DATA) $(SRC_PATH)/trace-events "$(DESTDIR)$(qemu_datadir)/trace-events"
++	$(INSTALL_DIR) "$(DESTDIR)$(qemu_datadir)/systemtap/script.d"
++	$(INSTALL_DATA) $(SRC_PATH)/scripts/systemtap/script.d/qemu_kvm.stp "$(DESTDIR)$(qemu_datadir)/systemtap/script.d/"
++	$(INSTALL_DIR) "$(DESTDIR)$(qemu_datadir)/systemtap/conf.d"
++	$(INSTALL_DATA) $(SRC_PATH)/scripts/systemtap/conf.d/qemu_kvm.conf "$(DESTDIR)$(qemu_datadir)/systemtap/conf.d/"
+ 	for d in $(TARGET_DIRS); do \
+ 	$(MAKE) -C $$d $@ || exit 1 ; \
+         done
+diff --git a/scripts/systemtap/conf.d/qemu_kvm.conf b/scripts/systemtap/conf.d/qemu_kvm.conf
+new file mode 100644
+index 0000000..372d816
+--- /dev/null
++++ b/scripts/systemtap/conf.d/qemu_kvm.conf
+@@ -0,0 +1,4 @@
++# Force load uprobes (see BZ#1118352)
++stap -e 'probe process("/usr/libexec/qemu-kvm").function("main") { printf("") }' -c true
++
++qemu_kvm_OPT="-s4" # per-CPU buffer size, in megabytes
+diff --git a/scripts/systemtap/script.d/qemu_kvm.stp b/scripts/systemtap/script.d/qemu_kvm.stp
+new file mode 100644
+index 0000000..c04abf9
+--- /dev/null
++++ b/scripts/systemtap/script.d/qemu_kvm.stp
+@@ -0,0 +1 @@
++probe qemu.kvm.simpletrace.handle_qmp_command,qemu.kvm.simpletrace.monitor_protocol_*,qemu.kvm.simpletrace.migrate_set_state {}
+-- 
+1.8.3.1
+

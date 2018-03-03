@@ -1,0 +1,60 @@
+From 96aa5a9a7d0dc4bb47e421168857eacbb36065a8 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 4 Nov 2013 22:32:21 +0100
+Subject: [PATCH 28/87] block/raw-win32: Always use -errno in hdev_open
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-31-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55330
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 30/43] block/raw-win32: Always use -errno in hdev_open
+Bugzilla: 1026524
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1026524
+
+On one occasion, hdev_open() returned -1 in case of an unknown error
+instead of a proper -errno value. Adjust this to match the behavior of
+raw_open() (in raw-win32), which is to return -EINVAL in this case.
+Also, change the call to error_setg*() to match the one in raw_open() as
+well.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 45d57f6e718e44e55780bcf1d09fa140dce7ec08)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/raw-win32.c | 5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/raw-win32.c |    5 ++---
+ 1 files changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/block/raw-win32.c b/block/raw-win32.c
+index 5a60ca5..3e0251f 100644
+--- a/block/raw-win32.c
++++ b/block/raw-win32.c
+@@ -587,12 +587,11 @@ static int hdev_open(BlockDriverState *bs, QDict *options, int flags,
+         int err = GetLastError();
+ 
+         if (err == ERROR_ACCESS_DENIED) {
+-            error_setg_errno(errp, EACCES, "Could not open device");
+             ret = -EACCES;
+         } else {
+-            error_setg(errp, "Could not open device");
+-            ret = -1;
++            ret = -EINVAL;
+         }
++        error_setg_errno(errp, -ret, "Could not open device");
+         goto done;
+     }
+ 
+-- 
+1.7.1
+

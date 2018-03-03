@@ -1,0 +1,141 @@
+From bb8aca64535578520c4b7f5186f9ae5754626694 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Thu, 5 May 2016 19:46:28 +0200
+Subject: [PATCH 10/10] block jobs: qemu-kvm-rhel differentiation
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <f2ce1dbde4055f710cb6f83e6edd9e93a498b366.1462477116.git.jcody@redhat.com>
+Patchwork-id: 70344
+O-Subject: [RHEL7.3 qemu-kvm-rhel 1/1] block jobs: qemu-kvm-rhel differentiation
+Bugzilla: 1156635
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+The conditional block job disablement for RHEL left some QAPI / HMP
+commands in place, that are vestigial without any actual block jobs to
+control.
+
+This patch envelopes those block-job related functions in the
+conditional code that is disabled for RHEL:
+
+block-job-set-speed
+block-job-cancel
+block-job-pause
+block-job-resume
+block-job-complete
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev.c       | 2 +-
+ hmp-commands.hx  | 2 +-
+ hmp.c            | 2 +-
+ qapi-schema.json | 2 +-
+ qmp-commands.hx  | 3 ---
+ 5 files changed, 4 insertions(+), 7 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index b5792a2..69e951f 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -1701,7 +1701,6 @@ void qmp_drive_mirror(const char *device, const char *target,
+         return;
+     }
+ }
+-#endif
+ 
+ static BlockJob *find_block_job(const char *device)
+ {
+@@ -1786,6 +1785,7 @@ void qmp_block_job_complete(const char *device, Error **errp)
+     trace_qmp_block_job_complete(job);
+     block_job_complete(job, errp);
+ }
++#endif
+ 
+ void qmp___com_redhat_change_backing_file(const char *device,
+                                           const char *image_node_name,
+diff --git a/hmp-commands.hx b/hmp-commands.hx
+index 7e1855a..dd528d2 100644
+--- a/hmp-commands.hx
++++ b/hmp-commands.hx
+@@ -81,7 +81,6 @@ ETEXI
+         .help       = "copy data from a backing file into a block device",
+         .mhandler.cmd = hmp_block_stream,
+     },
+-#endif
+ 
+ STEXI
+ @item block_stream
+@@ -160,6 +159,7 @@ STEXI
+ @findex block_job_resume
+ Resume a paused block streaming operation.
+ ETEXI
++#endif
+ 
+     {
+         .name       = "eject",
+diff --git a/hmp.c b/hmp.c
+index e1d92f4..fb9b445 100644
+--- a/hmp.c
++++ b/hmp.c
+@@ -1053,7 +1053,6 @@ void hmp_block_stream(Monitor *mon, const QDict *qdict)
+ 
+     hmp_handle_error(mon, &error);
+ }
+-#endif
+ 
+ void hmp_block_job_set_speed(Monitor *mon, const QDict *qdict)
+ {
+@@ -1106,6 +1105,7 @@ void hmp_block_job_complete(Monitor *mon, const QDict *qdict)
+ 
+     hmp_handle_error(mon, &error);
+ }
++#endif
+ 
+ typedef struct MigrationStatus
+ {
+diff --git a/qapi-schema.json b/qapi-schema.json
+index c8732c1..5138ed9 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -2326,7 +2326,6 @@
+ { 'command': 'block-stream',
+   'data': { 'device': 'str', '*base': 'str', '*backing-file': 'str',
+             '*speed': 'int', '*on-error': 'BlockdevOnError' } }
+-#_end-rhev-only
+ 
+ ##
+ # @block-job-set-speed:
+@@ -2448,6 +2447,7 @@
+ # Since: 1.3
+ ##
+ { 'command': 'block-job-complete', 'data': { 'device': 'str' } }
++#_end-rhev-only
+ 
+ ##
+ # @ObjectTypeInfo:
+diff --git a/qmp-commands.hx b/qmp-commands.hx
+index 22a09be..9522c44 100644
+--- a/qmp-commands.hx
++++ b/qmp-commands.hx
+@@ -1089,8 +1089,6 @@ Example:
+ 
+ EQMP
+ 
+-#endif
+-
+     {
+         .name       = "block-job-set-speed",
+         .args_type  = "device:B,speed:o",
+@@ -1117,7 +1115,6 @@ EQMP
+         .args_type  = "device:B",
+         .mhandler.cmd_new = qmp_marshal_input_block_job_complete,
+     },
+-#ifdef CONFIG_LIVE_BLOCK_OPS
+     {
+         .name       = "transaction",
+         .args_type  = "actions:q",
+-- 
+1.8.3.1
+

@@ -1,0 +1,272 @@
+From 0c9168510f4ddbdec3b0a88095db2e8f3f0aeef7 Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Thu, 25 Jun 2015 19:31:23 +0200
+Subject: [PATCH 03/10] target-i386: Intel MPX
+
+Message-id: <1435260689-9556-3-git-send-email-ehabkost@redhat.com>
+Patchwork-id: 66500
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 2/8] target-i386: Intel MPX
+Bugzilla: 1233350
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: Liu Jinsong <jinsong.liu@intel.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1233350
+
+Add some MPX related definiation, and hardcode sizes and offsets
+of xsave features 3 and 4. It also add corresponding part to
+kvm_get/put_xsave, and vmstate.
+
+Signed-off-by: Liu Jinsong <jinsong.liu@intel.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 79e9ebebbf2a00c46fcedb6dc7dd5e12bbd30216)
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	target-i386/kvm.c
+	target-i386/machine.c
+---
+ target-i386/cpu.c     |  4 ++++
+ target-i386/cpu.h     | 25 ++++++++++++++++++++++---
+ target-i386/kvm.c     | 24 ++++++++++++++++++++++++
+ target-i386/machine.c | 51 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 101 insertions(+), 3 deletions(-)
+
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index 0fd100f..a9e80d9 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -224,6 +224,10 @@ typedef struct ExtSaveArea {
+ static const ExtSaveArea ext_save_areas[] = {
+     [2] = { .feature = FEAT_1_ECX, .bits = CPUID_EXT_AVX,
+             .offset = 0x240, .size = 0x100 },
++    [3] = { .feature = FEAT_7_0_EBX, .bits = CPUID_7_0_EBX_MPX,
++            .offset = 0x3c0, .size = 0x40  },
++    [4] = { .feature = FEAT_7_0_EBX, .bits = CPUID_7_0_EBX_MPX,
++            .offset = 0x400, .size = 0x10  },
+ };
+ 
+ const char *get_register_name_32(unsigned int reg)
+diff --git a/target-i386/cpu.h b/target-i386/cpu.h
+index e9edd3d..7ebdbb3 100644
+--- a/target-i386/cpu.h
++++ b/target-i386/cpu.h
+@@ -383,9 +383,14 @@
+ 
+ #define MSR_VM_HSAVE_PA                 0xc0010117
+ 
+-#define XSTATE_FP                       1
+-#define XSTATE_SSE                      2
+-#define XSTATE_YMM                      4
++#define MSR_IA32_BNDCFGS                0x00000d90
++
++#define XSTATE_FP                       (1ULL << 0)
++#define XSTATE_SSE                      (1ULL << 1)
++#define XSTATE_YMM                      (1ULL << 2)
++#define XSTATE_BNDREGS                  (1ULL << 3)
++#define XSTATE_BNDCSR                   (1ULL << 4)
++
+ 
+ /* CPUID feature words */
+ typedef enum FeatureWord {
+@@ -548,6 +553,7 @@ typedef uint32_t FeatureWordArray[FEATURE_WORDS];
+ #define CPUID_7_0_EBX_ERMS     (1 << 9)
+ #define CPUID_7_0_EBX_INVPCID  (1 << 10)
+ #define CPUID_7_0_EBX_RTM      (1 << 11)
++#define CPUID_7_0_EBX_MPX      (1 << 14)
+ #define CPUID_7_0_EBX_RDSEED   (1 << 18)
+ #define CPUID_7_0_EBX_ADX      (1 << 19)
+ #define CPUID_7_0_EBX_SMAP     (1 << 20)
+@@ -698,6 +704,16 @@ typedef union {
+     uint64_t q;
+ } MMXReg;
+ 
++typedef struct BNDReg {
++    uint64_t lb;
++    uint64_t ub;
++} BNDReg;
++
++typedef struct BNDCSReg {
++    uint64_t cfgu;
++    uint64_t sts;
++} BNDCSReg;
++
+ #ifdef HOST_WORDS_BIGENDIAN
+ #define XMM_B(n) _b[15 - (n)]
+ #define XMM_W(n) _w[7 - (n)]
+@@ -918,6 +934,9 @@ typedef struct CPUX86State {
+ 
+     uint64_t xstate_bv;
+     XMMReg ymmh_regs[CPU_NB_REGS];
++    BNDReg bnd_regs[4];
++    BNDCSReg bndcs_regs;
++    uint64_t msr_bndcfgs;
+ 
+     uint64_t xcr0;
+ 
+diff --git a/target-i386/kvm.c b/target-i386/kvm.c
+index 97ae345..6d9aa63 100644
+--- a/target-i386/kvm.c
++++ b/target-i386/kvm.c
+@@ -68,6 +68,7 @@ static bool has_msr_tsc_deadline;
+ static bool has_msr_async_pf_en;
+ static bool has_msr_pv_eoi_en;
+ static bool has_msr_misc_enable;
++static bool has_msr_bndcfgs;
+ static bool has_msr_kvm_steal_time;
+ static int lm_capable_kernel;
+ static bool has_msr_hv_hypercall;
+@@ -785,6 +786,10 @@ static int kvm_get_supported_msrs(KVMState *s)
+                     has_msr_misc_enable = true;
+                     continue;
+                 }
++                if (kvm_msr_list->indices[i] == MSR_IA32_BNDCFGS) {
++                    has_msr_bndcfgs = true;
++                    continue;
++                }
+             }
+         }
+ 
+@@ -988,6 +993,8 @@ static int kvm_put_fpu(X86CPU *cpu)
+ #define XSAVE_XMM_SPACE   40
+ #define XSAVE_XSTATE_BV   128
+ #define XSAVE_YMMH_SPACE  144
++#define XSAVE_BNDREGS     240
++#define XSAVE_BNDCSR      256
+ 
+ static int kvm_put_xsave(X86CPU *cpu)
+ {
+@@ -1020,6 +1027,10 @@ static int kvm_put_xsave(X86CPU *cpu)
+     *(uint64_t *)&xsave->region[XSAVE_XSTATE_BV] = env->xstate_bv;
+     memcpy(&xsave->region[XSAVE_YMMH_SPACE], env->ymmh_regs,
+             sizeof env->ymmh_regs);
++    memcpy(&xsave->region[XSAVE_BNDREGS], env->bnd_regs,
++            sizeof env->bnd_regs);
++    memcpy(&xsave->region[XSAVE_BNDCSR], &env->bndcs_regs,
++            sizeof(env->bndcs_regs));
+     r = kvm_vcpu_ioctl(CPU(cpu), KVM_SET_XSAVE, xsave);
+     return r;
+ }
+@@ -1255,6 +1266,9 @@ static int kvm_put_msrs(X86CPU *cpu, int level)
+                                   MSR_MTRRphysMask(i), env->mtrr_var[i].mask);
+             }
+         }
++        if (has_msr_bndcfgs) {
++            kvm_msr_entry_set(&msrs[n++], MSR_IA32_BNDCFGS, env->msr_bndcfgs);
++        }
+     }
+     if (env->mcg_cap) {
+         int i;
+@@ -1336,6 +1350,10 @@ static int kvm_get_xsave(X86CPU *cpu)
+     env->xstate_bv = *(uint64_t *)&xsave->region[XSAVE_XSTATE_BV];
+     memcpy(env->ymmh_regs, &xsave->region[XSAVE_YMMH_SPACE],
+             sizeof env->ymmh_regs);
++    memcpy(env->bnd_regs, &xsave->region[XSAVE_BNDREGS],
++            sizeof env->bnd_regs);
++    memcpy(&env->bndcs_regs, &xsave->region[XSAVE_BNDCSR],
++            sizeof(env->bndcs_regs));
+     return 0;
+ }
+ 
+@@ -1479,6 +1497,9 @@ static int kvm_get_msrs(X86CPU *cpu)
+     if (has_msr_misc_enable) {
+         msrs[n++].index = MSR_IA32_MISC_ENABLE;
+     }
++    if (has_msr_bndcfgs) {
++        msrs[n++].index = MSR_IA32_BNDCFGS;
++    }
+ 
+     if (!env->tsc_valid) {
+         msrs[n++].index = MSR_IA32_TSC;
+@@ -1620,6 +1641,9 @@ static int kvm_get_msrs(X86CPU *cpu)
+         case MSR_IA32_MISC_ENABLE:
+             env->msr_ia32_misc_enable = msrs[i].data;
+             break;
++        case MSR_IA32_BNDCFGS:
++            env->msr_bndcfgs = msrs[i].data;
++            break;
+         default:
+             if (msrs[i].index >= MSR_MC0_CTL &&
+                 msrs[i].index < MSR_MC0_CTL + (env->mcg_cap & 0xff) * 4) {
+diff --git a/target-i386/machine.c b/target-i386/machine.c
+index 4c1ead4..b6be606 100644
+--- a/target-i386/machine.c
++++ b/target-i386/machine.c
+@@ -63,6 +63,21 @@ static const VMStateDescription vmstate_ymmh_reg = {
+ #define VMSTATE_YMMH_REGS_VARS(_field, _state, _n, _v)                         \
+     VMSTATE_STRUCT_ARRAY(_field, _state, _n, _v, vmstate_ymmh_reg, XMMReg)
+ 
++static const VMStateDescription vmstate_bnd_regs = {
++    .name = "bnd_regs",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .minimum_version_id_old = 1,
++    .fields      = (VMStateField[]) {
++        VMSTATE_UINT64(lb, BNDReg),
++        VMSTATE_UINT64(ub, BNDReg),
++        VMSTATE_END_OF_LIST()
++    }
++};
++
++#define VMSTATE_BND_REGS(_field, _state, _n)          \
++    VMSTATE_STRUCT_ARRAY(_field, _state, _n, 0, vmstate_bnd_regs, BNDReg)
++
+ static const VMStateDescription vmstate_mtrr_var = {
+     .name = "mtrr_var",
+     .version_id = 1,
+@@ -572,6 +587,39 @@ static const VMStateDescription vmstate_msr_hyperv_time = {
+     }
+ };
+ 
++static bool mpx_needed(void *opaque)
++{
++    X86CPU *cpu = opaque;
++    CPUX86State *env = &cpu->env;
++    unsigned int i;
++
++    for (i = 0; i < 4; i++) {
++        if (env->bnd_regs[i].lb || env->bnd_regs[i].ub) {
++            return true;
++        }
++    }
++
++    if (env->bndcs_regs.cfgu || env->bndcs_regs.sts) {
++        return true;
++    }
++
++    return !!env->msr_bndcfgs;
++}
++
++static const VMStateDescription vmstate_mpx = {
++    .name = "cpu/mpx",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .minimum_version_id_old = 1,
++    .fields      = (VMStateField[]) {
++        VMSTATE_BND_REGS(env.bnd_regs, X86CPU, 4),
++        VMSTATE_UINT64(env.bndcs_regs.cfgu, X86CPU),
++        VMSTATE_UINT64(env.bndcs_regs.sts, X86CPU),
++        VMSTATE_UINT64(env.msr_bndcfgs, X86CPU),
++        VMSTATE_END_OF_LIST()
++    }
++};
++
+ const VMStateDescription vmstate_x86_cpu = {
+     .name = "cpu",
+     .version_id = 12,
+@@ -713,6 +761,9 @@ const VMStateDescription vmstate_x86_cpu = {
+             .vmsd = &vmstate_msr_hyperv_time,
+             .needed = hyperv_time_enable_needed,
+         } , {
++            .vmsd = &vmstate_mpx,
++            .needed = mpx_needed,
++        } , {
+             /* empty */
+         }
+     }
+-- 
+1.8.3.1
+

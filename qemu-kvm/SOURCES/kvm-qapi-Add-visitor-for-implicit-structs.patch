@@ -1,0 +1,132 @@
+From a2a326f0a6b544335c49432248201fb811f1fc2b Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 9 Sep 2013 14:28:11 +0200
+Subject: [PATCH 20/38] qapi: Add visitor for implicit structs
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1378736903-18489-21-git-send-email-kwolf@redhat.com>
+Patchwork-id: 54207
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 20/32] qapi: Add visitor for implicit structs
+Bugzilla: 1005818
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Bugzilla: 1005818
+
+These can be used when an embedded struct is parsed and members not
+belonging to the struct may be present in the input (e.g. parsing a
+flat namespace QMP union, where fields from both the base and one
+of the alternative types are mixed in the JSON object)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit 761d524dbcc5bb41213dd0f238f43c273bc2b077)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ include/qapi/visitor-impl.h |  4 ++++
+ include/qapi/visitor.h      |  3 +++
+ qapi/qapi-visit-core.c      | 16 ++++++++++++++++
+ qapi/qmp-input-visitor.c    | 14 ++++++++++++++
+ 4 files changed, 37 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ include/qapi/visitor-impl.h |    4 ++++
+ include/qapi/visitor.h      |    3 +++
+ qapi/qapi-visit-core.c      |   16 ++++++++++++++++
+ qapi/qmp-input-visitor.c    |   14 ++++++++++++++
+ 4 files changed, 37 insertions(+), 0 deletions(-)
+
+diff --git a/include/qapi/visitor-impl.h b/include/qapi/visitor-impl.h
+index 5159964..5c1297f 100644
+--- a/include/qapi/visitor-impl.h
++++ b/include/qapi/visitor-impl.h
+@@ -22,6 +22,10 @@ struct Visitor
+                          const char *name, size_t size, Error **errp);
+     void (*end_struct)(Visitor *v, Error **errp);
+ 
++    void (*start_implicit_struct)(Visitor *v, void **obj, size_t size,
++                                  Error **errp);
++    void (*end_implicit_struct)(Visitor *v, Error **errp);
++
+     void (*start_list)(Visitor *v, const char *name, Error **errp);
+     GenericList *(*next_list)(Visitor *v, GenericList **list, Error **errp);
+     void (*end_list)(Visitor *v, Error **errp);
+diff --git a/include/qapi/visitor.h b/include/qapi/visitor.h
+index 1fef18c..a1cdd81 100644
+--- a/include/qapi/visitor.h
++++ b/include/qapi/visitor.h
+@@ -30,6 +30,9 @@ void visit_end_handle(Visitor *v, Error **errp);
+ void visit_start_struct(Visitor *v, void **obj, const char *kind,
+                         const char *name, size_t size, Error **errp);
+ void visit_end_struct(Visitor *v, Error **errp);
++void visit_start_implicit_struct(Visitor *v, void **obj, size_t size,
++                                 Error **errp);
++void visit_end_implicit_struct(Visitor *v, Error **errp);
+ void visit_start_list(Visitor *v, const char *name, Error **errp);
+ GenericList *visit_next_list(Visitor *v, GenericList **list, Error **errp);
+ void visit_end_list(Visitor *v, Error **errp);
+diff --git a/qapi/qapi-visit-core.c b/qapi/qapi-visit-core.c
+index 401ee6e..9b4d51b 100644
+--- a/qapi/qapi-visit-core.c
++++ b/qapi/qapi-visit-core.c
+@@ -45,6 +45,22 @@ void visit_end_struct(Visitor *v, Error **errp)
+     v->end_struct(v, errp);
+ }
+ 
++void visit_start_implicit_struct(Visitor *v, void **obj, size_t size,
++                                 Error **errp)
++{
++    if (!error_is_set(errp) && v->start_implicit_struct) {
++        v->start_implicit_struct(v, obj, size, errp);
++    }
++}
++
++void visit_end_implicit_struct(Visitor *v, Error **errp)
++{
++    assert(!error_is_set(errp));
++    if (v->end_implicit_struct) {
++        v->end_implicit_struct(v, errp);
++    }
++}
++
+ void visit_start_list(Visitor *v, const char *name, Error **errp)
+ {
+     if (!error_is_set(errp)) {
+diff --git a/qapi/qmp-input-visitor.c b/qapi/qmp-input-visitor.c
+index 67fb127..59c5cac 100644
+--- a/qapi/qmp-input-visitor.c
++++ b/qapi/qmp-input-visitor.c
+@@ -144,6 +144,18 @@ static void qmp_input_end_struct(Visitor *v, Error **errp)
+     qmp_input_pop(qiv, errp);
+ }
+ 
++static void qmp_input_start_implicit_struct(Visitor *v, void **obj,
++                                            size_t size, Error **errp)
++{
++    if (obj) {
++        *obj = g_malloc0(size);
++    }
++}
++
++static void qmp_input_end_implicit_struct(Visitor *v, Error **errp)
++{
++}
++
+ static void qmp_input_start_list(Visitor *v, const char *name, Error **errp)
+ {
+     QmpInputVisitor *qiv = to_qiv(v);
+@@ -293,6 +305,8 @@ QmpInputVisitor *qmp_input_visitor_new(QObject *obj)
+ 
+     v->visitor.start_struct = qmp_input_start_struct;
+     v->visitor.end_struct = qmp_input_end_struct;
++    v->visitor.start_implicit_struct = qmp_input_start_implicit_struct;
++    v->visitor.end_implicit_struct = qmp_input_end_implicit_struct;
+     v->visitor.start_list = qmp_input_start_list;
+     v->visitor.next_list = qmp_input_next_list;
+     v->visitor.end_list = qmp_input_end_list;
+-- 
+1.7.1
+

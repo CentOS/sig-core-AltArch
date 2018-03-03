@@ -1,0 +1,211 @@
+From 3cb467f6950fee049415dfe54a5d0f498efaead8 Mon Sep 17 00:00:00 2001
+Message-Id: <3cb467f6950fee049415dfe54a5d0f498efaead8.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:18:52 +0100
+Subject: [PATCH 42/56] ich9: APIs for pc guest info
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-43-git-send-email-mst@redhat.com>
+Patchwork-id: 56348
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 42/57] ich9: APIs for pc guest info
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+This adds APIs that will be used to fill in
+acpi tables, implemented using QOM,
+to various ich9 components.
+Some information is still missing in QOM,
+so we fall back on lookups by type instead.
+
+Reviewed-by: Gerd Hoffmann <kraxel@redhat.com>
+Tested-by: Gerd Hoffmann <kraxel@redhat.com>
+Reviewed-by: Igor Mammedov <imammedo@redhat.com>
+Tested-by: Igor Mammedov <imammedo@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 6f1426ab0fad715bccbad60e976ebf420442006c)
+---
+ include/hw/acpi/ich9.h    |  2 ++
+ include/hw/i386/ich9.h    |  2 ++
+ include/hw/pci-host/q35.h |  2 ++
+ hw/acpi/ich9.c            | 24 ++++++++++++++++++++++++
+ hw/isa/lpc_ich9.c         | 40 ++++++++++++++++++++++++++++++++++++++++
+ hw/pci-host/q35.c         | 10 ++++++++++
+ 6 files changed, 80 insertions(+)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/acpi/ich9.c            | 24 ++++++++++++++++++++++++
+ hw/isa/lpc_ich9.c         | 40 ++++++++++++++++++++++++++++++++++++++++
+ hw/pci-host/q35.c         | 10 ++++++++++
+ include/hw/acpi/ich9.h    |  2 ++
+ include/hw/i386/ich9.h    |  2 ++
+ include/hw/pci-host/q35.h |  2 ++
+ 6 files changed, 80 insertions(+)
+
+diff --git a/hw/acpi/ich9.c b/hw/acpi/ich9.c
+index 4a17f32..e747183 100644
+--- a/hw/acpi/ich9.c
++++ b/hw/acpi/ich9.c
+@@ -24,6 +24,7 @@
+  * GNU GPL, version 2 or (at your option) any later version.
+  */
+ #include "hw/hw.h"
++#include "qapi/visitor.h"
+ #include "hw/i386/pc.h"
+ #include "hw/pci/pci.h"
+ #include "qemu/timer.h"
+@@ -228,3 +229,26 @@ void ich9_pm_init(PCIDevice *lpc_pci, ICH9LPCPMRegs *pm,
+     pm->powerdown_notifier.notify = pm_powerdown_req;
+     qemu_register_powerdown_notifier(&pm->powerdown_notifier);
+ }
++
++static void ich9_pm_get_gpe0_blk(Object *obj, Visitor *v,
++                                 void *opaque, const char *name,
++                                 Error **errp)
++{
++    ICH9LPCPMRegs *pm = opaque;
++    uint32_t value = pm->pm_io_base + ICH9_PMIO_GPE0_STS;
++
++    visit_type_uint32(v, &value, name, errp);
++}
++
++void ich9_pm_add_properties(Object *obj, ICH9LPCPMRegs *pm, Error **errp)
++{
++    static const uint32_t gpe0_len = ICH9_PMIO_GPE0_LEN;
++
++    object_property_add_uint32_ptr(obj, ACPI_PM_PROP_PM_IO_BASE,
++                                   &pm->pm_io_base, errp);
++    object_property_add(obj, ACPI_PM_PROP_GPE0_BLK, "uint32",
++                        ich9_pm_get_gpe0_blk,
++                        NULL, NULL, pm, NULL);
++    object_property_add_uint32_ptr(obj, ACPI_PM_PROP_GPE0_BLK_LEN,
++                                   &gpe0_len, errp);
++}
+diff --git a/hw/isa/lpc_ich9.c b/hw/isa/lpc_ich9.c
+index 4f834b9..7a5a92f 100644
+--- a/hw/isa/lpc_ich9.c
++++ b/hw/isa/lpc_ich9.c
+@@ -29,6 +29,7 @@
+  */
+ #include "qemu-common.h"
+ #include "hw/hw.h"
++#include "qapi/visitor.h"
+ #include "qemu/range.h"
+ #include "hw/isa/isa.h"
+ #include "hw/sysbus.h"
+@@ -524,6 +525,43 @@ static const MemoryRegionOps ich9_rst_cnt_ops = {
+     .endianness = DEVICE_LITTLE_ENDIAN
+ };
+ 
++Object *ich9_lpc_find(void)
++{
++    bool ambig;
++    Object *o = object_resolve_path_type("", TYPE_ICH9_LPC_DEVICE, &ambig);
++
++    if (ambig) {
++        return NULL;
++    }
++    return o;
++}
++
++static void ich9_lpc_get_sci_int(Object *obj, Visitor *v,
++                                 void *opaque, const char *name,
++                                 Error **errp)
++{
++    ICH9LPCState *lpc = ICH9_LPC_DEVICE(obj);
++    uint32_t value = ich9_lpc_sci_irq(lpc);
++
++    visit_type_uint32(v, &value, name, errp);
++}
++
++static void ich9_lpc_add_properties(ICH9LPCState *lpc)
++{
++    static const uint8_t acpi_enable_cmd = ICH9_APM_ACPI_ENABLE;
++    static const uint8_t acpi_disable_cmd = ICH9_APM_ACPI_DISABLE;
++
++    object_property_add(OBJECT(lpc), ACPI_PM_PROP_SCI_INT, "uint32",
++                        ich9_lpc_get_sci_int,
++                        NULL, NULL, NULL, NULL);
++    object_property_add_uint8_ptr(OBJECT(lpc), ACPI_PM_PROP_ACPI_ENABLE_CMD,
++                                  &acpi_enable_cmd, NULL);
++    object_property_add_uint8_ptr(OBJECT(lpc), ACPI_PM_PROP_ACPI_DISABLE_CMD,
++                                  &acpi_disable_cmd, NULL);
++
++    ich9_pm_add_properties(OBJECT(lpc), &lpc->pm, NULL);
++}
++
+ static int ich9_lpc_initfn(PCIDevice *d)
+ {
+     ICH9LPCState *lpc = ICH9_LPC_DEVICE(d);
+@@ -551,6 +589,8 @@ static int ich9_lpc_initfn(PCIDevice *d)
+                                         ICH9_RST_CNT_IOPORT, &lpc->rst_cnt_mem,
+                                         1);
+ 
++    ich9_lpc_add_properties(lpc);
++
+     return 0;
+ }
+ 
+diff --git a/hw/pci-host/q35.c b/hw/pci-host/q35.c
+index 87691d1..befa9d4 100644
+--- a/hw/pci-host/q35.c
++++ b/hw/pci-host/q35.c
+@@ -378,6 +378,16 @@ static int mch_init(PCIDevice *d)
+     return 0;
+ }
+ 
++uint64_t mch_mcfg_base(void)
++{
++    bool ambiguous;
++    Object *o = object_resolve_path_type("", TYPE_MCH_PCI_DEVICE, &ambiguous);
++    if (!o) {
++        return 0;
++    }
++    return MCH_HOST_BRIDGE_PCIEXBAR_DEFAULT;
++}
++
+ static void mch_class_init(ObjectClass *klass, void *data)
+ {
+     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
+diff --git a/include/hw/acpi/ich9.h b/include/hw/acpi/ich9.h
+index b1fe71f..82fcf9f 100644
+--- a/include/hw/acpi/ich9.h
++++ b/include/hw/acpi/ich9.h
+@@ -49,4 +49,6 @@ void ich9_pm_init(PCIDevice *lpc_pci, ICH9LPCPMRegs *pm,
+ void ich9_pm_iospace_update(ICH9LPCPMRegs *pm, uint32_t pm_io_base);
+ extern const VMStateDescription vmstate_ich9_pm;
+ 
++void ich9_pm_add_properties(Object *obj, ICH9LPCPMRegs *pm, Error **errp);
++
+ #endif /* HW_ACPI_ICH9_H */
+diff --git a/include/hw/i386/ich9.h b/include/hw/i386/ich9.h
+index c5f637b..4a68b35 100644
+--- a/include/hw/i386/ich9.h
++++ b/include/hw/i386/ich9.h
+@@ -66,6 +66,8 @@ typedef struct ICH9LPCState {
+     qemu_irq *ioapic;
+ } ICH9LPCState;
+ 
++Object *ich9_lpc_find(void);
++
+ #define Q35_MASK(bit, ms_bit, ls_bit) \
+ ((uint##bit##_t)(((1ULL << ((ms_bit) + 1)) - 1) & ~((1ULL << ls_bit) - 1)))
+ 
+diff --git a/include/hw/pci-host/q35.h b/include/hw/pci-host/q35.h
+index e660a40..856d39f 100644
+--- a/include/hw/pci-host/q35.h
++++ b/include/hw/pci-host/q35.h
+@@ -150,4 +150,6 @@ typedef struct Q35PCIHost {
+ #define MCH_PCIE_DEV                           1
+ #define MCH_PCIE_FUNC                          0
+ 
++uint64_t mch_mcfg_base(void);
++
+ #endif /* HW_Q35_H */
+-- 
+1.7.11.7
+

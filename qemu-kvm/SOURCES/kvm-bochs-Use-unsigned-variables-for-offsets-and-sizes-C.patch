@@ -1,0 +1,111 @@
+From abf79316045a3c634e9633553942763fd358f9b2 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 25 Mar 2014 14:23:18 +0100
+Subject: [PATCH 11/49] bochs: Use unsigned variables for offsets and sizes (CVE-2014-0147)
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1395753835-7591-12-git-send-email-kwolf@redhat.com>
+Patchwork-id: n/a
+O-Subject: [virt-devel] [EMBARGOED RHEL-7.0 qemu-kvm PATCH 11/48] bochs: Use unsigned variables for offsets and sizes (CVE-2014-0147)
+Bugzilla: 1079339
+RH-Acked-by: Jeff Cody <jcody@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1079339
+Upstream status: Embargoed
+
+Gets us rid of integer overflows resulting in negative sizes which
+aren't correctly checked.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+---
+ block/bochs.c              |   16 ++++++++--------
+ tests/qemu-iotests/078     |    8 ++++++++
+ tests/qemu-iotests/078.out |    4 ++++
+ 3 files changed, 20 insertions(+), 8 deletions(-)
+
+diff --git a/block/bochs.c b/block/bochs.c
+index 708780d..04cca71 100644
+--- a/block/bochs.c
++++ b/block/bochs.c
+@@ -67,13 +67,13 @@ struct bochs_header {
+ typedef struct BDRVBochsState {
+     CoMutex lock;
+     uint32_t *catalog_bitmap;
+-    int catalog_size;
++    uint32_t catalog_size;
+ 
+-    int data_offset;
++    uint32_t data_offset;
+ 
+-    int bitmap_blocks;
+-    int extent_blocks;
+-    int extent_size;
++    uint32_t bitmap_blocks;
++    uint32_t extent_blocks;
++    uint32_t extent_size;
+ } BDRVBochsState;
+ 
+ static int bochs_probe(const uint8_t *buf, int buf_size, const char *filename)
+@@ -97,7 +97,7 @@ static int bochs_open(BlockDriverState *bs, QDict *options, int flags,
+                       Error **errp)
+ {
+     BDRVBochsState *s = bs->opaque;
+-    int i;
++    uint32_t i;
+     struct bochs_header bochs;
+     int ret;
+ 
+@@ -152,8 +152,8 @@ fail:
+ static int64_t seek_to_sector(BlockDriverState *bs, int64_t sector_num)
+ {
+     BDRVBochsState *s = bs->opaque;
+-    int64_t offset = sector_num * 512;
+-    int64_t extent_index, extent_offset, bitmap_offset;
++    uint64_t offset = sector_num * 512;
++    uint64_t extent_index, extent_offset, bitmap_offset;
+     char bitmap_entry;
+ 
+     // seek to sector
+diff --git a/tests/qemu-iotests/078 b/tests/qemu-iotests/078
+index f55f46d..73b573a 100755
+--- a/tests/qemu-iotests/078
++++ b/tests/qemu-iotests/078
+@@ -42,11 +42,19 @@ _supported_fmt bochs
+ _supported_proto generic
+ _supported_os Linux
+ 
++catalog_size_offset=$((0x48))
++
+ echo
+ echo "== Read from a valid image =="
+ _use_sample_img empty.bochs.bz2
+ { $QEMU_IO -c "read 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
+ 
++echo
++echo "== Negative catalog size =="
++_use_sample_img empty.bochs.bz2
++poke_file "$TEST_IMG" "$catalog_size_offset" "\xff\xff\xff\xff"
++{ $QEMU_IO -c "read 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
++
+ # success, all done
+ echo "*** done"
+ rm -f $seq.full
+diff --git a/tests/qemu-iotests/078.out b/tests/qemu-iotests/078.out
+index 25d37c5..ef8c42d 100644
+--- a/tests/qemu-iotests/078.out
++++ b/tests/qemu-iotests/078.out
+@@ -3,4 +3,8 @@ QA output created by 078
+ == Read from a valid image ==
+ read 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++== Negative catalog size ==
++qemu-io: can't open device TEST_DIR/empty.bochs: Could not open 'TEST_DIR/empty.bochs': Interrupted system call
++no file open, try 'help open'
+ *** done
+-- 
+1.7.1
+

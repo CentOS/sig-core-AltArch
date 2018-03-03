@@ -1,0 +1,339 @@
+From f6e47d854362ee1f5d405852ac75f2015bf94ad7 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Thu, 7 Nov 2013 12:27:37 +0100
+Subject: [PATCH 15/87] add qemu-img convert -n option (skip target volume creation)
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-18-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55317
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 17/43] add qemu-img convert -n option (skip target volume creation)
+Bugzilla: 1026524
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Alexandre Derumier <aderumier@odiso.com>
+
+BZ: 1026524
+
+Add a -n option to skip volume creation on qemu-img convert.
+This is useful for targets such as rbd / ceph, where the
+target volume may already exist; we cannot always rely on
+qemu-img convert to create the image, as dependent on the
+output format, there may be parameters which are not possible
+to specify through the qemu-img convert command line.
+
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Alexandre Derumier <aderumier@odiso.com>
+Signed-off-by: Alex Bligh <alex@alex.org.uk>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit b2e10493c71160d88bb823cae9a92e806a79b9d6)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+
+Conflicts:
+	tests/qemu-iotests/group
+
+Conflicts because upstream contains more tests in the group file.
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qemu-img-cmds.hx           |    4 +-
+ qemu-img.c                 |   53 +++++++++++++++++-------
+ qemu-img.texi              |   15 ++++++-
+ tests/qemu-iotests/063     |   97 ++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/063.out |   10 +++++
+ tests/qemu-iotests/group   |    1 +
+ 6 files changed, 162 insertions(+), 18 deletions(-)
+ create mode 100644 tests/qemu-iotests/063
+ create mode 100644 tests/qemu-iotests/063.out
+
+diff --git a/qemu-img-cmds.hx b/qemu-img-cmds.hx
+index c97a1f4..0c36e59 100644
+--- a/qemu-img-cmds.hx
++++ b/qemu-img-cmds.hx
+@@ -34,9 +34,9 @@ STEXI
+ ETEXI
+ 
+ DEF("convert", img_convert,
+-    "convert [-c] [-p] [-q] [-f fmt] [-t cache] [-O output_fmt] [-o options] [-s snapshot_name] [-S sparse_size] filename [filename2 [...]] output_filename")
++    "convert [-c] [-p] [-q] [-n] [-f fmt] [-t cache] [-O output_fmt] [-o options] [-s snapshot_name] [-S sparse_size] filename [filename2 [...]] output_filename")
+ STEXI
+-@item convert [-c] [-p] [-q] [-f @var{fmt}] [-t @var{cache}] [-O @var{output_fmt}] [-o @var{options}] [-s @var{snapshot_name}] [-S @var{sparse_size}] @var{filename} [@var{filename2} [...]] @var{output_filename}
++@item convert [-c] [-p] [-q] [-n] [-f @var{fmt}] [-t @var{cache}] [-O @var{output_fmt}] [-o @var{options}] [-s @var{snapshot_name}] [-S @var{sparse_size}] @var{filename} [@var{filename2} [...]] @var{output_filename}
+ ETEXI
+ 
+ DEF("info", img_info,
+diff --git a/qemu-img.c b/qemu-img.c
+index 3a59bf0..8fcea44 100644
+--- a/qemu-img.c
++++ b/qemu-img.c
+@@ -101,6 +101,8 @@ static void help(void)
+            "  '-S' indicates the consecutive number of bytes that must contain only zeros\n"
+            "       for qemu-img to create a sparse image during conversion\n"
+            "  '--output' takes the format in which the output must be done (human or json)\n"
++           "  '-n' skips the target volume creation (useful if the volume is created\n"
++           "       prior to running qemu-img)\n"
+            "\n"
+            "Parameters to check subcommand:\n"
+            "  '-r' tries to repair any inconsistencies that are found during the check.\n"
+@@ -1113,7 +1115,8 @@ out3:
+ 
+ static int img_convert(int argc, char **argv)
+ {
+-    int c, ret = 0, n, n1, bs_n, bs_i, compress, cluster_size, cluster_sectors;
++    int c, ret = 0, n, n1, bs_n, bs_i, compress, cluster_size,
++        cluster_sectors, skip_create;
+     int progress = 0, flags;
+     const char *fmt, *out_fmt, *cache, *out_baseimg, *out_filename;
+     BlockDriver *drv, *proto_drv;
+@@ -1136,8 +1139,9 @@ static int img_convert(int argc, char **argv)
+     cache = "unsafe";
+     out_baseimg = NULL;
+     compress = 0;
++    skip_create = 0;
+     for(;;) {
+-        c = getopt(argc, argv, "f:O:B:s:hce6o:pS:t:q");
++        c = getopt(argc, argv, "f:O:B:s:hce6o:pS:t:qn");
+         if (c == -1) {
+             break;
+         }
+@@ -1194,6 +1198,9 @@ static int img_convert(int argc, char **argv)
+         case 'q':
+             quiet = true;
+             break;
++        case 'n':
++            skip_create = 1;
++            break;
+         }
+     }
+ 
+@@ -1326,20 +1333,22 @@ static int img_convert(int argc, char **argv)
+         }
+     }
+ 
+-    /* Create the new image */
+-    ret = bdrv_create(drv, out_filename, param);
+-    if (ret < 0) {
+-        if (ret == -ENOTSUP) {
+-            error_report("Formatting not supported for file format '%s'",
+-                         out_fmt);
+-        } else if (ret == -EFBIG) {
+-            error_report("The image size is too large for file format '%s'",
+-                         out_fmt);
+-        } else {
+-            error_report("%s: error while converting %s: %s",
+-                         out_filename, out_fmt, strerror(-ret));
++    if (!skip_create) {
++        /* Create the new image */
++        ret = bdrv_create(drv, out_filename, param);
++        if (ret < 0) {
++            if (ret == -ENOTSUP) {
++                error_report("Formatting not supported for file format '%s'",
++                             out_fmt);
++            } else if (ret == -EFBIG) {
++                error_report("The image size is too large for file format '%s'",
++                             out_fmt);
++            } else {
++                error_report("%s: error while converting %s: %s",
++                             out_filename, out_fmt, strerror(-ret));
++            }
++            goto out;
+         }
+-        goto out;
+     }
+ 
+     flags = BDRV_O_RDWR;
+@@ -1360,6 +1369,20 @@ static int img_convert(int argc, char **argv)
+     bdrv_get_geometry(bs[0], &bs_sectors);
+     buf = qemu_blockalign(out_bs, IO_BUF_SIZE);
+ 
++    if (skip_create) {
++        int64_t output_length = bdrv_getlength(out_bs);
++        if (output_length < 0) {
++            error_report("unable to get output image length: %s\n",
++                         strerror(-output_length));
++            ret = -1;
++            goto out;
++        } else if (output_length < total_sectors << BDRV_SECTOR_BITS) {
++            error_report("output file is smaller than input file");
++            ret = -1;
++            goto out;
++        }
++    }
++
+     if (compress) {
+         ret = bdrv_get_info(out_bs, &bdi);
+         if (ret < 0) {
+diff --git a/qemu-img.texi b/qemu-img.texi
+index 8364fa1..43ee4eb 100644
+--- a/qemu-img.texi
++++ b/qemu-img.texi
+@@ -96,6 +96,14 @@ Second image format
+ Strict mode - fail on on different image size or sector allocation
+ @end table
+ 
++Parameters to convert subcommand:
++
++@table @option
++
++@item -n
++Skip the creation of the target volume
++@end table
++
+ Command description:
+ 
+ @table @option
+@@ -171,7 +179,7 @@ Error on reading data
+ 
+ @end table
+ 
+-@item convert [-c] [-p] [-f @var{fmt}] [-t @var{cache}] [-O @var{output_fmt}] [-o @var{options}] [-s @var{snapshot_name}] [-S @var{sparse_size}] @var{filename} [@var{filename2} [...]] @var{output_filename}
++@item convert [-c] [-p] [-n] [-f @var{fmt}] [-t @var{cache}] [-O @var{output_fmt}] [-o @var{options}] [-s @var{snapshot_name}] [-S @var{sparse_size}] @var{filename} [@var{filename2} [...]] @var{output_filename}
+ 
+ Convert the disk image @var{filename} or a snapshot @var{snapshot_name} to disk image @var{output_filename}
+ using format @var{output_fmt}. It can be optionally compressed (@code{-c}
+@@ -190,6 +198,11 @@ created as a copy on write image of the specified base image; the
+ @var{backing_file} should have the same content as the input's base image,
+ however the path, image format, etc may differ.
+ 
++If the @code{-n} option is specified, the target volume creation will be
++skipped. This is useful for formats such as @code{rbd} if the target
++volume has already been created with site specific options that cannot
++be supplied through qemu-img.
++
+ @item info [-f @var{fmt}] [--output=@var{ofmt}] [--backing-chain] @var{filename}
+ 
+ Give information about the disk image @var{filename}. Use it in
+diff --git a/tests/qemu-iotests/063 b/tests/qemu-iotests/063
+new file mode 100644
+index 0000000..de0cbbd
+--- /dev/null
++++ b/tests/qemu-iotests/063
+@@ -0,0 +1,97 @@
++#!/bin/bash
++#
++# test of qemu-img convert -n - convert without creation
++#
++# Copyright (C) 2009 Red Hat, Inc.
++# Copyright (C) 2013 Alex Bligh (alex@alex.org.uk)
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++
++# creator
++owner=alex@alex.org.uk
++
++seq=`basename $0`
++echo "QA output created by $seq"
++
++here=`pwd`
++tmp=/tmp/$$
++status=1	# failure is the default!
++
++_cleanup()
++{
++	_cleanup_test_img
++	rm -f $TEST_IMG.orig $TEST_IMG.raw $TEST_IMG.raw2
++}
++trap "_cleanup; exit \$status" 0 1 2 3 15
++
++# get standard environment, filters and checks
++. ./common.rc
++. ./common.filter
++. ./common.pattern
++
++_supported_fmt qcow qcow2 vmdk qed raw
++_supported_proto generic
++_supported_os Linux
++
++_make_test_img 4M
++
++echo "== Testing conversion with -n fails with no target file =="
++# check .orig file does not exist
++rm -f $TEST_IMG.orig
++if $QEMU_IMG convert -f $IMGFMT -O $IMGFMT -n $TEST_IMG $TEST_IMG.orig >/dev/null 2>&1; then
++    exit 1
++fi
++
++echo "== Testing conversion with -n succeeds with a target file =="
++rm -f $TEST_IMG.orig
++cp $TEST_IMG $TEST_IMG.orig
++if ! $QEMU_IMG convert -f $IMGFMT -O $IMGFMT -n $TEST_IMG $TEST_IMG.orig ; then
++    exit 1
++fi
++
++echo "== Testing conversion to raw is the same after conversion with -n =="
++# compare the raw files
++if ! $QEMU_IMG convert -f $IMGFMT -O raw $TEST_IMG $TEST_IMG.raw1 ; then
++    exit 1
++fi
++
++if ! $QEMU_IMG convert -f $IMGFMT -O raw $TEST_IMG.orig $TEST_IMG.raw2 ; then
++    exit 1
++fi
++
++if ! cmp $TEST_IMG.raw1 $TEST_IMG.raw2 ; then
++    exit 1
++fi
++
++echo "== Testing conversion back to original format =="
++if ! $QEMU_IMG convert -f raw -O $IMGFMT -n $TEST_IMG.raw2 $TEST_IMG ; then
++    exit 1
++fi
++_check_test_img
++
++echo "== Testing conversion to a smaller file fails =="
++rm -f $TEST_IMG.orig
++mv $TEST_IMG $TEST_IMG.orig
++_make_test_img 2M
++if $QEMU_IMG convert -f $IMGFMT -O $IMGFMT -n $TEST_IMG.orig $TEST_IMG >/dev/null 2>&1; then
++    exit 1
++fi
++
++rm -f $TEST_IMG.orig $TEST_IMG.raw $TEST_IMG.raw2
++
++echo "*** done"
++rm -f $seq.full
++status=0
++exit 0
+diff --git a/tests/qemu-iotests/063.out b/tests/qemu-iotests/063.out
+new file mode 100644
+index 0000000..de1c99a
+--- /dev/null
++++ b/tests/qemu-iotests/063.out
+@@ -0,0 +1,10 @@
++QA output created by 063
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=4194304
++== Testing conversion with -n fails with no target file ==
++== Testing conversion with -n succeeds with a target file ==
++== Testing conversion to raw is the same after conversion with -n ==
++== Testing conversion back to original format ==
++No errors were found on the image.
++== Testing conversion to a smaller file fails ==
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=2097152
++*** done
+diff --git a/tests/qemu-iotests/group b/tests/qemu-iotests/group
+index 9c8826d..ff3c505 100644
+--- a/tests/qemu-iotests/group
++++ b/tests/qemu-iotests/group
+@@ -62,4 +62,5 @@
+ 053 rw auto
+ 059 rw auto
+ 060 rw auto
++063 rw auto
+ 068 rw auto
+-- 
+1.7.1
+

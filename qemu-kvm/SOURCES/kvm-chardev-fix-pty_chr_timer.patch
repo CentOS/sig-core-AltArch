@@ -1,0 +1,67 @@
+From 65b9fb19d5853b28b6748963d9e0053429655921 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Wed, 18 Sep 2013 09:53:54 +0200
+Subject: [PATCH 01/18] chardev: fix pty_chr_timer
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1379498034-29529-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 54429
+O-Subject: [RHEL-7 qemu-kvm PATCH 1/1] chardev: fix pty_chr_timer
+Bugzilla: 994414
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+pty_chr_timer first calls pty_chr_update_read_handler(), then clears
+timer_tag (because it is a one-shot timer).   This is the wrong order
+though.  pty_chr_update_read_handler might re-arm time timer, and the
+new timer_tag gets overwitten in that case.
+
+This leads to crashes when unplugging a pty chardev:  pty_chr_close
+thinks no timer is running -> timer isn't canceled -> pty_chr_timer gets
+called with stale CharDevState -> BOOM.
+
+This patch fixes the ordering.
+Kill the pointless goto while being at it.
+
+https://bugzilla.redhat.com/show_bug.cgi?id=994414
+
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit b0d768c35e08d2057b63e8e77e7a513c447199fa)
+---
+ qemu-char.c | 12 ++++--------
+ 1 file changed, 4 insertions(+), 8 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qemu-char.c |   12 ++++--------
+ 1 files changed, 4 insertions(+), 8 deletions(-)
+
+diff --git a/qemu-char.c b/qemu-char.c
+index 2fb876c..660d758 100644
+--- a/qemu-char.c
++++ b/qemu-char.c
+@@ -1029,15 +1029,11 @@ static gboolean pty_chr_timer(gpointer opaque)
+     struct CharDriverState *chr = opaque;
+     PtyCharDriver *s = chr->opaque;
+ 
+-    if (s->connected) {
+-        goto out;
+-    }
+-
+-    /* Next poll ... */
+-    pty_chr_update_read_handler(chr);
+-
+-out:
+     s->timer_tag = 0;
++    if (!s->connected) {
++        /* Next poll ... */
++        pty_chr_update_read_handler(chr);
++    }
+     return FALSE;
+ }
+ 
+-- 
+1.7.1
+

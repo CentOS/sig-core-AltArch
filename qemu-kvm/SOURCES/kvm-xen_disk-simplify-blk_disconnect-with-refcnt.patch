@@ -1,0 +1,70 @@
+From e81a83acac1f44ade1e28879203ca95466dad805 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Fri, 17 Jan 2014 03:07:50 +0100
+Subject: [PATCH 07/34] xen_disk: simplify blk_disconnect with refcnt
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1389928083-8921-6-git-send-email-famz@redhat.com>
+Patchwork-id: 56767
+O-Subject: [RHEL-7 qemu-kvm PATCH 05/18] xen_disk: simplify blk_disconnect with refcnt
+Bugzilla: 1041301
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+We call bdrv_attach_dev when initializing whether or not bs is created
+locally, so call bdrv_detach_dev and let the refcnt handle the
+lifecycle.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit c0777fe18b08c3a6de0c53325d6b9b75ebb9de9a)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+
+Conflicts:
+	hw/block/xen_disk.c
+
+Contextual conflict because of backport of 4f8a066b.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ hw/block/xen_disk.c | 11 +++++------
+ 1 file changed, 5 insertions(+), 6 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/block/xen_disk.c |   11 +++++------
+ 1 files changed, 5 insertions(+), 6 deletions(-)
+
+diff --git a/hw/block/xen_disk.c b/hw/block/xen_disk.c
+index 138ab94..a2653b2 100644
+--- a/hw/block/xen_disk.c
++++ b/hw/block/xen_disk.c
+@@ -822,6 +822,9 @@ static int blk_connect(struct XenDevice *xendev)
+             blkdev->bs = NULL;
+             return -1;
+         }
++        /* blkdev->bs is not create by us, we get a reference
++         * so we can bdrv_unref() unconditionally */
++        bdrv_ref(blkdev->bs);
+     }
+     bdrv_attach_dev_nofail(blkdev->bs, blkdev);
+     blkdev->file_size = bdrv_getlength(blkdev->bs);
+@@ -920,12 +923,8 @@ static void blk_disconnect(struct XenDevice *xendev)
+     struct XenBlkDev *blkdev = container_of(xendev, struct XenBlkDev, xendev);
+ 
+     if (blkdev->bs) {
+-        if (!blkdev->dinfo) {
+-            /* close/delete only if we created it ourself */
+-            bdrv_close(blkdev->bs);
+-            bdrv_detach_dev(blkdev->bs, blkdev);
+-            bdrv_unref(blkdev->bs);
+-        }
++        bdrv_detach_dev(blkdev->bs, blkdev);
++        bdrv_unref(blkdev->bs);
+         blkdev->bs = NULL;
+     }
+     xen_be_unbind_evtchn(&blkdev->xendev);
+-- 
+1.7.1
+

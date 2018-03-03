@@ -1,0 +1,150 @@
+From 5f1f1921575005ea286f1eb408f62064728df972 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Wed, 20 Nov 2013 19:44:08 +0100
+Subject: [PATCH 25/25] block: vhdx qemu-iotest - log replay of data sector
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <1a13302bddec68d7ee3e2f3be3a457c4bc61eea4.1384975172.git.jcody@redhat.com>
+Patchwork-id: 55818
+O-Subject: [RHEL7 qemu-kvm PATCH 25/26] block: vhdx qemu-iotest - log replay of data sector
+Bugzilla: 879234
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+This tests the replay of a data sector in a VHDX image file.
+
+The image file is a 10G dynamic image, with 4MB block size.  The
+image was created with qemu-img, and the log left unplayed by
+modification of the vhdx image format driver.
+
+It was verified under both QEMU and Hyper-V that the image file,
+post log replay, matched.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit e78835b722eb26f5a56370166e99b69e9751ea2a)
+
+Conflicts:
+	tests/qemu-iotests/group
+
+RHEL7 Notes: Conflict due to test number leapfrogging tests that have
+             not yet been backported into RHEL7.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+---
+ tests/qemu-iotests/070                             |  67 +++++++++++++++++++++
+ tests/qemu-iotests/070.out                         |   8 +++
+ tests/qemu-iotests/group                           |   1 +
+ 4 files changed, 76 insertions(+)
+ create mode 100755 tests/qemu-iotests/070
+ create mode 100644 tests/qemu-iotests/070.out
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/070     |   67 ++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/070.out |    8 +++++
+ tests/qemu-iotests/group   |    1 +
+ 3 files changed, 76 insertions(+), 0 deletions(-)
+ create mode 100755 tests/qemu-iotests/070
+ create mode 100644 tests/qemu-iotests/070.out
+
+diff --git a/tests/qemu-iotests/070 b/tests/qemu-iotests/070
+new file mode 100755
+index 0000000..41bf100
+--- /dev/null
++++ b/tests/qemu-iotests/070
+@@ -0,0 +1,67 @@
++#!/bin/bash
++#
++# Test VHDX log replay from an image with a journal that needs to be
++# replayed
++#
++# Copyright (C) 2013 Red Hat, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++
++# creator
++owner=jcody@redhat.com
++
++seq=`basename $0`
++echo "QA output created by $seq"
++
++here=`pwd`
++tmp=/tmp/$$
++status=1	# failure is the default!
++
++_cleanup()
++{
++    _cleanup_test_img
++}
++trap "_cleanup; exit \$status" 0 1 2 3 15
++
++# get standard environment, filters and checks
++. ./common.rc
++. ./common.filter
++
++_supported_fmt vhdx
++_supported_proto generic
++_supported_os Linux
++
++# With the log replayed, the pattern 0xa5 extends to 0xc025000
++# If the log was not replayed, it would only extend to 0xc000000
++#
++# This image is a 10G dynamic image, with 4M block size, and 1 unplayed
++# data sector in the log
++#
++# This image was created with qemu-img, however it was verified using
++# Hyper-V to properly replay the logs and give the same post-replay
++# image as qemu.
++_use_sample_img iotest-dirtylog-10G-4M.vhdx.bz2
++
++echo
++echo "=== Verify open image read-only fails, due to dirty log ==="
++$QEMU_IO -r -c "read -pP 0xa5 0 18M" "$TEST_IMG" 2>&1 | grep -o "Permission denied"
++
++echo "=== Verify open image replays log  ==="
++$QEMU_IO  -c "read -pP 0xa5 0 18M" "$TEST_IMG" | _filter_qemu_io
++
++# success, all done
++echo "*** done"
++rm -f $seq.full
++status=0
+diff --git a/tests/qemu-iotests/070.out b/tests/qemu-iotests/070.out
+new file mode 100644
+index 0000000..9db8ff2
+--- /dev/null
++++ b/tests/qemu-iotests/070.out
+@@ -0,0 +1,8 @@
++QA output created by 070
++
++=== Verify open image read-only fails, due to dirty log ===
++Permission denied
++=== Verify open image replays log  ===
++read 18874368/18874368 bytes at offset 0
++18 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++*** done
+diff --git a/tests/qemu-iotests/group b/tests/qemu-iotests/group
+index 1a182ed..0867b0f 100644
+--- a/tests/qemu-iotests/group
++++ b/tests/qemu-iotests/group
+@@ -68,3 +68,4 @@
+ 065 rw auto
+ 067 rw auto
+ 068 rw auto
++070 rw auto
+-- 
+1.7.1
+

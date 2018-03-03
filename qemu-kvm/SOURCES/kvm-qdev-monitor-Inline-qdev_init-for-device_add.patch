@@ -1,0 +1,63 @@
+From 69d7d4071c52078ff3040d693e07063de2730925 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Fri, 17 Jan 2014 17:07:56 +0100
+Subject: [PATCH 06/11] qdev-monitor: Inline qdev_init() for device_add
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1389978479-30595-7-git-send-email-armbru@redhat.com>
+Patchwork-id: 56793
+O-Subject: [PATCH 7.0 qemu-kvm 6/9] qdev-monitor: Inline qdev_init() for device_add
+Bugzilla: 669524
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+
+From: Andreas Färber <afaerber@suse.de>
+
+For historic reasons, qdev_init() unparents the device on failure.
+Inline this to make the error paths clearer and consistent.
+
+Reviewed-by: Igor Mammedov <imammedo@redhat.com>
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit 852e2c5008563692a8868260480e76b95bb9018c)
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+---
+ qdev-monitor.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qdev-monitor.c |    7 ++++++-
+ 1 files changed, 6 insertions(+), 1 deletions(-)
+
+diff --git a/qdev-monitor.c b/qdev-monitor.c
+index 464e7bd..eb05b4c 100644
+--- a/qdev-monitor.c
++++ b/qdev-monitor.c
+@@ -459,6 +459,7 @@ DeviceState *qdev_device_add(QemuOpts *opts)
+     const char *driver, *path, *id;
+     DeviceState *dev;
+     BusState *bus = NULL;
++    Error *err = NULL;
+ 
+     driver = qemu_opt_get(opts, "driver");
+     if (!driver) {
+@@ -541,7 +542,11 @@ DeviceState *qdev_device_add(QemuOpts *opts)
+                                   OBJECT(dev), NULL);
+         g_free(name);
+     }
+-    if (qdev_init(dev) < 0) {
++    object_property_set_bool(OBJECT(dev), true, "realized", &err);
++    if (err != NULL) {
++        qerror_report_err(err);
++        error_free(err);
++        object_unparent(OBJECT(dev));
+         object_unref(OBJECT(dev));
+         qerror_report(QERR_DEVICE_INIT_FAILED, driver);
+         return NULL;
+-- 
+1.7.1
+

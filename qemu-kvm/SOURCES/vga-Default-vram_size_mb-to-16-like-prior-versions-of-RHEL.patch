@@ -1,0 +1,103 @@
+From c712cf32b457f67d926b3d54c015371d6683099b Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Wed, 31 Jul 2013 08:02:53 +0200
+Subject: vga: Default .vram_size_mb to 16, like prior versions of RHEL
+
+Message-id: <1375201922-6794-5-git-send-email-armbru@redhat.com>
+Patchwork-id: 52811
+O-Subject: [RHEL-7 PATCH v3 04/15] vga: Default .vram_size_mb to 16, like prior versions of RHEL
+Bugzilla: 983991
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+A brief history of VGA video RAM sizes:
+
+* Initially, all VGA devices got 8 MiB of video RAM.
+
+* Upstream qemu-kvm kvm-62 (2008) doubled it to 16 MiB (commit
+  a7fe029).
+
+* RHEL-5 and RHEL-6 based on upstream qemu-kvm.
+
+* Upstream qemu v1.2.0 made the size configurable for "isa-vga",
+  "VGA", "vmware_vga" (commit 4a1e244), and "qxl-vga", "qxl" (commit
+  13d1fd4), then doubled the default to 16 MiB (commit 9e56edc) for
+  the new machine type.  Except "isa-vga" stayed at 8 MiB.
+
+* Upstream qemu-kvm merged this in qemu-kvm-1.2.0.  Incompatible
+  change of default VGA video RAM back to 8 MiB for "isa-vga",
+  "isa-cirrus-vga", "cirrus-vga"[*].
+
+* Upstream qemu v1.3.0 made the size configurable for
+  "isa-cirrus-vga", "cirrus-vga" (commit 19403a6).
+
+RHEL-7 bases on upstream qemu.  To avoid qemu-kvm-1.2.0's incompatible
+change, default video RAM size to 16 MiB for all VGA devices[**] and
+RHEL machine types.
+
+[*] And the non-qdevified, memory-mapped VGA used by MIPS magnum and
+pica61 machines, but these don't matter in qemu-kvm.
+
+[**] Except for the non-qdevified, memory-mapped VGA.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+
+diff --git a/hw/display/cirrus_vga.c b/hw/display/cirrus_vga.c
+index 64bfe2b..fa8eae2 100644
+--- a/hw/display/cirrus_vga.c
++++ b/hw/display/cirrus_vga.c
+@@ -2924,7 +2924,7 @@ static int vga_initfn(ISADevice *dev)
+ 
+ static Property isa_cirrus_vga_properties[] = {
+     DEFINE_PROP_UINT32("vgamem_mb", struct ISACirrusVGAState,
+-                       cirrus_vga.vga.vram_size_mb, 8),
++                       cirrus_vga.vga.vram_size_mb, 16),
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
+@@ -2986,7 +2986,7 @@ static int pci_cirrus_vga_initfn(PCIDevice *dev)
+ 
+ static Property pci_vga_cirrus_properties[] = {
+     DEFINE_PROP_UINT32("vgamem_mb", struct PCICirrusVGAState,
+-                       cirrus_vga.vga.vram_size_mb, 8),
++                       cirrus_vga.vga.vram_size_mb, 16),
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
+diff --git a/hw/display/vga-isa.c b/hw/display/vga-isa.c
+index 9e63b69..2f34ee3 100644
+--- a/hw/display/vga-isa.c
++++ b/hw/display/vga-isa.c
+@@ -75,7 +75,7 @@ static int vga_initfn(ISADevice *dev)
+ }
+ 
+ static Property vga_isa_properties[] = {
+-    DEFINE_PROP_UINT32("vgamem_mb", ISAVGAState, state.vram_size_mb, 8),
++    DEFINE_PROP_UINT32("vgamem_mb", ISAVGAState, state.vram_size_mb, 16),
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index 96f6bf9..5d57a76 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -888,18 +888,6 @@ static QEMUMachine pc_machine_rhel700 = {
+         .property = "param_change",\
+         .value    = "off",\
+     },{\
+-        .driver   = "VGA",\
+-        .property = "vgamem_mb",\
+-        .value    = stringify(8),\
+-    },{\
+-        .driver   = "qxl-vga",\
+-        .property = "vgamem_mb",\
+-        .value    = stringify(8),\
+-    },{\
+-        .driver   = "qxl",\
+-        .property = "vgamem_mb",\
+-        .value    = stringify(8),\
+-    },{\
+         .driver   = "virtio-blk-pci",\
+         .property = "config-wce",\
+         .value    = "off",\

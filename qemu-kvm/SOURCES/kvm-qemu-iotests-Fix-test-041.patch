@@ -1,0 +1,102 @@
+From 8a95de5d6c85d1db0f32ab5083ff9e00166a7ee8 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sun, 19 Jan 2014 18:08:01 +0100
+Subject: [PATCH 27/34] qemu-iotests: Fix test 041
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1390154881-17140-8-git-send-email-mreitz@redhat.com>
+Patchwork-id: 56820
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 7/7] qemu-iotests: Fix test 041
+Bugzilla: 921890
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+BZ: 921890
+
+Performing multiple drive-mirror blockjobs on the same qemu instance
+results in the image file used for the block device being replaced by
+the newly mirrored file, which is not what we want.
+
+Fix this by performing one dedicated test per sync mode.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Message-id: 1385407736-13941-3-git-send-email-mreitz@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@amazon.com>
+(cherry picked from commit 171d64319c9604228429b0580edf764a69b67c75)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ tests/qemu-iotests/041     | 32 ++++++++++++++++++++++++--------
+ tests/qemu-iotests/041.out |  4 ++--
+ 2 files changed, 26 insertions(+), 10 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/041     |   32 ++++++++++++++++++++++++--------
+ tests/qemu-iotests/041.out |    4 ++--
+ 2 files changed, 26 insertions(+), 10 deletions(-)
+
+diff --git a/tests/qemu-iotests/041 b/tests/qemu-iotests/041
+index eccfe38..bcfb759 100755
+--- a/tests/qemu-iotests/041
++++ b/tests/qemu-iotests/041
+@@ -750,16 +750,32 @@ class TestUnbackedSource(ImageMirroringTestCase):
+         os.remove(test_img)
+         os.remove(target_img)
+ 
+-    def test_absolute_paths(self):
++    def test_absolute_paths_full(self):
++        self.assert_no_active_block_jobs()
++        result = self.vm.qmp('drive-mirror', device='drive0',
++                             sync='full', target=target_img,
++                             mode='absolute-paths')
++        self.assert_qmp(result, 'return', {})
++        self.complete_and_wait()
++        self.assert_no_active_block_jobs()
++
++    def test_absolute_paths_top(self):
++        self.assert_no_active_block_jobs()
++        result = self.vm.qmp('drive-mirror', device='drive0',
++                             sync='top', target=target_img,
++                             mode='absolute-paths')
++        self.assert_qmp(result, 'return', {})
++        self.complete_and_wait()
+         self.assert_no_active_block_jobs()
+ 
+-        for sync_mode in ['full', 'top', 'none']:
+-            result = self.vm.qmp('drive-mirror', device='drive0',
+-                                 sync=sync_mode, target=target_img,
+-                                 mode='absolute-paths')
+-            self.assert_qmp(result, 'return', {})
+-            self.complete_and_wait()
+-            self.assert_no_active_block_jobs()
++    def test_absolute_paths_none(self):
++        self.assert_no_active_block_jobs()
++        result = self.vm.qmp('drive-mirror', device='drive0',
++                             sync='none', target=target_img,
++                             mode='absolute-paths')
++        self.assert_qmp(result, 'return', {})
++        self.complete_and_wait()
++        self.assert_no_active_block_jobs()
+ 
+ if __name__ == '__main__':
+     iotests.main(supported_fmts=['qcow2', 'qed'])
+diff --git a/tests/qemu-iotests/041.out b/tests/qemu-iotests/041.out
+index 4fd1c2d..6d9bee1 100644
+--- a/tests/qemu-iotests/041.out
++++ b/tests/qemu-iotests/041.out
+@@ -1,5 +1,5 @@
+-.........................
++...........................
+ ----------------------------------------------------------------------
+-Ran 25 tests
++Ran 27 tests
+ 
+ OK
+-- 
+1.7.1
+

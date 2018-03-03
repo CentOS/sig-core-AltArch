@@ -1,0 +1,64 @@
+From 00beaa541050bcbf399e116772db3746cb0c0278 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Mon, 1 Sep 2014 13:36:52 +0200
+Subject: [PATCH 05/12] vmstate_xhci_event: fix unterminated field list
+
+Message-id: <1409578613-11909-2-git-send-email-lersek@redhat.com>
+Patchwork-id: 60781
+O-Subject: [PATCH RHEL-7.0.z/RHEL-7.1.0 qemu-kvm 1/2] vmstate_xhci_event: fix unterminated field list
+Bugzilla: 1122147
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+
+"vmstate_xhci_event" was introduced in commit 37352df3 ("xhci: add live
+migration support"), and first released in v1.6.0. The field list in this
+VMSD is not terminated with the VMSTATE_END_OF_LIST() macro.
+
+During normal use (ie. migration), the issue is practically invisible,
+because the "vmstate_xhci_event" object (with the unterminated field list)
+is only ever referenced -- via "vmstate_xhci_intr" -- if xhci_er_full()
+returns true, for the "ev_buffer" test. Since that field_exists() check
+(apparently) almost always returns false, we almost never traverse
+"vmstate_xhci_event" during migration, which hides the bug.
+
+However, Amit's vmstate checker forces recursion into this VMSD as well,
+and the lack of VMSTATE_END_OF_LIST() breaks the field list terminator
+check (field->name != NULL) in dump_vmstate_vmsd(). The result is
+undefined behavior, which in my case translates to infinite recursion
+(because the loop happens to overflow into "vmstate_xhci_intr", which then
+links back to "vmstate_xhci_event").
+
+Add the missing terminator.
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Amit Shah <amit.shah@redhat.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Peter Maydell <peter.maydell@linaro.org>
+(cherry picked from commit 3afca1d6d413592c2b78cf28f52fa24a586d8f56)
+
+RHEL-7 note: this is for CVE-2014-5263.
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/hcd-xhci.c |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+diff --git a/hw/usb/hcd-xhci.c b/hw/usb/hcd-xhci.c
+index fd1bd89..0ef2bc4 100644
+--- a/hw/usb/hcd-xhci.c
++++ b/hw/usb/hcd-xhci.c
+@@ -3526,6 +3526,7 @@ static const VMStateDescription vmstate_xhci_event = {
+         VMSTATE_UINT32(flags,  XHCIEvent),
+         VMSTATE_UINT8(slotid,  XHCIEvent),
+         VMSTATE_UINT8(epid,    XHCIEvent),
++        VMSTATE_END_OF_LIST()
+     }
+ };
+ 
+-- 
+1.7.1
+

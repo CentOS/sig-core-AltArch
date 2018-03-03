@@ -1,0 +1,64 @@
+From 3d6cc57909eca16bd7bc4dc823b5eb71e65baffb Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Tue, 14 Mar 2017 08:52:56 +0100
+Subject: [PATCH 23/24] usb-ccid: add check message size checks
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1489481576-26911-5-git-send-email-kraxel@redhat.com>
+Patchwork-id: 74287
+O-Subject: [RHEL-7.4 qemu-kvm PATCH 4/4] usb-ccid: add check message size checks
+Bugzilla: 1419818
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Check message size too when figuring whenever we should expect more data.
+Fix debug message to show useful data, p->iov.size is fixed anyway if we
+land there, print how much we got meanwhile instead.
+
+Also check announced message size against actual message size.  That
+is a more general fix for CVE-2017-5898 than commit "c7dfbf3 usb: ccid:
+check ccid apdu length".
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+Reviewed-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: 1487250819-23764-4-git-send-email-kraxel@redhat.com
+(cherry picked from commit 31fb4444a485a348f8e2699d7c3dd15e1819ad2c)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/dev-smartcard-reader.c | 13 ++++++++++---
+ 1 file changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/hw/usb/dev-smartcard-reader.c b/hw/usb/dev-smartcard-reader.c
+index 07d15ba..5e96a18 100644
+--- a/hw/usb/dev-smartcard-reader.c
++++ b/hw/usb/dev-smartcard-reader.c
+@@ -1009,12 +1009,19 @@ static void ccid_handle_bulk_out(USBCCIDState *s, USBPacket *p)
+     }
+ 
+     ccid_header = (CCID_Header *)s->bulk_out_data;
+-    if (p->iov.size == CCID_MAX_PACKET_SIZE) {
++    if ((s->bulk_out_pos - 10 < ccid_header->dwLength) &&
++        (p->iov.size == CCID_MAX_PACKET_SIZE)) {
+         DPRINTF(s, D_VERBOSE,
+-            "usb-ccid: bulk_in: expecting more packets (%zd/%d)\n",
+-            p->iov.size, ccid_header->dwLength);
++                "usb-ccid: bulk_in: expecting more packets (%d/%d)\n",
++                s->bulk_out_pos - 10, ccid_header->dwLength);
+         return;
+     }
++    if (s->bulk_out_pos - 10 != ccid_header->dwLength) {
++        DPRINTF(s, 1,
++                "usb-ccid: bulk_in: message size mismatch (got %d, expected %d)\n",
++                s->bulk_out_pos - 10, ccid_header->dwLength);
++        goto err;
++    }
+ 
+     DPRINTF(s, D_MORE_INFO, "%s %x %s\n", __func__,
+             ccid_header->bMessageType,
+-- 
+1.8.3.1
+

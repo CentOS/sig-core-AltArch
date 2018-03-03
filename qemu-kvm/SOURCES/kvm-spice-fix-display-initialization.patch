@@ -1,0 +1,113 @@
+From e2022d7c9e8623092daeca9c9a3f6118f3c7239e Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Fri, 30 Aug 2013 07:08:09 +0200
+Subject: [PATCH 01/29] spice: fix display initialization
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1377846489-22691-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 53931
+O-Subject: [RHEL-7 qemu-kvm PATCH 1/1] spice: fix display initialization
+Bugzilla: 974887
+RH-Acked-by: Hans de Goede <hdegoede@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+Spice has two display interface implementations:  One integrated into
+the qxl graphics card, and one generic which can operate with every
+qemu-emulated graphics card.
+
+The generic one is activated in case spice is used without qxl.  The
+logic for that only caught the "-vga qxl" case, "-device qxl-vga" goes
+unnoticed.  Fix that by adding a check in the spice interface
+registration so we'll notice the qxl card no matter how it is created.
+
+https://bugzilla.redhat.com/show_bug.cgi?id=981094
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 58ae52a8dc7752e3da9a905678580b4cb8181cdc)
+---
+ include/sysemu/sysemu.h | 1 -
+ include/ui/qemu-spice.h | 2 ++
+ ui/spice-core.c         | 5 +++++
+ vl.c                    | 2 +-
+ 4 files changed, 8 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ include/sysemu/sysemu.h |    1 -
+ include/ui/qemu-spice.h |    2 ++
+ ui/spice-core.c         |    5 +++++
+ vl.c                    |    2 +-
+ 4 files changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/include/sysemu/sysemu.h b/include/sysemu/sysemu.h
+index 3caeb66..d7a77b6 100644
+--- a/include/sysemu/sysemu.h
++++ b/include/sysemu/sysemu.h
+@@ -103,7 +103,6 @@ typedef enum {
+ 
+ extern int vga_interface_type;
+ #define xenfb_enabled (vga_interface_type == VGA_XENFB)
+-#define qxl_enabled (vga_interface_type == VGA_QXL)
+ 
+ extern int graphic_width;
+ extern int graphic_height;
+diff --git a/include/ui/qemu-spice.h b/include/ui/qemu-spice.h
+index eba6d77..c6c756b 100644
+--- a/include/ui/qemu-spice.h
++++ b/include/ui/qemu-spice.h
+@@ -27,6 +27,7 @@
+ #include "monitor/monitor.h"
+ 
+ extern int using_spice;
++extern int spice_displays;
+ 
+ void qemu_spice_init(void);
+ void qemu_spice_input_init(void);
+@@ -57,6 +58,7 @@ static inline CharDriverState *qemu_chr_open_spice_port(const char *name)
+ #include "monitor/monitor.h"
+ 
+ #define using_spice 0
++#define spice_displays 0
+ static inline int qemu_spice_set_passwd(const char *passwd,
+                                         bool fail_if_connected,
+                                         bool disconnect_if_connected)
+diff --git a/ui/spice-core.c b/ui/spice-core.c
+index bcc4199..c8337ab 100644
+--- a/ui/spice-core.c
++++ b/ui/spice-core.c
+@@ -48,6 +48,7 @@ static char *auth_passwd;
+ static time_t auth_expires = TIME_MAX;
+ static int spice_migration_completed;
+ int using_spice = 0;
++int spice_displays;
+ 
+ static QemuThread me;
+ 
+@@ -823,6 +824,10 @@ int qemu_spice_add_interface(SpiceBaseInstance *sin)
+         qemu_add_vm_change_state_handler(vm_change_state_handler, NULL);
+     }
+ 
++    if (strcmp(sin->sif->type, SPICE_INTERFACE_QXL) == 0) {
++        spice_displays++;
++    }
++
+     return spice_server_add_interface(spice_server, sin);
+ }
+ 
+diff --git a/vl.c b/vl.c
+index 51c04e7..f7b326a 100644
+--- a/vl.c
++++ b/vl.c
+@@ -4405,7 +4405,7 @@ int main(int argc, char **argv, char **envp)
+     }
+ #endif
+ #ifdef CONFIG_SPICE
+-    if (using_spice && !qxl_enabled) {
++    if (using_spice && !spice_displays) {
+         qemu_spice_display_init(ds);
+     }
+ #endif
+-- 
+1.7.1
+

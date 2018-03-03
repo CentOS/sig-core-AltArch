@@ -1,0 +1,214 @@
+From 6d981002b5ccbcb4905e5fa45b4606cf4ddc9c9e Mon Sep 17 00:00:00 2001
+From: Amos Kong <akong@redhat.com>
+Date: Tue, 25 Feb 2014 07:56:50 +0100
+Subject: [PATCH 1/6] qmp: access the local QemuOptsLists for drive option
+
+RH-Author: Amos Kong <akong@redhat.com>
+Message-id: <1393315010-20614-1-git-send-email-akong@redhat.com>
+Patchwork-id: 57771
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v3] qmp: access the local QemuOptsLists for drive option
+Bugzilla: 1026184
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+Bugzilla: 1026184
+Brew: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7104270
+
+Currently we have three QemuOptsList (qemu_common_drive_opts,
+qemu_legacy_drive_opts, and qemu_drive_opts), only qemu_drive_opts
+is added to vm_config_groups[].
+
+This patch changes query-command-line-options to access three local
+QemuOptsLists for drive option, and merge the description items
+together.
+
+Signed-off-by: Amos Kong <akong@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 968854c8a106243eae7a68394ce1cb85dc138837)
+---
+v2: re-backport when patch is merged to mainline
+v3: rebase to latest qemu-kvm-rhel7
+---
+redo/fix query-command-line-options isn't finished, let's fix the
+blkdev issue in rhel7.0 by this backport.
+---
+ blockdev.c                 |    1 -
+ include/qemu/config-file.h |    1 +
+ include/sysemu/sysemu.h    |    2 +
+ util/qemu-config.c         |   77 +++++++++++++++++++++++++++++++++++++++++++-
+ vl.c                       |    3 ++
+ 5 files changed, 82 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev.c                 |    1 -
+ include/qemu/config-file.h |    1 +
+ include/sysemu/sysemu.h    |    2 +
+ util/qemu-config.c         |   77 +++++++++++++++++++++++++++++++++++++++++++-
+ vl.c                       |    3 ++
+ 5 files changed, 82 insertions(+), 2 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index 80c6bb4..e51203c 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -47,7 +47,6 @@
+ #include "sysemu/arch_init.h"
+ 
+ static QTAILQ_HEAD(drivelist, DriveInfo) drives = QTAILQ_HEAD_INITIALIZER(drives);
+-extern QemuOptsList qemu_common_drive_opts;
+ 
+ static const char *const if_name[IF_COUNT] = {
+     [IF_NONE] = "none",
+diff --git a/include/qemu/config-file.h b/include/qemu/config-file.h
+index ccfccae..3f92282 100644
+--- a/include/qemu/config-file.h
++++ b/include/qemu/config-file.h
+@@ -9,6 +9,7 @@
+ QemuOptsList *qemu_find_opts(const char *group);
+ QemuOptsList *qemu_find_opts_err(const char *group, Error **errp);
+ void qemu_add_opts(QemuOptsList *list);
++void qemu_add_drive_opts(QemuOptsList *list);
+ int qemu_set_option(const char *str);
+ int qemu_global_option(const char *str);
+ void qemu_add_globals(void);
+diff --git a/include/sysemu/sysemu.h b/include/sysemu/sysemu.h
+index c70d2dd..8dc0a4c 100644
+--- a/include/sysemu/sysemu.h
++++ b/include/sysemu/sysemu.h
+@@ -191,6 +191,8 @@ QemuOpts *qemu_get_machine_opts(void);
+ 
+ bool usb_enabled(bool default_usb);
+ 
++extern QemuOptsList qemu_legacy_drive_opts;
++extern QemuOptsList qemu_common_drive_opts;
+ extern QemuOptsList qemu_drive_opts;
+ extern QemuOptsList qemu_simple_drive_opts;
+ extern QemuOptsList qemu_chardev_opts;
+diff --git a/util/qemu-config.c b/util/qemu-config.c
+index a59568d..04da942 100644
+--- a/util/qemu-config.c
++++ b/util/qemu-config.c
+@@ -8,6 +8,7 @@
+ #include "qmp-commands.h"
+ 
+ static QemuOptsList *vm_config_groups[32];
++static QemuOptsList *drive_config_groups[4];
+ 
+ static QemuOptsList *find_list(QemuOptsList **lists, const char *group,
+                                Error **errp)
+@@ -77,6 +78,59 @@ static CommandLineParameterInfoList *query_option_descs(const QemuOptDesc *desc)
+     return param_list;
+ }
+ 
++/* remove repeated entry from the info list */
++static void cleanup_infolist(CommandLineParameterInfoList *head)
++{
++    CommandLineParameterInfoList *pre_entry, *cur, *del_entry;
++
++    cur = head;
++    while (cur->next) {
++        pre_entry = head;
++        while (pre_entry != cur->next) {
++            if (!strcmp(pre_entry->value->name, cur->next->value->name)) {
++                del_entry = cur->next;
++                cur->next = cur->next->next;
++                g_free(del_entry);
++                break;
++            }
++            pre_entry = pre_entry->next;
++        }
++        cur = cur->next;
++    }
++}
++
++/* merge the description items of two parameter infolists */
++static void connect_infolist(CommandLineParameterInfoList *head,
++                             CommandLineParameterInfoList *new)
++{
++    CommandLineParameterInfoList *cur;
++
++    cur = head;
++    while (cur->next) {
++        cur = cur->next;
++    }
++    cur->next = new;
++}
++
++/* access all the local QemuOptsLists for drive option */
++static CommandLineParameterInfoList *get_drive_infolist(void)
++{
++    CommandLineParameterInfoList *head = NULL, *cur;
++    int i;
++
++    for (i = 0; drive_config_groups[i] != NULL; i++) {
++        if (!head) {
++            head = query_option_descs(drive_config_groups[i]->desc);
++        } else {
++            cur = query_option_descs(drive_config_groups[i]->desc);
++            connect_infolist(head, cur);
++        }
++    }
++    cleanup_infolist(head);
++
++    return head;
++}
++
+ CommandLineOptionInfoList *qmp_query_command_line_options(bool has_option,
+                                                           const char *option,
+                                                           Error **errp)
+@@ -89,7 +143,12 @@ CommandLineOptionInfoList *qmp_query_command_line_options(bool has_option,
+         if (!has_option || !strcmp(option, vm_config_groups[i]->name)) {
+             info = g_malloc0(sizeof(*info));
+             info->option = g_strdup(vm_config_groups[i]->name);
+-            info->parameters = query_option_descs(vm_config_groups[i]->desc);
++            if (!strcmp("drive", vm_config_groups[i]->name)) {
++                info->parameters = get_drive_infolist();
++            } else {
++                info->parameters =
++                    query_option_descs(vm_config_groups[i]->desc);
++            }
+             entry = g_malloc0(sizeof(*entry));
+             entry->value = info;
+             entry->next = conf_list;
+@@ -109,6 +168,22 @@ QemuOptsList *qemu_find_opts_err(const char *group, Error **errp)
+     return find_list(vm_config_groups, group, errp);
+ }
+ 
++void qemu_add_drive_opts(QemuOptsList *list)
++{
++    int entries, i;
++
++    entries = ARRAY_SIZE(drive_config_groups);
++    entries--; /* keep list NULL terminated */
++    for (i = 0; i < entries; i++) {
++        if (drive_config_groups[i] == NULL) {
++            drive_config_groups[i] = list;
++            return;
++        }
++    }
++    fprintf(stderr, "ran out of space in drive_config_groups");
++    abort();
++}
++
+ void qemu_add_opts(QemuOptsList *list)
+ {
+     int entries, i;
+diff --git a/vl.c b/vl.c
+index deb5884..51300e7 100644
+--- a/vl.c
++++ b/vl.c
+@@ -2851,6 +2851,9 @@ int main(int argc, char **argv, char **envp)
+ 
+     qemu_add_opts(&qemu_drive_opts);
+     qemu_add_opts(&qemu_simple_drive_opts);
++    qemu_add_drive_opts(&qemu_legacy_drive_opts);
++    qemu_add_drive_opts(&qemu_common_drive_opts);
++    qemu_add_drive_opts(&qemu_drive_opts);
+     qemu_add_opts(&qemu_chardev_opts);
+     qemu_add_opts(&qemu_device_opts);
+     qemu_add_opts(&qemu_netdev_opts);
+-- 
+1.7.1
+

@@ -1,0 +1,103 @@
+From 7322fbc37925671b3ac9e589ba8eb200b7aee7f3 Mon Sep 17 00:00:00 2001
+Message-Id: <7322fbc37925671b3ac9e589ba8eb200b7aee7f3.1418766606.git.jen@redhat.com>
+In-Reply-To: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+References: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 4 Dec 2014 00:04:57 -0600
+Subject: [CHANGE 03/31] vmdk: Check VMFS extent line field number
+To: rhvirt-patches@redhat.com,
+    jen@redhat.com
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1417651524-18041-4-git-send-email-famz@redhat.com>
+Patchwork-id: 62676
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v5 03/30] vmdk: Check VMFS extent line field number
+Bugzilla: 1134237
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+VMFS extent line in description file should be with 4 fields:
+
+    RW <size> VMFS "file-name.vmdk"
+
+Check the number explicitly and report error if offset is appended as
+FLAT, which should be invalid format.
+
+Reported-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit b47053bd0359c68094d7a25a65687c0844771e34)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Jeff E. Nelson <jen@redhat.com>
+---
+ block/vmdk.c               |  9 +++++++--
+ tests/qemu-iotests/059     | 14 ++++++++++++++
+ tests/qemu-iotests/059.out |  5 +++++
+ 3 files changed, 26 insertions(+), 2 deletions(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index a5b1f1c..d77eb37 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -750,9 +750,14 @@ static int vmdk_parse_extents(const char *desc, BlockDriverState *bs,
+                 return -EINVAL;
+             }
+         } else if (!strcmp(type, "VMFS")) {
+-            flat_offset = 0;
++            if (ret == 4) {
++                flat_offset = 0;
++            } else {
++                error_setg(errp, "Invalid extent lines:\n%s", p);
++                return -EINVAL;
++            }
+         } else if (ret != 4) {
+-            error_setg(errp, "Invalid extent lines: \n%s", p);
++            error_setg(errp, "Invalid extent lines:\n%s", p);
+             return -EINVAL;
+         }
+ 
+diff --git a/tests/qemu-iotests/059 b/tests/qemu-iotests/059
+index 23534c2..c8d92a0 100755
+--- a/tests/qemu-iotests/059
++++ b/tests/qemu-iotests/059
+@@ -81,6 +81,20 @@ IMGOPTS="subformat=twoGbMaxExtentFlat" _make_test_img 1000G
+ $QEMU_IMG info $TEST_IMG | _filter_testdir | sed -e 's/cid: [0-9]*/cid: XXXXXXXX/'
+ 
+ echo
++echo "=== Testing malformed VMFS extent description line ==="
++cat >"$TEST_IMG" <<EOF
++# Disk DescriptorFile
++version=1
++CID=58ab4847
++parentCID=ffffffff
++createType="vmfs"
++
++# Extent description
++RW 12582912 VMFS "dummy.vmdk" 1
++EOF
++_img_info
++
++echo
+ echo "=== Testing version 3 ==="
+ _use_sample_img iotest-version3.vmdk.bz2
+ _img_info
+diff --git a/tests/qemu-iotests/059.out b/tests/qemu-iotests/059.out
+index 87a2004..f161651 100644
+--- a/tests/qemu-iotests/059.out
++++ b/tests/qemu-iotests/059.out
+@@ -2038,6 +2038,11 @@ Format specific information:
+             filename: TEST_DIR/t-f500.vmdk
+             format: FLAT
+ 
++=== Testing malformed VMFS extent description line ===
++qemu-img: Could not open 'TEST_DIR/t.IMGFMT': Invalid extent lines:
++RW 12582912 VMFS "dummy.IMGFMT" 1
++
++
+ === Testing version 3 ===
+ image: TEST_DIR/iotest-version3.IMGFMT
+ file format: IMGFMT
+-- 
+2.1.0
+

@@ -1,0 +1,284 @@
+From e04d52892c7fcd0e2ec70f77f3e5b934d45918c8 Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Wed, 31 Jul 2013 09:56:17 +0200
+Subject: block: add block driver read only whitelist
+
+Message-id: <6873f36f1d3c26ad7b84bf2150c0a98afd6c5e72.1375208619.git.mrezanin@redhat.com>
+Patchwork-id: 52827
+O-Subject: [RHEL7 qemu-kvm PATCH 4.5/5] block: add block driver read only whitelist
+Bugzilla: 836675
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Michal Novotny <minovotn@redhat.com>
+
+From: Fam Zheng <famz@redhat.com>
+
+This is missing patch required for "VMDK Backports and Spec Update" serie.
+
+We may want to include a driver in the whitelist for read only tasks
+such as diagnosing or exporting guest data (with libguestfs as a good
+example). This patch introduces a readonly whitelist option, and for
+backward compatibility, the old configure option --block-drv-whitelist
+is now an alias to rw whitelist.
+
+Drivers in readonly list is only permitted to open file readonly, and
+returns -ENOTSUP for RW opening.
+
+E.g. To include vmdk readonly, and others read+write:
+    ./configure --target-list=x86_64-softmmu \
+                --block-drv-rw-whitelist=qcow2,raw,file,qed \
+                --block-drv-ro-whitelist=vmdk
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit b64ec4e4ade581d662753cdeb0d7e0e27aafbf81)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+diff --git a/block.c b/block.c
+index 3f87489..65c0b60 100644
+--- a/block.c
++++ b/block.c
+@@ -328,28 +328,40 @@ BlockDriver *bdrv_find_format(const char *format_name)
+     return NULL;
+ }
+ 
+-static int bdrv_is_whitelisted(BlockDriver *drv)
++static int bdrv_is_whitelisted(BlockDriver *drv, bool read_only)
+ {
+-    static const char *whitelist[] = {
+-        CONFIG_BDRV_WHITELIST
++    static const char *whitelist_rw[] = {
++        CONFIG_BDRV_RW_WHITELIST
++    };
++    static const char *whitelist_ro[] = {
++        CONFIG_BDRV_RO_WHITELIST
+     };
+     const char **p;
+ 
+-    if (!whitelist[0])
++    if (!whitelist_rw[0] && !whitelist_ro[0]) {
+         return 1;               /* no whitelist, anything goes */
++    }
+ 
+-    for (p = whitelist; *p; p++) {
++    for (p = whitelist_rw; *p; p++) {
+         if (!strcmp(drv->format_name, *p)) {
+             return 1;
+         }
+     }
++    if (read_only) {
++        for (p = whitelist_ro; *p; p++) {
++            if (!strcmp(drv->format_name, *p)) {
++                return 1;
++            }
++        }
++    }
+     return 0;
+ }
+ 
+-BlockDriver *bdrv_find_whitelisted_format(const char *format_name)
++BlockDriver *bdrv_find_whitelisted_format(const char *format_name,
++                                          bool read_only)
+ {
+     BlockDriver *drv = bdrv_find_format(format_name);
+-    return drv && bdrv_is_whitelisted(drv) ? drv : NULL;
++    return drv && bdrv_is_whitelisted(drv, read_only) ? drv : NULL;
+ }
+ 
+ typedef struct CreateCo {
+@@ -684,10 +696,6 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
+ 
+     trace_bdrv_open_common(bs, filename ?: "", flags, drv->format_name);
+ 
+-    if (use_bdrv_whitelist && !bdrv_is_whitelisted(drv)) {
+-        return -ENOTSUP;
+-    }
+-
+     /* bdrv_open() with directly using a protocol as drv. This layer is already
+      * opened, so assign it to bs (while file becomes a closed BlockDriverState)
+      * and return immediately. */
+@@ -698,9 +706,15 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
+ 
+     bs->open_flags = flags;
+     bs->buffer_alignment = 512;
++    open_flags = bdrv_open_flags(bs, flags);
++    bs->read_only = !(open_flags & BDRV_O_RDWR);
++
++    if (use_bdrv_whitelist && !bdrv_is_whitelisted(drv, bs->read_only)) {
++        return -ENOTSUP;
++    }
+ 
+     assert(bs->copy_on_read == 0); /* bdrv_new() and bdrv_close() make it so */
+-    if ((flags & BDRV_O_RDWR) && (flags & BDRV_O_COPY_ON_READ)) {
++    if (!bs->read_only && (flags & BDRV_O_COPY_ON_READ)) {
+         bdrv_enable_copy_on_read(bs);
+     }
+ 
+@@ -714,9 +728,6 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
+     bs->opaque = g_malloc0(drv->instance_size);
+ 
+     bs->enable_write_cache = !!(flags & BDRV_O_CACHE_WB);
+-    open_flags = bdrv_open_flags(bs, flags);
+-
+-    bs->read_only = !(open_flags & BDRV_O_RDWR);
+ 
+     /* Open the image, either directly or using a protocol */
+     if (drv->bdrv_file_open) {
+@@ -801,7 +812,7 @@ int bdrv_file_open(BlockDriverState **pbs, const char *filename,
+     /* Find the right block driver */
+     drvname = qdict_get_try_str(options, "driver");
+     if (drvname) {
+-        drv = bdrv_find_whitelisted_format(drvname);
++        drv = bdrv_find_whitelisted_format(drvname, !(flags & BDRV_O_RDWR));
+         qdict_del(options, "driver");
+     } else if (filename) {
+         drv = bdrv_find_protocol(filename);
+diff --git a/blockdev.c b/blockdev.c
+index 625d041..6500c47 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -477,7 +477,7 @@ DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
+             error_printf("\n");
+             return NULL;
+         }
+-        drv = bdrv_find_whitelisted_format(buf);
++        drv = bdrv_find_whitelisted_format(buf, ro);
+         if (!drv) {
+             error_report("'%s' invalid format", buf);
+             return NULL;
+@@ -1024,7 +1024,7 @@ void qmp_change_blockdev(const char *device, const char *filename,
+     }
+ 
+     if (format) {
+-        drv = bdrv_find_whitelisted_format(format);
++        drv = bdrv_find_whitelisted_format(format, bs->read_only);
+         if (!drv) {
+             error_set(errp, QERR_INVALID_BLOCK_FORMAT, format);
+             return;
+diff --git a/configure b/configure
+index eb74510..a71e8a1 100755
+--- a/configure
++++ b/configure
+@@ -123,7 +123,8 @@ interp_prefix="/usr/gnemul/qemu-%M"
+ static="no"
+ cross_prefix=""
+ audio_drv_list=""
+-block_drv_whitelist=""
++block_drv_rw_whitelist=""
++block_drv_ro_whitelist=""
+ host_cc="cc"
+ libs_softmmu=""
+ libs_tools=""
+@@ -708,7 +709,9 @@ for opt do
+   ;;
+   --audio-drv-list=*) audio_drv_list="$optarg"
+   ;;
+-  --block-drv-whitelist=*) block_drv_whitelist=`echo "$optarg" | sed -e 's/,/ /g'`
++  --block-drv-rw-whitelist=*|--block-drv-whitelist=*) block_drv_rw_whitelist=`echo "$optarg" | sed -e 's/,/ /g'`
++  ;;
++  --block-drv-ro-whitelist=*) block_drv_ro_whitelist=`echo "$optarg" | sed -e 's/,/ /g'`
+   ;;
+   --enable-debug-tcg) debug_tcg="yes"
+   ;;
+@@ -1105,7 +1108,12 @@ echo "  --disable-cocoa          disable Cocoa (Mac OS X only)"
+ echo "  --enable-cocoa           enable Cocoa (default on Mac OS X)"
+ echo "  --audio-drv-list=LIST    set audio drivers list:"
+ echo "                           Available drivers: $audio_possible_drivers"
+-echo "  --block-drv-whitelist=L  set block driver whitelist"
++echo "  --block-drv-whitelist=L  Same as --block-drv-rw-whitelist=L"
++echo "  --block-drv-rw-whitelist=L"
++echo "                           set block driver read-write whitelist"
++echo "                           (affects only QEMU, not qemu-img)"
++echo "  --block-drv-ro-whitelist=L"
++echo "                           set block driver read-only whitelist"
+ echo "                           (affects only QEMU, not qemu-img)"
+ echo "  --enable-mixemu          enable mixer emulation"
+ echo "  --disable-xen            disable xen backend driver support"
+@@ -3525,7 +3533,8 @@ echo "curses support    $curses"
+ echo "curl support      $curl"
+ echo "mingw32 support   $mingw32"
+ echo "Audio drivers     $audio_drv_list"
+-echo "Block whitelist   $block_drv_whitelist"
++echo "Block whitelist (rw) $block_drv_rw_whitelist"
++echo "Block whitelist (ro) $block_drv_ro_whitelist"
+ echo "Mixer emulation   $mixemu"
+ echo "VirtFS support    $virtfs"
+ echo "VNC support       $vnc"
+@@ -3704,7 +3713,8 @@ fi
+ if test "$audio_win_int" = "yes" ; then
+   echo "CONFIG_AUDIO_WIN_INT=y" >> $config_host_mak
+ fi
+-echo "CONFIG_BDRV_WHITELIST=$block_drv_whitelist" >> $config_host_mak
++echo "CONFIG_BDRV_RW_WHITELIST=$block_drv_rw_whitelist" >> $config_host_mak
++echo "CONFIG_BDRV_RO_WHITELIST=$block_drv_ro_whitelist" >> $config_host_mak
+ if test "$mixemu" = "yes" ; then
+   echo "CONFIG_MIXEMU=y" >> $config_host_mak
+ fi
+diff --git a/hw/block/xen_disk.c b/hw/block/xen_disk.c
+index 0ac65d4..247f32f 100644
+--- a/hw/block/xen_disk.c
++++ b/hw/block/xen_disk.c
+@@ -780,11 +780,13 @@ static int blk_connect(struct XenDevice *xendev)
+ {
+     struct XenBlkDev *blkdev = container_of(xendev, struct XenBlkDev, xendev);
+     int pers, index, qflags;
++    bool readonly = true;
+ 
+     /* read-only ? */
+     qflags = BDRV_O_CACHE_WB | BDRV_O_NATIVE_AIO;
+     if (strcmp(blkdev->mode, "w") == 0) {
+         qflags |= BDRV_O_RDWR;
++        readonly = false;
+     }
+ 
+     /* init qemu block driver */
+@@ -795,8 +797,10 @@ static int blk_connect(struct XenDevice *xendev)
+         xen_be_printf(&blkdev->xendev, 2, "create new bdrv (xenbus setup)\n");
+         blkdev->bs = bdrv_new(blkdev->dev);
+         if (blkdev->bs) {
+-            if (bdrv_open(blkdev->bs, blkdev->filename, NULL, qflags,
+-                        bdrv_find_whitelisted_format(blkdev->fileproto)) != 0) {
++            BlockDriver *drv = bdrv_find_whitelisted_format(blkdev->fileproto,
++                                                           readonly);
++            if (bdrv_open(blkdev->bs,
++                          blkdev->filename, NULL, qflags, drv) != 0) {
+                 bdrv_delete(blkdev->bs);
+                 blkdev->bs = NULL;
+             }
+diff --git a/include/block/block.h b/include/block/block.h
+index 1251c5c..5604418 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -124,7 +124,8 @@ void bdrv_init(void);
+ void bdrv_init_with_whitelist(void);
+ BlockDriver *bdrv_find_protocol(const char *filename);
+ BlockDriver *bdrv_find_format(const char *format_name);
+-BlockDriver *bdrv_find_whitelisted_format(const char *format_name);
++BlockDriver *bdrv_find_whitelisted_format(const char *format_name,
++                                          bool readonly);
+ int bdrv_create(BlockDriver *drv, const char* filename,
+     QEMUOptionParameter *options);
+ int bdrv_create_file(const char* filename, QEMUOptionParameter *options);
+diff --git a/scripts/create_config b/scripts/create_config
+index c471e8c..258513a 100755
+--- a/scripts/create_config
++++ b/scripts/create_config
+@@ -34,8 +34,15 @@ case $line in
+     done
+     echo ""
+     ;;
+- CONFIG_BDRV_WHITELIST=*)
+-    echo "#define CONFIG_BDRV_WHITELIST \\"
++ CONFIG_BDRV_RW_WHITELIST=*)
++    echo "#define CONFIG_BDRV_RW_WHITELIST\\"
++    for drv in ${line#*=}; do
++      echo "    \"${drv}\",\\"
++    done
++    echo "    NULL"
++    ;;
++ CONFIG_BDRV_RO_WHITELIST=*)
++    echo "#define CONFIG_BDRV_RO_WHITELIST\\"
+     for drv in ${line#*=}; do
+       echo "    \"${drv}\",\\"
+     done

@@ -1,0 +1,58 @@
+From 25760de201dc5c29d171fc4ae4f34d6eaabbdad6 Mon Sep 17 00:00:00 2001
+Message-Id: <25760de201dc5c29d171fc4ae4f34d6eaabbdad6.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:09:23 +0100
+Subject: [PATCH 35/50] scsi-disk: catch write protection errors in UNMAP
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-38-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56074
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 37/52] scsi-disk: catch write protection errors in UNMAP
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+This is the same that is already done for WRITE SAME.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit c5fd1fb038405ed13496761970b3b531f747a892)
+---
+ hw/scsi/scsi-disk.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/scsi/scsi-disk.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/hw/scsi/scsi-disk.c b/hw/scsi/scsi-disk.c
+index 74e6a14..4138268 100644
+--- a/hw/scsi/scsi-disk.c
++++ b/hw/scsi/scsi-disk.c
+@@ -1543,6 +1543,7 @@ done:
+ 
+ static void scsi_disk_emulate_unmap(SCSIDiskReq *r, uint8_t *inbuf)
+ {
++    SCSIDiskState *s = DO_UPCAST(SCSIDiskState, qdev, r->req.dev);
+     uint8_t *p = inbuf;
+     int len = r->req.cmd.xfer;
+     UnmapCBData *data;
+@@ -1560,6 +1561,11 @@ static void scsi_disk_emulate_unmap(SCSIDiskReq *r, uint8_t *inbuf)
+         goto invalid_param_len;
+     }
+ 
++    if (bdrv_is_read_only(s->qdev.conf.bs)) {
++        scsi_check_condition(r, SENSE_CODE(WRITE_PROTECTED));
++        return;
++    }
++
+     data = g_new0(UnmapCBData, 1);
+     data->r = r;
+     data->inbuf = &p[8];
+-- 
+1.7.11.7
+

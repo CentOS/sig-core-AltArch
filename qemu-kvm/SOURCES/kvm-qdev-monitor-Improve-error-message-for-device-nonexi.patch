@@ -1,0 +1,70 @@
+From 41eb96b80b2e805573cc79e3b6e7eff49892dd47 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Fri, 17 Jan 2014 17:07:59 +0100
+Subject: [PATCH 09/11] qdev-monitor: Improve error message for -device nonexistant
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1389978479-30595-10-git-send-email-armbru@redhat.com>
+Patchwork-id: 56794
+O-Subject: [PATCH 7.0 qemu-kvm 9/9] qdev-monitor: Improve error message for -device nonexistant
+Bugzilla: 669524
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+
+Once upon a time, the error message was:
+
+    qemu: -device nonexistant: Device "nonexistant" not found.  Try -device '?' for a list.
+
+But progress marches on, and conversion to QError (commit 0204276)
+changed it into:
+
+    Invalid parameter 'driver'
+    Try with argument '?' for a list.
+
+Progress didn't stop there, of course.  After a couple of iterations,
+we arrived at the current message (commit 6acbe4c):
+
+    qemu: -device nonexistant: Parameter 'driver' expects device type
+
+Mission accomplished: this is complete mush.
+
+We've since abandoned our quest for "rich" error objects, fortunately
+before it turned all error messages into mush.  Time to undo the
+damage to this one.  Make it:
+
+    qemu: -device nonexistant: nonexistant is not a valid device model name
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit 11c308b17a34932033cceca4f88b5e67009e3ebd)
+---
+ qdev-monitor.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qdev-monitor.c |    3 ++-
+ 1 files changed, 2 insertions(+), 1 deletions(-)
+
+diff --git a/qdev-monitor.c b/qdev-monitor.c
+index 55a476b..ac65a10 100644
+--- a/qdev-monitor.c
++++ b/qdev-monitor.c
+@@ -479,7 +479,8 @@ DeviceState *qdev_device_add(QemuOpts *opts)
+     }
+ 
+     if (!object_class_dynamic_cast(oc, TYPE_DEVICE)) {
+-        qerror_report(QERR_INVALID_PARAMETER_VALUE, "driver", "device type");
++        qerror_report(ERROR_CLASS_GENERIC_ERROR,
++                      "'%s' is not a valid device model name", driver);
+         return NULL;
+     }
+ 
+-- 
+1.7.1
+

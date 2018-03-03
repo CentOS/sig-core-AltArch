@@ -1,0 +1,122 @@
+From 566788cb4c4f066daf10354edd8d9d497bb0043c Mon Sep 17 00:00:00 2001
+Message-Id: <566788cb4c4f066daf10354edd8d9d497bb0043c.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:09:12 +0100
+Subject: [PATCH 24/50] block: add flags to BlockRequest
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-27-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56063
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 26/52] block: add flags to BlockRequest
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+This lets bdrv_co_do_rw receive flags, so that it can be used for
+zero writes.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit d20d9b7c6723d0123b7d60dd5557aa0a6599f471)
+---
+ block.c               | 17 +++++++++++------
+ include/block/block.h |  1 +
+ 2 files changed, 12 insertions(+), 6 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ block.c               | 17 +++++++++++------
+ include/block/block.h |  1 +
+ 2 files changed, 12 insertions(+), 6 deletions(-)
+
+diff --git a/block.c b/block.c
+index 8dfc207..1f70913 100644
+--- a/block.c
++++ b/block.c
+@@ -74,6 +74,7 @@ static BlockDriverAIOCB *bdrv_co_aio_rw_vector(BlockDriverState *bs,
+                                                int64_t sector_num,
+                                                QEMUIOVector *qiov,
+                                                int nb_sectors,
++                                               BdrvRequestFlags flags,
+                                                BlockDriverCompletionFunc *cb,
+                                                void *opaque,
+                                                bool is_write);
+@@ -3675,7 +3676,7 @@ BlockDriverAIOCB *bdrv_aio_readv(BlockDriverState *bs, int64_t sector_num,
+ {
+     trace_bdrv_aio_readv(bs, sector_num, nb_sectors, opaque);
+ 
+-    return bdrv_co_aio_rw_vector(bs, sector_num, qiov, nb_sectors,
++    return bdrv_co_aio_rw_vector(bs, sector_num, qiov, nb_sectors, 0,
+                                  cb, opaque, false);
+ }
+ 
+@@ -3685,7 +3686,7 @@ BlockDriverAIOCB *bdrv_aio_writev(BlockDriverState *bs, int64_t sector_num,
+ {
+     trace_bdrv_aio_writev(bs, sector_num, nb_sectors, opaque);
+ 
+-    return bdrv_co_aio_rw_vector(bs, sector_num, qiov, nb_sectors,
++    return bdrv_co_aio_rw_vector(bs, sector_num, qiov, nb_sectors, 0,
+                                  cb, opaque, true);
+ }
+ 
+@@ -3857,8 +3858,10 @@ int bdrv_aio_multiwrite(BlockDriverState *bs, BlockRequest *reqs, int num_reqs)
+     /* Run the aio requests. */
+     mcb->num_requests = num_reqs;
+     for (i = 0; i < num_reqs; i++) {
+-        bdrv_aio_writev(bs, reqs[i].sector, reqs[i].qiov,
+-            reqs[i].nb_sectors, multiwrite_cb, mcb);
++        bdrv_co_aio_rw_vector(bs, reqs[i].sector, reqs[i].qiov,
++                              reqs[i].nb_sectors, reqs[i].flags,
++                              multiwrite_cb, mcb,
++                              true);
+     }
+ 
+     return 0;
+@@ -4163,10 +4166,10 @@ static void coroutine_fn bdrv_co_do_rw(void *opaque)
+ 
+     if (!acb->is_write) {
+         acb->req.error = bdrv_co_do_readv(bs, acb->req.sector,
+-            acb->req.nb_sectors, acb->req.qiov, 0);
++            acb->req.nb_sectors, acb->req.qiov, acb->req.flags);
+     } else {
+         acb->req.error = bdrv_co_do_writev(bs, acb->req.sector,
+-            acb->req.nb_sectors, acb->req.qiov, 0);
++            acb->req.nb_sectors, acb->req.qiov, acb->req.flags);
+     }
+ 
+     acb->bh = qemu_bh_new(bdrv_co_em_bh, acb);
+@@ -4177,6 +4180,7 @@ static BlockDriverAIOCB *bdrv_co_aio_rw_vector(BlockDriverState *bs,
+                                                int64_t sector_num,
+                                                QEMUIOVector *qiov,
+                                                int nb_sectors,
++                                               BdrvRequestFlags flags,
+                                                BlockDriverCompletionFunc *cb,
+                                                void *opaque,
+                                                bool is_write)
+@@ -4188,6 +4192,7 @@ static BlockDriverAIOCB *bdrv_co_aio_rw_vector(BlockDriverState *bs,
+     acb->req.sector = sector_num;
+     acb->req.nb_sectors = nb_sectors;
+     acb->req.qiov = qiov;
++    acb->req.flags = flags;
+     acb->is_write = is_write;
+     acb->done = NULL;
+ 
+diff --git a/include/block/block.h b/include/block/block.h
+index b87ed3a..6042e10 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -297,6 +297,7 @@ typedef struct BlockRequest {
+     /* Fields to be filled by multiwrite caller */
+     int64_t sector;
+     int nb_sectors;
++    int flags;
+     QEMUIOVector *qiov;
+     BlockDriverCompletionFunc *cb;
+     void *opaque;
+-- 
+1.7.11.7
+

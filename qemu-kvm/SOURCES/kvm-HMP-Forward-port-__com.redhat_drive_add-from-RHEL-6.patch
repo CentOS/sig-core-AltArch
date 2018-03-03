@@ -1,0 +1,110 @@
+From c18bb5012af503e6ca0278cc5bd9457d853fa218 Mon Sep 17 00:00:00 2001
+Message-Id: <c18bb5012af503e6ca0278cc5bd9457d853fa218.1387385974.git.minovotn@redhat.com>
+In-Reply-To: <7cba796b16325e96d01e65bd265b4073ab103157.1387385974.git.minovotn@redhat.com>
+References: <7cba796b16325e96d01e65bd265b4073ab103157.1387385974.git.minovotn@redhat.com>
+From: Markus Armbruster <armbru@redhat.com>
+Date: Tue, 17 Dec 2013 06:46:37 +0100
+Subject: [PATCH 3/5] HMP: Forward-port __com.redhat_drive_add from RHEL-6
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1387262799-10350-5-git-send-email-armbru@redhat.com>
+Patchwork-id: 56295
+O-Subject: [PATCH v2 4/6] HMP: Forward-port __com.redhat_drive_add from RHEL-6
+Bugzilla: 889051
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+---
+ blockdev.c              | 14 ++++++++++++++
+ hmp-commands.hx         | 15 +++++++++++++++
+ include/sysemu/sysemu.h |  1 +
+ vl.c                    |  1 +
+ 4 files changed, 31 insertions(+)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ blockdev.c              | 14 ++++++++++++++
+ hmp-commands.hx         | 15 +++++++++++++++
+ include/sysemu/sysemu.h |  1 +
+ vl.c                    |  1 +
+ 4 files changed, 31 insertions(+)
+
+diff --git a/blockdev.c b/blockdev.c
+index f6d607c..93fb339 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -1916,3 +1916,17 @@ QemuOptsList qemu_drive_opts = {
+         { /* end of list */ }
+     },
+ };
++
++QemuOptsList qemu_simple_drive_opts = {
++    .name = "simple-drive",
++    .implied_opt_name = "format",
++    .head = QTAILQ_HEAD_INITIALIZER(qemu_simple_drive_opts.head),
++    .desc = {
++        /*
++         * no elements => accept any
++         * sanity checking will happen later
++         * when setting device properties
++         */
++        { /* end if list */ }
++    }
++};
+diff --git a/hmp-commands.hx b/hmp-commands.hx
+index c881e01..bfb565b 100644
+--- a/hmp-commands.hx
++++ b/hmp-commands.hx
+@@ -1091,6 +1091,21 @@ STEXI
+ Add drive to PCI storage controller.
+ ETEXI
+ 
++    {
++        .name       = RFQDN_REDHAT "drive_add",
++        .args_type  = "simple-drive:O",
++        .params     = "id=name,[file=file][,format=f][,media=d]...",
++        .help       = "Create a drive similar to -device if=none.",
++	.user_print = monitor_user_noop,
++        .mhandler.cmd_new = simple_drive_add,
++    },
++
++STEXI
++@item __com.redhat_drive_add
++@findex __com.redhat_drive_add
++Create a drive similar to -device if=none.
++ETEXI
++
+ #if defined(TARGET_I386) && 0 /* Disabled for Red Hat Enterprise Linux */
+     {
+         .name       = "pci_add",
+diff --git a/include/sysemu/sysemu.h b/include/sysemu/sysemu.h
+index 8fbc818..c70d2dd 100644
+--- a/include/sysemu/sysemu.h
++++ b/include/sysemu/sysemu.h
+@@ -192,6 +192,7 @@ QemuOpts *qemu_get_machine_opts(void);
+ bool usb_enabled(bool default_usb);
+ 
+ extern QemuOptsList qemu_drive_opts;
++extern QemuOptsList qemu_simple_drive_opts;
+ extern QemuOptsList qemu_chardev_opts;
+ extern QemuOptsList qemu_device_opts;
+ extern QemuOptsList qemu_netdev_opts;
+diff --git a/vl.c b/vl.c
+index da12b90..4a79f62 100644
+--- a/vl.c
++++ b/vl.c
+@@ -2837,6 +2837,7 @@ int main(int argc, char **argv, char **envp)
+     module_call_init(MODULE_INIT_QOM);
+ 
+     qemu_add_opts(&qemu_drive_opts);
++    qemu_add_opts(&qemu_simple_drive_opts);
+     qemu_add_opts(&qemu_chardev_opts);
+     qemu_add_opts(&qemu_device_opts);
+     qemu_add_opts(&qemu_netdev_opts);
+-- 
+1.7.11.7
+

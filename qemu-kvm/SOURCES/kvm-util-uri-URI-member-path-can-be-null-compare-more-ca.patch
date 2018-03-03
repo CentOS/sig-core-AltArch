@@ -1,0 +1,64 @@
+From 81278fd6c82c8a1c22c65f1ae1ea048d2473dbfe Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Tue, 8 Sep 2015 18:06:24 +0200
+Subject: [PATCH 6/7] util/uri: URI member path can be null, compare more
+ carfully
+
+Message-id: <1441735585-23432-7-git-send-email-armbru@redhat.com>
+Patchwork-id: 67709
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 6/7] util/uri: URI member path can be null, compare more carfully
+Bugzilla: 1218919
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+
+uri_resolve_relative() calls strcmp(bas->path, ref->path).  However,
+either argument could be null!  Evidence: the code checks for null
+after the comparison.  Spotted by Coverity.
+
+I suspect this was screwed up when we stole the code from libxml2.
+There the conditional reads
+
+    xmlStrEqual((xmlChar *)bas->path, (xmlChar *)ref->path)
+
+with
+
+    int
+    xmlStrEqual(const xmlChar *str1, const xmlChar *str2) {
+	if (str1 == str2) return(1);
+	if (str1 == NULL) return(0);
+	if (str2 == NULL) return(0);
+	do {
+	    if (*str1++ != *str2) return(0);
+	} while (*str2++);
+	return(1);
+    }
+
+Fix by replicating libxml2's logic faithfully.
+
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Michael Tokarev <mjt@tls.msk.ru>
+(cherry picked from commit afb30dde3ad71349fc65726946d58e5d3c61f8af)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ util/uri.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/util/uri.c b/util/uri.c
+index b9a7b54..1cfd78b 100644
+--- a/util/uri.c
++++ b/util/uri.c
+@@ -1935,7 +1935,8 @@ uri_resolve_relative (const char *uri, const char * base)
+ 	val = g_strdup (uri);
+ 	goto done;
+     }
+-    if (!strcmp(bas->path, ref->path)) {
++    if (bas->path == ref->path ||
++        (bas->path && ref->path && !strcmp(bas->path, ref->path))) {
+ 	val = g_strdup("");
+ 	goto done;
+     }
+-- 
+1.8.3.1
+

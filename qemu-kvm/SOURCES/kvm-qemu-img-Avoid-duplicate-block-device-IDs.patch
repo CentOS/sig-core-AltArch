@@ -1,0 +1,172 @@
+From aa82f406b4d4ff21041ef39547d1b166e9c6ee38 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Thu, 23 Oct 2014 10:10:10 +0200
+Subject: [PATCH 07/19] qemu-img: Avoid duplicate block device IDs
+
+Message-id: <1414059011-15516-8-git-send-email-kwolf@redhat.com>
+Patchwork-id: 61842
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v2 7/8] qemu-img: Avoid duplicate block device IDs
+Bugzilla: 1088176
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+qemu-img used to use "image" as ID for all block devices. This means
+that e.g. img_convert() ended up with potentially multiple source images
+and one target image, all with the same ID. The next patch will catch
+this and fail to open the block device.
+
+This patch makes sure that qemu-img uses meaningful unique IDs for the
+block devices it uses.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit 9ffe333276de8ef463896303fb951f03fd4ffcb4)
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qemu-img.c | 38 ++++++++++++++++++++++----------------
+ 1 file changed, 22 insertions(+), 16 deletions(-)
+
+diff --git a/qemu-img.c b/qemu-img.c
+index 5c2f36a..fe0ac65 100644
+--- a/qemu-img.c
++++ b/qemu-img.c
+@@ -262,7 +262,8 @@ static int print_block_option_help(const char *filename, const char *fmt)
+     return 0;
+ }
+ 
+-static BlockDriverState *bdrv_new_open(const char *filename,
++static BlockDriverState *bdrv_new_open(const char *id,
++                                       const char *filename,
+                                        const char *fmt,
+                                        int flags,
+                                        bool require_io,
+@@ -274,7 +275,7 @@ static BlockDriverState *bdrv_new_open(const char *filename,
+     Error *local_err = NULL;
+     int ret;
+ 
+-    bs = bdrv_new("image", &error_abort);
++    bs = bdrv_new(id, &error_abort);
+ 
+     if (fmt) {
+         drv = bdrv_find_format(fmt);
+@@ -616,7 +617,7 @@ static int img_check(int argc, char **argv)
+         return 1;
+     }
+ 
+-    bs = bdrv_new_open(filename, fmt, flags, true, quiet);
++    bs = bdrv_new_open("image", filename, fmt, flags, true, quiet);
+     if (!bs) {
+         return 1;
+     }
+@@ -725,7 +726,7 @@ static int img_commit(int argc, char **argv)
+         return -1;
+     }
+ 
+-    bs = bdrv_new_open(filename, fmt, flags, true, quiet);
++    bs = bdrv_new_open("image", filename, fmt, flags, true, quiet);
+     if (!bs) {
+         return 1;
+     }
+@@ -968,14 +969,14 @@ static int img_compare(int argc, char **argv)
+     /* Initialize before goto out */
+     qemu_progress_init(progress, 2.0);
+ 
+-    bs1 = bdrv_new_open(filename1, fmt1, BDRV_O_FLAGS, true, quiet);
++    bs1 = bdrv_new_open("image 1", filename1, fmt1, BDRV_O_FLAGS, true, quiet);
+     if (!bs1) {
+         error_report("Can't open file %s", filename1);
+         ret = 2;
+         goto out3;
+     }
+ 
+-    bs2 = bdrv_new_open(filename2, fmt2, BDRV_O_FLAGS, true, quiet);
++    bs2 = bdrv_new_open("image 2", filename2, fmt2, BDRV_O_FLAGS, true, quiet);
+     if (!bs2) {
+         error_report("Can't open file %s", filename2);
+         ret = 2;
+@@ -1280,8 +1281,11 @@ static int img_convert(int argc, char **argv)
+ 
+     total_sectors = 0;
+     for (bs_i = 0; bs_i < bs_n; bs_i++) {
+-        bs[bs_i] = bdrv_new_open(argv[optind + bs_i], fmt, BDRV_O_FLAGS, true,
+-                                 quiet);
++        char *id = bs_n > 1 ? g_strdup_printf("source %d", bs_i)
++                            : g_strdup("source");
++        bs[bs_i] = bdrv_new_open(id, argv[optind + bs_i], fmt, BDRV_O_FLAGS,
++                                 true, quiet);
++        g_free(id);
+         if (!bs[bs_i]) {
+             error_report("Could not open '%s'", argv[optind + bs_i]);
+             ret = -1;
+@@ -1395,7 +1399,7 @@ static int img_convert(int argc, char **argv)
+         return -1;
+     }
+ 
+-    out_bs = bdrv_new_open(out_filename, out_fmt, flags, true, quiet);
++    out_bs = bdrv_new_open("target", out_filename, out_fmt, flags, true, quiet);
+     if (!out_bs) {
+         ret = -1;
+         goto out;
+@@ -1758,8 +1762,8 @@ static ImageInfoList *collect_image_info_list(const char *filename,
+         }
+         g_hash_table_insert(filenames, (gpointer)filename, NULL);
+ 
+-        bs = bdrv_new_open(filename, fmt, BDRV_O_FLAGS | BDRV_O_NO_BACKING,
+-                           false, false);
++        bs = bdrv_new_open("image", filename, fmt,
++                           BDRV_O_FLAGS | BDRV_O_NO_BACKING, false, false);
+         if (!bs) {
+             goto err;
+         }
+@@ -2018,7 +2022,7 @@ static int img_map(int argc, char **argv)
+         return 1;
+     }
+ 
+-    bs = bdrv_new_open(filename, fmt, BDRV_O_FLAGS, true, false);
++    bs = bdrv_new_open("image", filename, fmt, BDRV_O_FLAGS, true, false);
+     if (!bs) {
+         return 1;
+     }
+@@ -2137,7 +2141,7 @@ static int img_snapshot(int argc, char **argv)
+     filename = argv[optind++];
+ 
+     /* Open the image */
+-    bs = bdrv_new_open(filename, NULL, bdrv_oflags, true, quiet);
++    bs = bdrv_new_open("image", filename, NULL, bdrv_oflags, true, quiet);
+     if (!bs) {
+         return 1;
+     }
+@@ -2264,7 +2268,7 @@ static int img_rebase(int argc, char **argv)
+      * Ignore the old backing file for unsafe rebase in case we want to correct
+      * the reference to a renamed or moved backing file.
+      */
+-    bs = bdrv_new_open(filename, fmt, flags, true, quiet);
++    bs = bdrv_new_open("image", filename, fmt, flags, true, quiet);
+     if (!bs) {
+         return 1;
+     }
+@@ -2561,7 +2565,8 @@ static int img_resize(int argc, char **argv)
+     n = qemu_opt_get_size(param, BLOCK_OPT_SIZE, 0);
+     qemu_opts_del(param);
+ 
+-    bs = bdrv_new_open(filename, fmt, BDRV_O_FLAGS | BDRV_O_RDWR, true, quiet);
++    bs = bdrv_new_open("image", filename, fmt, BDRV_O_FLAGS | BDRV_O_RDWR,
++                       true, quiet);
+     if (!bs) {
+         ret = -1;
+         goto out;
+@@ -2662,7 +2667,8 @@ static int img_amend(int argc, char **argv)
+         help();
+     }
+ 
+-    bs = bdrv_new_open(filename, fmt, BDRV_O_FLAGS | BDRV_O_RDWR, true, quiet);
++    bs = bdrv_new_open("image", filename, fmt,
++                       BDRV_O_FLAGS | BDRV_O_RDWR, true, quiet);
+     if (!bs) {
+         error_report("Could not open image '%s'", filename);
+         ret = -1;
+-- 
+1.8.3.1
+

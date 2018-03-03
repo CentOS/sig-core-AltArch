@@ -1,0 +1,518 @@
+From e4c72f672ead22ca78bbdef54517c120f39cf531 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Thu, 5 Oct 2017 14:51:14 +0200
+Subject: [PATCH 02/11] hw: use ld_p/st_p instead of ld_raw/st_raw
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <20171005145119.15277-3-kraxel@redhat.com>
+Patchwork-id: 76827
+O-Subject: [RHEL-7.5 qemu-kvm PATCH 2/7] hw: use ld_p/st_p instead of ld_raw/st_raw
+Bugzilla: 1501294
+RH-Acked-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+The ld_raw and st_raw definitions are only needed in code that
+must compile for both user-mode and softmmu emulation.  Device
+models can use the equivalent ld_p/st_p which are simple
+pointer accessors.
+
+Reviewed-by: Peter Maydell <peter.maydell@linaro.org>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 0983979b3a5edbff399c092b90c8be6dc656f2a4)
+
+[ rhel: drop hw/arm/nseries.c chunk ]
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/9pfs/virtio-9p-device.c     |   2 +-
+ hw/block/virtio-blk.c          |  12 +--
+ hw/display/omap_lcd_template.h |  10 +--
+ hw/display/sm501_template.h    |   6 +-
+ hw/display/vga_template.h      |   4 +-
+ hw/mips/mips_fulong2e.c        |  28 +++----
+ hw/mips/mips_malta.c           | 176 ++++++++++++++++++++---------------------
+ hw/scsi/vhost-scsi.c           |   4 +-
+ hw/scsi/virtio-scsi.c          |  28 +++----
+ 9 files changed, 135 insertions(+), 135 deletions(-)
+
+diff --git a/hw/9pfs/virtio-9p-device.c b/hw/9pfs/virtio-9p-device.c
+index 69d781d..0658b2d 100644
+--- a/hw/9pfs/virtio-9p-device.c
++++ b/hw/9pfs/virtio-9p-device.c
+@@ -34,7 +34,7 @@ static void virtio_9p_get_config(VirtIODevice *vdev, uint8_t *config)
+ 
+     len = strlen(s->tag);
+     cfg = g_malloc0(sizeof(struct virtio_9p_config) + len);
+-    stw_raw(&cfg->tag_len, len);
++    stw_p(&cfg->tag_len, len);
+     /* We don't copy the terminating null to config space */
+     memcpy(cfg->tag, s->tag, len);
+     memcpy(config, cfg, s->config_size);
+diff --git a/hw/block/virtio-blk.c b/hw/block/virtio-blk.c
+index 462ac81..50ada79 100644
+--- a/hw/block/virtio-blk.c
++++ b/hw/block/virtio-blk.c
+@@ -508,12 +508,12 @@ static void virtio_blk_update_config(VirtIODevice *vdev, uint8_t *config)
+ 
+     bdrv_get_geometry(s->bs, &capacity);
+     memset(&blkcfg, 0, sizeof(blkcfg));
+-    stq_raw(&blkcfg.capacity, capacity);
+-    stl_raw(&blkcfg.seg_max, 128 - 2);
+-    stw_raw(&blkcfg.cylinders, s->conf->cyls);
+-    stl_raw(&blkcfg.blk_size, blk_size);
+-    stw_raw(&blkcfg.min_io_size, s->conf->min_io_size / blk_size);
+-    stw_raw(&blkcfg.opt_io_size, s->conf->opt_io_size / blk_size);
++    stq_p(&blkcfg.capacity, capacity);
++    stl_p(&blkcfg.seg_max, 128 - 2);
++    stw_p(&blkcfg.cylinders, s->conf->cyls);
++    stl_p(&blkcfg.blk_size, blk_size);
++    stw_p(&blkcfg.min_io_size, s->conf->min_io_size / blk_size);
++    stw_p(&blkcfg.opt_io_size, s->conf->opt_io_size / blk_size);
+     blkcfg.heads = s->conf->heads;
+     /*
+      * We must ensure that the block device capacity is a multiple of
+diff --git a/hw/display/omap_lcd_template.h b/hw/display/omap_lcd_template.h
+index 2fb96f8..e5dd447 100644
+--- a/hw/display/omap_lcd_template.h
++++ b/hw/display/omap_lcd_template.h
+@@ -50,7 +50,7 @@ static void glue(draw_line2_, DEPTH)(void *opaque,
+     uint8_t v, r, g, b;
+ 
+     do {
+-        v = ldub_raw((void *) s);
++        v = ldub_p((void *) s);
+         r = (pal[v & 3] >> 4) & 0xf0;
+         g = pal[v & 3] & 0xf0;
+         b = (pal[v & 3] << 4) & 0xf0;
+@@ -89,7 +89,7 @@ static void glue(draw_line4_, DEPTH)(void *opaque,
+     uint8_t v, r, g, b;
+ 
+     do {
+-        v = ldub_raw((void *) s);
++        v = ldub_p((void *) s);
+         r = (pal[v & 0xf] >> 4) & 0xf0;
+         g = pal[v & 0xf] & 0xf0;
+         b = (pal[v & 0xf] << 4) & 0xf0;
+@@ -116,7 +116,7 @@ static void glue(draw_line8_, DEPTH)(void *opaque,
+     uint8_t v, r, g, b;
+ 
+     do {
+-        v = ldub_raw((void *) s);
++        v = ldub_p((void *) s);
+         r = (pal[v] >> 4) & 0xf0;
+         g = pal[v] & 0xf0;
+         b = (pal[v] << 4) & 0xf0;
+@@ -136,7 +136,7 @@ static void glue(draw_line12_, DEPTH)(void *opaque,
+     uint8_t r, g, b;
+ 
+     do {
+-        v = lduw_raw((void *) s);
++        v = lduw_p((void *) s);
+         r = (v >> 4) & 0xf0;
+         g = v & 0xf0;
+         b = (v << 4) & 0xf0;
+@@ -159,7 +159,7 @@ static void glue(draw_line16_, DEPTH)(void *opaque,
+     uint8_t r, g, b;
+ 
+     do {
+-        v = lduw_raw((void *) s);
++        v = lduw_p((void *) s);
+         r = (v >> 8) & 0xf8;
+         g = (v >> 3) & 0xfc;
+         b = (v << 3) & 0xf8;
+diff --git a/hw/display/sm501_template.h b/hw/display/sm501_template.h
+index 2d4a3d8..87374f5 100644
+--- a/hw/display/sm501_template.h
++++ b/hw/display/sm501_template.h
+@@ -47,7 +47,7 @@ static void glue(draw_line8_, PIXEL_NAME)(
+ {
+     uint8_t v, r, g, b;
+     do {
+-      	v = ldub_raw(s);
++	v = ldub_p(s);
+ 	r = (pal[v] >> 16) & 0xff;
+ 	g = (pal[v] >>  8) & 0xff;
+ 	b = (pal[v] >>  0) & 0xff;
+@@ -64,7 +64,7 @@ static void glue(draw_line16_, PIXEL_NAME)(
+     uint8_t r, g, b;
+ 
+     do {
+-	rgb565 = lduw_raw(s);
++	rgb565 = lduw_p(s);
+ 	r = ((rgb565 >> 11) & 0x1f) << 3;
+ 	g = ((rgb565 >>  5) & 0x3f) << 2;
+ 	b = ((rgb565 >>  0) & 0x1f) << 3;
+@@ -80,7 +80,7 @@ static void glue(draw_line32_, PIXEL_NAME)(
+     uint8_t r, g, b;
+ 
+     do {
+-	ldub_raw(s);
++	ldub_p(s);
+ #if defined(TARGET_WORDS_BIGENDIAN)
+         r = s[1];
+         g = s[2];
+diff --git a/hw/display/vga_template.h b/hw/display/vga_template.h
+index 6cfae56..90ec9c2 100644
+--- a/hw/display/vga_template.h
++++ b/hw/display/vga_template.h
+@@ -361,7 +361,7 @@ static void glue(vga_draw_line15_, PIXEL_NAME)(VGACommonState *s1, uint8_t *d,
+ 
+     w = width;
+     do {
+-        v = lduw_raw((void *)s);
++        v = lduw_p((void *)s);
+         r = (v >> 7) & 0xf8;
+         g = (v >> 2) & 0xf8;
+         b = (v << 3) & 0xf8;
+@@ -386,7 +386,7 @@ static void glue(vga_draw_line16_, PIXEL_NAME)(VGACommonState *s1, uint8_t *d,
+ 
+     w = width;
+     do {
+-        v = lduw_raw((void *)s);
++        v = lduw_p((void *)s);
+         r = (v >> 8) & 0xf8;
+         g = (v >> 3) & 0xfc;
+         b = (v << 3) & 0xf8;
+diff --git a/hw/mips/mips_fulong2e.c b/hw/mips/mips_fulong2e.c
+index 1aac93a..31c67c6 100644
+--- a/hw/mips/mips_fulong2e.c
++++ b/hw/mips/mips_fulong2e.c
+@@ -176,24 +176,24 @@ static void write_bootloader (CPUMIPSState *env, uint8_t *base, int64_t kernel_a
+     /* Small bootloader */
+     p = (uint32_t *) base;
+ 
+-    stl_raw(p++, 0x0bf00010);                                      /* j 0x1fc00040 */
+-    stl_raw(p++, 0x00000000);                                      /* nop */
++    stl_p(p++, 0x0bf00010);                                      /* j 0x1fc00040 */
++    stl_p(p++, 0x00000000);                                      /* nop */
+ 
+     /* Second part of the bootloader */
+     p = (uint32_t *) (base + 0x040);
+ 
+-    stl_raw(p++, 0x3c040000);                                      /* lui a0, 0 */
+-    stl_raw(p++, 0x34840002);                                      /* ori a0, a0, 2 */
+-    stl_raw(p++, 0x3c050000 | ((ENVP_ADDR >> 16) & 0xffff));       /* lui a1, high(ENVP_ADDR) */
+-    stl_raw(p++, 0x34a50000 | (ENVP_ADDR & 0xffff));               /* ori a1, a0, low(ENVP_ADDR) */
+-    stl_raw(p++, 0x3c060000 | (((ENVP_ADDR + 8) >> 16) & 0xffff)); /* lui a2, high(ENVP_ADDR + 8) */
+-    stl_raw(p++, 0x34c60000 | ((ENVP_ADDR + 8) & 0xffff));         /* ori a2, a2, low(ENVP_ADDR + 8) */
+-    stl_raw(p++, 0x3c070000 | (loaderparams.ram_size >> 16));      /* lui a3, high(env->ram_size) */
+-    stl_raw(p++, 0x34e70000 | (loaderparams.ram_size & 0xffff));   /* ori a3, a3, low(env->ram_size) */
+-    stl_raw(p++, 0x3c1f0000 | ((kernel_addr >> 16) & 0xffff));     /* lui ra, high(kernel_addr) */;
+-    stl_raw(p++, 0x37ff0000 | (kernel_addr & 0xffff));             /* ori ra, ra, low(kernel_addr) */
+-    stl_raw(p++, 0x03e00008);                                      /* jr ra */
+-    stl_raw(p++, 0x00000000);                                      /* nop */
++    stl_p(p++, 0x3c040000);                                      /* lui a0, 0 */
++    stl_p(p++, 0x34840002);                                      /* ori a0, a0, 2 */
++    stl_p(p++, 0x3c050000 | ((ENVP_ADDR >> 16) & 0xffff));       /* lui a1, high(ENVP_ADDR) */
++    stl_p(p++, 0x34a50000 | (ENVP_ADDR & 0xffff));               /* ori a1, a0, low(ENVP_ADDR) */
++    stl_p(p++, 0x3c060000 | (((ENVP_ADDR + 8) >> 16) & 0xffff)); /* lui a2, high(ENVP_ADDR + 8) */
++    stl_p(p++, 0x34c60000 | ((ENVP_ADDR + 8) & 0xffff));         /* ori a2, a2, low(ENVP_ADDR + 8) */
++    stl_p(p++, 0x3c070000 | (loaderparams.ram_size >> 16));      /* lui a3, high(env->ram_size) */
++    stl_p(p++, 0x34e70000 | (loaderparams.ram_size & 0xffff));   /* ori a3, a3, low(env->ram_size) */
++    stl_p(p++, 0x3c1f0000 | ((kernel_addr >> 16) & 0xffff));     /* lui ra, high(kernel_addr) */;
++    stl_p(p++, 0x37ff0000 | (kernel_addr & 0xffff));             /* ori ra, ra, low(kernel_addr) */
++    stl_p(p++, 0x03e00008);                                      /* jr ra */
++    stl_p(p++, 0x00000000);                                      /* nop */
+ }
+ 
+ 
+diff --git a/hw/mips/mips_malta.c b/hw/mips/mips_malta.c
+index 9d521cc..cf719de 100644
+--- a/hw/mips/mips_malta.c
++++ b/hw/mips/mips_malta.c
+@@ -514,136 +514,136 @@ static void write_bootloader (CPUMIPSState *env, uint8_t *base,
+ 
+     /* Small bootloader */
+     p = (uint32_t *)base;
+-    stl_raw(p++, 0x0bf00160);                                      /* j 0x1fc00580 */
+-    stl_raw(p++, 0x00000000);                                      /* nop */
++    stl_p(p++, 0x0bf00160);                                      /* j 0x1fc00580 */
++    stl_p(p++, 0x00000000);                                      /* nop */
+ 
+     /* YAMON service vector */
+-    stl_raw(base + 0x500, 0xbfc00580);      /* start: */
+-    stl_raw(base + 0x504, 0xbfc0083c);      /* print_count: */
+-    stl_raw(base + 0x520, 0xbfc00580);      /* start: */
+-    stl_raw(base + 0x52c, 0xbfc00800);      /* flush_cache: */
+-    stl_raw(base + 0x534, 0xbfc00808);      /* print: */
+-    stl_raw(base + 0x538, 0xbfc00800);      /* reg_cpu_isr: */
+-    stl_raw(base + 0x53c, 0xbfc00800);      /* unred_cpu_isr: */
+-    stl_raw(base + 0x540, 0xbfc00800);      /* reg_ic_isr: */
+-    stl_raw(base + 0x544, 0xbfc00800);      /* unred_ic_isr: */
+-    stl_raw(base + 0x548, 0xbfc00800);      /* reg_esr: */
+-    stl_raw(base + 0x54c, 0xbfc00800);      /* unreg_esr: */
+-    stl_raw(base + 0x550, 0xbfc00800);      /* getchar: */
+-    stl_raw(base + 0x554, 0xbfc00800);      /* syscon_read: */
++    stl_p(base + 0x500, 0xbfc00580);      /* start: */
++    stl_p(base + 0x504, 0xbfc0083c);      /* print_count: */
++    stl_p(base + 0x520, 0xbfc00580);      /* start: */
++    stl_p(base + 0x52c, 0xbfc00800);      /* flush_cache: */
++    stl_p(base + 0x534, 0xbfc00808);      /* print: */
++    stl_p(base + 0x538, 0xbfc00800);      /* reg_cpu_isr: */
++    stl_p(base + 0x53c, 0xbfc00800);      /* unred_cpu_isr: */
++    stl_p(base + 0x540, 0xbfc00800);      /* reg_ic_isr: */
++    stl_p(base + 0x544, 0xbfc00800);      /* unred_ic_isr: */
++    stl_p(base + 0x548, 0xbfc00800);      /* reg_esr: */
++    stl_p(base + 0x54c, 0xbfc00800);      /* unreg_esr: */
++    stl_p(base + 0x550, 0xbfc00800);      /* getchar: */
++    stl_p(base + 0x554, 0xbfc00800);      /* syscon_read: */
+ 
+ 
+     /* Second part of the bootloader */
+     p = (uint32_t *) (base + 0x580);
+-    stl_raw(p++, 0x24040002);                                      /* addiu a0, zero, 2 */
+-    stl_raw(p++, 0x3c1d0000 | (((ENVP_ADDR - 64) >> 16) & 0xffff)); /* lui sp, high(ENVP_ADDR) */
+-    stl_raw(p++, 0x37bd0000 | ((ENVP_ADDR - 64) & 0xffff));        /* ori sp, sp, low(ENVP_ADDR) */
+-    stl_raw(p++, 0x3c050000 | ((ENVP_ADDR >> 16) & 0xffff));       /* lui a1, high(ENVP_ADDR) */
+-    stl_raw(p++, 0x34a50000 | (ENVP_ADDR & 0xffff));               /* ori a1, a1, low(ENVP_ADDR) */
+-    stl_raw(p++, 0x3c060000 | (((ENVP_ADDR + 8) >> 16) & 0xffff)); /* lui a2, high(ENVP_ADDR + 8) */
+-    stl_raw(p++, 0x34c60000 | ((ENVP_ADDR + 8) & 0xffff));         /* ori a2, a2, low(ENVP_ADDR + 8) */
+-    stl_raw(p++, 0x3c070000 | (loaderparams.ram_size >> 16));     /* lui a3, high(ram_size) */
+-    stl_raw(p++, 0x34e70000 | (loaderparams.ram_size & 0xffff));  /* ori a3, a3, low(ram_size) */
++    stl_p(p++, 0x24040002);                                      /* addiu a0, zero, 2 */
++    stl_p(p++, 0x3c1d0000 | (((ENVP_ADDR - 64) >> 16) & 0xffff)); /* lui sp, high(ENVP_ADDR) */
++    stl_p(p++, 0x37bd0000 | ((ENVP_ADDR - 64) & 0xffff));        /* ori sp, sp, low(ENVP_ADDR) */
++    stl_p(p++, 0x3c050000 | ((ENVP_ADDR >> 16) & 0xffff));       /* lui a1, high(ENVP_ADDR) */
++    stl_p(p++, 0x34a50000 | (ENVP_ADDR & 0xffff));               /* ori a1, a1, low(ENVP_ADDR) */
++    stl_p(p++, 0x3c060000 | (((ENVP_ADDR + 8) >> 16) & 0xffff)); /* lui a2, high(ENVP_ADDR + 8) */
++    stl_p(p++, 0x34c60000 | ((ENVP_ADDR + 8) & 0xffff));         /* ori a2, a2, low(ENVP_ADDR + 8) */
++    stl_p(p++, 0x3c070000 | (loaderparams.ram_size >> 16));     /* lui a3, high(ram_size) */
++    stl_p(p++, 0x34e70000 | (loaderparams.ram_size & 0xffff));  /* ori a3, a3, low(ram_size) */
+ 
+     /* Load BAR registers as done by YAMON */
+-    stl_raw(p++, 0x3c09b400);                                      /* lui t1, 0xb400 */
++    stl_p(p++, 0x3c09b400);                                      /* lui t1, 0xb400 */
+ 
+ #ifdef TARGET_WORDS_BIGENDIAN
+-    stl_raw(p++, 0x3c08df00);                                      /* lui t0, 0xdf00 */
++    stl_p(p++, 0x3c08df00);                                      /* lui t0, 0xdf00 */
+ #else
+-    stl_raw(p++, 0x340800df);                                      /* ori t0, r0, 0x00df */
++    stl_p(p++, 0x340800df);                                      /* ori t0, r0, 0x00df */
+ #endif
+-    stl_raw(p++, 0xad280068);                                      /* sw t0, 0x0068(t1) */
++    stl_p(p++, 0xad280068);                                      /* sw t0, 0x0068(t1) */
+ 
+-    stl_raw(p++, 0x3c09bbe0);                                      /* lui t1, 0xbbe0 */
++    stl_p(p++, 0x3c09bbe0);                                      /* lui t1, 0xbbe0 */
+ 
+ #ifdef TARGET_WORDS_BIGENDIAN
+-    stl_raw(p++, 0x3c08c000);                                      /* lui t0, 0xc000 */
++    stl_p(p++, 0x3c08c000);                                      /* lui t0, 0xc000 */
+ #else
+-    stl_raw(p++, 0x340800c0);                                      /* ori t0, r0, 0x00c0 */
++    stl_p(p++, 0x340800c0);                                      /* ori t0, r0, 0x00c0 */
+ #endif
+-    stl_raw(p++, 0xad280048);                                      /* sw t0, 0x0048(t1) */
++    stl_p(p++, 0xad280048);                                      /* sw t0, 0x0048(t1) */
+ #ifdef TARGET_WORDS_BIGENDIAN
+-    stl_raw(p++, 0x3c084000);                                      /* lui t0, 0x4000 */
++    stl_p(p++, 0x3c084000);                                      /* lui t0, 0x4000 */
+ #else
+-    stl_raw(p++, 0x34080040);                                      /* ori t0, r0, 0x0040 */
++    stl_p(p++, 0x34080040);                                      /* ori t0, r0, 0x0040 */
+ #endif
+-    stl_raw(p++, 0xad280050);                                      /* sw t0, 0x0050(t1) */
++    stl_p(p++, 0xad280050);                                      /* sw t0, 0x0050(t1) */
+ 
+ #ifdef TARGET_WORDS_BIGENDIAN
+-    stl_raw(p++, 0x3c088000);                                      /* lui t0, 0x8000 */
++    stl_p(p++, 0x3c088000);                                      /* lui t0, 0x8000 */
+ #else
+-    stl_raw(p++, 0x34080080);                                      /* ori t0, r0, 0x0080 */
++    stl_p(p++, 0x34080080);                                      /* ori t0, r0, 0x0080 */
+ #endif
+-    stl_raw(p++, 0xad280058);                                      /* sw t0, 0x0058(t1) */
++    stl_p(p++, 0xad280058);                                      /* sw t0, 0x0058(t1) */
+ #ifdef TARGET_WORDS_BIGENDIAN
+-    stl_raw(p++, 0x3c083f00);                                      /* lui t0, 0x3f00 */
++    stl_p(p++, 0x3c083f00);                                      /* lui t0, 0x3f00 */
+ #else
+-    stl_raw(p++, 0x3408003f);                                      /* ori t0, r0, 0x003f */
++    stl_p(p++, 0x3408003f);                                      /* ori t0, r0, 0x003f */
+ #endif
+-    stl_raw(p++, 0xad280060);                                      /* sw t0, 0x0060(t1) */
++    stl_p(p++, 0xad280060);                                      /* sw t0, 0x0060(t1) */
+ 
+ #ifdef TARGET_WORDS_BIGENDIAN
+-    stl_raw(p++, 0x3c08c100);                                      /* lui t0, 0xc100 */
++    stl_p(p++, 0x3c08c100);                                      /* lui t0, 0xc100 */
+ #else
+-    stl_raw(p++, 0x340800c1);                                      /* ori t0, r0, 0x00c1 */
++    stl_p(p++, 0x340800c1);                                      /* ori t0, r0, 0x00c1 */
+ #endif
+-    stl_raw(p++, 0xad280080);                                      /* sw t0, 0x0080(t1) */
++    stl_p(p++, 0xad280080);                                      /* sw t0, 0x0080(t1) */
+ #ifdef TARGET_WORDS_BIGENDIAN
+-    stl_raw(p++, 0x3c085e00);                                      /* lui t0, 0x5e00 */
++    stl_p(p++, 0x3c085e00);                                      /* lui t0, 0x5e00 */
+ #else
+-    stl_raw(p++, 0x3408005e);                                      /* ori t0, r0, 0x005e */
++    stl_p(p++, 0x3408005e);                                      /* ori t0, r0, 0x005e */
+ #endif
+-    stl_raw(p++, 0xad280088);                                      /* sw t0, 0x0088(t1) */
++    stl_p(p++, 0xad280088);                                      /* sw t0, 0x0088(t1) */
+ 
+     /* Jump to kernel code */
+-    stl_raw(p++, 0x3c1f0000 | ((kernel_entry >> 16) & 0xffff));    /* lui ra, high(kernel_entry) */
+-    stl_raw(p++, 0x37ff0000 | (kernel_entry & 0xffff));            /* ori ra, ra, low(kernel_entry) */
+-    stl_raw(p++, 0x03e00008);                                      /* jr ra */
+-    stl_raw(p++, 0x00000000);                                      /* nop */
++    stl_p(p++, 0x3c1f0000 | ((kernel_entry >> 16) & 0xffff));    /* lui ra, high(kernel_entry) */
++    stl_p(p++, 0x37ff0000 | (kernel_entry & 0xffff));            /* ori ra, ra, low(kernel_entry) */
++    stl_p(p++, 0x03e00008);                                      /* jr ra */
++    stl_p(p++, 0x00000000);                                      /* nop */
+ 
+     /* YAMON subroutines */
+     p = (uint32_t *) (base + 0x800);
+-    stl_raw(p++, 0x03e00008);                                     /* jr ra */
+-    stl_raw(p++, 0x24020000);                                     /* li v0,0 */
++    stl_p(p++, 0x03e00008);                                     /* jr ra */
++    stl_p(p++, 0x24020000);                                     /* li v0,0 */
+    /* 808 YAMON print */
+-    stl_raw(p++, 0x03e06821);                                     /* move t5,ra */
+-    stl_raw(p++, 0x00805821);                                     /* move t3,a0 */
+-    stl_raw(p++, 0x00a05021);                                     /* move t2,a1 */
+-    stl_raw(p++, 0x91440000);                                     /* lbu a0,0(t2) */
+-    stl_raw(p++, 0x254a0001);                                     /* addiu t2,t2,1 */
+-    stl_raw(p++, 0x10800005);                                     /* beqz a0,834 */
+-    stl_raw(p++, 0x00000000);                                     /* nop */
+-    stl_raw(p++, 0x0ff0021c);                                     /* jal 870 */
+-    stl_raw(p++, 0x00000000);                                     /* nop */
+-    stl_raw(p++, 0x08000205);                                     /* j 814 */
+-    stl_raw(p++, 0x00000000);                                     /* nop */
+-    stl_raw(p++, 0x01a00008);                                     /* jr t5 */
+-    stl_raw(p++, 0x01602021);                                     /* move a0,t3 */
++    stl_p(p++, 0x03e06821);                                     /* move t5,ra */
++    stl_p(p++, 0x00805821);                                     /* move t3,a0 */
++    stl_p(p++, 0x00a05021);                                     /* move t2,a1 */
++    stl_p(p++, 0x91440000);                                     /* lbu a0,0(t2) */
++    stl_p(p++, 0x254a0001);                                     /* addiu t2,t2,1 */
++    stl_p(p++, 0x10800005);                                     /* beqz a0,834 */
++    stl_p(p++, 0x00000000);                                     /* nop */
++    stl_p(p++, 0x0ff0021c);                                     /* jal 870 */
++    stl_p(p++, 0x00000000);                                     /* nop */
++    stl_p(p++, 0x08000205);                                     /* j 814 */
++    stl_p(p++, 0x00000000);                                     /* nop */
++    stl_p(p++, 0x01a00008);                                     /* jr t5 */
++    stl_p(p++, 0x01602021);                                     /* move a0,t3 */
+     /* 0x83c YAMON print_count */
+-    stl_raw(p++, 0x03e06821);                                     /* move t5,ra */
+-    stl_raw(p++, 0x00805821);                                     /* move t3,a0 */
+-    stl_raw(p++, 0x00a05021);                                     /* move t2,a1 */
+-    stl_raw(p++, 0x00c06021);                                     /* move t4,a2 */
+-    stl_raw(p++, 0x91440000);                                     /* lbu a0,0(t2) */
+-    stl_raw(p++, 0x0ff0021c);                                     /* jal 870 */
+-    stl_raw(p++, 0x00000000);                                     /* nop */
+-    stl_raw(p++, 0x254a0001);                                     /* addiu t2,t2,1 */
+-    stl_raw(p++, 0x258cffff);                                     /* addiu t4,t4,-1 */
+-    stl_raw(p++, 0x1580fffa);                                     /* bnez t4,84c */
+-    stl_raw(p++, 0x00000000);                                     /* nop */
+-    stl_raw(p++, 0x01a00008);                                     /* jr t5 */
+-    stl_raw(p++, 0x01602021);                                     /* move a0,t3 */
++    stl_p(p++, 0x03e06821);                                     /* move t5,ra */
++    stl_p(p++, 0x00805821);                                     /* move t3,a0 */
++    stl_p(p++, 0x00a05021);                                     /* move t2,a1 */
++    stl_p(p++, 0x00c06021);                                     /* move t4,a2 */
++    stl_p(p++, 0x91440000);                                     /* lbu a0,0(t2) */
++    stl_p(p++, 0x0ff0021c);                                     /* jal 870 */
++    stl_p(p++, 0x00000000);                                     /* nop */
++    stl_p(p++, 0x254a0001);                                     /* addiu t2,t2,1 */
++    stl_p(p++, 0x258cffff);                                     /* addiu t4,t4,-1 */
++    stl_p(p++, 0x1580fffa);                                     /* bnez t4,84c */
++    stl_p(p++, 0x00000000);                                     /* nop */
++    stl_p(p++, 0x01a00008);                                     /* jr t5 */
++    stl_p(p++, 0x01602021);                                     /* move a0,t3 */
+     /* 0x870 */
+-    stl_raw(p++, 0x3c08b800);                                     /* lui t0,0xb400 */
+-    stl_raw(p++, 0x350803f8);                                     /* ori t0,t0,0x3f8 */
+-    stl_raw(p++, 0x91090005);                                     /* lbu t1,5(t0) */
+-    stl_raw(p++, 0x00000000);                                     /* nop */
+-    stl_raw(p++, 0x31290040);                                     /* andi t1,t1,0x40 */
+-    stl_raw(p++, 0x1120fffc);                                     /* beqz t1,878 <outch+0x8> */
+-    stl_raw(p++, 0x00000000);                                     /* nop */
+-    stl_raw(p++, 0x03e00008);                                     /* jr ra */
+-    stl_raw(p++, 0xa1040000);                                     /* sb a0,0(t0) */
++    stl_p(p++, 0x3c08b800);                                     /* lui t0,0xb400 */
++    stl_p(p++, 0x350803f8);                                     /* ori t0,t0,0x3f8 */
++    stl_p(p++, 0x91090005);                                     /* lbu t1,5(t0) */
++    stl_p(p++, 0x00000000);                                     /* nop */
++    stl_p(p++, 0x31290040);                                     /* andi t1,t1,0x40 */
++    stl_p(p++, 0x1120fffc);                                     /* beqz t1,878 <outch+0x8> */
++    stl_p(p++, 0x00000000);                                     /* nop */
++    stl_p(p++, 0x03e00008);                                     /* jr ra */
++    stl_p(p++, 0xa1040000);                                     /* sb a0,0(t0) */
+ 
+ }
+ 
+diff --git a/hw/scsi/vhost-scsi.c b/hw/scsi/vhost-scsi.c
+index 5e3cc61..96c4fb7 100644
+--- a/hw/scsi/vhost-scsi.c
++++ b/hw/scsi/vhost-scsi.c
+@@ -164,8 +164,8 @@ static void vhost_scsi_set_config(VirtIODevice *vdev,
+     VirtIOSCSIConfig *scsiconf = (VirtIOSCSIConfig *)config;
+     VirtIOSCSICommon *vs = VIRTIO_SCSI_COMMON(vdev);
+ 
+-    if ((uint32_t) ldl_raw(&scsiconf->sense_size) != vs->sense_size ||
+-        (uint32_t) ldl_raw(&scsiconf->cdb_size) != vs->cdb_size) {
++    if ((uint32_t) ldl_p(&scsiconf->sense_size) != vs->sense_size ||
++        (uint32_t) ldl_p(&scsiconf->cdb_size) != vs->cdb_size) {
+         error_report("vhost-scsi does not support changing the sense data and CDB sizes");
+         exit(1);
+     }
+diff --git a/hw/scsi/virtio-scsi.c b/hw/scsi/virtio-scsi.c
+index 808eb54..0b2dc9c 100644
+--- a/hw/scsi/virtio-scsi.c
++++ b/hw/scsi/virtio-scsi.c
+@@ -423,16 +423,16 @@ static void virtio_scsi_get_config(VirtIODevice *vdev,
+     VirtIOSCSIConfig *scsiconf = (VirtIOSCSIConfig *)config;
+     VirtIOSCSICommon *s = VIRTIO_SCSI_COMMON(vdev);
+ 
+-    stl_raw(&scsiconf->num_queues, s->conf.num_queues);
+-    stl_raw(&scsiconf->seg_max, 128 - 2);
+-    stl_raw(&scsiconf->max_sectors, s->conf.max_sectors);
+-    stl_raw(&scsiconf->cmd_per_lun, s->conf.cmd_per_lun);
+-    stl_raw(&scsiconf->event_info_size, sizeof(VirtIOSCSIEvent));
+-    stl_raw(&scsiconf->sense_size, s->sense_size);
+-    stl_raw(&scsiconf->cdb_size, s->cdb_size);
+-    stw_raw(&scsiconf->max_channel, VIRTIO_SCSI_MAX_CHANNEL);
+-    stw_raw(&scsiconf->max_target, VIRTIO_SCSI_MAX_TARGET);
+-    stl_raw(&scsiconf->max_lun, VIRTIO_SCSI_MAX_LUN);
++    stl_p(&scsiconf->num_queues, s->conf.num_queues);
++    stl_p(&scsiconf->seg_max, 128 - 2);
++    stl_p(&scsiconf->max_sectors, s->conf.max_sectors);
++    stl_p(&scsiconf->cmd_per_lun, s->conf.cmd_per_lun);
++    stl_p(&scsiconf->event_info_size, sizeof(VirtIOSCSIEvent));
++    stl_p(&scsiconf->sense_size, s->sense_size);
++    stl_p(&scsiconf->cdb_size, s->cdb_size);
++    stw_p(&scsiconf->max_channel, VIRTIO_SCSI_MAX_CHANNEL);
++    stw_p(&scsiconf->max_target, VIRTIO_SCSI_MAX_TARGET);
++    stl_p(&scsiconf->max_lun, VIRTIO_SCSI_MAX_LUN);
+ }
+ 
+ static void virtio_scsi_set_config(VirtIODevice *vdev,
+@@ -441,14 +441,14 @@ static void virtio_scsi_set_config(VirtIODevice *vdev,
+     VirtIOSCSIConfig *scsiconf = (VirtIOSCSIConfig *)config;
+     VirtIOSCSICommon *vs = VIRTIO_SCSI_COMMON(vdev);
+ 
+-    if ((uint32_t) ldl_raw(&scsiconf->sense_size) >= 65536 ||
+-        (uint32_t) ldl_raw(&scsiconf->cdb_size) >= 256) {
++    if ((uint32_t) ldl_p(&scsiconf->sense_size) >= 65536 ||
++        (uint32_t) ldl_p(&scsiconf->cdb_size) >= 256) {
+         error_report("bad data written to virtio-scsi configuration space");
+         exit(1);
+     }
+ 
+-    vs->sense_size = ldl_raw(&scsiconf->sense_size);
+-    vs->cdb_size = ldl_raw(&scsiconf->cdb_size);
++    vs->sense_size = ldl_p(&scsiconf->sense_size);
++    vs->cdb_size = ldl_p(&scsiconf->cdb_size);
+ }
+ 
+ static uint32_t virtio_scsi_get_features(VirtIODevice *vdev,
+-- 
+1.8.3.1
+

@@ -1,0 +1,224 @@
+From 04981be7338ba396410cdab91612c17d6383d3a3 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Tue, 18 Nov 2014 15:30:14 +0100
+Subject: [PATCH 35/41] block/raw-posix: Try both FIEMAP and SEEK_HOLE
+
+Message-id: <1416324620-16229-2-git-send-email-mreitz@redhat.com>
+Patchwork-id: 62436
+O-Subject: [RHEL-7.1/7.0.z qemu-kvm PATCH v3 1/7] block/raw-posix: Try both FIEMAP and SEEK_HOLE
+Bugzilla: 1160237
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+The current version of raw-posix always uses ioctl(FS_IOC_FIEMAP) if
+FIEMAP is available; lseek with SEEK_HOLE/SEEK_DATA are not even
+compiled in in this case. However, there may be implementations which
+support the latter but not the former (e.g., NFSv4.2) as well as vice
+versa.
+
+To cover both cases, try FIEMAP first (as this will return -ENOTSUP if
+not supported instead of returning a failsafe value (everything
+allocated as a single extent)) and if that does not work, fall back to
+SEEK_HOLE/SEEK_DATA.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 4f11aa8a40351b28c0e67c7276e0003b38cc46ac)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/raw-posix.c | 127 +++++++++++++++++++++++++++++++++---------------------
+ 1 file changed, 77 insertions(+), 50 deletions(-)
+
+diff --git a/block/raw-posix.c b/block/raw-posix.c
+index cfe7452..5f57412 100644
+--- a/block/raw-posix.c
++++ b/block/raw-posix.c
+@@ -147,6 +147,9 @@ typedef struct BDRVRawState {
+     bool has_discard:1;
+     bool has_write_zeroes:1;
+     bool discard_zeroes:1;
++#ifdef CONFIG_FIEMAP
++    bool skip_fiemap;
++#endif
+ } BDRVRawState;
+ 
+ typedef struct BDRVRawReopenState {
+@@ -1305,53 +1308,29 @@ out:
+     return result;
+ }
+ 
+-/*
+- * Returns true iff the specified sector is present in the disk image. Drivers
+- * not implementing the functionality are assumed to not support backing files,
+- * hence all their sectors are reported as allocated.
+- *
+- * If 'sector_num' is beyond the end of the disk image the return value is 0
+- * and 'pnum' is set to 0.
+- *
+- * 'pnum' is set to the number of sectors (including and immediately following
+- * the specified sector) that are known to be in the same
+- * allocated/unallocated state.
+- *
+- * 'nb_sectors' is the max value 'pnum' should be set to.  If nb_sectors goes
+- * beyond the end of the disk image it will be clamped.
+- */
+-static int64_t coroutine_fn raw_co_get_block_status(BlockDriverState *bs,
+-                                            int64_t sector_num,
+-                                            int nb_sectors, int *pnum)
++static int64_t try_fiemap(BlockDriverState *bs, off_t start, off_t *data,
++                          off_t *hole, int nb_sectors, int *pnum)
+ {
+-    off_t start, data, hole;
+-    int64_t ret;
+-
+-    ret = fd_open(bs);
+-    if (ret < 0) {
+-        return ret;
+-    }
+-
+-    start = sector_num * BDRV_SECTOR_SIZE;
+-    ret = BDRV_BLOCK_DATA | BDRV_BLOCK_OFFSET_VALID | start;
+-
+ #ifdef CONFIG_FIEMAP
+-
+     BDRVRawState *s = bs->opaque;
++    int64_t ret = BDRV_BLOCK_DATA | BDRV_BLOCK_OFFSET_VALID | start;
+     struct {
+         struct fiemap fm;
+         struct fiemap_extent fe;
+     } f;
+ 
++    if (s->skip_fiemap) {
++        return -ENOTSUP;
++    }
++
+     f.fm.fm_start = start;
+     f.fm.fm_length = (int64_t)nb_sectors * BDRV_SECTOR_SIZE;
+     f.fm.fm_flags = 0;
+     f.fm.fm_extent_count = 1;
+     f.fm.fm_reserved = 0;
+     if (ioctl(s->fd, FS_IOC_FIEMAP, &f) == -1) {
+-        /* Assume everything is allocated.  */
+-        *pnum = nb_sectors;
+-        return ret;
++        s->skip_fiemap = true;
++        return -errno;
+     }
+ 
+     if (f.fm.fm_mapped_extents == 0) {
+@@ -1359,44 +1338,92 @@ static int64_t coroutine_fn raw_co_get_block_status(BlockDriverState *bs,
+          * f.fm.fm_start + f.fm.fm_length must be clamped to the file size!
+          */
+         off_t length = lseek(s->fd, 0, SEEK_END);
+-        hole = f.fm.fm_start;
+-        data = MIN(f.fm.fm_start + f.fm.fm_length, length);
++        *hole = f.fm.fm_start;
++        *data = MIN(f.fm.fm_start + f.fm.fm_length, length);
+     } else {
+-        data = f.fe.fe_logical;
+-        hole = f.fe.fe_logical + f.fe.fe_length;
++        *data = f.fe.fe_logical;
++        *hole = f.fe.fe_logical + f.fe.fe_length;
+         if (f.fe.fe_flags & FIEMAP_EXTENT_UNWRITTEN) {
+             ret |= BDRV_BLOCK_ZERO;
+         }
+     }
+ 
+-#elif defined SEEK_HOLE && defined SEEK_DATA
++    return ret;
++#else
++    return -ENOTSUP;
++#endif
++}
+ 
++static int64_t try_seek_hole(BlockDriverState *bs, off_t start, off_t *data,
++                             off_t *hole, int *pnum)
++{
++#if defined SEEK_HOLE && defined SEEK_DATA
+     BDRVRawState *s = bs->opaque;
+ 
+-    hole = lseek(s->fd, start, SEEK_HOLE);
+-    if (hole == -1) {
++    *hole = lseek(s->fd, start, SEEK_HOLE);
++    if (*hole == -1) {
+         /* -ENXIO indicates that sector_num was past the end of the file.
+          * There is a virtual hole there.  */
+         assert(errno != -ENXIO);
+ 
+-        /* Most likely EINVAL.  Assume everything is allocated.  */
+-        *pnum = nb_sectors;
+-        return ret;
++        return -errno;
+     }
+ 
+-    if (hole > start) {
+-        data = start;
++    if (*hole > start) {
++        *data = start;
+     } else {
+         /* On a hole.  We need another syscall to find its end.  */
+-        data = lseek(s->fd, start, SEEK_DATA);
+-        if (data == -1) {
+-            data = lseek(s->fd, 0, SEEK_END);
++        *data = lseek(s->fd, start, SEEK_DATA);
++        if (*data == -1) {
++            *data = lseek(s->fd, 0, SEEK_END);
+         }
+     }
++
++    return BDRV_BLOCK_DATA | BDRV_BLOCK_OFFSET_VALID | start;
+ #else
+-    data = 0;
+-    hole = start + nb_sectors * BDRV_SECTOR_SIZE;
++    return -ENOTSUP;
+ #endif
++}
++
++/*
++ * Returns true iff the specified sector is present in the disk image. Drivers
++ * not implementing the functionality are assumed to not support backing files,
++ * hence all their sectors are reported as allocated.
++ *
++ * If 'sector_num' is beyond the end of the disk image the return value is 0
++ * and 'pnum' is set to 0.
++ *
++ * 'pnum' is set to the number of sectors (including and immediately following
++ * the specified sector) that are known to be in the same
++ * allocated/unallocated state.
++ *
++ * 'nb_sectors' is the max value 'pnum' should be set to.  If nb_sectors goes
++ * beyond the end of the disk image it will be clamped.
++ */
++static int64_t coroutine_fn raw_co_get_block_status(BlockDriverState *bs,
++                                                    int64_t sector_num,
++                                                    int nb_sectors, int *pnum)
++{
++    off_t start, data = 0, hole = 0;
++    int64_t ret;
++
++    ret = fd_open(bs);
++    if (ret < 0) {
++        return ret;
++    }
++
++    start = sector_num * BDRV_SECTOR_SIZE;
++
++    ret = try_fiemap(bs, start, &data, &hole, nb_sectors, pnum);
++    if (ret < 0) {
++        ret = try_seek_hole(bs, start, &data, &hole, pnum);
++        if (ret < 0) {
++            /* Assume everything is allocated. */
++            data = 0;
++            hole = start + nb_sectors * BDRV_SECTOR_SIZE;
++            ret = BDRV_BLOCK_DATA | BDRV_BLOCK_OFFSET_VALID | start;
++        }
++    }
+ 
+     if (data <= start) {
+         /* On a data extent, compute sectors to the end of the extent.  */
+-- 
+1.8.3.1
+

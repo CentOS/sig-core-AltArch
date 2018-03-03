@@ -1,0 +1,63 @@
+From 11ef790c7cca491bba62d8cb94018c1cf78e033c Mon Sep 17 00:00:00 2001
+From: Juan Quintela <quintela@redhat.com>
+Date: Tue, 14 Jan 2014 15:07:36 +0100
+Subject: [PATCH 25/40] memory: use find_next_bit() to find dirty bits
+
+RH-Author: Juan Quintela <quintela@redhat.com>
+Message-id: <1389712071-23303-26-git-send-email-quintela@redhat.com>
+Patchwork-id: 56680
+O-Subject: [RHEL7 qemu-kvm PATCH 25/40] memory: use find_next_bit() to find dirty bits
+Bugzilla: 997559
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+
+This operation is way faster than doing it bit by bit.
+
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Orit Wasserman <owasserm@redhat.com>
+(cherry picked from commit 1bafff0c7cb99972fd243464632eca0780c6a8f1)
+Signed-off-by: Juan Quintela <quintela@trasno.org>
+---
+ include/exec/memory-internal.h | 16 ++++++----------
+ 1 file changed, 6 insertions(+), 10 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ include/exec/memory-internal.h |   16 ++++++----------
+ 1 files changed, 6 insertions(+), 10 deletions(-)
+
+diff --git a/include/exec/memory-internal.h b/include/exec/memory-internal.h
+index caff5b4..1eda526 100644
+--- a/include/exec/memory-internal.h
++++ b/include/exec/memory-internal.h
+@@ -53,19 +53,15 @@ static inline bool cpu_physical_memory_get_dirty(ram_addr_t start,
+                                                  ram_addr_t length,
+                                                  unsigned client)
+ {
+-    ram_addr_t addr, end;
++    unsigned long end, page, next;
+ 
+     assert(client < DIRTY_MEMORY_NUM);
+ 
+-    end = TARGET_PAGE_ALIGN(start + length);
+-    start &= TARGET_PAGE_MASK;
+-    for (addr = start; addr < end; addr += TARGET_PAGE_SIZE) {
+-        if (test_bit(addr >> TARGET_PAGE_BITS,
+-                     ram_list.dirty_memory[client])) {
+-            return true;
+-        }
+-    }
+-    return false;
++    end = TARGET_PAGE_ALIGN(start + length) >> TARGET_PAGE_BITS;
++    page = start >> TARGET_PAGE_BITS;
++    next = find_next_bit(ram_list.dirty_memory[client], end, page);
++
++    return next < end;
+ }
+ 
+ static inline bool cpu_physical_memory_get_dirty_flag(ram_addr_t addr,
+-- 
+1.7.1
+

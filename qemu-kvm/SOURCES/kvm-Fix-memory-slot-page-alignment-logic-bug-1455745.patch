@@ -1,0 +1,61 @@
+From be6123e0eadd895a9fa47005df38c4dce655236c Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Tue, 6 Jun 2017 17:08:19 +0200
+Subject: [PATCH 1/6] kvm: Fix memory slot page alignment logic (bug#1455745)
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <20170606170819.18875-1-pbonzini@redhat.com>
+Patchwork-id: 75507
+O-Subject: [RHEL7.4 qemu-kvm PATCH] kvm: Fix memory slot page alignment logic (bug#1455745)
+Bugzilla: 1455745
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Alexander Graf <agraf@suse.de>
+
+Brew build: 13356300
+
+Memory slots have to be page aligned to get entered into KVM. There
+is existing logic that tries to ensure that we pad memory slots that
+are not page aligned to the biggest region that would still fit in the
+alignment requirements.
+
+Unfortunately, that logic is broken. It tries to calculate the start
+offset based on the region size.
+
+Fix up the logic to do the thing it was intended to do and document it
+properly in the comment above it.
+
+With this patch applied, I can successfully run an e500 guest with more
+than 3GB RAM (at which point RAM starts overlapping subpage memory regions).
+[Paolo: in RHEL's case, the issue was reported with assigned devices]
+
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Alexander Graf <agraf@suse.de>
+(cherry picked from commit f2a64032a14c642d0ddc9a7a846fc3d737deede5)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ kvm-all.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/kvm-all.c b/kvm-all.c
+index fc6e3ab..9486b9a 100644
+--- a/kvm-all.c
++++ b/kvm-all.c
+@@ -621,8 +621,10 @@ static void kvm_set_phys_mem(MemoryRegionSection *section, bool add)
+     unsigned delta;
+ 
+     /* kvm works in page size chunks, but the function may be called
+-       with sub-page size and unaligned start address. */
+-    delta = TARGET_PAGE_ALIGN(size) - size;
++       with sub-page size and unaligned start address. Pad the start
++       address to next and truncate size to previous page boundary. */
++    delta = (TARGET_PAGE_SIZE - (start_addr & ~TARGET_PAGE_MASK));
++    delta &= ~TARGET_PAGE_MASK;
+     if (delta > size) {
+         return;
+     }
+-- 
+1.8.3.1
+

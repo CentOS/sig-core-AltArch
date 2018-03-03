@@ -1,0 +1,86 @@
+From a38284209acf74b1e44b32deca45da2cf451ba68 Mon Sep 17 00:00:00 2001
+Message-Id: <a38284209acf74b1e44b32deca45da2cf451ba68.1418766606.git.jen@redhat.com>
+In-Reply-To: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+References: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 4 Dec 2014 00:05:01 -0600
+Subject: [CHANGE 07/31] vmdk: Check for overhead when opening
+To: rhvirt-patches@redhat.com,
+    jen@redhat.com
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1417651524-18041-8-git-send-email-famz@redhat.com>
+Patchwork-id: 62680
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v5 07/30] vmdk: Check for overhead when opening
+Bugzilla: 1134251
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+Report an error if file size is even smaller than metadata.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 34ceed81f9ca31829448276dafe3d9151d66962c)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Jeff E. Nelson <jen@redhat.com>
+---
+ block/vmdk.c               | 7 +++++++
+ tests/qemu-iotests/059     | 6 ++++++
+ tests/qemu-iotests/059.out | 5 +++++
+ 3 files changed, 18 insertions(+)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 4226baa..7ea3aef 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -636,6 +636,13 @@ static int vmdk_open_vmdk4(BlockDriverState *bs,
+     if (le32_to_cpu(header.flags) & VMDK4_FLAG_RGD) {
+         l1_backup_offset = le64_to_cpu(header.rgd_offset) << 9;
+     }
++    if (bdrv_getlength(file) <
++            le64_to_cpu(header.grain_offset) * BDRV_SECTOR_SIZE) {
++        error_report("File truncated, expecting at least %lld bytes",
++                le64_to_cpu(header.grain_offset) * BDRV_SECTOR_SIZE);
++        return -EINVAL;
++    }
++
+     ret = vmdk_add_extent(bs, file, false,
+                           le64_to_cpu(header.capacity),
+                           le64_to_cpu(header.gd_offset) << 9,
+diff --git a/tests/qemu-iotests/059 b/tests/qemu-iotests/059
+index dde4a59..71b7b49 100755
+--- a/tests/qemu-iotests/059
++++ b/tests/qemu-iotests/059
+@@ -98,6 +98,12 @@ EOF
+ _img_info
+ 
+ echo
++echo "=== Testing truncated sparse ==="
++IMGOPTS="subformat=monolithicSparse" _make_test_img 100G
++truncate -s 10M $TEST_IMG
++_img_info
++
++echo
+ echo "=== Testing version 3 ==="
+ _use_sample_img iotest-version3.vmdk.bz2
+ _img_info
+diff --git a/tests/qemu-iotests/059.out b/tests/qemu-iotests/059.out
+index 75d9858..f4ca52d 100644
+--- a/tests/qemu-iotests/059.out
++++ b/tests/qemu-iotests/059.out
+@@ -2043,6 +2043,11 @@ qemu-img: Could not open 'TEST_DIR/t.IMGFMT': Invalid extent lines:
+ RW 12582912 VMFS "dummy.IMGFMT" 1
+ 
+ 
++=== Testing truncated sparse ===
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=107374182400
++qemu-img: File truncated, expecting at least 13172736 bytes
++qemu-img: Could not open 'TEST_DIR/t.IMGFMT': Could not open 'TEST_DIR/t.IMGFMT': Wrong medium type
++
+ === Testing version 3 ===
+ image: TEST_DIR/iotest-version3.IMGFMT
+ file format: IMGFMT
+-- 
+2.1.0
+

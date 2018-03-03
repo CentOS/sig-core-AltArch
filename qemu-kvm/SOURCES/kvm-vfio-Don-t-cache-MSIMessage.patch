@@ -1,0 +1,78 @@
+From cc5b2c1e8ea83b1d1e377993c302322beb37bc50 Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Thu, 7 Aug 2014 21:03:20 +0200
+Subject: [PATCH 7/7] vfio: Don't cache MSIMessage
+
+Message-id: <20140807210320.11689.35203.stgit@gimli.home>
+Patchwork-id: 60483
+O-Subject: [RHEL7.0/z qemu-kvm PATCH v2 6/6] vfio: Don't cache MSIMessage
+Bugzilla: 1098976
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Commit 40509f7f added a test to avoid updating KVM MSI routes when the
+MSIMessage is unchanged and f4d45d47 switched to relying on this
+rather than doing our own comparison.  Our cached msg is effectively
+unused now.  Remove it.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c | 8 ++------
+ 1 file changed, 2 insertions(+), 6 deletions(-)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index 688e2ef..abaa4c1 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -131,7 +131,6 @@ typedef struct VFIOMSIVector {
+     EventNotifier interrupt;
+     EventNotifier kvm_interrupt;
+     struct VFIODevice *vdev; /* back pointer to device */
+-    MSIMessage msg; /* cache the MSI message so we know when it changes */
+     int virq;
+     bool use;
+ } VFIOMSIVector;
+@@ -725,7 +724,6 @@ static void vfio_add_kvm_msi_virq(VFIOMSIVector *vector, MSIMessage *msg,
+         return;
+     }
+ 
+-    vector->msg = *msg;
+     vector->virq = virq;
+ }
+ 
+@@ -741,7 +739,6 @@ static void vfio_remove_kvm_msi_virq(VFIOMSIVector *vector)
+ static void vfio_update_kvm_msi_virq(VFIOMSIVector *vector, MSIMessage msg)
+ {
+     kvm_irqchip_update_msi_route(kvm_state, vector->virq, msg);
+-    vector->msg = msg;
+ }
+ 
+ static int vfio_msix_vector_do_use(PCIDevice *pdev, unsigned int nr,
+@@ -920,6 +917,7 @@ retry:
+ 
+     for (i = 0; i < vdev->nr_vectors; i++) {
+         VFIOMSIVector *vector = &vdev->msi_vectors[i];
++        MSIMessage msg = msi_get_message(&vdev->pdev, i);
+ 
+         vector->vdev = vdev;
+         vector->virq = -1;
+@@ -932,13 +930,11 @@ retry:
+         qemu_set_fd_handler(event_notifier_get_fd(&vector->interrupt),
+                             vfio_msi_interrupt, NULL, vector);
+ 
+-        vector->msg = msi_get_message(&vdev->pdev, i);
+-
+         /*
+          * Attempt to enable route through KVM irqchip,
+          * default to userspace handling if unavailable.
+          */
+-        vfio_add_kvm_msi_virq(vector, &vector->msg, false);
++        vfio_add_kvm_msi_virq(vector, &msg, false);
+     }
+ 
+     /* Set interrupt type prior to possible interrupts */
+-- 
+1.8.3.1
+

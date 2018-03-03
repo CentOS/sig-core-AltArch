@@ -1,0 +1,55 @@
+From e892a0cc154fecadbd209c4cac1ebcc9208173d9 Mon Sep 17 00:00:00 2001
+From: Amos Kong <akong@redhat.com>
+Date: Mon, 4 Aug 2014 04:12:07 +0200
+Subject: [PATCH 1/4] virtio-net: Do not filter VLANs without F_CTRL_VLAN
+
+Message-id: <1407125528-27862-2-git-send-email-akong@redhat.com>
+Patchwork-id: 60415
+O-Subject: [RHEL-7.1/7.0.z qemu-kvm PATCH 1/2] virtio-net: Do not filter VLANs without F_CTRL_VLAN
+Bugzilla: 1065724
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Xiao Wang <jasowang@redhat.com>
+RH-Acked-by: Vlad Yasevich <vyasevic@redhat.com>
+
+From: Stefan Fritsch <sf@sfritsch.de>
+
+If VIRTIO_NET_F_CTRL_VLAN is not negotiated, do not filter out all
+VLAN-tagged packets but send them to the guest.
+
+This fixes VLANs with OpenBSD guests (and probably NetBSD, too, because
+the OpenBSD driver started as a port from NetBSD).
+
+Signed-off-by: Stefan Fritsch <sf@sfritsch.de>
+Signed-off-by: Amos Kong <akong@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 0b1eaa8803e680de9a05727355dfe3d306b81e17)
+---
+ hw/net/virtio-net.c |    6 ++++++
+ 1 files changed, 6 insertions(+), 0 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/net/virtio-net.c |    6 ++++++
+ 1 files changed, 6 insertions(+), 0 deletions(-)
+
+diff --git a/hw/net/virtio-net.c b/hw/net/virtio-net.c
+index f72be9f..8e58139 100644
+--- a/hw/net/virtio-net.c
++++ b/hw/net/virtio-net.c
+@@ -490,6 +490,12 @@ static void virtio_net_set_features(VirtIODevice *vdev, uint32_t features)
+         }
+         vhost_net_ack_features(tap_get_vhost_net(nc->peer), features);
+     }
++
++    if ((1 << VIRTIO_NET_F_CTRL_VLAN) & features) {
++        memset(n->vlans, 0, MAX_VLAN >> 3);
++    } else {
++        memset(n->vlans, 0xff, MAX_VLAN >> 3);
++    }
+ }
+ 
+ static int virtio_net_handle_rx_mode(VirtIONet *n, uint8_t cmd,
+-- 
+1.7.1
+

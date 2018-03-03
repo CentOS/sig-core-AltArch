@@ -1,0 +1,66 @@
+From 40d8624f4a90769b60ee567035f8231b64c10011 Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Thu, 23 Feb 2017 14:29:34 +0100
+Subject: [PATCH 04/17] target-i386: kvm_cpu_fill_host(): No need to check
+ level
+
+RH-Author: Eduardo Habkost <ehabkost@redhat.com>
+Message-id: <20170223142945.17790-4-ehabkost@redhat.com>
+Patchwork-id: 74035
+O-Subject: [RHEL-7.4 qemu-kvm PATCH v2 03/14] target-i386: kvm_cpu_fill_host(): No need to check level
+Bugzilla: 1382122
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+There's no need to check level (CPUID[0].EAX) before calling
+kvm_arch_get_supported_cpuid(s, 0x7, 0, R_EBX), because:
+
+ * The kernel won't return any entry for CPUID 7 if CPUID[0].EAX is < 7
+   on the host (See kvm_dev_ioctl_get_cpuid() on the kernel code);
+ * kvm_arch_get_supported_cpuid() will return 0 if no entry is returned
+   by the kernel for the requested leaf.
+
+This will simplify the kvm_cpu_fill_host() code a little.
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 7171a3933f2ee8cb984fd64c59ca081f39b943a4)
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/cpu.c | 18 ++++++------------
+ 1 file changed, 6 insertions(+), 12 deletions(-)
+
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index 8a49ff5..c82073e 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -1267,18 +1267,12 @@ static void kvm_cpu_fill_host(x86_def_t *x86_cpu_def)
+     x86_cpu_def->features[FEAT_1_ECX] =
+         kvm_arch_get_supported_cpuid(s, 0x1, 0, R_ECX);
+ 
+-    if (x86_cpu_def->level >= 7) {
+-        x86_cpu_def->features[FEAT_7_0_EBX] =
+-                    kvm_arch_get_supported_cpuid(s, 0x7, 0, R_EBX);
+-        x86_cpu_def->features[FEAT_7_0_ECX] =
+-                    kvm_arch_get_supported_cpuid(s, 0x7, 0, R_ECX);
+-        x86_cpu_def->features[FEAT_7_0_EDX] =
+-                    kvm_arch_get_supported_cpuid(s, 0x7, 0, R_EDX);
+-    } else {
+-        x86_cpu_def->features[FEAT_7_0_EBX] = 0;
+-        x86_cpu_def->features[FEAT_7_0_ECX] = 0;
+-        x86_cpu_def->features[FEAT_7_0_EDX] = 0;
+-    }
++    x86_cpu_def->features[FEAT_7_0_EBX] =
++                kvm_arch_get_supported_cpuid(s, 0x7, 0, R_EBX);
++    x86_cpu_def->features[FEAT_7_0_ECX] =
++                kvm_arch_get_supported_cpuid(s, 0x7, 0, R_ECX);
++    x86_cpu_def->features[FEAT_7_0_EDX] =
++                kvm_arch_get_supported_cpuid(s, 0x7, 0, R_EDX);
+     x86_cpu_def->features[FEAT_XSAVE] =
+                 kvm_arch_get_supported_cpuid(s, 0xd, 1, R_EAX);
+ 
+-- 
+1.8.3.1
+

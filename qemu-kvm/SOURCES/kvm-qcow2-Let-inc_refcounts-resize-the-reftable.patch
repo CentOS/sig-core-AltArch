@@ -1,0 +1,168 @@
+From f9a81072210afed390c21465ba973fc557105b79 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:22:18 +0200
+Subject: [PATCH 24/42] qcow2: Let inc_refcounts() resize the reftable
+
+Message-id: <1434212556-3927-25-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66043
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 24/42] qcow2: Let inc_refcounts() resize the reftable
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1129893
+
+Now that the refcount table can be passed around by reference, do that
+for inc_refcounts() (and subsequently check_refcounts_l1() and
+check_refcounts_l2()) and use it for resizing it when a cluster after
+the image end is encountered.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 641bb63cd6b003ab0ca2e312a014449037d71647)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-refcount.c | 57 +++++++++++++++++++++++++++++++-------------------
+ 1 file changed, 35 insertions(+), 22 deletions(-)
+
+diff --git a/block/qcow2-refcount.c b/block/qcow2-refcount.c
+index 4655fa2..7d03e65 100644
+--- a/block/qcow2-refcount.c
++++ b/block/qcow2-refcount.c
+@@ -1055,8 +1055,8 @@ fail:
+  */
+ static int inc_refcounts(BlockDriverState *bs,
+                          BdrvCheckResult *res,
+-                         uint16_t *refcount_table,
+-                         int64_t refcount_table_size,
++                         uint16_t **refcount_table,
++                         int64_t *refcount_table_size,
+                          int64_t offset, int64_t size)
+ {
+     BDRVQcowState *s = bs->opaque;
+@@ -1071,17 +1071,30 @@ static int inc_refcounts(BlockDriverState *bs,
+     for(cluster_offset = start; cluster_offset <= last;
+         cluster_offset += s->cluster_size) {
+         k = cluster_offset >> s->cluster_bits;
+-        if (k >= refcount_table_size) {
+-            fprintf(stderr, "Warning: cluster offset=0x%" PRIx64 " is after "
+-                "the end of the image file, can't properly check refcounts.\n",
+-                cluster_offset);
+-            res->check_errors++;
+-        } else {
+-            if (++refcount_table[k] == 0) {
+-                fprintf(stderr, "ERROR: overflow cluster offset=0x%" PRIx64
+-                    "\n", cluster_offset);
+-                res->corruptions++;
++        if (k >= *refcount_table_size) {
++            int64_t old_refcount_table_size = *refcount_table_size;
++            uint16_t *new_refcount_table;
++
++            *refcount_table_size = k + 1;
++            new_refcount_table = g_try_realloc(*refcount_table,
++                                               *refcount_table_size *
++                                               sizeof(**refcount_table));
++            if (!new_refcount_table) {
++                *refcount_table_size = old_refcount_table_size;
++                res->check_errors++;
++                return -ENOMEM;
+             }
++            *refcount_table = new_refcount_table;
++
++            memset(*refcount_table + old_refcount_table_size, 0,
++                   (*refcount_table_size - old_refcount_table_size) *
++                   sizeof(**refcount_table));
++        }
++
++        if (++(*refcount_table)[k] == 0) {
++            fprintf(stderr, "ERROR: overflow cluster offset=0x%" PRIx64
++                    "\n", cluster_offset);
++            res->corruptions++;
+         }
+     }
+ 
+@@ -1102,7 +1115,7 @@ enum {
+  * error occurred.
+  */
+ static int check_refcounts_l2(BlockDriverState *bs, BdrvCheckResult *res,
+-    uint16_t *refcount_table, int64_t refcount_table_size, int64_t l2_offset,
++    uint16_t **refcount_table, int64_t *refcount_table_size, int64_t l2_offset,
+     int flags)
+ {
+     BDRVQcowState *s = bs->opaque;
+@@ -1220,8 +1233,8 @@ fail:
+  */
+ static int check_refcounts_l1(BlockDriverState *bs,
+                               BdrvCheckResult *res,
+-                              uint16_t *refcount_table,
+-                              int64_t refcount_table_size,
++                              uint16_t **refcount_table,
++                              int64_t *refcount_table_size,
+                               int64_t l1_table_offset, int l1_size,
+                               int flags)
+ {
+@@ -1556,7 +1569,7 @@ static int check_refblocks(BlockDriverState *bs, BdrvCheckResult *res,
+         }
+ 
+         if (offset != 0) {
+-            ret = inc_refcounts(bs, res, *refcount_table, *nb_clusters,
++            ret = inc_refcounts(bs, res, refcount_table, nb_clusters,
+                                 offset, s->cluster_size);
+             if (ret < 0) {
+                 return ret;
+@@ -1589,7 +1602,7 @@ static int check_refblocks(BlockDriverState *bs, BdrvCheckResult *res,
+                                sizeof(**refcount_table));
+                     }
+                     (*refcount_table)[cluster]--;
+-                    ret = inc_refcounts(bs, res, *refcount_table, *nb_clusters,
++                    ret = inc_refcounts(bs, res, refcount_table, nb_clusters,
+                                         new_offset, s->cluster_size);
+                     if (ret < 0) {
+                         return ret;
+@@ -1625,14 +1638,14 @@ static int calculate_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
+     }
+ 
+     /* header */
+-    ret = inc_refcounts(bs, res, *refcount_table, *nb_clusters,
++    ret = inc_refcounts(bs, res, refcount_table, nb_clusters,
+                         0, s->cluster_size);
+     if (ret < 0) {
+         return ret;
+     }
+ 
+     /* current L1 table */
+-    ret = check_refcounts_l1(bs, res, *refcount_table, *nb_clusters,
++    ret = check_refcounts_l1(bs, res, refcount_table, nb_clusters,
+                              s->l1_table_offset, s->l1_size, CHECK_FRAG_INFO);
+     if (ret < 0) {
+         return ret;
+@@ -1641,20 +1654,20 @@ static int calculate_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
+     /* snapshots */
+     for (i = 0; i < s->nb_snapshots; i++) {
+         sn = s->snapshots + i;
+-        ret = check_refcounts_l1(bs, res, *refcount_table, *nb_clusters,
++        ret = check_refcounts_l1(bs, res, refcount_table, nb_clusters,
+                                  sn->l1_table_offset, sn->l1_size, 0);
+         if (ret < 0) {
+             return ret;
+         }
+     }
+-    ret = inc_refcounts(bs, res, *refcount_table, *nb_clusters,
++    ret = inc_refcounts(bs, res, refcount_table, nb_clusters,
+                         s->snapshots_offset, s->snapshots_size);
+     if (ret < 0) {
+         return ret;
+     }
+ 
+     /* refcount data */
+-    ret = inc_refcounts(bs, res, *refcount_table, *nb_clusters,
++    ret = inc_refcounts(bs, res, refcount_table, nb_clusters,
+                         s->refcount_table_offset,
+                         s->refcount_table_size * sizeof(uint64_t));
+     if (ret < 0) {
+-- 
+1.8.3.1
+

@@ -1,0 +1,51 @@
+From 5f3d2969b85b5e679b6d110d180500914a499993 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Mon, 12 Aug 2013 15:59:35 +0200
+Subject: dump: Abstract dump_init() with cpu_synchronize_all_states()
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1376323180-12863-6-git-send-email-lersek@redhat.com>
+Patchwork-id: 53164
+O-Subject: [RHEL-7 qemu-kvm PATCH 05/10] dump: Abstract dump_init() with cpu_synchronize_all_states()
+Bugzilla: 981582
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Radim Krcmar <rkrcmar@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Andreas Färber <afaerber@suse.de>
+
+Instead of calling cpu_synchronize_state() for each CPU, call the
+existing cpu_synchronize_all_states() helper.
+
+Reviewed-by: Luiz Capitulino <lcapitulino@redhat.com>
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit 1b3509ca5bbd8e7d2be92ac42196a3ee2e31cb03)
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+
+diff --git a/dump.c b/dump.c
+index c0d3da5..87ca12c 100644
+--- a/dump.c
++++ b/dump.c
+@@ -21,6 +21,7 @@
+ #include "sysemu/dump.h"
+ #include "sysemu/sysemu.h"
+ #include "sysemu/memory_mapping.h"
++#include "sysemu/cpus.h"
+ #include "qapi/error.h"
+ #include "qmp-commands.h"
+ 
+@@ -731,12 +732,12 @@ static int dump_init(DumpState *s, int fd, bool paging, bool has_filter,
+      * If the target architecture is not supported, cpu_get_dump_info() will
+      * return -1.
+      *
+-     * if we use kvm, we should synchronize the register before we get dump
++     * If we use KVM, we should synchronize the registers before we get dump
+      * info.
+      */
++    cpu_synchronize_all_states();
+     nr_cpus = 0;
+     for (env = first_cpu; env != NULL; env = env->next_cpu) {
+-        cpu_synchronize_state(env);
+         nr_cpus++;
+     }
+ 

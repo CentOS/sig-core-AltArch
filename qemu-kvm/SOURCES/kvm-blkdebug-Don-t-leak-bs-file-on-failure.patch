@@ -1,0 +1,90 @@
+From 66e996f40abbca9c62a262beeefb93b7b4c6e64f Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Sat, 8 Feb 2014 09:53:22 +0100
+Subject: [PATCH 32/37] blkdebug: Don't leak bs->file on failure
+
+Message-id: <1392117622-28812-33-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57197
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 32/37] blkdebug: Don't leak bs->file on failure
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+Reported-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+
+Conflicts:
+	block/blkdebug.c
+
+Conflicts because RHEL 7 doesn't have the blockdev-add support
+series for blkdebug.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block/blkdebug.c | 16 ++++++++++------
+ 1 file changed, 10 insertions(+), 6 deletions(-)
+---
+ block/blkdebug.c |   16 ++++++++++------
+ 1 files changed, 10 insertions(+), 6 deletions(-)
+
+diff --git a/block/blkdebug.c b/block/blkdebug.c
+index ccb562b..1e772a5 100644
+--- a/block/blkdebug.c
++++ b/block/blkdebug.c
+@@ -367,7 +367,7 @@ static int blkdebug_open(BlockDriverState *bs, QDict *options, int flags,
+     if (error_is_set(&local_err)) {
+         error_propagate(errp, local_err);
+         ret = -EINVAL;
+-        goto fail;
++        goto out;
+     }
+ 
+     /* Read rules from config file */
+@@ -376,7 +376,7 @@ static int blkdebug_open(BlockDriverState *bs, QDict *options, int flags,
+         ret = read_config(s, config);
+         if (ret < 0) {
+             error_setg_errno(errp, -ret, "Could not read blkdebug config file");
+-            goto fail;
++            goto out;
+         }
+     }
+ 
+@@ -388,13 +388,13 @@ static int blkdebug_open(BlockDriverState *bs, QDict *options, int flags,
+     if (filename == NULL) {
+         error_setg(errp, "Could not retrieve image file name");
+         ret = -EINVAL;
+-        goto fail;
++        goto out;
+     }
+ 
+     ret = bdrv_file_open(&bs->file, filename, NULL, flags, &local_err);
+     if (ret < 0) {
+         error_propagate(errp, local_err);
+-        goto fail;
++        goto out;
+     }
+ 
+     /* Set request alignment */
+@@ -404,11 +404,15 @@ static int blkdebug_open(BlockDriverState *bs, QDict *options, int flags,
+     } else {
+         error_setg(errp, "Invalid alignment");
+         ret = -EINVAL;
+-        goto fail;
++        goto fail_unref;
+     }
+ 
+     ret = 0;
+-fail:
++    goto out;
++
++fail_unref:
++    bdrv_unref(bs->file);
++out:
+     qemu_opts_del(opts);
+     return ret;
+ }
+-- 
+1.7.1
+

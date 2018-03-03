@@ -1,0 +1,83 @@
+From 197c8b66cc0b7cc239075b4c86b0f118194e198a Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Sat, 13 Jun 2015 16:22:28 +0200
+Subject: [PATCH 34/42] qcow2: Fix header extension size check
+
+Message-id: <1434212556-3927-35-git-send-email-mreitz@redhat.com>
+Patchwork-id: 66053
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 34/42] qcow2: Fix header extension size check
+Bugzilla: 1129893
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+BZ: 1129893
+
+After reading the extension header, offset is incremented, but not
+checked against end_offset any more. This way an integer overflow could
+happen when checking whether the extension end is within the allowed
+range, effectively disabling the check.
+
+This patch adds the missing check and a test case for it.
+
+Cc: qemu-stable@nongnu.org
+Reported-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Message-id: 1416935562-7760-2-git-send-email-kwolf@redhat.com
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 2ebafc854d109ff09b66fb4dd62c2c53fc29754a)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2.c              | 2 +-
+ tests/qemu-iotests/080     | 2 ++
+ tests/qemu-iotests/080.out | 2 ++
+ 3 files changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/block/qcow2.c b/block/qcow2.c
+index 4e60077..991c41f 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -116,7 +116,7 @@ static int qcow2_read_extensions(BlockDriverState *bs, uint64_t start_offset,
+ #ifdef DEBUG_EXT
+         printf("ext.magic = 0x%x\n", ext.magic);
+ #endif
+-        if (ext.len > end_offset - offset) {
++        if (offset > end_offset || ext.len > end_offset - offset) {
+             error_setg(errp, "Header extension too large");
+             return -EINVAL;
+         }
+diff --git a/tests/qemu-iotests/080 b/tests/qemu-iotests/080
+index 6b3a3e7..b9f9630 100755
+--- a/tests/qemu-iotests/080
++++ b/tests/qemu-iotests/080
+@@ -78,6 +78,8 @@ poke_file "$TEST_IMG" "$offset_backing_file_offset" "\xff\xff\xff\xff\xff\xff\xf
+ poke_file "$TEST_IMG" "$offset_ext_magic" "\x12\x34\x56\x78"
+ poke_file "$TEST_IMG" "$offset_ext_size" "\x7f\xff\xff\xff"
+ { $QEMU_IO -c "read 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
++poke_file "$TEST_IMG" "$offset_backing_file_offset" "\x00\x00\x00\x00\x00\x00\x00\x$(printf %x $offset_ext_size)"
++{ $QEMU_IO -c "read 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
+ poke_file "$TEST_IMG" "$offset_backing_file_offset" "\x00\x00\x00\x00\x00\x00\x00\x00"
+ { $QEMU_IO -c "read 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
+ 
+diff --git a/tests/qemu-iotests/080.out b/tests/qemu-iotests/080.out
+index 1fa0672..b7db555 100644
+--- a/tests/qemu-iotests/080.out
++++ b/tests/qemu-iotests/080.out
+@@ -13,6 +13,8 @@ qemu-io: can't open device TEST_DIR/t.qcow2: Invalid backing file offset
+ no file open, try 'help open'
+ qemu-io: can't open device TEST_DIR/t.qcow2: Header extension too large
+ no file open, try 'help open'
++qemu-io: can't open device TEST_DIR/t.qcow2: Header extension too large
++no file open, try 'help open'
+ 
+ == Huge refcount table size ==
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
+-- 
+1.8.3.1
+

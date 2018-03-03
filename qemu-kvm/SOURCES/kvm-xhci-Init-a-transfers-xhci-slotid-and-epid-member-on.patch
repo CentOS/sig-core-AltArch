@@ -1,0 +1,61 @@
+From 0302db9f99761bc53e99cd1c3fbdcec3a3fd13c5 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Fri, 11 Jul 2014 14:20:43 +0200
+Subject: [PATCH 09/43] xhci: Init a transfers xhci, slotid and epid member on
+ epctx alloc
+
+Message-id: <1405088470-24115-11-git-send-email-kraxel@redhat.com>
+Patchwork-id: 59823
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 10/37] xhci: Init a transfers xhci, slotid and epid member on epctx alloc
+Bugzilla: 1075846
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Hans de Goede <hdegoede@redhat.com>
+
+Transfers are part of an epctx, which is part of a slot, which is part of
+a xhci. Transfers cannot dynamically be moved from one epctx to another,
+so once created their xhci, slotid and epid are constant, so lets set these
+up at creation time, rather then re-initializing them with the same
+value each time a transfer gets submitted.
+
+Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 4c5d82ecf1e8fd0720137f7d09fc77d65b51b4d0)
+---
+ hw/usb/hcd-xhci.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/hcd-xhci.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/hw/usb/hcd-xhci.c b/hw/usb/hcd-xhci.c
+index 61f5329..2daf334 100644
+--- a/hw/usb/hcd-xhci.c
++++ b/hw/usb/hcd-xhci.c
+@@ -1247,6 +1247,9 @@ static XHCIEPContext *xhci_alloc_epctx(XHCIState *xhci,
+     epctx->epid = epid;
+ 
+     for (i = 0; i < ARRAY_SIZE(epctx->transfers); i++) {
++        epctx->transfers[i].xhci = xhci;
++        epctx->transfers[i].slotid = slotid;
++        epctx->transfers[i].epid = epid;
+         usb_packet_init(&epctx->transfers[i].packet);
+     }
+     epctx->kick_timer = qemu_new_timer_ns(vm_clock, xhci_ep_kick_timer, epctx);
+@@ -2062,9 +2065,6 @@ static void xhci_kick_ep(XHCIState *xhci, unsigned int slotid,
+         for (i = 0; i < length; i++) {
+             assert(xhci_ring_fetch(xhci, ring, &xfer->trbs[i], NULL));
+         }
+-        xfer->xhci = xhci;
+-        xfer->epid = epid;
+-        xfer->slotid = slotid;
+         xfer->streamid = streamid;
+ 
+         if (epid == 1) {
+-- 
+1.8.3.1
+

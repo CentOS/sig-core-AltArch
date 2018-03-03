@@ -1,0 +1,465 @@
+From ddb1e6862dffe40bb2929d3a0e3eba198c54ee43 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 10 Nov 2014 09:14:07 +0100
+Subject: [PATCH 30/41] qcow2: Add falloc and full preallocation option
+
+Message-id: <1415610847-15383-5-git-send-email-mreitz@redhat.com>
+Patchwork-id: 62240
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v2 4/4] qcow2: Add falloc and full preallocation option
+Bugzilla: 1087724
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Hu Tao <hutao@cn.fujitsu.com>
+
+preallocation=falloc allocates disk space by posix_fallocate(),
+preallocation=full allocates disk space by writing zeros to disk.
+Both modes imply preallocation=metadata.
+
+Signed-off-by: Hu Tao <hutao@cn.fujitsu.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 0e4271b711a8ea766d29824c844e268b91ac3ae5)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	block/qcow2.c
+
+QEMUOptionParameter has not been replaced with QemuOpts downstream,
+total_size is in sectors instead of bytes in downstream's
+qcow2_create2().
+
+The use of QEMUOptionParameter makes it rather difficult to set an
+option in qcow2 for the underlying file to be created. Because qcow2
+already used to pass a functionally empty options array, I added an
+assertion for this to be true and created a new QEMUOptionParameter
+array in case there are actually options to be passed to the protocol
+driver (that is, for preallocation).
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2.c              | 81 +++++++++++++++++++++++++++++++++++++++-------
+ qemu-doc.texi              |  8 +++--
+ qemu-img.texi              |  8 +++--
+ tests/qemu-iotests/082.out | 54 +++++++++++++++----------------
+ 4 files changed, 106 insertions(+), 45 deletions(-)
+
+diff --git a/block/qcow2.c b/block/qcow2.c
+index 99c6b93..43e54d6 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -1557,8 +1557,7 @@ static int preallocate(BlockDriverState *bs)
+ static int qcow2_create2(const char *filename, int64_t total_size,
+                          const char *backing_file, const char *backing_format,
+                          int flags, size_t cluster_size, PreallocMode prealloc,
+-                         QEMUOptionParameter *options, int version,
+-                         Error **errp)
++                         int version, Error **errp)
+ {
+     /* Calculate cluster_bits */
+     int cluster_bits;
+@@ -1588,8 +1587,71 @@ static int qcow2_create2(const char *filename, int64_t total_size,
+     uint64_t* refcount_table;
+     Error *local_err = NULL;
+     int ret;
++    QEMUOptionParameter *options = NULL;
++    BlockDriver *file_drv;
++
++    if (prealloc == PREALLOC_MODE_FULL || prealloc == PREALLOC_MODE_FALLOC) {
++        int64_t meta_size = 0;
++        uint64_t nreftablee, nrefblocke, nl1e, nl2e;
++        int64_t aligned_total_size = align_offset(total_size * BDRV_SECTOR_SIZE,
++                                                  cluster_size);
++
++        /* header: 1 cluster */
++        meta_size += cluster_size;
++
++        /* total size of L2 tables */
++        nl2e = aligned_total_size / cluster_size;
++        nl2e = align_offset(nl2e, cluster_size / sizeof(uint64_t));
++        meta_size += nl2e * sizeof(uint64_t);
++
++        /* total size of L1 tables */
++        nl1e = nl2e * sizeof(uint64_t) / cluster_size;
++        nl1e = align_offset(nl1e, cluster_size / sizeof(uint64_t));
++        meta_size += nl1e * sizeof(uint64_t);
++
++        /* total size of refcount blocks
++         *
++         * note: every host cluster is reference-counted, including metadata
++         * (even refcount blocks are recursively included).
++         * Let:
++         *   a = total_size * BDRV_SECTOR_SIZE (this is the guest disk size)
++         *   m = meta size not including refcount blocks and refcount tables
++         *   c = cluster size
++         *   y1 = number of refcount blocks entries
++         *   y2 = meta size including everything
++         * then,
++         *   y1 = (y2 + a)/c
++         *   y2 = y1 * sizeof(u16) + y1 * sizeof(u16) * sizeof(u64) / c + m
++         * we can get y1:
++         *   y1 = (a + m) / (c - sizeof(u16) - sizeof(u16) * sizeof(u64) / c)
++         */
++        nrefblocke = (aligned_total_size + meta_size + cluster_size) /
++            (cluster_size - sizeof(uint16_t) -
++             1.0 * sizeof(uint16_t) * sizeof(uint64_t) / cluster_size);
++        nrefblocke = align_offset(nrefblocke, cluster_size / sizeof(uint16_t));
++        meta_size += nrefblocke * sizeof(uint16_t);
++
++        /* total size of refcount tables */
++        nreftablee = nrefblocke * sizeof(uint16_t) / cluster_size;
++        nreftablee = align_offset(nreftablee, cluster_size / sizeof(uint64_t));
++        meta_size += nreftablee * sizeof(uint64_t);
++
++        file_drv = bdrv_find_protocol(filename, true);
++        if (file_drv == NULL) {
++            error_setg(errp, "Could not find protocol for file '%s'", filename);
++            return -ENOENT;
++        }
++
++        options = append_option_parameters(options, file_drv->create_options);
++
++        set_option_parameter_int(options, BLOCK_OPT_SIZE,
++                                 aligned_total_size + meta_size);
++        set_option_parameter(options, BLOCK_OPT_PREALLOC,
++                             PreallocMode_lookup[prealloc]);
++    }
+ 
+     ret = bdrv_create_file(filename, options, &local_err);
++    free_option_parameters(options);
+     if (ret < 0) {
+         error_propagate(errp, local_err);
+         return ret;
+@@ -1691,7 +1753,7 @@ static int qcow2_create2(const char *filename, int64_t total_size,
+     }
+ 
+     /* And if we're supposed to preallocate metadata, do that now */
+-    if (prealloc == PREALLOC_MODE_METADATA) {
++    if (prealloc != PREALLOC_MODE_OFF) {
+         BDRVQcowState *s = bs->opaque;
+         qemu_co_mutex_lock(&s->lock);
+         ret = preallocate(bs);
+@@ -1761,13 +1823,6 @@ static int qcow2_create(const char *filename, QEMUOptionParameter *options,
+         options++;
+     }
+ 
+-    if (prealloc != PREALLOC_MODE_OFF &&
+-        prealloc != PREALLOC_MODE_METADATA) {
+-        error_setg(errp, "Unsupported preallocate mode: %s",
+-                   PreallocMode_lookup[prealloc]);
+-        return -EINVAL;
+-    }
+-
+     if (backing_file && prealloc != PREALLOC_MODE_OFF) {
+         error_setg(errp, "Backing file and preallocation cannot be used at "
+                    "the same time");
+@@ -1780,8 +1835,9 @@ static int qcow2_create(const char *filename, QEMUOptionParameter *options,
+         return -EINVAL;
+     }
+ 
++    assert(!options || !options->name);
+     ret = qcow2_create2(filename, sectors, backing_file, backing_fmt, flags,
+-                        cluster_size, prealloc, options, version, &local_err);
++                        cluster_size, prealloc, version, &local_err);
+     if (error_is_set(&local_err)) {
+         error_propagate(errp, local_err);
+     }
+@@ -2315,7 +2371,8 @@ static QEMUOptionParameter qcow2_create_options[] = {
+     {
+         .name = BLOCK_OPT_PREALLOC,
+         .type = OPT_STRING,
+-        .help = "Preallocation mode (allowed values: off, metadata)"
++        .help = "Preallocation mode (allowed values: off, metadata, "
++                "falloc, full)"
+     },
+     {
+         .name = BLOCK_OPT_LAZY_REFCOUNTS,
+diff --git a/qemu-doc.texi b/qemu-doc.texi
+index dc5b49e..0f7e5f8 100644
+--- a/qemu-doc.texi
++++ b/qemu-doc.texi
+@@ -567,9 +567,11 @@ sizes can improve the image file size whereas larger cluster sizes generally
+ provide better performance.
+ 
+ @item preallocation
+-Preallocation mode (allowed values: off, metadata). An image with preallocated
+-metadata is initially larger but can improve performance when the image needs
+-to grow.
++Preallocation mode (allowed values: @code{off}, @code{metadata}, @code{falloc},
++@code{full}). An image with preallocated metadata is initially larger but can
++improve performance when the image needs to grow. @code{falloc} and @code{full}
++preallocations are like the same options of @code{raw} format, but sets up
++metadata also.
+ 
+ @item lazy_refcounts
+ If this option is set to @code{on}, reference count updates are postponed with
+diff --git a/qemu-img.texi b/qemu-img.texi
+index 80d3261..e943856 100644
+--- a/qemu-img.texi
++++ b/qemu-img.texi
+@@ -432,9 +432,11 @@ sizes can improve the image file size whereas larger cluster sizes generally
+ provide better performance.
+ 
+ @item preallocation
+-Preallocation mode (allowed values: off, metadata). An image with preallocated
+-metadata is initially larger but can improve performance when the image needs
+-to grow.
++Preallocation mode (allowed values: @code{off}, @code{metadata}, @code{falloc},
++@code{full}). An image with preallocated metadata is initially larger but can
++improve performance when the image needs to grow. @code{falloc} and @code{full}
++preallocations are like the same options of @code{raw} format, but sets up
++metadata also.
+ 
+ @item lazy_refcounts
+ If this option is set to @code{on}, reference count updates are postponed with
+diff --git a/tests/qemu-iotests/082.out b/tests/qemu-iotests/082.out
+index d71610b..8abfde7 100644
+--- a/tests/qemu-iotests/082.out
++++ b/tests/qemu-iotests/082.out
+@@ -64,7 +64,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: create -f qcow2 -o ? TEST_DIR/t.qcow2 128M
+@@ -75,7 +75,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: create -f qcow2 -o cluster_size=4k,help TEST_DIR/t.qcow2 128M
+@@ -86,7 +86,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: create -f qcow2 -o cluster_size=4k,? TEST_DIR/t.qcow2 128M
+@@ -97,7 +97,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: create -f qcow2 -o help,cluster_size=4k TEST_DIR/t.qcow2 128M
+@@ -108,7 +108,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: create -f qcow2 -o ?,cluster_size=4k TEST_DIR/t.qcow2 128M
+@@ -119,7 +119,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: create -f qcow2 -o cluster_size=4k -o help TEST_DIR/t.qcow2 128M
+@@ -130,7 +130,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: create -f qcow2 -o cluster_size=4k -o ? TEST_DIR/t.qcow2 128M
+@@ -141,7 +141,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: create -f qcow2 -o backing_file=TEST_DIR/t.qcow2,,help TEST_DIR/t.qcow2 128M
+@@ -167,7 +167,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: create -o help
+@@ -245,7 +245,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: convert -O qcow2 -o ? TEST_DIR/t.qcow2 TEST_DIR/t.qcow2.base
+@@ -256,7 +256,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: convert -O qcow2 -o cluster_size=4k,help TEST_DIR/t.qcow2 TEST_DIR/t.qcow2.base
+@@ -267,7 +267,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: convert -O qcow2 -o cluster_size=4k,? TEST_DIR/t.qcow2 TEST_DIR/t.qcow2.base
+@@ -278,7 +278,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: convert -O qcow2 -o help,cluster_size=4k TEST_DIR/t.qcow2 TEST_DIR/t.qcow2.base
+@@ -289,7 +289,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: convert -O qcow2 -o ?,cluster_size=4k TEST_DIR/t.qcow2 TEST_DIR/t.qcow2.base
+@@ -300,7 +300,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: convert -O qcow2 -o cluster_size=4k -o help TEST_DIR/t.qcow2 TEST_DIR/t.qcow2.base
+@@ -311,7 +311,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: convert -O qcow2 -o cluster_size=4k -o ? TEST_DIR/t.qcow2 TEST_DIR/t.qcow2.base
+@@ -322,7 +322,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: convert -O qcow2 -o backing_file=TEST_DIR/t.qcow2,,help TEST_DIR/t.qcow2 TEST_DIR/t.qcow2.base
+@@ -348,7 +348,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: convert -o help
+@@ -415,7 +415,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: amend -f qcow2 -o ? TEST_DIR/t.qcow2
+@@ -426,7 +426,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: amend -f qcow2 -o cluster_size=4k,help TEST_DIR/t.qcow2
+@@ -437,7 +437,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: amend -f qcow2 -o cluster_size=4k,? TEST_DIR/t.qcow2
+@@ -448,7 +448,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: amend -f qcow2 -o help,cluster_size=4k TEST_DIR/t.qcow2
+@@ -459,7 +459,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: amend -f qcow2 -o ?,cluster_size=4k TEST_DIR/t.qcow2
+@@ -470,7 +470,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: amend -f qcow2 -o cluster_size=4k -o help TEST_DIR/t.qcow2
+@@ -481,7 +481,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: amend -f qcow2 -o cluster_size=4k -o ? TEST_DIR/t.qcow2
+@@ -492,7 +492,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: amend -f qcow2 -o backing_file=TEST_DIR/t.qcow2,,help TEST_DIR/t.qcow2
+@@ -520,7 +520,7 @@ backing_file     File name of a base image
+ backing_fmt      Image format of the base image
+ encryption       Encrypt the image
+ cluster_size     qcow2 cluster size
+-preallocation    Preallocation mode (allowed values: off, metadata)
++preallocation    Preallocation mode (allowed values: off, metadata, falloc, full)
+ lazy_refcounts   Postpone refcount updates
+ 
+ Testing: convert -o help
+-- 
+1.8.3.1
+

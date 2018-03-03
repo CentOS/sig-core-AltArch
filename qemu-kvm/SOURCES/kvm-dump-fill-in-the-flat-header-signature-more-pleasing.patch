@@ -1,0 +1,51 @@
+From e40ba375b6007ff227d18aa55be7f1070145ccac Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Fri, 7 Nov 2014 17:18:07 +0100
+Subject: [PATCH 20/41] dump: fill in the flat header signature more pleasingly
+ to the eye
+
+Message-id: <1415380693-16593-21-git-send-email-lersek@redhat.com>
+Patchwork-id: 62206
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 20/26] dump: fill in the flat header signature more pleasingly to the eye
+Bugzilla: 1157798
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: dgibson <dgibson@redhat.com>
+
+The "mh.signature" array field has size 16, and is zeroed by the preceding
+memset(). MAKEDUMPFILE_SIGNATURE expands to a string literal with string
+length 12 (size 13). There's no need to measure the length of
+MAKEDUMPFILE_SIGNATURE at runtime, nor for the extra zero-filling of
+"mh.signature" with strncpy().
+
+Use memcpy() with MIN(sizeof, sizeof) for robustness (which is an integer
+constant expression, evaluable at compile time.)
+
+Approximately-suggested-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit ae3f88f60fb9f42bb3679311c2fbff8e1868ea47)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/dump.c b/dump.c
+index 9250594..533b914 100644
+--- a/dump.c
++++ b/dump.c
+@@ -722,8 +722,8 @@ static int write_start_flat_header(int fd)
+     int ret = 0;
+ 
+     memset(&mh, 0, sizeof(mh));
+-    strncpy(mh.signature, MAKEDUMPFILE_SIGNATURE,
+-            strlen(MAKEDUMPFILE_SIGNATURE));
++    memcpy(mh.signature, MAKEDUMPFILE_SIGNATURE,
++           MIN(sizeof mh.signature, sizeof MAKEDUMPFILE_SIGNATURE));
+ 
+     mh.type = cpu_to_be64(TYPE_FLAT_HEADER);
+     mh.version = cpu_to_be64(VERSION_FLAT_HEADER);
+-- 
+1.8.3.1
+

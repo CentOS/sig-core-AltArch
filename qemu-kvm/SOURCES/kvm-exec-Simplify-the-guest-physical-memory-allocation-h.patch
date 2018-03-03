@@ -1,0 +1,184 @@
+From b84b9552e5d474f237824a33e7211dfac8d2de60 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 18 Sep 2013 09:31:05 +0200
+Subject: [PATCH 21/29] exec: Simplify the guest physical memory allocation hook
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1379496669-22778-5-git-send-email-armbru@redhat.com>
+Patchwork-id: 54424
+O-Subject: [PATCH 7.0 qemu-kvm 4/8] exec: Simplify the guest physical memory allocation hook
+Bugzilla: 1009328
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Make it a generic hook rather than a KVM hook.  Less code and
+ifdeffery.
+
+Since the only user of the hook is old S390 KVM, there's hope we can
+get rid of it some day.
+
+Acked-by: Christian Borntraeger <borntraeger@de.ibm.com>
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Acked-by: Laszlo Ersek <lersek@redhat.com>
+Acked-by: Stefano Stabellini <stefano.stabellini@eu.citrix.com>
+Message-id: 1375276272-15988-5-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <anthony@codemonkey.ws>
+(cherry picked from commit 91138037cb341a04a66e4c43b6cb31d5d8a43a73)
+
+Conflicts:
+	exec.c
+
+Trivial conflict because we don't have upstream commits acc9d80 and
+058bc4b.
+---
+ exec.c                  | 20 ++++++++++++++------
+ include/exec/exec-all.h |  2 ++
+ include/sysemu/kvm.h    |  5 -----
+ kvm-all.c               | 13 -------------
+ target-s390x/kvm.c      | 17 ++++++-----------
+ 5 files changed, 22 insertions(+), 35 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ exec.c                  |   20 ++++++++++++++------
+ include/exec/exec-all.h |    2 ++
+ include/sysemu/kvm.h    |    5 -----
+ kvm-all.c               |   13 -------------
+ target-s390x/kvm.c      |   17 ++++++-----------
+ 5 files changed, 22 insertions(+), 35 deletions(-)
+
+diff --git a/exec.c b/exec.c
+index 32ed61c..42a0005 100644
+--- a/exec.c
++++ b/exec.c
+@@ -679,6 +679,19 @@ typedef struct subpage_t {
+ static int subpage_register (subpage_t *mmio, uint32_t start, uint32_t end,
+                              uint16_t section);
+ static subpage_t *subpage_init(hwaddr base);
++
++static void *(*phys_mem_alloc)(ram_addr_t size) = qemu_anon_ram_alloc;
++
++/*
++ * Set a custom physical guest memory alloator.
++ * Accelerators with unusual needs may need this.  Hopefully, we can
++ * get rid of it eventually.
++ */
++void phys_mem_set_alloc(void *(*alloc)(ram_addr_t))
++{
++    phys_mem_alloc = alloc;
++}
++
+ static void destroy_page_desc(uint16_t section_index)
+ {
+     MemoryRegionSection *section = &phys_sections[section_index];
+@@ -1070,12 +1083,7 @@ ram_addr_t qemu_ram_alloc_from_ptr(ram_addr_t size, void *host,
+ #endif
+         }
+         if (!new_block->host) {
+-            if (kvm_enabled()) {
+-                /* some s390/kvm configurations have special constraints */
+-                new_block->host = kvm_ram_alloc(size);
+-            } else {
+-                new_block->host = qemu_anon_ram_alloc(size);
+-            }
++            new_block->host = phys_mem_alloc(size);
+             memory_try_enable_merging(new_block->host, size);
+         }
+     }
+diff --git a/include/exec/exec-all.h b/include/exec/exec-all.h
+index 6362074..993c655 100644
+--- a/include/exec/exec-all.h
++++ b/include/exec/exec-all.h
+@@ -366,6 +366,8 @@ bool is_tcg_gen_code(uintptr_t pc_ptr);
+ 
+ #if !defined(CONFIG_USER_ONLY)
+ 
++void phys_mem_set_alloc(void *(*alloc)(ram_addr_t));
++
+ struct MemoryRegion *iotlb_to_region(hwaddr index);
+ uint64_t io_mem_read(struct MemoryRegion *mr, hwaddr addr,
+                      unsigned size);
+diff --git a/include/sysemu/kvm.h b/include/sysemu/kvm.h
+index 08284ef..7fc3844 100644
+--- a/include/sysemu/kvm.h
++++ b/include/sysemu/kvm.h
+@@ -141,11 +141,6 @@ int kvm_init_vcpu(CPUState *cpu);
+ #ifdef NEED_CPU_H
+ int kvm_cpu_exec(CPUArchState *env);
+ 
+-#if !defined(CONFIG_USER_ONLY)
+-void *kvm_ram_alloc(ram_addr_t size);
+-void *kvm_arch_ram_alloc(ram_addr_t size);
+-#endif
+-
+ void kvm_setup_guest_memory(void *start, size_t size);
+ void kvm_flush_coalesced_mmio_buffer(void);
+ 
+diff --git a/kvm-all.c b/kvm-all.c
+index 545b470..d0a7c21 100644
+--- a/kvm-all.c
++++ b/kvm-all.c
+@@ -1794,19 +1794,6 @@ int kvm_has_intx_set_mask(void)
+     return kvm_state->intx_set_mask;
+ }
+ 
+-void *kvm_ram_alloc(ram_addr_t size)
+-{
+-#ifdef TARGET_S390X
+-    void *mem;
+-
+-    mem = kvm_arch_ram_alloc(size);
+-    if (mem) {
+-        return mem;
+-    }
+-#endif
+-    return qemu_anon_ram_alloc(size);
+-}
+-
+ void kvm_setup_guest_memory(void *start, size_t size)
+ {
+ #ifdef CONFIG_VALGRIND_H
+diff --git a/target-s390x/kvm.c b/target-s390x/kvm.c
+index 862fb12..0b18db4 100644
+--- a/target-s390x/kvm.c
++++ b/target-s390x/kvm.c
+@@ -92,9 +92,15 @@ const KVMCapabilityInfo kvm_arch_required_capabilities[] = {
+ 
+ static int cap_sync_regs;
+ 
++static void *legacy_s390_alloc(ram_addr_t size);
++
+ int kvm_arch_init(KVMState *s)
+ {
+     cap_sync_regs = kvm_check_extension(s, KVM_CAP_SYNC_REGS);
++    if (!kvm_check_extension(s, KVM_CAP_S390_GMAP)
++        || !kvm_check_extension(s, KVM_CAP_S390_COW)) {
++        phys_mem_set_alloc(legacy_s390_alloc);
++    }
+     return 0;
+ }
+ 
+@@ -332,17 +338,6 @@ static void *legacy_s390_alloc(ram_addr_t size)
+     return mem;
+ }
+ 
+-void *kvm_arch_ram_alloc(ram_addr_t size)
+-{
+-    /* Can we use the standard allocation ? */
+-    if (kvm_check_extension(kvm_state, KVM_CAP_S390_GMAP) &&
+-        kvm_check_extension(kvm_state, KVM_CAP_S390_COW)) {
+-        return NULL;
+-    } else {
+-        return legacy_s390_alloc(size);
+-    }
+-}
+-
+ int kvm_arch_insert_sw_breakpoint(CPUState *cs, struct kvm_sw_breakpoint *bp)
+ {
+     S390CPU *cpu = S390_CPU(cs);
+-- 
+1.7.1
+

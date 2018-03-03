@@ -1,0 +1,92 @@
+From 0262e36cb9326586a82985b1c26ee8cf9c6e0578 Mon Sep 17 00:00:00 2001
+Message-Id: <0262e36cb9326586a82985b1c26ee8cf9c6e0578.1387382496.git.minovotn@redhat.com>
+In-Reply-To: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+References: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+From: Nigel Croxon <ncroxon@redhat.com>
+Date: Thu, 14 Nov 2013 22:52:39 +0100
+Subject: [PATCH 03/46] migration: Fail migration on bdrv_flush_all() error
+
+RH-Author: Nigel Croxon <ncroxon@redhat.com>
+Message-id: <1384469598-13137-4-git-send-email-ncroxon@redhat.com>
+Patchwork-id: 55687
+O-Subject: [RHEL7.0 PATCH 03/42] migration: Fail migration on bdrv_flush_all() error
+Bugzilla: 1011720
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: 1011720
+https://bugzilla.redhat.com/show_bug.cgi?id=1011720
+
+>From commit ID:
+commit 0e1146a7a011a69d8cbc958b4f7ebad186730fc3
+Author: Kevin Wolf <kwolf@redhat.com>
+Date:   Fri Jul 5 13:54:55 2013 +0200
+
+    migration: Fail migration on bdrv_flush_all() error
+
+    If bdrv_flush_all() returns an error, there is an inconsistency in the
+    view of an image file between the source and the destination host.
+    Completing the migration would lead to corruption. Better abort
+    migration in this case.
+
+    To reproduce this case, try the following (ensures that there is
+    something to flush, and then fails that flush):
+
+    $ qemu-img create -f qcow2 test.qcow2 1G
+    $ cat blkdebug.cfg
+    [inject-error]
+    event = "flush_to_os"
+    errno = "5"
+    $ qemu-system-x86_64 -hda blkdebug:blkdebug.cfg:test.qcow2 -monitor stdio
+    (qemu) qemu-io ide0-hd0 "write 0 4k"
+    (qemu) migrate ...
+
+    Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+    Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+---
+ migration.c |   17 ++++++++++++++---
+ 1 files changed, 14 insertions(+), 3 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ migration.c | 17 ++++++++++++++---
+ 1 file changed, 14 insertions(+), 3 deletions(-)
+
+diff --git a/migration.c b/migration.c
+index d91e702..3520776 100644
+--- a/migration.c
++++ b/migration.c
+@@ -542,15 +542,26 @@ static void *migration_thread(void *opaque)
+             if (pending_size && pending_size >= max_size) {
+                 qemu_savevm_state_iterate(s->file);
+             } else {
++                int ret;
++
+                 DPRINTF("done iterating\n");
+                 qemu_mutex_lock_iothread();
+                 start_time = qemu_get_clock_ms(rt_clock);
+                 qemu_system_wakeup_request(QEMU_WAKEUP_REASON_OTHER);
+                 old_vm_running = runstate_is_running();
+-                vm_stop_force_state(RUN_STATE_FINISH_MIGRATE);
+-                qemu_file_set_rate_limit(s->file, INT_MAX);
+-                qemu_savevm_state_complete(s->file);
++
++                ret = vm_stop_force_state(RUN_STATE_FINISH_MIGRATE);
++                if (ret >= 0) {
++                    qemu_file_set_rate_limit(s->file, INT_MAX);
++                    qemu_savevm_state_complete(s->file);
++                }
+                 qemu_mutex_unlock_iothread();
++
++                if (ret < 0) {
++                    migrate_finish_set_state(s, MIG_STATE_ERROR);
++                    break;
++                }
++
+                 if (!qemu_file_get_error(s->file)) {
+                     migrate_finish_set_state(s, MIG_STATE_COMPLETED);
+                     break;
+-- 
+1.7.11.7
+

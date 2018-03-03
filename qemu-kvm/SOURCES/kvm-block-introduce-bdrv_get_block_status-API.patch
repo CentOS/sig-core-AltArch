@@ -1,0 +1,447 @@
+From 89e6ba9d5ad137ecb8f981f1ec28ee519812bf50 Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Wed, 6 Nov 2013 12:37:43 +0100
+Subject: [PATCH 12/81] block: introduce bdrv_get_block_status API
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1383741463-25811-1-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 55521
+O-Subject: [RHEL 7.0 qemu-kvm PATCH v2 12/26] block: introduce bdrv_get_block_status API
+Bugzilla: 989646
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+For now, bdrv_get_block_status is just another name for bdrv_is_allocated.
+The next patches will add more flags.
+
+This also touches all block drivers with a mostly mechanical rename.  The
+sole exception is cow; because it calls cow_co_is_allocated from the read
+code, we keep that function and make cow_co_get_block_status a wrapper.
+
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit b6b8a33354a448ee421f57676c1a93a536a63269)
+---
+ block.c                   | 46 ++++++++++++++++++++++++++--------------------
+ block/cow.c               |  8 +++++++-
+ block/qcow.c              |  4 ++--
+ block/qcow2.c             |  4 ++--
+ block/qed.c               |  4 ++--
+ block/raw-posix.c         |  4 ++--
+ block/raw.c               |  6 +++---
+ block/sheepdog.c          | 12 ++++++------
+ block/vdi.c               |  4 ++--
+ block/vmdk.c              |  4 ++--
+ block/vvfat.c             |  4 ++--
+ include/block/block.h     |  2 ++
+ include/block/block_int.h |  2 +-
+ 13 files changed, 59 insertions(+), 45 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c                   |   46 +++++++++++++++++++++++++-------------------
+ block/cow.c               |    8 ++++++-
+ block/qcow.c              |    4 +-
+ block/qcow2.c             |    4 +-
+ block/qed.c               |    4 +-
+ block/raw-posix.c         |    4 +-
+ block/raw.c               |    6 ++--
+ block/sheepdog.c          |   12 +++++-----
+ block/vdi.c               |    4 +-
+ block/vmdk.c              |    4 +-
+ block/vvfat.c             |    4 +-
+ include/block/block.h     |    2 +
+ include/block/block_int.h |    2 +-
+ 13 files changed, 59 insertions(+), 45 deletions(-)
+
+diff --git a/block.c b/block.c
+index f5d6658..772f5b7 100644
+--- a/block.c
++++ b/block.c
+@@ -3010,15 +3010,15 @@ int bdrv_has_zero_init(BlockDriverState *bs)
+     return 1;
+ }
+ 
+-typedef struct BdrvCoIsAllocatedData {
++typedef struct BdrvCoGetBlockStatusData {
+     BlockDriverState *bs;
+     BlockDriverState *base;
+     int64_t sector_num;
+     int nb_sectors;
+     int *pnum;
+-    int ret;
++    int64_t ret;
+     bool done;
+-} BdrvCoIsAllocatedData;
++} BdrvCoGetBlockStatusData;
+ 
+ /*
+  * Returns true iff the specified sector is present in the disk image. Drivers
+@@ -3035,9 +3035,9 @@ typedef struct BdrvCoIsAllocatedData {
+  * 'nb_sectors' is the max value 'pnum' should be set to.  If nb_sectors goes
+  * beyond the end of the disk image it will be clamped.
+  */
+-static int coroutine_fn bdrv_co_is_allocated(BlockDriverState *bs,
+-                                             int64_t sector_num,
+-                                             int nb_sectors, int *pnum)
++static int64_t coroutine_fn bdrv_co_get_block_status(BlockDriverState *bs,
++                                                     int64_t sector_num,
++                                                     int nb_sectors, int *pnum)
+ {
+     int64_t length;
+     int64_t n;
+@@ -3057,35 +3057,35 @@ static int coroutine_fn bdrv_co_is_allocated(BlockDriverState *bs,
+         nb_sectors = n;
+     }
+ 
+-    if (!bs->drv->bdrv_co_is_allocated) {
++    if (!bs->drv->bdrv_co_get_block_status) {
+         *pnum = nb_sectors;
+         return 1;
+     }
+ 
+-    return bs->drv->bdrv_co_is_allocated(bs, sector_num, nb_sectors, pnum);
++    return bs->drv->bdrv_co_get_block_status(bs, sector_num, nb_sectors, pnum);
+ }
+ 
+-/* Coroutine wrapper for bdrv_is_allocated() */
+-static void coroutine_fn bdrv_is_allocated_co_entry(void *opaque)
++/* Coroutine wrapper for bdrv_get_block_status() */
++static void coroutine_fn bdrv_get_block_status_co_entry(void *opaque)
+ {
+-    BdrvCoIsAllocatedData *data = opaque;
++    BdrvCoGetBlockStatusData *data = opaque;
+     BlockDriverState *bs = data->bs;
+ 
+-    data->ret = bdrv_co_is_allocated(bs, data->sector_num, data->nb_sectors,
+-                                     data->pnum);
++    data->ret = bdrv_co_get_block_status(bs, data->sector_num, data->nb_sectors,
++                                         data->pnum);
+     data->done = true;
+ }
+ 
+ /*
+- * Synchronous wrapper around bdrv_co_is_allocated().
++ * Synchronous wrapper around bdrv_co_get_block_status().
+  *
+- * See bdrv_co_is_allocated() for details.
++ * See bdrv_co_get_block_status() for details.
+  */
+-int bdrv_is_allocated(BlockDriverState *bs, int64_t sector_num, int nb_sectors,
+-                      int *pnum)
++int64_t bdrv_get_block_status(BlockDriverState *bs, int64_t sector_num,
++                              int nb_sectors, int *pnum)
+ {
+     Coroutine *co;
+-    BdrvCoIsAllocatedData data = {
++    BdrvCoGetBlockStatusData data = {
+         .bs = bs,
+         .sector_num = sector_num,
+         .nb_sectors = nb_sectors,
+@@ -3095,9 +3095,9 @@ int bdrv_is_allocated(BlockDriverState *bs, int64_t sector_num, int nb_sectors,
+ 
+     if (qemu_in_coroutine()) {
+         /* Fast-path if already in coroutine context */
+-        bdrv_is_allocated_co_entry(&data);
++        bdrv_get_block_status_co_entry(&data);
+     } else {
+-        co = qemu_coroutine_create(bdrv_is_allocated_co_entry);
++        co = qemu_coroutine_create(bdrv_get_block_status_co_entry);
+         qemu_coroutine_enter(co, &data);
+         while (!data.done) {
+             qemu_aio_wait();
+@@ -3106,6 +3106,12 @@ int bdrv_is_allocated(BlockDriverState *bs, int64_t sector_num, int nb_sectors,
+     return data.ret;
+ }
+ 
++int coroutine_fn bdrv_is_allocated(BlockDriverState *bs, int64_t sector_num,
++                                   int nb_sectors, int *pnum)
++{
++    return bdrv_get_block_status(bs, sector_num, nb_sectors, pnum);
++}
++
+ /*
+  * Given an image chain: ... -> [BASE] -> [INTER1] -> [INTER2] -> [TOP]
+  *
+diff --git a/block/cow.c b/block/cow.c
+index 5a33b46..5e71c76 100644
+--- a/block/cow.c
++++ b/block/cow.c
+@@ -188,6 +188,12 @@ static int coroutine_fn cow_co_is_allocated(BlockDriverState *bs,
+     return changed;
+ }
+ 
++static int64_t coroutine_fn cow_co_get_block_status(BlockDriverState *bs,
++        int64_t sector_num, int nb_sectors, int *num_same)
++{
++    return cow_co_is_allocated(bs, sector_num, nb_sectors, num_same);
++}
++
+ static int cow_update_bitmap(BlockDriverState *bs, int64_t sector_num,
+         int nb_sectors)
+ {
+@@ -370,7 +376,7 @@ static BlockDriver bdrv_cow = {
+ 
+     .bdrv_read              = cow_co_read,
+     .bdrv_write             = cow_co_write,
+-    .bdrv_co_is_allocated   = cow_co_is_allocated,
++    .bdrv_co_get_block_status   = cow_co_get_block_status,
+ 
+     .create_options = cow_create_options,
+ };
+diff --git a/block/qcow.c b/block/qcow.c
+index e2a64c7..05af25c 100644
+--- a/block/qcow.c
++++ b/block/qcow.c
+@@ -395,7 +395,7 @@ static uint64_t get_cluster_offset(BlockDriverState *bs,
+     return cluster_offset;
+ }
+ 
+-static int coroutine_fn qcow_co_is_allocated(BlockDriverState *bs,
++static int64_t coroutine_fn qcow_co_get_block_status(BlockDriverState *bs,
+         int64_t sector_num, int nb_sectors, int *pnum)
+ {
+     BDRVQcowState *s = bs->opaque;
+@@ -895,7 +895,7 @@ static BlockDriver bdrv_qcow = {
+ 
+     .bdrv_co_readv          = qcow_co_readv,
+     .bdrv_co_writev         = qcow_co_writev,
+-    .bdrv_co_is_allocated   = qcow_co_is_allocated,
++    .bdrv_co_get_block_status   = qcow_co_get_block_status,
+ 
+     .bdrv_set_key           = qcow_set_key,
+     .bdrv_make_empty        = qcow_make_empty,
+diff --git a/block/qcow2.c b/block/qcow2.c
+index f6e64d2..8d3bf5d 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -640,7 +640,7 @@ static int qcow2_reopen_prepare(BDRVReopenState *state,
+     return 0;
+ }
+ 
+-static int coroutine_fn qcow2_co_is_allocated(BlockDriverState *bs,
++static int64_t coroutine_fn qcow2_co_get_block_status(BlockDriverState *bs,
+         int64_t sector_num, int nb_sectors, int *pnum)
+ {
+     BDRVQcowState *s = bs->opaque;
+@@ -1786,7 +1786,7 @@ static BlockDriver bdrv_qcow2 = {
+     .bdrv_close         = qcow2_close,
+     .bdrv_reopen_prepare  = qcow2_reopen_prepare,
+     .bdrv_create        = qcow2_create,
+-    .bdrv_co_is_allocated = qcow2_co_is_allocated,
++    .bdrv_co_get_block_status = qcow2_co_get_block_status,
+     .bdrv_set_key       = qcow2_set_key,
+     .bdrv_make_empty    = qcow2_make_empty,
+ 
+diff --git a/block/qed.c b/block/qed.c
+index 4651403..a573039 100644
+--- a/block/qed.c
++++ b/block/qed.c
+@@ -667,7 +667,7 @@ static void qed_is_allocated_cb(void *opaque, int ret, uint64_t offset, size_t l
+     }
+ }
+ 
+-static int coroutine_fn bdrv_qed_co_is_allocated(BlockDriverState *bs,
++static int64_t coroutine_fn bdrv_qed_co_get_block_status(BlockDriverState *bs,
+                                                  int64_t sector_num,
+                                                  int nb_sectors, int *pnum)
+ {
+@@ -1574,7 +1574,7 @@ static BlockDriver bdrv_qed = {
+     .bdrv_close               = bdrv_qed_close,
+     .bdrv_reopen_prepare      = bdrv_qed_reopen_prepare,
+     .bdrv_create              = bdrv_qed_create,
+-    .bdrv_co_is_allocated     = bdrv_qed_co_is_allocated,
++    .bdrv_co_get_block_status = bdrv_qed_co_get_block_status,
+     .bdrv_make_empty          = bdrv_qed_make_empty,
+     .bdrv_aio_readv           = bdrv_qed_aio_readv,
+     .bdrv_aio_writev          = bdrv_qed_aio_writev,
+diff --git a/block/raw-posix.c b/block/raw-posix.c
+index 90ce9f8..9a7c5a8 100644
+--- a/block/raw-posix.c
++++ b/block/raw-posix.c
+@@ -1084,7 +1084,7 @@ static int raw_create(const char *filename, QEMUOptionParameter *options)
+  * 'nb_sectors' is the max value 'pnum' should be set to.  If nb_sectors goes
+  * beyond the end of the disk image it will be clamped.
+  */
+-static int coroutine_fn raw_co_is_allocated(BlockDriverState *bs,
++static int64_t coroutine_fn raw_co_get_block_status(BlockDriverState *bs,
+                                             int64_t sector_num,
+                                             int nb_sectors, int *pnum)
+ {
+@@ -1199,7 +1199,7 @@ static BlockDriver bdrv_file = {
+     .bdrv_reopen_abort = raw_reopen_abort,
+     .bdrv_close = raw_close,
+     .bdrv_create = raw_create,
+-    .bdrv_co_is_allocated = raw_co_is_allocated,
++    .bdrv_co_get_block_status = raw_co_get_block_status,
+ 
+     .bdrv_aio_readv = raw_aio_readv,
+     .bdrv_aio_writev = raw_aio_writev,
+diff --git a/block/raw.c b/block/raw.c
+index f78ff39..844a222 100644
+--- a/block/raw.c
++++ b/block/raw.c
+@@ -35,11 +35,11 @@ static void raw_close(BlockDriverState *bs)
+ {
+ }
+ 
+-static int coroutine_fn raw_co_is_allocated(BlockDriverState *bs,
++static int64_t coroutine_fn raw_co_get_block_status(BlockDriverState *bs,
+                                             int64_t sector_num,
+                                             int nb_sectors, int *pnum)
+ {
+-    return bdrv_is_allocated(bs->file, sector_num, nb_sectors, pnum);
++    return bdrv_get_block_status(bs->file, sector_num, nb_sectors, pnum);
+ }
+ 
+ static int coroutine_fn raw_co_write_zeroes(BlockDriverState *bs,
+@@ -134,7 +134,7 @@ static BlockDriver bdrv_raw = {
+ 
+     .bdrv_co_readv          = raw_co_readv,
+     .bdrv_co_writev         = raw_co_writev,
+-    .bdrv_co_is_allocated   = raw_co_is_allocated,
++    .bdrv_co_get_block_status   = raw_co_get_block_status,
+     .bdrv_co_write_zeroes   = raw_co_write_zeroes,
+     .bdrv_co_discard        = raw_co_discard,
+ 
+diff --git a/block/sheepdog.c b/block/sheepdog.c
+index 2758c26..e5398bb 100644
+--- a/block/sheepdog.c
++++ b/block/sheepdog.c
+@@ -2289,9 +2289,9 @@ static coroutine_fn int sd_co_discard(BlockDriverState *bs, int64_t sector_num,
+     return acb->ret;
+ }
+ 
+-static coroutine_fn int
+-sd_co_is_allocated(BlockDriverState *bs, int64_t sector_num, int nb_sectors,
+-                   int *pnum)
++static coroutine_fn int64_t
++sd_co_get_block_status(BlockDriverState *bs, int64_t sector_num, int nb_sectors,
++                       int *pnum)
+ {
+     BDRVSheepdogState *s = bs->opaque;
+     SheepdogInode *inode = &s->inode;
+@@ -2356,7 +2356,7 @@ static BlockDriver bdrv_sheepdog = {
+     .bdrv_co_writev = sd_co_writev,
+     .bdrv_co_flush_to_disk  = sd_co_flush_to_disk,
+     .bdrv_co_discard = sd_co_discard,
+-    .bdrv_co_is_allocated = sd_co_is_allocated,
++    .bdrv_co_get_block_status = sd_co_get_block_status,
+ 
+     .bdrv_snapshot_create   = sd_snapshot_create,
+     .bdrv_snapshot_goto     = sd_snapshot_goto,
+@@ -2383,7 +2383,7 @@ static BlockDriver bdrv_sheepdog_tcp = {
+     .bdrv_co_writev = sd_co_writev,
+     .bdrv_co_flush_to_disk  = sd_co_flush_to_disk,
+     .bdrv_co_discard = sd_co_discard,
+-    .bdrv_co_is_allocated = sd_co_is_allocated,
++    .bdrv_co_get_block_status = sd_co_get_block_status,
+ 
+     .bdrv_snapshot_create   = sd_snapshot_create,
+     .bdrv_snapshot_goto     = sd_snapshot_goto,
+@@ -2410,7 +2410,7 @@ static BlockDriver bdrv_sheepdog_unix = {
+     .bdrv_co_writev = sd_co_writev,
+     .bdrv_co_flush_to_disk  = sd_co_flush_to_disk,
+     .bdrv_co_discard = sd_co_discard,
+-    .bdrv_co_is_allocated = sd_co_is_allocated,
++    .bdrv_co_get_block_status = sd_co_get_block_status,
+ 
+     .bdrv_snapshot_create   = sd_snapshot_create,
+     .bdrv_snapshot_goto     = sd_snapshot_goto,
+diff --git a/block/vdi.c b/block/vdi.c
+index 2662d89..1252ad4 100644
+--- a/block/vdi.c
++++ b/block/vdi.c
+@@ -470,7 +470,7 @@ static int vdi_reopen_prepare(BDRVReopenState *state,
+     return 0;
+ }
+ 
+-static int coroutine_fn vdi_co_is_allocated(BlockDriverState *bs,
++static int64_t coroutine_fn vdi_co_get_block_status(BlockDriverState *bs,
+         int64_t sector_num, int nb_sectors, int *pnum)
+ {
+     /* TODO: Check for too large sector_num (in bdrv_is_allocated or here). */
+@@ -779,7 +779,7 @@ static BlockDriver bdrv_vdi = {
+     .bdrv_close = vdi_close,
+     .bdrv_reopen_prepare = vdi_reopen_prepare,
+     .bdrv_create = vdi_create,
+-    .bdrv_co_is_allocated = vdi_co_is_allocated,
++    .bdrv_co_get_block_status = vdi_co_get_block_status,
+     .bdrv_make_empty = vdi_make_empty,
+ 
+     .bdrv_read = vdi_co_read,
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 66735ab..a30c3b9 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -1042,7 +1042,7 @@ static VmdkExtent *find_extent(BDRVVmdkState *s,
+     return NULL;
+ }
+ 
+-static int coroutine_fn vmdk_co_is_allocated(BlockDriverState *bs,
++static int64_t coroutine_fn vmdk_co_get_block_status(BlockDriverState *bs,
+         int64_t sector_num, int nb_sectors, int *pnum)
+ {
+     BDRVVmdkState *s = bs->opaque;
+@@ -1820,7 +1820,7 @@ static BlockDriver bdrv_vmdk = {
+     .bdrv_close     = vmdk_close,
+     .bdrv_create    = vmdk_create,
+     .bdrv_co_flush_to_disk  = vmdk_co_flush,
+-    .bdrv_co_is_allocated   = vmdk_co_is_allocated,
++    .bdrv_co_get_block_status = vmdk_co_get_block_status,
+     .bdrv_get_allocated_file_size  = vmdk_get_allocated_file_size,
+ 
+     .create_options = vmdk_create_options,
+diff --git a/block/vvfat.c b/block/vvfat.c
+index 87b0279..510a559 100644
+--- a/block/vvfat.c
++++ b/block/vvfat.c
+@@ -2874,7 +2874,7 @@ static coroutine_fn int vvfat_co_write(BlockDriverState *bs, int64_t sector_num,
+     return ret;
+ }
+ 
+-static int coroutine_fn vvfat_co_is_allocated(BlockDriverState *bs,
++static int64_t coroutine_fn vvfat_co_get_block_status(BlockDriverState *bs,
+ 	int64_t sector_num, int nb_sectors, int* n)
+ {
+     BDRVVVFATState* s = bs->opaque;
+@@ -2981,7 +2981,7 @@ static BlockDriver bdrv_vvfat = {
+ 
+     .bdrv_read              = vvfat_co_read,
+     .bdrv_write             = vvfat_co_write,
+-    .bdrv_co_is_allocated   = vvfat_co_is_allocated,
++    .bdrv_co_get_block_status = vvfat_co_get_block_status,
+ };
+ 
+ static void bdrv_vvfat_init(void)
+diff --git a/include/block/block.h b/include/block/block.h
+index ec4d4aa..a733f5f 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -281,6 +281,8 @@ void bdrv_drain_all(void);
+ int bdrv_discard(BlockDriverState *bs, int64_t sector_num, int nb_sectors);
+ int bdrv_co_discard(BlockDriverState *bs, int64_t sector_num, int nb_sectors);
+ int bdrv_has_zero_init(BlockDriverState *bs);
++int64_t bdrv_get_block_status(BlockDriverState *bs, int64_t sector_num,
++                              int nb_sectors, int *pnum);
+ int bdrv_is_allocated(BlockDriverState *bs, int64_t sector_num, int nb_sectors,
+                       int *pnum);
+ int bdrv_is_allocated_above(BlockDriverState *top, BlockDriverState *base,
+diff --git a/include/block/block_int.h b/include/block/block_int.h
+index 267be48..ea2c811 100644
+--- a/include/block/block_int.h
++++ b/include/block/block_int.h
+@@ -124,7 +124,7 @@ struct BlockDriver {
+         int64_t sector_num, int nb_sectors);
+     int coroutine_fn (*bdrv_co_discard)(BlockDriverState *bs,
+         int64_t sector_num, int nb_sectors);
+-    int coroutine_fn (*bdrv_co_is_allocated)(BlockDriverState *bs,
++    int64_t coroutine_fn (*bdrv_co_get_block_status)(BlockDriverState *bs,
+         int64_t sector_num, int nb_sectors, int *pnum);
+ 
+     /*
+-- 
+1.7.1
+

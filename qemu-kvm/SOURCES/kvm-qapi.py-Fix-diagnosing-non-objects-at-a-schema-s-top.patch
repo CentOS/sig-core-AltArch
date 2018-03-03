@@ -1,0 +1,99 @@
+From 73cd8a69f21978e950706a633d9a25e10fe6ad2d Mon Sep 17 00:00:00 2001
+Message-Id: <73cd8a69f21978e950706a633d9a25e10fe6ad2d.1387369730.git.minovotn@redhat.com>
+In-Reply-To: <091eecc4fa42754760dfff393dabcc2b444e9693.1387369730.git.minovotn@redhat.com>
+References: <091eecc4fa42754760dfff393dabcc2b444e9693.1387369730.git.minovotn@redhat.com>
+From: Markus Armbruster <armbru@redhat.com>
+Date: Tue, 10 Dec 2013 15:29:17 +0100
+Subject: [PATCH 17/21] qapi.py: Fix diagnosing non-objects at a schema's
+ top-level
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1386689361-30281-15-git-send-email-armbru@redhat.com>
+Patchwork-id: 56129
+O-Subject: [PATCH 7.0 qemu-kvm 14/18] qapi.py: Fix diagnosing non-objects at a schema's top-level
+Bugzilla: 997915
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Report syntax error instead of crashing.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Message-id: 1374939721-7876-8-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit 5f3cd2b717c949f3afb502fb4c81193eb18ce6aa)
+---
+ scripts/qapi.py                               | 10 ++++++----
+ tests/qapi-schema/non-objects.err             |  2 +-
+ tests/qapi-schema/quoted-structural-chars.err |  2 +-
+ 3 files changed, 8 insertions(+), 6 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ scripts/qapi.py                               | 10 ++++++----
+ tests/qapi-schema/non-objects.err             |  2 +-
+ tests/qapi-schema/quoted-structural-chars.err |  2 +-
+ 3 files changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/scripts/qapi.py b/scripts/qapi.py
+index 12fb29a..75fc282 100644
+--- a/scripts/qapi.py
++++ b/scripts/qapi.py
+@@ -64,7 +64,7 @@ class QAPISchema:
+         self.accept()
+ 
+         while self.tok != None:
+-            self.exprs.append(self.get_expr())
++            self.exprs.append(self.get_expr(False))
+ 
+     def accept(self):
+         while True:
+@@ -117,7 +117,7 @@ class QAPISchema:
+             if self.tok != ':':
+                 raise QAPISchemaError(self, 'Expected ":"')
+             self.accept()
+-            expr[key] = self.get_expr()
++            expr[key] = self.get_expr(True)
+             if self.tok == '}':
+                 self.accept()
+                 return expr
+@@ -135,7 +135,7 @@ class QAPISchema:
+         if not self.tok in [ '{', '[', "'" ]:
+             raise QAPISchemaError(self, 'Expected "{", "[", "]" or string')
+         while True:
+-            expr.append(self.get_expr())
++            expr.append(self.get_expr(True))
+             if self.tok == ']':
+                 self.accept()
+                 return expr
+@@ -143,7 +143,9 @@ class QAPISchema:
+                 raise QAPISchemaError(self, 'Expected "," or "]"')
+             self.accept()
+ 
+-    def get_expr(self):
++    def get_expr(self, nested):
++        if self.tok != '{' and not nested:
++            raise QAPISchemaError(self, 'Expected "{"')
+         if self.tok == '{':
+             self.accept()
+             expr = self.get_members()
+diff --git a/tests/qapi-schema/non-objects.err b/tests/qapi-schema/non-objects.err
+index 48c849d..a6c2dc2 100644
+--- a/tests/qapi-schema/non-objects.err
++++ b/tests/qapi-schema/non-objects.err
+@@ -1 +1 @@
+-Crashed: <type 'exceptions.AttributeError'>
++<stdin>:1:1: Expected "{"
+diff --git a/tests/qapi-schema/quoted-structural-chars.err b/tests/qapi-schema/quoted-structural-chars.err
+index 48c849d..a6c2dc2 100644
+--- a/tests/qapi-schema/quoted-structural-chars.err
++++ b/tests/qapi-schema/quoted-structural-chars.err
+@@ -1 +1 @@
+-Crashed: <type 'exceptions.AttributeError'>
++<stdin>:1:1: Expected "{"
+-- 
+1.7.11.7
+

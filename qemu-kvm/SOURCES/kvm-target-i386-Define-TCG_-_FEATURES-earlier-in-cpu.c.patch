@@ -1,0 +1,171 @@
+From 30c05c032f0af4e959b304f5223dbaf331955488 Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Thu, 23 Feb 2017 14:29:43 +0100
+Subject: [PATCH 13/17] target-i386: Define TCG_*_FEATURES earlier in cpu.c
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Eduardo Habkost <ehabkost@redhat.com>
+Message-id: <20170223142945.17790-13-ehabkost@redhat.com>
+Patchwork-id: 74042
+O-Subject: [RHEL-7.4 qemu-kvm PATCH v2 12/14] target-i386: Define TCG_*_FEATURES earlier in cpu.c
+Bugzilla: 1382122
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Those macros will be used in the feature_word_info array data, so need
+to be defined earlier.
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit 621626ce7d44f008298c7e6cfefa9fbb80a33dc2)
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/cpu.c | 121 +++++++++++++++++++++++++++---------------------------
+ 1 file changed, 61 insertions(+), 60 deletions(-)
+
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index e6821b6..d611062 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -187,6 +187,67 @@ static const char *cpuid_xsave_feature_name[] = {
+     NULL, NULL, NULL, NULL,
+ };
+ 
++#define I486_FEATURES (CPUID_FP87 | CPUID_VME | CPUID_PSE)
++#define PENTIUM_FEATURES (I486_FEATURES | CPUID_DE | CPUID_TSC | \
++          CPUID_MSR | CPUID_MCE | CPUID_CX8 | CPUID_MMX | CPUID_APIC)
++#define PENTIUM2_FEATURES (PENTIUM_FEATURES | CPUID_PAE | CPUID_SEP | \
++          CPUID_MTRR | CPUID_PGE | CPUID_MCA | CPUID_CMOV | CPUID_PAT | \
++          CPUID_PSE36 | CPUID_FXSR)
++#define PENTIUM3_FEATURES (PENTIUM2_FEATURES | CPUID_SSE)
++#define PPRO_FEATURES (CPUID_FP87 | CPUID_DE | CPUID_PSE | CPUID_TSC | \
++          CPUID_MSR | CPUID_MCE | CPUID_CX8 | CPUID_PGE | CPUID_CMOV | \
++          CPUID_PAT | CPUID_FXSR | CPUID_MMX | CPUID_SSE | CPUID_SSE2 | \
++          CPUID_PAE | CPUID_SEP | CPUID_APIC)
++
++#define TCG_FEATURES (CPUID_FP87 | CPUID_PSE | CPUID_TSC | CPUID_MSR | \
++          CPUID_PAE | CPUID_MCE | CPUID_CX8 | CPUID_APIC | CPUID_SEP | \
++          CPUID_MTRR | CPUID_PGE | CPUID_MCA | CPUID_CMOV | CPUID_PAT | \
++          CPUID_PSE36 | CPUID_CLFLUSH | CPUID_ACPI | CPUID_MMX | \
++          CPUID_FXSR | CPUID_SSE | CPUID_SSE2 | CPUID_SS)
++          /* partly implemented:
++          CPUID_MTRR, CPUID_MCA, CPUID_CLFLUSH (needed for Win64)
++          CPUID_PSE36 (needed for Solaris) */
++          /* missing:
++          CPUID_VME, CPUID_DTS, CPUID_SS, CPUID_HT, CPUID_TM, CPUID_PBE */
++#define TCG_EXT_FEATURES (CPUID_EXT_SSE3 | CPUID_EXT_PCLMULQDQ | \
++          CPUID_EXT_MONITOR | CPUID_EXT_SSSE3 | CPUID_EXT_CX16 | \
++          CPUID_EXT_SSE41 | CPUID_EXT_SSE42 | CPUID_EXT_POPCNT | \
++          CPUID_EXT_MOVBE | CPUID_EXT_AES | CPUID_EXT_HYPERVISOR)
++          /* missing:
++          CPUID_EXT_DTES64, CPUID_EXT_DSCPL, CPUID_EXT_VMX, CPUID_EXT_SMX,
++          CPUID_EXT_EST, CPUID_EXT_TM2, CPUID_EXT_CID, CPUID_EXT_FMA,
++          CPUID_EXT_XTPR, CPUID_EXT_PDCM, CPUID_EXT_PCID, CPUID_EXT_DCA,
++          CPUID_EXT_X2APIC, CPUID_EXT_TSC_DEADLINE_TIMER, CPUID_EXT_XSAVE,
++          CPUID_EXT_OSXSAVE, CPUID_EXT_AVX, CPUID_EXT_F16C,
++          CPUID_EXT_RDRAND */
++
++#ifdef TARGET_X86_64
++#define TCG_EXT2_X86_64_FEATURES (CPUID_EXT2_SYSCALL | CPUID_EXT2_LM)
++#else
++#define TCG_EXT2_X86_64_FEATURES 0
++#endif
++
++#define TCG_EXT2_FEATURES ((TCG_FEATURES & CPUID_EXT2_AMD_ALIASES) | \
++          CPUID_EXT2_NX | CPUID_EXT2_MMXEXT | CPUID_EXT2_RDTSCP | \
++          CPUID_EXT2_3DNOW | CPUID_EXT2_3DNOWEXT | \
++          TCG_EXT2_X86_64_FEATURES)
++          /* missing:
++          CPUID_EXT2_PDPE1GB */
++#define TCG_EXT3_FEATURES (CPUID_EXT3_LAHF_LM | CPUID_EXT3_SVM | \
++          CPUID_EXT3_CR8LEG | CPUID_EXT3_ABM | CPUID_EXT3_SSE4A)
++#define TCG_EXT4_FEATURES 0
++#define TCG_SVM_FEATURES 0
++#define TCG_KVM_FEATURES 0
++#define TCG_7_0_EBX_FEATURES (CPUID_7_0_EBX_SMEP | CPUID_7_0_EBX_SMAP | \
++          CPUID_7_0_EBX_BMI1 | CPUID_7_0_EBX_BMI2 | CPUID_7_0_EBX_ADX)
++          /* missing:
++          CPUID_7_0_EBX_FSGSBASE, CPUID_7_0_EBX_HLE, CPUID_7_0_EBX_AVX2,
++          CPUID_7_0_EBX_ERMS, CPUID_7_0_EBX_INVPCID, CPUID_7_0_EBX_RTM,
++          CPUID_7_0_EBX_RDSEED */
++#define TCG_7_0_ECX_FEATURES 0
++#define TCG_7_0_EDX_FEATURES 0
++
++
+ typedef struct FeatureWordInfo {
+     const char **feat_names;
+     uint32_t cpuid_eax;   /* Input EAX for CPUID */
+@@ -453,66 +514,6 @@ typedef struct x86_def_t {
+     char model_id[48];
+ } x86_def_t;
+ 
+-#define I486_FEATURES (CPUID_FP87 | CPUID_VME | CPUID_PSE)
+-#define PENTIUM_FEATURES (I486_FEATURES | CPUID_DE | CPUID_TSC | \
+-          CPUID_MSR | CPUID_MCE | CPUID_CX8 | CPUID_MMX | CPUID_APIC)
+-#define PENTIUM2_FEATURES (PENTIUM_FEATURES | CPUID_PAE | CPUID_SEP | \
+-          CPUID_MTRR | CPUID_PGE | CPUID_MCA | CPUID_CMOV | CPUID_PAT | \
+-          CPUID_PSE36 | CPUID_FXSR)
+-#define PENTIUM3_FEATURES (PENTIUM2_FEATURES | CPUID_SSE)
+-#define PPRO_FEATURES (CPUID_FP87 | CPUID_DE | CPUID_PSE | CPUID_TSC | \
+-          CPUID_MSR | CPUID_MCE | CPUID_CX8 | CPUID_PGE | CPUID_CMOV | \
+-          CPUID_PAT | CPUID_FXSR | CPUID_MMX | CPUID_SSE | CPUID_SSE2 | \
+-          CPUID_PAE | CPUID_SEP | CPUID_APIC)
+-
+-#define TCG_FEATURES (CPUID_FP87 | CPUID_PSE | CPUID_TSC | CPUID_MSR | \
+-          CPUID_PAE | CPUID_MCE | CPUID_CX8 | CPUID_APIC | CPUID_SEP | \
+-          CPUID_MTRR | CPUID_PGE | CPUID_MCA | CPUID_CMOV | CPUID_PAT | \
+-          CPUID_PSE36 | CPUID_CLFLUSH | CPUID_ACPI | CPUID_MMX | \
+-          CPUID_FXSR | CPUID_SSE | CPUID_SSE2 | CPUID_SS)
+-          /* partly implemented:
+-          CPUID_MTRR, CPUID_MCA, CPUID_CLFLUSH (needed for Win64)
+-          CPUID_PSE36 (needed for Solaris) */
+-          /* missing:
+-          CPUID_VME, CPUID_DTS, CPUID_SS, CPUID_HT, CPUID_TM, CPUID_PBE */
+-#define TCG_EXT_FEATURES (CPUID_EXT_SSE3 | CPUID_EXT_PCLMULQDQ | \
+-          CPUID_EXT_MONITOR | CPUID_EXT_SSSE3 | CPUID_EXT_CX16 | \
+-          CPUID_EXT_SSE41 | CPUID_EXT_SSE42 | CPUID_EXT_POPCNT | \
+-          CPUID_EXT_MOVBE | CPUID_EXT_AES | CPUID_EXT_HYPERVISOR)
+-          /* missing:
+-          CPUID_EXT_DTES64, CPUID_EXT_DSCPL, CPUID_EXT_VMX, CPUID_EXT_SMX,
+-          CPUID_EXT_EST, CPUID_EXT_TM2, CPUID_EXT_CID, CPUID_EXT_FMA,
+-          CPUID_EXT_XTPR, CPUID_EXT_PDCM, CPUID_EXT_PCID, CPUID_EXT_DCA,
+-          CPUID_EXT_X2APIC, CPUID_EXT_TSC_DEADLINE_TIMER, CPUID_EXT_XSAVE,
+-          CPUID_EXT_OSXSAVE, CPUID_EXT_AVX, CPUID_EXT_F16C,
+-          CPUID_EXT_RDRAND */
+-
+-#ifdef TARGET_X86_64
+-#define TCG_EXT2_X86_64_FEATURES (CPUID_EXT2_SYSCALL | CPUID_EXT2_LM)
+-#else
+-#define TCG_EXT2_X86_64_FEATURES 0
+-#endif
+-
+-#define TCG_EXT2_FEATURES ((TCG_FEATURES & CPUID_EXT2_AMD_ALIASES) | \
+-          CPUID_EXT2_NX | CPUID_EXT2_MMXEXT | CPUID_EXT2_RDTSCP | \
+-          CPUID_EXT2_3DNOW | CPUID_EXT2_3DNOWEXT | \
+-          TCG_EXT2_X86_64_FEATURES)
+-          /* missing:
+-          CPUID_EXT2_PDPE1GB */
+-#define TCG_EXT3_FEATURES (CPUID_EXT3_LAHF_LM | CPUID_EXT3_SVM | \
+-          CPUID_EXT3_CR8LEG | CPUID_EXT3_ABM | CPUID_EXT3_SSE4A)
+-#define TCG_EXT4_FEATURES 0
+-#define TCG_SVM_FEATURES 0
+-#define TCG_KVM_FEATURES 0
+-#define TCG_7_0_EBX_FEATURES (CPUID_7_0_EBX_SMEP | CPUID_7_0_EBX_SMAP | \
+-          CPUID_7_0_EBX_BMI1 | CPUID_7_0_EBX_BMI2 | CPUID_7_0_EBX_ADX)
+-          /* missing:
+-          CPUID_7_0_EBX_FSGSBASE, CPUID_7_0_EBX_HLE, CPUID_7_0_EBX_AVX2,
+-          CPUID_7_0_EBX_ERMS, CPUID_7_0_EBX_INVPCID, CPUID_7_0_EBX_RTM,
+-          CPUID_7_0_EBX_RDSEED */
+-#define TCG_7_0_ECX_FEATURES 0
+-#define TCG_7_0_EDX_FEATURES 0
+-
+ /* built-in CPU model definitions
+  */
+ static x86_def_t builtin_x86_defs[] = {
+-- 
+1.8.3.1
+

@@ -1,0 +1,287 @@
+From ea939f77fa0b152746821afb017cfef8170e5500 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Wed, 22 Feb 2017 12:36:21 +0100
+Subject: [PATCH 03/24] ui/vnc: optimize dirty bitmap tracking
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1487766986-6329-4-git-send-email-kraxel@redhat.com>
+Patchwork-id: 73979
+O-Subject: [RHEL-7.4 qemu-kvm PATCH 3/8] ui/vnc: optimize dirty bitmap tracking
+Bugzilla: 1377977
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Marc-André Lureau <mlureau@redhat.com>
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+
+From: Peter Lieven <pl@kamp.de>
+
+vnc_update_client currently scans the dirty bitmap of each client
+bitwise which is a very costly operation if only few bits are dirty.
+vnc_refresh_server_surface does almost the same.
+this patch optimizes both by utilizing the heavily optimized
+function find_next_bit to find the offset of the next dirty
+bit in the dirty bitmaps.
+
+The following artifical test (just the bitmap operation part) running
+vnc_update_client 65536 times on a 2560x2048 surface illustrates the
+performance difference:
+
+All bits clean - vnc_update_client_new: 0.07 secs
+ vnc_update_client_old: 10.98 secs
+
+All bits dirty - vnc_update_client_new: 11.26 secs
+ vnc_update_client_old: 20.19 secs
+
+Few bits dirty - vnc_update_client_new: 0.08 secs
+ vnc_update_client_old: 10.98 secs
+
+The case for all bits dirty is still rather slow, this
+is due to the implementation of find_and_clear_dirty_height.
+This will be addresses in a separate patch.
+
+Signed-off-by: Peter Lieven <pl@kamp.de>
+Reviewed-by: Wenchao Xia <xiawenc@linux.vnet.ibm.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 12b316d4c173bf07f421ef9dc98ba4b53916066e)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ ui/vnc.c | 155 ++++++++++++++++++++++++++++++++++-----------------------------
+ ui/vnc.h |   4 ++
+ 2 files changed, 88 insertions(+), 71 deletions(-)
+
+diff --git a/ui/vnc.c b/ui/vnc.c
+index 13fb34b..54530a2 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -572,6 +572,15 @@ void *vnc_server_fb_ptr(VncDisplay *vd, int x, int y)
+     ptr += x * VNC_SERVER_FB_BYTES;
+     return ptr;
+ }
++/* this sets only the visible pixels of a dirty bitmap */
++#define VNC_SET_VISIBLE_PIXELS_DIRTY(bitmap, w, h) {\
++        int y;\
++        memset(bitmap, 0x00, sizeof(bitmap));\
++        for (y = 0; y < h; y++) {\
++            bitmap_set(bitmap[y], 0,\
++                       DIV_ROUND_UP(w, VNC_DIRTY_PIXELS_PER_BIT));\
++        } \
++    }
+ 
+ static void vnc_dpy_switch(DisplayChangeListener *dcl,
+                            DisplaySurface *surface)
+@@ -597,7 +606,9 @@ static void vnc_dpy_switch(DisplayChangeListener *dcl,
+     qemu_pixman_image_unref(vd->guest.fb);
+     vd->guest.fb = pixman_image_ref(surface->image);
+     vd->guest.format = surface->format;
+-    memset(vd->guest.dirty, 0xFF, sizeof(vd->guest.dirty));
++    VNC_SET_VISIBLE_PIXELS_DIRTY(vd->guest.dirty,
++                                 surface_width(vd->ds),
++                                 surface_height(vd->ds));
+ 
+     QTAILQ_FOREACH(vs, &vd->clients, next) {
+         vnc_colordepth(vs);
+@@ -605,7 +616,9 @@ static void vnc_dpy_switch(DisplayChangeListener *dcl,
+         if (vs->vd->cursor) {
+             vnc_cursor_define(vs);
+         }
+-        memset(vs->dirty, 0xFF, sizeof(vs->dirty));
++        VNC_SET_VISIBLE_PIXELS_DIRTY(vs->dirty,
++                                     surface_width(vd->ds),
++                                     surface_height(vd->ds));
+     }
+ }
+ 
+@@ -891,10 +904,9 @@ static int vnc_update_client(VncState *vs, int has_dirty)
+         VncDisplay *vd = vs->vd;
+         VncJob *job;
+         int y;
+-        int width, height;
++        int height;
+         int n = 0;
+ 
+-
+         if (vs->output.offset && !vs->audio_cap && !vs->force_update)
+             /* kernel send buffers are full -> drop frames to throttle */
+             return 0;
+@@ -910,39 +922,27 @@ static int vnc_update_client(VncState *vs, int has_dirty)
+          */
+         job = vnc_job_new(vs);
+ 
+-        width = MIN(pixman_image_get_width(vd->server), vs->client_width);
+         height = MIN(pixman_image_get_height(vd->server), vs->client_height);
+ 
+-        for (y = 0; y < height; y++) {
+-            int x;
+-            int last_x = -1;
+-            for (x = 0; x < width / VNC_DIRTY_PIXELS_PER_BIT; x++) {
+-                if (test_and_clear_bit(x, vs->dirty[y])) {
+-                    if (last_x == -1) {
+-                        last_x = x;
+-                    }
+-                } else {
+-                    if (last_x != -1) {
+-                        int h = find_and_clear_dirty_height(vs, y, last_x, x,
+-                                                            height);
+-
+-                        n += vnc_job_add_rect(job,
+-                                              last_x * VNC_DIRTY_PIXELS_PER_BIT,
+-                                              y,
+-                                              (x - last_x) *
+-                                              VNC_DIRTY_PIXELS_PER_BIT,
+-                                              h);
+-                    }
+-                    last_x = -1;
+-                }
+-            }
+-            if (last_x != -1) {
+-                int h = find_and_clear_dirty_height(vs, y, last_x, x, height);
+-                n += vnc_job_add_rect(job, last_x * VNC_DIRTY_PIXELS_PER_BIT,
+-                                      y,
+-                                      (x - last_x) * VNC_DIRTY_PIXELS_PER_BIT,
+-                                      h);
++        y = 0;
++        for (;;) {
++            int x, h;
++            unsigned long x2;
++            unsigned long offset = find_next_bit((unsigned long *) &vs->dirty,
++                                                 height * VNC_DIRTY_BPL(vs),
++                                                 y * VNC_DIRTY_BPL(vs));
++            if (offset == height * VNC_DIRTY_BPL(vs)) {
++                /* no more dirty bits */
++                break;
+             }
++            y = offset / VNC_DIRTY_BPL(vs);
++            x = offset % VNC_DIRTY_BPL(vs);
++            x2 = find_next_zero_bit((unsigned long *) &vs->dirty[y],
++                                    VNC_DIRTY_BPL(vs), x);
++            bitmap_clear(vs->dirty[y], x, x2 - x);
++            h = find_and_clear_dirty_height(vs, y, x, x2, height);
++            n += vnc_job_add_rect(job, x * VNC_DIRTY_PIXELS_PER_BIT, y,
++                                  (x2 - x) * VNC_DIRTY_PIXELS_PER_BIT, h);
+         }
+ 
+         vnc_job_push(job);
+@@ -2690,8 +2690,8 @@ static int vnc_refresh_server_surface(VncDisplay *vd)
+     int width = pixman_image_get_width(vd->guest.fb);
+     int height = pixman_image_get_height(vd->guest.fb);
+     int y;
+-    uint8_t *guest_row;
+-    uint8_t *server_row;
++    uint8_t *guest_row0 = NULL, *server_row0;
++    int guest_stride = 0, server_stride;
+     int cmp_bytes;
+     VncState *vs;
+     int has_dirty = 0;
+@@ -2716,44 +2716,57 @@ static int vnc_refresh_server_surface(VncDisplay *vd)
+     if (vd->guest.format != VNC_SERVER_FB_FORMAT) {
+         int width = pixman_image_get_width(vd->server);
+         tmpbuf = qemu_pixman_linebuf_create(VNC_SERVER_FB_FORMAT, width);
+-    }
+-    guest_row = (uint8_t *)pixman_image_get_data(vd->guest.fb);
+-    server_row = (uint8_t *)pixman_image_get_data(vd->server);
+-    for (y = 0; y < height; y++) {
+-        if (!bitmap_empty(vd->guest.dirty[y], VNC_DIRTY_BITS)) {
+-            int x;
+-            uint8_t *guest_ptr;
+-            uint8_t *server_ptr;
+-
+-            if (vd->guest.format != VNC_SERVER_FB_FORMAT) {
+-                qemu_pixman_linebuf_fill(tmpbuf, vd->guest.fb, width, 0, y);
+-                guest_ptr = (uint8_t *)pixman_image_get_data(tmpbuf);
+-            } else {
+-                guest_ptr = guest_row;
+-            }
+-            server_ptr = server_row;
++    } else {
++        guest_row0 = (uint8_t *)pixman_image_get_data(vd->guest.fb);
++        guest_stride = pixman_image_get_stride(vd->guest.fb);
++    }
++    server_row0 = (uint8_t *)pixman_image_get_data(vd->server);
++    server_stride = pixman_image_get_stride(vd->server);
++
++    y = 0;
++    for (;;) {
++        int x;
++        uint8_t *guest_ptr, *server_ptr;
++        unsigned long offset = find_next_bit((unsigned long *) &vd->guest.dirty,
++                                             height * VNC_DIRTY_BPL(&vd->guest),
++                                             y * VNC_DIRTY_BPL(&vd->guest));
++        if (offset == height * VNC_DIRTY_BPL(&vd->guest)) {
++            /* no more dirty bits */
++            break;
++        }
++        y = offset / VNC_DIRTY_BPL(&vd->guest);
++        x = offset % VNC_DIRTY_BPL(&vd->guest);
+ 
+-            for (x = 0; x + VNC_DIRTY_PIXELS_PER_BIT - 1 < width;
+-                 x += VNC_DIRTY_PIXELS_PER_BIT, guest_ptr += cmp_bytes,
+-                 server_ptr += cmp_bytes) {
+-                if (!test_and_clear_bit((x / VNC_DIRTY_PIXELS_PER_BIT),
+-                    vd->guest.dirty[y])) {
+-                    continue;
+-                }
+-                if (memcmp(server_ptr, guest_ptr, cmp_bytes) == 0) {
+-                    continue;
+-                }
+-                memcpy(server_ptr, guest_ptr, cmp_bytes);
+-                if (!vd->non_adaptive)
+-                    vnc_rect_updated(vd, x, y, &tv);
+-                QTAILQ_FOREACH(vs, &vd->clients, next) {
+-                    set_bit((x / VNC_DIRTY_PIXELS_PER_BIT), vs->dirty[y]);
+-                }
+-                has_dirty++;
++        server_ptr = server_row0 + y * server_stride + x * cmp_bytes;
++
++        if (vd->guest.format != VNC_SERVER_FB_FORMAT) {
++            qemu_pixman_linebuf_fill(tmpbuf, vd->guest.fb, width, 0, y);
++            guest_ptr = (uint8_t *)pixman_image_get_data(tmpbuf);
++        } else {
++            guest_ptr = guest_row0 + y * guest_stride;
++        }
++        guest_ptr += x * cmp_bytes;
++
++        for (; x < DIV_ROUND_UP(width, VNC_DIRTY_PIXELS_PER_BIT);
++             x++, guest_ptr += cmp_bytes, server_ptr += cmp_bytes) {
++            if (!test_and_clear_bit(x, vd->guest.dirty[y])) {
++                continue;
++            }
++            if (memcmp(server_ptr, guest_ptr, cmp_bytes) == 0) {
++                continue;
++            }
++            memcpy(server_ptr, guest_ptr, cmp_bytes);
++            if (!vd->non_adaptive) {
++                vnc_rect_updated(vd, x * VNC_DIRTY_PIXELS_PER_BIT,
++                                 y, &tv);
+             }
++            QTAILQ_FOREACH(vs, &vd->clients, next) {
++                set_bit(x, vs->dirty[y]);
++            }
++            has_dirty++;
+         }
+-        guest_row  += pixman_image_get_stride(vd->guest.fb);
+-        server_row += pixman_image_get_stride(vd->server);
++
++        y++;
+     }
+     qemu_pixman_image_unref(tmpbuf);
+     return has_dirty;
+diff --git a/ui/vnc.h b/ui/vnc.h
+index 561f383..ebf4bdd 100644
+--- a/ui/vnc.h
++++ b/ui/vnc.h
+@@ -88,6 +88,10 @@ typedef void VncSendHextileTile(VncState *vs,
+ /* VNC_DIRTY_BITS is the number of bits in the dirty bitmap. */
+ #define VNC_DIRTY_BITS (VNC_MAX_WIDTH / VNC_DIRTY_PIXELS_PER_BIT)
+ 
++/* VNC_DIRTY_BPL (BPL = bits per line) might be greater than
++ * VNC_DIRTY_BITS due to alignment */
++#define VNC_DIRTY_BPL(x) (sizeof((x)->dirty) / VNC_MAX_HEIGHT * BITS_PER_BYTE)
++
+ #define VNC_STAT_RECT  64
+ #define VNC_STAT_COLS (VNC_MAX_WIDTH / VNC_STAT_RECT)
+ #define VNC_STAT_ROWS (VNC_MAX_HEIGHT / VNC_STAT_RECT)
+-- 
+1.8.3.1
+

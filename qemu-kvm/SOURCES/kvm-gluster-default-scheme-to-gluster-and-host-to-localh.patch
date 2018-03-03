@@ -1,0 +1,58 @@
+From a5dba057d87136b90802c822f296164b52266273 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Tue, 2 Sep 2014 19:26:26 +0200
+Subject: [PATCH 4/6] gluster: default scheme to gluster:// and host to localhost.
+
+Message-id: <dad17090b75becd16b580a4f4da0dbe2d4ec5697.1409685668.git.jcody@redhat.com>
+Patchwork-id: 60813
+O-Subject: [PATCH qemu-kvm-rhev RHEL7.1] gluster: default scheme to gluster:// and host to localhost.
+Bugzilla: 1088150
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+Currently, "gluster:///volname/img" and (using file. options)
+"file.driver=gluster,file.filename=foo" will segfault.  Also,
+"//host/volname/img" will be rejected, but it is a valid URL
+that should be accepted just fine with "file.driver=gluster".
+Accept all of these, by inferring missing transport and host
+as TCP and localhost respectively.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 24897a767bd778fc6a050537d024565f9272cd06)
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/gluster.c |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/block/gluster.c b/block/gluster.c
+index da43d0c..5f85799 100644
+--- a/block/gluster.c
++++ b/block/gluster.c
+@@ -134,7 +134,7 @@ static int qemu_gluster_parseuri(GlusterConf *gconf, const char *filename)
+     }
+ 
+     /* transport */
+-    if (!strcmp(uri->scheme, "gluster")) {
++    if (!uri->scheme || !strcmp(uri->scheme, "gluster")) {
+         gconf->transport = g_strdup("tcp");
+     } else if (!strcmp(uri->scheme, "gluster+tcp")) {
+         gconf->transport = g_strdup("tcp");
+@@ -170,7 +170,7 @@ static int qemu_gluster_parseuri(GlusterConf *gconf, const char *filename)
+         }
+         gconf->server = g_strdup(qp->p[0].value);
+     } else {
+-        gconf->server = g_strdup(uri->server);
++        gconf->server = g_strdup(uri->server ? uri->server : "localhost");
+         gconf->port = uri->port;
+     }
+ 
+-- 
+1.7.1
+

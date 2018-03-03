@@ -1,0 +1,63 @@
+From 0bdb440567cacd42675c39d97fb19b20e77d93da Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Wed, 15 Jan 2014 09:14:31 -0500
+Subject: [PATCH 04/14] audio: honor QEMU_AUDIO_TIMER_PERIOD instead of waking
+ up every *nano* second.
+
+Message-id: <23a0c5622fb294ab7cbcf3a812f5ab2f2e47b461.1389776721.git.mrezanin@redhat.com>
+Patchwork-id: 56719
+O-Subject: [RHEL7 qemu-kvm PATCH 1/3] audio: honor QEMU_AUDIO_TIMER_PERIOD instead of waking up every *nano* second.
+Bugzilla: 1017636
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Miroslav Rezanina <mrezanin@redhat.com>
+
+This is manual backport of upstream commit b4350deed:
+
+    Now that we no longer have MIN_REARM_TIMER_NS a bug in the audio subsys has
+    clearly shown it self by trying to make a timer fire every nano second.
+
+    Note we have a similar problem in 1.6, 1.5 and older but there
+    MIN_REARM_TIMER_NS limits the wakeups caused by audio being active to
+    4000 times / second. This still causes a host cpu load of 50 % for simply
+    playing audio, where as with this patch git master is at 13%, so we should
+    backport this to 1.5 and 1.6 too.
+
+    Note this will not apply to 1.5 and 1.6 as is.
+
+    Cc: qemu-stable@nongnu.org
+    Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+    Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+
+RHEL does not use new timer api so patch couldn't be cherry picked.
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+Upstream: b4350deed67b95651896ddb60cf9f765093a4848
+---
+ audio/audio.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ audio/audio.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/audio/audio.c b/audio/audio.c
+index 02bb886..ebf7d3f 100644
+--- a/audio/audio.c
++++ b/audio/audio.c
+@@ -1124,7 +1124,8 @@ static int audio_is_timer_needed (void)
+ static void audio_reset_timer (AudioState *s)
+ {
+     if (audio_is_timer_needed ()) {
+-        qemu_mod_timer (s->ts, qemu_get_clock_ns (vm_clock) + 1);
++        qemu_mod_timer (s->ts, 
++            qemu_get_clock_ns (vm_clock) + conf.period.ticks);
+     }
+     else {
+         qemu_del_timer (s->ts);
+-- 
+1.8.3.1
+

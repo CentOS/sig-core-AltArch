@@ -1,0 +1,129 @@
+From 0ae4c882404b4590c34bb9b03a86f9389413fd1c Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Wed, 7 Sep 2016 14:09:52 +0200
+Subject: [PATCH 2/2] Add skip_dump flag to ignore memory region during dump
+
+RH-Author: Alex Williamson <alex.williamson@redhat.com>
+Message-id: <20160907140817.21968.47551.stgit@gimli.home>
+Patchwork-id: 72264
+O-Subject: [RHEL7.3 qemu-kvm PATCH v2] Add skip_dump flag to ignore memory region during dump
+Bugzilla: 1373088
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Auger Eric <eric.auger@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Nikunj A Dadhania <nikunj@linux.vnet.ibm.com>
+
+Bugzilla: 1373088
+Brew: https://brewweb.engineering.redhat.com/brew/taskinfo?taskID=11713365
+Upstream: e4dc3f5909ab90520bc1a27b381c3017ff65ed68
+
+The PCI MMIO might be disabled or the device in the reset state.
+Make sure we do not dump these memory regions.
+
+Signed-off-by: Nikunj A Dadhania <nikunj@linux.vnet.ibm.com>
+Acked-by: Alex Williamson <alex.williamson@redhat.com>
+CC: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c        |  1 +
+ include/exec/memory.h | 19 +++++++++++++++++++
+ memory.c              | 10 ++++++++++
+ memory_mapping.c      |  3 ++-
+ 4 files changed, 32 insertions(+), 1 deletion(-)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index 36b9832..4fdc09a 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -2596,6 +2596,7 @@ static int vfio_mmap_bar(VFIOBAR *bar, MemoryRegion *mem, MemoryRegion *submem,
+         }
+ 
+         memory_region_init_ram_ptr(submem, name, size, *map);
++        memory_region_set_skip_dump(submem);
+     } else {
+ empty_region:
+         /* Create a zero sized sub-region to make cleanup easy. */
+diff --git a/include/exec/memory.h b/include/exec/memory.h
+index 3bbe378..448d501 100644
+--- a/include/exec/memory.h
++++ b/include/exec/memory.h
+@@ -126,6 +126,7 @@ struct MemoryRegion {
+     bool terminates;
+     bool romd_mode;
+     bool ram;
++    bool skip_dump;
+     bool readonly; /* For RAM regions */
+     bool enabled;
+     bool rom_device;
+@@ -353,6 +354,24 @@ uint64_t memory_region_size(MemoryRegion *mr);
+ bool memory_region_is_ram(MemoryRegion *mr);
+ 
+ /**
++ * memory_region_is_skip_dump: check whether a memory region should not be
++ *                             dumped
++ *
++ * Returns %true is a memory region should not be dumped(e.g. VFIO BAR MMAP).
++ *
++ * @mr: the memory region being queried
++ */
++bool memory_region_is_skip_dump(MemoryRegion *mr);
++
++/**
++ * memory_region_set_skip_dump: Set skip_dump flag, dump will ignore this memory
++ *                              region
++ *
++ * @mr: the memory region being queried
++ */
++void memory_region_set_skip_dump(MemoryRegion *mr);
++
++/**
+  * memory_region_is_romd: check whether a memory region is in ROMD mode
+  *
+  * Returns %true if a memory region is a ROM device and currently set to allow
+diff --git a/memory.c b/memory.c
+index a71d096..7bd6e87 100644
+--- a/memory.c
++++ b/memory.c
+@@ -957,6 +957,11 @@ void memory_region_init_ram_ptr(MemoryRegion *mr,
+     mr->ram_addr = qemu_ram_alloc_from_ptr(size, ptr, mr);
+ }
+ 
++void memory_region_set_skip_dump(MemoryRegion *mr)
++{
++    mr->skip_dump = true;
++}
++
+ void memory_region_init_alias(MemoryRegion *mr,
+                               const char *name,
+                               MemoryRegion *orig,
+@@ -1047,6 +1052,11 @@ bool memory_region_is_ram(MemoryRegion *mr)
+     return mr->ram;
+ }
+ 
++bool memory_region_is_skip_dump(MemoryRegion *mr)
++{
++    return mr->skip_dump;
++}
++
+ bool memory_region_is_logging(MemoryRegion *mr)
+ {
+     return mr->dirty_log_mask;
+diff --git a/memory_mapping.c b/memory_mapping.c
+index 65082d8..a4d59b7 100644
+--- a/memory_mapping.c
++++ b/memory_mapping.c
+@@ -203,7 +203,8 @@ static void guest_phys_blocks_region_add(MemoryListener *listener,
+     GuestPhysBlock *predecessor;
+ 
+     /* we only care about RAM */
+-    if (!memory_region_is_ram(section->mr)) {
++    if (!memory_region_is_ram(section->mr) ||
++        memory_region_is_skip_dump(section->mr)) {
+         return;
+     }
+ 
+-- 
+1.8.3.1
+

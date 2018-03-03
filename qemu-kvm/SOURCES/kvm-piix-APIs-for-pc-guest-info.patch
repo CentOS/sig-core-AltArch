@@ -1,0 +1,185 @@
+From 364834e660cd4143e69126b2fb9a640c3ee9b9c1 Mon Sep 17 00:00:00 2001
+Message-Id: <364834e660cd4143e69126b2fb9a640c3ee9b9c1.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:18:49 +0100
+Subject: [PATCH 41/56] piix: APIs for pc guest info
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-42-git-send-email-mst@redhat.com>
+Patchwork-id: 56347
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 41/57] piix: APIs for pc guest info
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+This adds APIs that will be used to fill in guest acpi tables.
+Some required information is still lacking in QOM, so we
+fall back on lookups by type and returning explicit types.
+
+Reviewed-by: Gerd Hoffmann <kraxel@redhat.com>
+Tested-by: Gerd Hoffmann <kraxel@redhat.com>
+Reviewed-by: Igor Mammedov <imammedo@redhat.com>
+Tested-by: Igor Mammedov <imammedo@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 277e9340e6a1b0a0e8e988d2f0ac82b18b695c0b)
+
+Conflicts:
+	hw/acpi/piix4.c
+---
+ include/hw/acpi/piix4.h |  8 ++++++++
+ include/hw/i386/pc.h    |  1 +
+ hw/acpi/piix4.c         | 45 ++++++++++++++++++++++++++++++++++++++++-----
+ hw/pci-host/piix.c      |  8 ++++++++
+ 4 files changed, 57 insertions(+), 5 deletions(-)
+ create mode 100644 include/hw/acpi/piix4.h
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/acpi/piix4.c         | 45 ++++++++++++++++++++++++++++++++++++++++-----
+ hw/pci-host/piix.c      |  8 ++++++++
+ include/hw/acpi/piix4.h |  8 ++++++++
+ include/hw/i386/pc.h    |  1 +
+ 4 files changed, 57 insertions(+), 5 deletions(-)
+ create mode 100644 include/hw/acpi/piix4.h
+
+diff --git a/hw/acpi/piix4.c b/hw/acpi/piix4.c
+index 18b1300..6ebabe6 100644
+--- a/hw/acpi/piix4.c
++++ b/hw/acpi/piix4.c
+@@ -29,6 +29,7 @@
+ #include "exec/ioport.h"
+ #include "hw/nvram/fw_cfg.h"
+ #include "exec/address-spaces.h"
++#include "hw/acpi/piix4.h"
+ 
+ //#define DEBUG
+ 
+@@ -67,6 +68,8 @@ typedef struct PIIX4PMState {
+     PCIDevice dev;
+ 
+     MemoryRegion io;
++    uint32_t io_base;
++
+     MemoryRegion io_gpe;
+     MemoryRegion io_pci;
+     MemoryRegion io_cpu;
+@@ -143,14 +146,12 @@ static void apm_ctrl_changed(uint32_t val, void *arg)
+ 
+ static void pm_io_space_update(PIIX4PMState *s)
+ {
+-    uint32_t pm_io_base;
+-
+-    pm_io_base = le32_to_cpu(*(uint32_t *)(s->dev.config + 0x40));
+-    pm_io_base &= 0xffc0;
++    s->io_base = le32_to_cpu(*(uint32_t *)(s->dev.config + 0x40));
++    s->io_base &= 0xffc0;
+ 
+     memory_region_transaction_begin();
+     memory_region_set_enabled(&s->io, s->dev.config[0x80] & 1);
+-    memory_region_set_address(&s->io, pm_io_base);
++    memory_region_set_address(&s->io, s->io_base);
+     memory_region_transaction_commit();
+ }
+ 
+@@ -393,6 +394,28 @@ static void piix4_pm_machine_ready(Notifier *n, void *opaque)
+ 
+ }
+ 
++static void piix4_pm_add_propeties(PIIX4PMState *s)
++{
++    static const uint8_t acpi_enable_cmd = ACPI_ENABLE;
++    static const uint8_t acpi_disable_cmd = ACPI_DISABLE;
++    static const uint32_t gpe0_blk = GPE_BASE;
++    static const uint32_t gpe0_blk_len = GPE_LEN;
++    static const uint16_t sci_int = 9;
++
++    object_property_add_uint8_ptr(OBJECT(s), ACPI_PM_PROP_ACPI_ENABLE_CMD,
++                                  &acpi_enable_cmd, NULL);
++    object_property_add_uint8_ptr(OBJECT(s), ACPI_PM_PROP_ACPI_DISABLE_CMD,
++                                  &acpi_disable_cmd, NULL);
++    object_property_add_uint32_ptr(OBJECT(s), ACPI_PM_PROP_GPE0_BLK,
++                                  &gpe0_blk, NULL);
++    object_property_add_uint32_ptr(OBJECT(s), ACPI_PM_PROP_GPE0_BLK_LEN,
++                                  &gpe0_blk_len, NULL);
++    object_property_add_uint16_ptr(OBJECT(s), ACPI_PM_PROP_SCI_INT,
++                                  &sci_int, NULL);
++    object_property_add_uint32_ptr(OBJECT(s), ACPI_PM_PROP_PM_IO_BASE,
++                                  &s->io_base, NULL);
++}
++
+ static int piix4_pm_initfn(PCIDevice *dev)
+ {
+     PIIX4PMState *s = DO_UPCAST(PIIX4PMState, dev, dev);
+@@ -442,9 +465,21 @@ static int piix4_pm_initfn(PCIDevice *dev)
+ 
+     piix4_acpi_system_hot_add_init(pci_address_space_io(dev), dev->bus, s);
+ 
++    piix4_pm_add_propeties(s);
+     return 0;
+ }
+ 
++Object *piix4_pm_find(void)
++{
++    bool ambig;
++    Object *o = object_resolve_path_type("", "PIIX4_PM", &ambig);
++
++    if (ambig || !o) {
++        return NULL;
++    }
++    return o;
++}
++
+ i2c_bus *piix4_pm_init(PCIBus *bus, int devfn, uint32_t smb_io_base,
+                        qemu_irq sci_irq, qemu_irq smi_irq,
+                        int kvm_enabled, FWCfgState *fw_cfg)
+diff --git a/hw/pci-host/piix.c b/hw/pci-host/piix.c
+index 6502d1c..9284c8d 100644
+--- a/hw/pci-host/piix.c
++++ b/hw/pci-host/piix.c
+@@ -408,6 +408,14 @@ PCIBus *i440fx_init(PCII440FXState **pi440fx_state,
+     return b;
+ }
+ 
++PCIBus *find_i440fx(void)
++{
++    PCIHostState *s = OBJECT_CHECK(PCIHostState,
++                                   object_resolve_path("/machine/i440fx", NULL),
++                                   TYPE_PCI_HOST_BRIDGE);
++    return s ? s->bus : NULL;
++}
++
+ /* PIIX3 PCI to ISA bridge */
+ static void piix3_set_irq_pic(PIIX3State *piix3, int pic_irq)
+ {
+diff --git a/include/hw/acpi/piix4.h b/include/hw/acpi/piix4.h
+new file mode 100644
+index 0000000..65e6fd7
+--- /dev/null
++++ b/include/hw/acpi/piix4.h
+@@ -0,0 +1,8 @@
++#ifndef HW_ACPI_PIIX4_H
++#define HW_ACPI_PIIX4_H
++
++#include "qemu/typedefs.h"
++
++Object *piix4_pm_find(void);
++
++#endif
+diff --git a/include/hw/i386/pc.h b/include/hw/i386/pc.h
+index 5011c87..d78e45b 100644
+--- a/include/hw/i386/pc.h
++++ b/include/hw/i386/pc.h
+@@ -191,6 +191,7 @@ PCIBus *i440fx_init(PCII440FXState **pi440fx_state, int *piix_devfn,
+                     MemoryRegion *pci_memory,
+                     MemoryRegion *ram_memory);
+ 
++PCIBus *find_i440fx(void);
+ /* piix4.c */
+ extern PCIDevice *piix4_dev;
+ int piix4_init(PCIBus *bus, ISABus **isa_bus, int devfn);
+-- 
+1.7.11.7
+

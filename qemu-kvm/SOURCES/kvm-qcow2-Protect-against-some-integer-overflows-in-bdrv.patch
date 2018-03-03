@@ -1,0 +1,74 @@
+From 339f13dfd338d88192a11231f4a60bec57b3b66b Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 25 Mar 2014 14:23:38 +0100
+Subject: [PATCH 31/49] qcow2: Protect against some integer overflows in bdrv_check
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1395753835-7591-32-git-send-email-kwolf@redhat.com>
+Patchwork-id: n/a
+O-Subject: [virt-devel] [EMBARGOED RHEL-7.0 qemu-kvm PATCH 31/48] qcow2: Protect against some integer overflows in bdrv_check
+Bugzilla: 1066691
+RH-Acked-by: Jeff Cody <jcody@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1066691
+Upstream status: Series embargoed
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block/qcow2-refcount.c |   18 +++++++++---------
+ 1 files changed, 9 insertions(+), 9 deletions(-)
+
+diff --git a/block/qcow2-refcount.c b/block/qcow2-refcount.c
+index fb57c10..73ae4e3 100644
+--- a/block/qcow2-refcount.c
++++ b/block/qcow2-refcount.c
+@@ -1018,8 +1018,7 @@ static void inc_refcounts(BlockDriverState *bs,
+                           int64_t offset, int64_t size)
+ {
+     BDRVQcowState *s = bs->opaque;
+-    int64_t start, last, cluster_offset;
+-    int k;
++    uint64_t start, last, cluster_offset, k;
+ 
+     if (size <= 0)
+         return;
+@@ -1029,11 +1028,7 @@ static void inc_refcounts(BlockDriverState *bs,
+     for(cluster_offset = start; cluster_offset <= last;
+         cluster_offset += s->cluster_size) {
+         k = cluster_offset >> s->cluster_bits;
+-        if (k < 0) {
+-            fprintf(stderr, "ERROR: invalid cluster offset=0x%" PRIx64 "\n",
+-                cluster_offset);
+-            res->corruptions++;
+-        } else if (k >= refcount_table_size) {
++        if (k >= refcount_table_size) {
+             fprintf(stderr, "Warning: cluster offset=0x%" PRIx64 " is after "
+                 "the end of the image file, can't properly check refcounts.\n",
+                 cluster_offset);
+@@ -1474,14 +1469,19 @@ int qcow2_check_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
+                           BdrvCheckMode fix)
+ {
+     BDRVQcowState *s = bs->opaque;
+-    int64_t size, i, highest_cluster;
+-    int nb_clusters, refcount1, refcount2;
++    int64_t size, i, highest_cluster, nb_clusters;
++    int refcount1, refcount2;
+     QCowSnapshot *sn;
+     uint16_t *refcount_table;
+     int ret;
+ 
+     size = bdrv_getlength(bs->file);
+     nb_clusters = size_to_clusters(s, size);
++    if (nb_clusters > INT_MAX) {
++        res->check_errors++;
++        return -EFBIG;
++    }
++
+     refcount_table = g_malloc0(nb_clusters * sizeof(uint16_t));
+ 
+     res->bfi.total_clusters =
+-- 
+1.7.1
+

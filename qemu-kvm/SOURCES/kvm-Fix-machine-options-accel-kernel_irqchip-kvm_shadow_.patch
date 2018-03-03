@@ -1,0 +1,178 @@
+From 63d9ae740b30071f01c5fd1196f077b635491530 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Tue, 6 Aug 2013 13:17:03 +0200
+Subject: [PATCH 10/28] Fix -machine options accel, kernel_irqchip, kvm_shadow_mem
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1375795025-28674-5-git-send-email-armbru@redhat.com>
+Patchwork-id: 52993
+O-Subject: [PATCH 7.0 qemu-kvm 4/6] Fix -machine options accel, kernel_irqchip, kvm_shadow_mem
+Bugzilla: 980782
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michal Novotny <minovotn@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+
+Multiple -machine options with the same ID are merged.  All but the
+one without an ID are to be silently ignored.
+
+In most places, we query these options with a null ID.  This is
+correct.
+
+In some places, we instead query whatever options come first in the
+list.  This is wrong.  When the -machine processed first happens to
+have an ID, options are taken from that ID, and the ones specified
+without ID are silently ignored.
+
+Example:
+
+    $ upstream-qemu -nodefaults -S -display none -monitor stdio -machine id=foo -machine accel=kvm,usb=on
+    $ upstream-qemu -nodefaults -S -display none -monitor stdio -machine id=foo,accel=kvm,usb=on -machine accel=xen
+    $ upstream-qemu -nodefaults -S -display none -monitor stdio -machine accel=xen -machine id=foo,accel=kvm,usb=on
+
+    $ qemu-system-x86_64 -nodefaults -S -display none -monitor stdio -machine accel=kvm,usb=on
+    QEMU 1.5.50 monitor - type 'help' for more information
+    (qemu) info kvm
+    kvm support: enabled
+    (qemu) info usb
+    (qemu) q
+    $ qemu-system-x86_64 -nodefaults -S -display none -monitor stdio -machine id=foo -machine accel=kvm,usb=on
+    QEMU 1.5.50 monitor - type 'help' for more information
+    (qemu) info kvm
+    kvm support: disabled
+    (qemu) info usb
+    (qemu) q
+    $ qemu-system-x86_64 -nodefaults -S -display none -monitor stdio -machine id=foo,accel=kvm,usb=on -machine accel=xen
+    QEMU 1.5.50 monitor - type 'help' for more information
+    (qemu) info kvm
+    kvm support: enabled
+    (qemu) info usb
+    USB support not enabled
+    (qemu) q
+    $ qemu-system-x86_64 -nodefaults -S -display none -monitor stdio -machine accel=xen -machine id=foo,accel=kvm,usb=on
+    xc: error: Could not obtain handle on privileged command interface (2 = No such file or directory): Internal error
+    xen be core: can't open xen interface
+    failed to initialize Xen: Operation not permitted
+
+Option usb is queried correctly, and the one without an ID wins,
+regardless of option order.
+
+Option accel is queried incorrectly, and which one wins depends on
+option order and ID.
+
+Affected options are accel (and its sugared forms -enable-kvm and
+-no-kvm), kernel_irqchip, kvm_shadow_mem.
+
+Additionally, option kernel_irqchip is normally on by default, except
+it's off when no -machine options are given.  Bug can't bite, because
+kernel_irqchip is used only when KVM is enabled, KVM is off by
+default, and enabling always creates -machine options.  Downstreams
+that enable KVM by default do get bitten, though.
+
+Use qemu_get_machine_opts() to fix these bugs.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Message-id: 1372943363-24081-5-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit 36ad0e948e15d8d86c8dec1c17a8588d87b0107d)
+
+Conflicts:
+	hw/ppc/e500.c
+
+Conflicts, because we don't have commit d85937e "kvm/openpic:
+in-kernel mpic support".  Resolution is trivial: drop the hunk.
+
+There's a pasto in upstream's commit message.  The first paragraph
+after "Example:" shouldn't be there.
+---
+ kvm-all.c         |  5 +----
+ target-i386/kvm.c | 17 +++++++----------
+ vl.c              |  8 ++------
+ 3 files changed, 10 insertions(+), 20 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ kvm-all.c         |    5 +----
+ target-i386/kvm.c |   17 +++++++----------
+ vl.c              |    8 ++------
+ 3 files changed, 10 insertions(+), 20 deletions(-)
+
+diff --git a/kvm-all.c b/kvm-all.c
+index 8222729..6c9d51e 100644
+--- a/kvm-all.c
++++ b/kvm-all.c
+@@ -1256,12 +1256,9 @@ int kvm_irqchip_remove_irqfd_notifier(KVMState *s, EventNotifier *n, int virq)
+ 
+ static int kvm_irqchip_create(KVMState *s)
+ {
+-    QemuOptsList *list = qemu_find_opts("machine");
+     int ret;
+ 
+-    if (QTAILQ_EMPTY(&list->head) ||
+-        !qemu_opt_get_bool(QTAILQ_FIRST(&list->head),
+-                           "kernel_irqchip", true) ||
++    if (!qemu_opt_get_bool(qemu_get_machine_opts(), "kernel_irqchip", true) ||
+         !kvm_check_extension(s, KVM_CAP_IRQCHIP)) {
+         return 0;
+     }
+diff --git a/target-i386/kvm.c b/target-i386/kvm.c
+index 9ffb6ca..8da6a0d 100644
+--- a/target-i386/kvm.c
++++ b/target-i386/kvm.c
+@@ -741,7 +741,6 @@ static int kvm_get_supported_msrs(KVMState *s)
+ 
+ int kvm_arch_init(KVMState *s)
+ {
+-    QemuOptsList *list = qemu_find_opts("machine");
+     uint64_t identity_base = 0xfffbc000;
+     uint64_t shadow_mem;
+     int ret;
+@@ -790,15 +789,13 @@ int kvm_arch_init(KVMState *s)
+     }
+     qemu_register_reset(kvm_unpoison_all, NULL);
+ 
+-    if (!QTAILQ_EMPTY(&list->head)) {
+-        shadow_mem = qemu_opt_get_size(QTAILQ_FIRST(&list->head),
+-                                       "kvm_shadow_mem", -1);
+-        if (shadow_mem != -1) {
+-            shadow_mem /= 4096;
+-            ret = kvm_vm_ioctl(s, KVM_SET_NR_MMU_PAGES, shadow_mem);
+-            if (ret < 0) {
+-                return ret;
+-            }
++    shadow_mem = qemu_opt_get_size(qemu_get_machine_opts(),
++                                   "kvm_shadow_mem", -1);
++    if (shadow_mem != -1) {
++        shadow_mem /= 4096;
++        ret = kvm_vm_ioctl(s, KVM_SET_NR_MMU_PAGES, shadow_mem);
++        if (ret < 0) {
++            return ret;
+         }
+     }
+     return 0;
+diff --git a/vl.c b/vl.c
+index fe58eff..0ed9257 100644
+--- a/vl.c
++++ b/vl.c
+@@ -2661,17 +2661,13 @@ static struct {
+ 
+ static int configure_accelerator(void)
+ {
+-    const char *p = NULL;
++    const char *p;
+     char buf[10];
+     int i, ret;
+     bool accel_initialised = false;
+     bool init_failed = false;
+ 
+-    QemuOptsList *list = qemu_find_opts("machine");
+-    if (!QTAILQ_EMPTY(&list->head)) {
+-        p = qemu_opt_get(QTAILQ_FIRST(&list->head), "accel");
+-    }
+-
++    p = qemu_opt_get(qemu_get_machine_opts(), "accel");
+     if (p == NULL) {
+         /* Use the default "accelerator", tcg */
+         p = "kvm:tcg";
+-- 
+1.7.1
+

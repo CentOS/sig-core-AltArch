@@ -1,0 +1,202 @@
+From 2ffc3b31eafe39cc11678ef0e0ea39cdfef0469d Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Tue, 17 Jan 2017 19:51:32 +0100
+Subject: [PATCH 3/3] block/gluster: add support for selecting debug logging
+ level
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <87a60937c8dfa4bee63e59871811dbda7794e818.1484682588.git.jcody@redhat.com>
+Patchwork-id: 73255
+O-Subject: [RHEL-7.4 qemu-kvm 3/3] block/gluster: add support for selecting debug logging level
+Bugzilla: 1151859
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+
+This adds commandline support for the logging level of the
+gluster protocol driver, output to stdout.  The option is 'debug',
+e.g.:
+
+-drive filename=gluster://192.168.15.180/gv2/test.qcow2,debug=9
+
+Debug levels are 0-9, with 9 being the most verbose, and 0 representing
+no debugging output.  The default is the same as it was before, which
+is a level of 4.  The current logging levels defined in the gluster
+source are:
+
+    0 - None
+    1 - Emergency
+    2 - Alert
+    3 - Critical
+    4 - Error
+    5 - Warning
+    6 - Notice
+    7 - Info
+    8 - Debug
+    9 - Trace
+
+(From: glusterfs/logging.h)
+
+Reviewed-by: Niels de Vos <ndevos@redhat.com>
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+(cherry picked from commit 7eac868a508cdbf4cccef5c2084941b63fa3aded)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/gluster.c | 61 +++++++++++++++++++++++++++++++++++++++++++++------------
+ 1 file changed, 48 insertions(+), 13 deletions(-)
+
+diff --git a/block/gluster.c b/block/gluster.c
+index 5266dce..86e136d 100644
+--- a/block/gluster.c
++++ b/block/gluster.c
+@@ -35,6 +35,7 @@ typedef struct BDRVGlusterState {
+     int qemu_aio_count;
+     int event_reader_pos;
+     GlusterAIOCB *event_acb;
++    int debug_level;
+ } BDRVGlusterState;
+ 
+ #define GLUSTER_FD_READ  0
+@@ -46,6 +47,7 @@ typedef struct GlusterConf {
+     char *volname;
+     char *image;
+     char *transport;
++    int debug_level;
+ } GlusterConf;
+ 
+ static void qemu_gluster_gconf_free(GlusterConf *gconf)
+@@ -208,11 +210,7 @@ static struct glfs *qemu_gluster_init(GlusterConf *gconf, const char *filename,
+         goto out;
+     }
+ 
+-    /*
+-     * TODO: Use GF_LOG_ERROR instead of hard code value of 4 here when
+-     * GlusterFS makes GF_LOG_* macros available to libgfapi users.
+-     */
+-    ret = glfs_set_logging(glfs, "-", 4);
++    ret = glfs_set_logging(glfs, "-", gconf->debug_level);
+     if (ret < 0) {
+         goto out;
+     }
+@@ -292,16 +290,26 @@ static int qemu_gluster_aio_flush_cb(void *opaque)
+     return (s->qemu_aio_count > 0);
+ }
+ 
++#define GLUSTER_OPT_FILENAME "filename"
++#define GLUSTER_OPT_DEBUG "debug"
++#define GLUSTER_DEBUG_DEFAULT 4
++#define GLUSTER_DEBUG_MAX 9
++
+ /* TODO Convert to fine grained options */
+ static QemuOptsList runtime_opts = {
+     .name = "gluster",
+     .head = QTAILQ_HEAD_INITIALIZER(runtime_opts.head),
+     .desc = {
+         {
+-            .name = "filename",
++            .name = GLUSTER_OPT_FILENAME,
+             .type = QEMU_OPT_STRING,
+             .help = "URL to the gluster image",
+         },
++        {
++            .name = GLUSTER_OPT_DEBUG,
++            .type = QEMU_OPT_NUMBER,
++            .help = "Gluster log level, valid range is 0-9",
++        },
+         { /* end of list */ }
+     },
+ };
+@@ -342,8 +350,17 @@ static int qemu_gluster_open(BlockDriverState *bs,  QDict *options,
+         goto out;
+     }
+ 
+-    filename = qemu_opt_get(opts, "filename");
++    filename = qemu_opt_get(opts, GLUSTER_OPT_FILENAME);
+ 
++    s->debug_level = qemu_opt_get_number(opts, GLUSTER_OPT_DEBUG,
++                                         GLUSTER_DEBUG_DEFAULT);
++    if (s->debug_level < 0) {
++        s->debug_level = 0;
++    } else if (s->debug_level > GLUSTER_DEBUG_MAX) {
++        s->debug_level = GLUSTER_DEBUG_MAX;
++    }
++
++    gconf->debug_level = s->debug_level;
+     s->glfs = qemu_gluster_init(gconf, filename, errp);
+     if (!s->glfs) {
+         ret = -errno;
+@@ -398,6 +415,7 @@ static int qemu_gluster_reopen_prepare(BDRVReopenState *state,
+                                        BlockReopenQueue *queue, Error **errp)
+ {
+     int ret = 0;
++    BDRVGlusterState *s;
+     BDRVGlusterReopenState *reop_s;
+     GlusterConf *gconf = NULL;
+     int open_flags = 0;
+@@ -405,6 +423,8 @@ static int qemu_gluster_reopen_prepare(BDRVReopenState *state,
+     assert(state != NULL);
+     assert(state->bs != NULL);
+ 
++    s = state->bs->opaque;
++
+     state->opaque = g_malloc0(sizeof(BDRVGlusterReopenState));
+     reop_s = state->opaque;
+ 
+@@ -412,6 +432,7 @@ static int qemu_gluster_reopen_prepare(BDRVReopenState *state,
+ 
+     gconf = g_malloc0(sizeof(GlusterConf));
+ 
++    gconf->debug_level = s->debug_level;
+     reop_s->glfs = qemu_gluster_init(gconf, state->bs->filename, errp);
+     if (reop_s->glfs == NULL) {
+         ret = -errno;
+@@ -487,19 +508,28 @@ static int qemu_gluster_create(const char *filename,
+     int64_t total_size = 0;
+     GlusterConf *gconf = g_malloc0(sizeof(GlusterConf));
+ 
+-    glfs = qemu_gluster_init(gconf, filename, errp);
+-    if (!glfs) {
+-        ret = -errno;
+-        goto out;
+-    }
+-
++    gconf->debug_level = GLUSTER_DEBUG_DEFAULT;
+     while (options && options->name) {
+         if (!strcmp(options->name, BLOCK_OPT_SIZE)) {
+             total_size = options->value.n / BDRV_SECTOR_SIZE;
+         }
++        if (!strcmp(options->name, GLUSTER_OPT_DEBUG)) {
++            gconf->debug_level = options->value.n;
++            if (gconf->debug_level < 0) {
++                gconf->debug_level = 0;
++            } else if (gconf->debug_level > GLUSTER_DEBUG_MAX) {
++                gconf->debug_level = GLUSTER_DEBUG_MAX;
++            }
++        }
+         options++;
+     }
+ 
++    glfs = qemu_gluster_init(gconf, filename, errp);
++    if (!glfs) {
++        ret = -errno;
++        goto out;
++    }
++
+     fd = glfs_creat(glfs, gconf->image,
+         O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, S_IRUSR | S_IWUSR);
+     if (!fd) {
+@@ -732,6 +762,11 @@ static QEMUOptionParameter qemu_gluster_create_options[] = {
+         .type = OPT_SIZE,
+         .help = "Virtual disk size"
+     },
++    {
++        .name = GLUSTER_OPT_DEBUG,
++        .type = QEMU_OPT_NUMBER,
++        .help = "Gluster log level, valid range is 0-9",
++    },
+     { NULL }
+ };
+ 
+-- 
+1.8.3.1
+

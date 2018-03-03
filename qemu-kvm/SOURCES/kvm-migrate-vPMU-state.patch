@@ -1,0 +1,309 @@
+From 7bb09ff3360af16599cc2cae834f676a20cdfa88 Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Wed, 6 Nov 2013 08:27:29 +0100
+Subject: [PATCH 02/29] kvm: migrate vPMU state
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1379955972-3080-3-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 54487
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 2/2] kvm: migrate vPMU state
+Bugzilla: 928867
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Marcelo Tosatti <mtosatti@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+
+Reviewed-by: Gleb Natapov <gnatapov@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry-picked from commit 0d89436786b02a9e7d561c4d7dc4982e4a2739db)
+
+Conflicts:
+	target-i386/machine.c
+        [missing 0779cae, Initialize IA32_FEATURE_CONTROL MSR in reset and migration, 2013-07-07]
+
+Signed-of-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/cpu.h     |   23 ++++++++++++
+ target-i386/kvm.c     |   93 ++++++++++++++++++++++++++++++++++++++++++++++---
+ target-i386/machine.c |   44 +++++++++++++++++++++++
+ 3 files changed, 155 insertions(+), 5 deletions(-)
+
+diff --git a/target-i386/cpu.h b/target-i386/cpu.h
+index 74c7899..6aebc80 100644
+--- a/target-i386/cpu.h
++++ b/target-i386/cpu.h
+@@ -304,6 +304,8 @@
+ #define MSR_TSC_ADJUST                  0x0000003b
+ #define MSR_IA32_TSCDEADLINE            0x6e0
+ 
++#define MSR_P6_PERFCTR0                 0xc1
++
+ #define MSR_MTRRcap                     0xfe
+ #define MSR_MTRRcap_VCNT                8
+ #define MSR_MTRRcap_FIXRANGE_SUPPORT    (1 << 8)
+@@ -317,6 +319,8 @@
+ #define MSR_MCG_STATUS                  0x17a
+ #define MSR_MCG_CTL                     0x17b
+ 
++#define MSR_P6_EVNTSEL0                 0x186
++
+ #define MSR_IA32_PERF_STATUS            0x198
+ 
+ #define MSR_IA32_MISC_ENABLE            0x1a0
+@@ -342,6 +346,14 @@
+ 
+ #define MSR_MTRRdefType                 0x2ff
+ 
++#define MSR_CORE_PERF_FIXED_CTR0        0x309
++#define MSR_CORE_PERF_FIXED_CTR1        0x30a
++#define MSR_CORE_PERF_FIXED_CTR2        0x30b
++#define MSR_CORE_PERF_FIXED_CTR_CTRL    0x38d
++#define MSR_CORE_PERF_GLOBAL_STATUS     0x38e
++#define MSR_CORE_PERF_GLOBAL_CTRL       0x38f
++#define MSR_CORE_PERF_GLOBAL_OVF_CTRL   0x390
++
+ #define MSR_MC0_CTL                     0x400
+ #define MSR_MC0_STATUS                  0x401
+ #define MSR_MC0_ADDR                    0x402
+@@ -720,6 +732,9 @@ typedef struct {
+ #define CPU_NB_REGS CPU_NB_REGS32
+ #endif
+ 
++#define MAX_FIXED_COUNTERS 3
++#define MAX_GP_COUNTERS    (MSR_IA32_PERF_STATUS - MSR_P6_EVNTSEL0)
++
+ #define NB_MMU_MODES 3
+ 
+ typedef enum TPRAccess {
+@@ -814,6 +829,14 @@ typedef struct CPUX86State {
+     uint64_t mcg_status;
+     uint64_t msr_ia32_misc_enable;
+ 
++    uint64_t msr_fixed_ctr_ctrl;
++    uint64_t msr_global_ctrl;
++    uint64_t msr_global_status;
++    uint64_t msr_global_ovf_ctrl;
++    uint64_t msr_fixed_counters[MAX_FIXED_COUNTERS];
++    uint64_t msr_gp_counters[MAX_GP_COUNTERS];
++    uint64_t msr_gp_evtsel[MAX_GP_COUNTERS];
++
+     /* exception/interrupt handling */
+     int error_code;
+     int exception_is_int;
+diff --git a/target-i386/kvm.c b/target-i386/kvm.c
+index c5a9416..4b470e4 100644
+--- a/target-i386/kvm.c
++++ b/target-i386/kvm.c
+@@ -71,6 +71,9 @@ static bool has_msr_misc_enable;
+ static bool has_msr_kvm_steal_time;
+ static int lm_capable_kernel;
+ 
++static bool has_msr_architectural_pmu;
++static uint32_t num_architectural_pmu_counters;
++
+ bool kvm_allows_irq0_override(void)
+ {
+     return !kvm_irqchip_in_kernel() || kvm_has_gsi_routing();
+@@ -579,6 +582,25 @@ int kvm_arch_init_vcpu(CPUState *cs)
+             break;
+         }
+     }
++
++    if (limit >= 0x0a) {
++        uint32_t ver;
++
++        cpu_x86_cpuid(env, 0x0a, 0, &ver, &unused, &unused, &unused);
++        if ((ver & 0xff) > 0) {
++            has_msr_architectural_pmu = true;
++            num_architectural_pmu_counters = (ver & 0xff00) >> 8;
++
++            /* Shouldn't be more than 32, since that's the number of bits
++             * available in EBX to tell us _which_ counters are available.
++             * Play it safe.
++             */
++            if (num_architectural_pmu_counters > MAX_GP_COUNTERS) {
++                num_architectural_pmu_counters = MAX_GP_COUNTERS;
++            }
++        }
++    }
++
+     cpu_x86_cpuid(env, 0x80000000, 0, &limit, &unused, &unused, &unused);
+ 
+     for (i = 0x80000000; i <= limit; i++) {
+@@ -1070,7 +1092,7 @@ static int kvm_put_msrs(X86CPU *cpu, int level)
+         struct kvm_msr_entry entries[100];
+     } msr_data;
+     struct kvm_msr_entry *msrs = msr_data.entries;
+-    int n = 0;
++    int n = 0, i;
+ 
+     kvm_msr_entry_set(&msrs[n++], MSR_IA32_SYSENTER_CS, env->sysenter_cs);
+     kvm_msr_entry_set(&msrs[n++], MSR_IA32_SYSENTER_ESP, env->sysenter_esp);
+@@ -1109,9 +1131,8 @@ static int kvm_put_msrs(X86CPU *cpu, int level)
+         }
+     }
+     /*
+-     * The following paravirtual MSRs have side effects on the guest or are
+-     * too heavy for normal writeback. Limit them to reset or full state
+-     * updates.
++     * The following MSRs have side effects on the guest or are too heavy
++     * for normal writeback. Limit them to reset or full state updates.
+      */
+     if (level >= KVM_PUT_RESET_STATE) {
+         kvm_msr_entry_set(&msrs[n++], MSR_KVM_SYSTEM_TIME,
+@@ -1129,6 +1150,33 @@ static int kvm_put_msrs(X86CPU *cpu, int level)
+             kvm_msr_entry_set(&msrs[n++], MSR_KVM_STEAL_TIME,
+                               env->steal_time_msr);
+         }
++        if (has_msr_architectural_pmu) {
++            /* Stop the counter.  */
++            kvm_msr_entry_set(&msrs[n++], MSR_CORE_PERF_FIXED_CTR_CTRL, 0);
++            kvm_msr_entry_set(&msrs[n++], MSR_CORE_PERF_GLOBAL_CTRL, 0);
++
++            /* Set the counter values.  */
++            for (i = 0; i < MAX_FIXED_COUNTERS; i++) {
++                kvm_msr_entry_set(&msrs[n++], MSR_CORE_PERF_FIXED_CTR0 + i,
++                                  env->msr_fixed_counters[i]);
++            }
++            for (i = 0; i < num_architectural_pmu_counters; i++) {
++                kvm_msr_entry_set(&msrs[n++], MSR_P6_PERFCTR0 + i,
++                                  env->msr_gp_counters[i]);
++                kvm_msr_entry_set(&msrs[n++], MSR_P6_EVNTSEL0 + i,
++                                  env->msr_gp_evtsel[i]);
++            }
++            kvm_msr_entry_set(&msrs[n++], MSR_CORE_PERF_GLOBAL_STATUS,
++                              env->msr_global_status);
++            kvm_msr_entry_set(&msrs[n++], MSR_CORE_PERF_GLOBAL_OVF_CTRL,
++                              env->msr_global_ovf_ctrl);
++
++            /* Now start the PMU.  */
++            kvm_msr_entry_set(&msrs[n++], MSR_CORE_PERF_FIXED_CTR_CTRL,
++                              env->msr_fixed_ctr_ctrl);
++            kvm_msr_entry_set(&msrs[n++], MSR_CORE_PERF_GLOBAL_CTRL,
++                              env->msr_global_ctrl);
++        }
+         if (hyperv_hypercall_available()) {
+             kvm_msr_entry_set(&msrs[n++], HV_X64_MSR_GUEST_OS_ID, 0);
+             kvm_msr_entry_set(&msrs[n++], HV_X64_MSR_HYPERCALL, 0);
+@@ -1385,6 +1433,19 @@ static int kvm_get_msrs(X86CPU *cpu)
+     if (has_msr_kvm_steal_time) {
+         msrs[n++].index = MSR_KVM_STEAL_TIME;
+     }
++    if (has_msr_architectural_pmu) {
++        msrs[n++].index = MSR_CORE_PERF_FIXED_CTR_CTRL;
++        msrs[n++].index = MSR_CORE_PERF_GLOBAL_CTRL;
++        msrs[n++].index = MSR_CORE_PERF_GLOBAL_STATUS;
++        msrs[n++].index = MSR_CORE_PERF_GLOBAL_OVF_CTRL;
++        for (i = 0; i < MAX_FIXED_COUNTERS; i++) {
++            msrs[n++].index = MSR_CORE_PERF_FIXED_CTR0 + i;
++        }
++        for (i = 0; i < num_architectural_pmu_counters; i++) {
++            msrs[n++].index = MSR_P6_PERFCTR0 + i;
++            msrs[n++].index = MSR_P6_EVNTSEL0 + i;
++        }
++    }
+ 
+     if (env->mcg_cap) {
+         msrs[n++].index = MSR_MCG_STATUS;
+@@ -1401,7 +1462,8 @@ static int kvm_get_msrs(X86CPU *cpu)
+     }
+ 
+     for (i = 0; i < ret; i++) {
+-        switch (msrs[i].index) {
++        uint32_t index = msrs[i].index;
++        switch (index) {
+         case MSR_IA32_SYSENTER_CS:
+             env->sysenter_cs = msrs[i].data;
+             break;
+@@ -1473,6 +1535,27 @@ static int kvm_get_msrs(X86CPU *cpu)
+         case MSR_KVM_STEAL_TIME:
+             env->steal_time_msr = msrs[i].data;
+             break;
++        case MSR_CORE_PERF_FIXED_CTR_CTRL:
++            env->msr_fixed_ctr_ctrl = msrs[i].data;
++            break;
++        case MSR_CORE_PERF_GLOBAL_CTRL:
++            env->msr_global_ctrl = msrs[i].data;
++            break;
++        case MSR_CORE_PERF_GLOBAL_STATUS:
++            env->msr_global_status = msrs[i].data;
++            break;
++        case MSR_CORE_PERF_GLOBAL_OVF_CTRL:
++            env->msr_global_ovf_ctrl = msrs[i].data;
++            break;
++        case MSR_CORE_PERF_FIXED_CTR0 ... MSR_CORE_PERF_FIXED_CTR0 + MAX_FIXED_COUNTERS - 1:
++            env->msr_fixed_counters[index - MSR_CORE_PERF_FIXED_CTR0] = msrs[i].data;
++            break;
++        case MSR_P6_PERFCTR0 ... MSR_P6_PERFCTR0 + MAX_GP_COUNTERS - 1:
++            env->msr_gp_counters[index - MSR_P6_PERFCTR0] = msrs[i].data;
++            break;
++        case MSR_P6_EVNTSEL0 ... MSR_P6_EVNTSEL0 + MAX_GP_COUNTERS - 1:
++            env->msr_gp_evtsel[index - MSR_P6_EVNTSEL0] = msrs[i].data;
++            break;
+         }
+     }
+ 
+diff --git a/target-i386/machine.c b/target-i386/machine.c
+index 4f30347..08b4ed3 100644
+--- a/target-i386/machine.c
++++ b/target-i386/machine.c
+@@ -465,6 +465,47 @@ static const VMStateDescription vmstate_xsave ={
+     }
+ };
+ 
++static bool pmu_enable_needed(void *opaque)
++{
++    X86CPU *cpu = opaque;
++    CPUX86State *env = &cpu->env;
++    int i;
++
++    if (env->msr_fixed_ctr_ctrl || env->msr_global_ctrl ||
++        env->msr_global_status || env->msr_global_ovf_ctrl) {
++        return true;
++    }
++    for (i = 0; i < MAX_FIXED_COUNTERS; i++) {
++        if (env->msr_fixed_counters[i]) {
++            return true;
++        }
++    }
++    for (i = 0; i < MAX_GP_COUNTERS; i++) {
++        if (env->msr_gp_counters[i] || env->msr_gp_evtsel[i]) {
++            return true;
++        }
++    }
++
++    return false;
++}
++
++static const VMStateDescription vmstate_msr_architectural_pmu = {
++    .name = "cpu/msr_architectural_pmu",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .minimum_version_id_old = 1,
++    .fields      = (VMStateField []) {
++        VMSTATE_UINT64(env.msr_fixed_ctr_ctrl, X86CPU),
++        VMSTATE_UINT64(env.msr_global_ctrl, X86CPU),
++        VMSTATE_UINT64(env.msr_global_status, X86CPU),
++        VMSTATE_UINT64(env.msr_global_ovf_ctrl, X86CPU),
++        VMSTATE_UINT64_ARRAY(env.msr_fixed_counters, X86CPU, MAX_FIXED_COUNTERS),
++        VMSTATE_UINT64_ARRAY(env.msr_gp_counters, X86CPU, MAX_GP_COUNTERS),
++        VMSTATE_UINT64_ARRAY(env.msr_gp_evtsel, X86CPU, MAX_GP_COUNTERS),
++        VMSTATE_END_OF_LIST()
++    }
++};
++
+ const VMStateDescription vmstate_x86_cpu = {
+     .name = "cpu",
+     .version_id = 12,
+@@ -594,6 +635,9 @@ const VMStateDescription vmstate_x86_cpu = {
+             .vmsd = &vmstate_xsave,
+             .needed = vmstate_xsave_needed,
+         }, {
++            .vmsd = &vmstate_msr_architectural_pmu,
++            .needed = pmu_enable_needed,
++        }, {
+             /* empty */
+         }
+     }
+-- 
+1.7.1
+

@@ -1,0 +1,73 @@
+From 4d0430b1f847d672a39c76e6567bb5e88bc33c78 Mon Sep 17 00:00:00 2001
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Fri, 16 Sep 2016 08:38:18 +0200
+Subject: [PATCH] virtio: recalculate vq->inuse after migration
+
+RH-Author: Stefan Hajnoczi <stefanha@redhat.com>
+Message-id: <1474015098-11019-2-git-send-email-stefanha@redhat.com>
+Patchwork-id: 72372
+O-Subject: [RHEL-7.3 qemu-kvm PATCH 1/1] virtio: recalculate vq->inuse after migration
+Bugzilla: 1376542
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+The vq->inuse field is not migrated.  Many devices don't hold
+VirtQueueElements across migration so it doesn't matter that vq->inuse
+starts at 0 on the destination QEMU.
+
+At least virtio-serial, virtio-blk, and virtio-balloon migrate while
+holding VirtQueueElements.  For these devices we need to recalculate
+vq->inuse upon load so the value is correct.
+
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Reviewed-by: Cornelia Huck <cornelia.huck@de.ibm.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit bccdef6b1a204db0f41ffb6e24ce373e4d7890d4)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+
+  hw/virtio/virtio.c
+
+  Downstream does not have the vq->used_idx field which was added
+  upstream as a performance optimization reducing guest memory accesses.
+  Replace vq->used_idx with vring_used_idx(&vdev->vq[i]).
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+---
+ hw/virtio/virtio.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/hw/virtio/virtio.c b/hw/virtio/virtio.c
+index e67337b..0df4ed3 100644
+--- a/hw/virtio/virtio.c
++++ b/hw/virtio/virtio.c
+@@ -932,6 +932,21 @@ int virtio_load(VirtIODevice *vdev, QEMUFile *f)
+                              vdev->vq[i].last_avail_idx, nheads);
+                 return -1;
+             }
++
++            /*
++             * Some devices migrate VirtQueueElements that have been popped
++             * from the avail ring but not yet returned to the used ring.
++             */
++            vdev->vq[i].inuse = vdev->vq[i].last_avail_idx -
++                                vring_used_idx(&vdev->vq[i]);
++            if (vdev->vq[i].inuse > vdev->vq[i].vring.num) {
++                error_report("VQ %d size 0x%x < last_avail_idx 0x%x - "
++                             "used_idx 0x%x",
++                             i, vdev->vq[i].vring.num,
++                             vdev->vq[i].last_avail_idx,
++                             vring_used_idx(&vdev->vq[i]));
++                return -1;
++            }
+         } else if (vdev->vq[i].last_avail_idx) {
+             error_report("VQ %d address 0x0 "
+                          "inconsistent with Host index 0x%x",
+-- 
+1.8.3.1
+

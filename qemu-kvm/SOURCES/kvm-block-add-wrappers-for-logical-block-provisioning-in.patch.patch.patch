@@ -1,0 +1,97 @@
+From 53d8964bc0e80e99d5ccb15100ecb93a7b5f74b0 Mon Sep 17 00:00:00 2001
+Message-Id: <53d8964bc0e80e99d5ccb15100ecb93a7b5f74b0.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:08:58 +0100
+Subject: [PATCH 10/50] block: add wrappers for logical block provisioning
+ information
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-13-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56050
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 12/52] block: add wrappers for logical block provisioning information
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Peter Lieven <pl@kamp.de>
+
+This adds 2 wrappers to read the unallocated_blocks_are_zero and
+can_write_zeroes_with_unmap info from the BDI. The wrappers are
+required to check for the existence of a backing_hd and
+if the devices are opened with the correct flags.
+
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 4ce786914b745a144a9eda1ea33f3ff98328c527)
+---
+ block.c               | 30 ++++++++++++++++++++++++++++++
+ include/block/block.h |  2 ++
+ 2 files changed, 32 insertions(+)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ block.c               | 30 ++++++++++++++++++++++++++++++
+ include/block/block.h |  2 ++
+ 2 files changed, 32 insertions(+)
+
+diff --git a/block.c b/block.c
+index 77167f0..2fae459 100644
+--- a/block.c
++++ b/block.c
+@@ -3121,6 +3121,36 @@ int bdrv_has_zero_init(BlockDriverState *bs)
+     return 0;
+ }
+ 
++bool bdrv_unallocated_blocks_are_zero(BlockDriverState *bs)
++{
++    BlockDriverInfo bdi;
++
++    if (bs->backing_hd) {
++        return false;
++    }
++
++    if (bdrv_get_info(bs, &bdi) == 0) {
++        return bdi.unallocated_blocks_are_zero;
++    }
++
++    return false;
++}
++
++bool bdrv_can_write_zeroes_with_unmap(BlockDriverState *bs)
++{
++    BlockDriverInfo bdi;
++
++    if (bs->backing_hd || !(bs->open_flags & BDRV_O_UNMAP)) {
++        return false;
++    }
++
++    if (bdrv_get_info(bs, &bdi) == 0) {
++        return bdi.can_write_zeroes_with_unmap;
++    }
++
++    return false;
++}
++
+ typedef struct BdrvCoGetBlockStatusData {
+     BlockDriverState *bs;
+     BlockDriverState *base;
+diff --git a/include/block/block.h b/include/block/block.h
+index ab3044e..1958d98 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -330,6 +330,8 @@ int bdrv_discard(BlockDriverState *bs, int64_t sector_num, int nb_sectors);
+ int bdrv_co_discard(BlockDriverState *bs, int64_t sector_num, int nb_sectors);
+ int bdrv_has_zero_init_1(BlockDriverState *bs);
+ int bdrv_has_zero_init(BlockDriverState *bs);
++bool bdrv_unallocated_blocks_are_zero(BlockDriverState *bs);
++bool bdrv_can_write_zeroes_with_unmap(BlockDriverState *bs);
+ int64_t bdrv_get_block_status(BlockDriverState *bs, int64_t sector_num,
+                               int nb_sectors, int *pnum);
+ int bdrv_is_allocated(BlockDriverState *bs, int64_t sector_num, int nb_sectors,
+-- 
+1.7.11.7
+

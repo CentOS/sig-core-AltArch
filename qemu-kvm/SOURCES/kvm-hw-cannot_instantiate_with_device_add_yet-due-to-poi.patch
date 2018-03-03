@@ -1,0 +1,221 @@
+From 8aa43c6e4e8def26812cb435b9f3c3146488e3bd Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Thu, 16 Jan 2014 15:25:18 -0500
+Subject: [PATCH 12/14] hw: cannot_instantiate_with_device_add_yet due to
+ pointer props
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Message-id: <1389885919-16158-2-git-send-email-armbru@redhat.com>
+Patchwork-id: 56750
+O-Subject: [PATCH 7.0 qemu-kvm 1/2] hw: cannot_instantiate_with_device_add_yet due to pointer props
+Bugzilla: 1031098
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Pointer properties can be set only by code, not by device_add.  A
+device with a pointer property can work with device_add only when the
+property may remain null.
+
+This is the case for property "interrupt_vector" of device
+"etraxfs,pic".  Add a comment there.
+
+Set cannot_instantiate_with_device_add_yet for the other devices with
+pointer properties, with a comment explaining why.
+
+Juha Riihimäki and Peter Maydell deserve my thanks for making "pointer
+property must not remain null" blatantly obvious in the OMAP devices.
+
+Only device "smbus-eeprom" is actually changed.  The others are all
+sysbus devices, which get cannot_instantiate_with_device_add_yet set
+in their abstract base's class init function.  Setting it again in
+their class init function is technically redundant, but serves as
+insurance for when sysbus devices become available with device_add,
+and as documentation.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Edgar E. Iglesias <edgar.iglesias@gmail.com> (for ETRAX)
+Signed-off-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit 1b111dc1216be2a89770fdc1ab3dfa8025957442)
+---
+ hw/audio/marvell_88w8618.c | 2 ++
+ hw/dma/sparc32_dma.c       | 2 ++
+ hw/gpio/omap_gpio.c        | 4 ++++
+ hw/i2c/omap_i2c.c          | 2 ++
+ hw/i2c/smbus_eeprom.c      | 2 ++
+ hw/intc/etraxfs_pic.c      | 4 ++++
+ hw/intc/grlib_irqmp.c      | 2 ++
+ hw/intc/omap_intc.c        | 4 ++++
+ hw/net/etraxfs_eth.c       | 2 ++
+ hw/net/lance.c             | 2 ++
+ 10 files changed, 26 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/audio/marvell_88w8618.c | 2 ++
+ hw/dma/sparc32_dma.c       | 2 ++
+ hw/gpio/omap_gpio.c        | 4 ++++
+ hw/i2c/omap_i2c.c          | 2 ++
+ hw/i2c/smbus_eeprom.c      | 2 ++
+ hw/intc/etraxfs_pic.c      | 4 ++++
+ hw/intc/grlib_irqmp.c      | 2 ++
+ hw/intc/omap_intc.c        | 4 ++++
+ hw/net/etraxfs_eth.c       | 2 ++
+ hw/net/lance.c             | 2 ++
+ 10 files changed, 26 insertions(+)
+
+diff --git a/hw/audio/marvell_88w8618.c b/hw/audio/marvell_88w8618.c
+index de06dfd..4f7196a 100644
+--- a/hw/audio/marvell_88w8618.c
++++ b/hw/audio/marvell_88w8618.c
+@@ -285,6 +285,8 @@ static void mv88w8618_audio_class_init(ObjectClass *klass, void *data)
+     dc->reset = mv88w8618_audio_reset;
+     dc->vmsd = &mv88w8618_audio_vmsd;
+     dc->props = mv88w8618_audio_properties;
++    /* Reason: pointer property "wm8750" */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo mv88w8618_audio_info = {
+diff --git a/hw/dma/sparc32_dma.c b/hw/dma/sparc32_dma.c
+index fd21533..c866da7 100644
+--- a/hw/dma/sparc32_dma.c
++++ b/hw/dma/sparc32_dma.c
+@@ -298,6 +298,8 @@ static void sparc32_dma_class_init(ObjectClass *klass, void *data)
+     dc->reset = dma_reset;
+     dc->vmsd = &vmstate_dma;
+     dc->props = sparc32_dma_properties;
++    /* Reason: pointer property "iommu_opaque" */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo sparc32_dma_info = {
+diff --git a/hw/gpio/omap_gpio.c b/hw/gpio/omap_gpio.c
+index f5eeaea..3f423dd 100644
+--- a/hw/gpio/omap_gpio.c
++++ b/hw/gpio/omap_gpio.c
+@@ -745,6 +745,8 @@ static void omap_gpio_class_init(ObjectClass *klass, void *data)
+     k->init = omap_gpio_init;
+     dc->reset = omap_gpif_reset;
+     dc->props = omap_gpio_properties;
++    /* Reason: pointer property "clk" */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo omap_gpio_info = {
+@@ -774,6 +776,8 @@ static void omap2_gpio_class_init(ObjectClass *klass, void *data)
+     k->init = omap2_gpio_init;
+     dc->reset = omap2_gpif_reset;
+     dc->props = omap2_gpio_properties;
++    /* Reason: pointer properties "iclk", "fclk0", ..., "fclk5" */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo omap2_gpio_info = {
+diff --git a/hw/i2c/omap_i2c.c b/hw/i2c/omap_i2c.c
+index efb2254..464308e 100644
+--- a/hw/i2c/omap_i2c.c
++++ b/hw/i2c/omap_i2c.c
+@@ -469,6 +469,8 @@ static void omap_i2c_class_init(ObjectClass *klass, void *data)
+     k->init = omap_i2c_init;
+     dc->props = omap_i2c_properties;
+     dc->reset = omap_i2c_reset;
++    /* Reason: pointer properties "iclk", "fclk" */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo omap_i2c_info = {
+diff --git a/hw/i2c/smbus_eeprom.c b/hw/i2c/smbus_eeprom.c
+index 0154283..0218f8a 100644
+--- a/hw/i2c/smbus_eeprom.c
++++ b/hw/i2c/smbus_eeprom.c
+@@ -121,6 +121,8 @@ static void smbus_eeprom_class_initfn(ObjectClass *klass, void *data)
+     sc->write_data = eeprom_write_data;
+     sc->read_data = eeprom_read_data;
+     dc->props = smbus_eeprom_properties;
++    /* Reason: pointer property "data" */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo smbus_eeprom_info = {
+diff --git a/hw/intc/etraxfs_pic.c b/hw/intc/etraxfs_pic.c
+index 635103c..57650c4 100644
+--- a/hw/intc/etraxfs_pic.c
++++ b/hw/intc/etraxfs_pic.c
+@@ -163,6 +163,10 @@ static void etraxfs_pic_class_init(ObjectClass *klass, void *data)
+ 
+     k->init = etraxfs_pic_init;
+     dc->props = etraxfs_pic_properties;
++    /*
++     * Note: pointer property "interrupt_vector" may remain null, thus
++     * no need for dc->cannot_instantiate_with_device_add_yet = true;
++     */
+ }
+ 
+ static const TypeInfo etraxfs_pic_info = {
+diff --git a/hw/intc/grlib_irqmp.c b/hw/intc/grlib_irqmp.c
+index 68dfe6a..1cfa960 100644
+--- a/hw/intc/grlib_irqmp.c
++++ b/hw/intc/grlib_irqmp.c
+@@ -368,6 +368,8 @@ static void grlib_irqmp_class_init(ObjectClass *klass, void *data)
+     k->init = grlib_irqmp_init;
+     dc->reset = grlib_irqmp_reset;
+     dc->props = grlib_irqmp_properties;
++    /* Reason: pointer properties "set_pil_in", "set_pil_in_opaque" */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo grlib_irqmp_info = {
+diff --git a/hw/intc/omap_intc.c b/hw/intc/omap_intc.c
+index 875eba4..e846fd6 100644
+--- a/hw/intc/omap_intc.c
++++ b/hw/intc/omap_intc.c
+@@ -387,6 +387,8 @@ static void omap_intc_class_init(ObjectClass *klass, void *data)
+     k->init = omap_intc_init;
+     dc->reset = omap_inth_reset;
+     dc->props = omap_intc_properties;
++    /* Reason: pointer property "clk" */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo omap_intc_info = {
+@@ -631,6 +633,8 @@ static void omap2_intc_class_init(ObjectClass *klass, void *data)
+     k->init = omap2_intc_init;
+     dc->reset = omap_inth_reset;
+     dc->props = omap2_intc_properties;
++    /* Reason: pointer property "iclk", "fclk" */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo omap2_intc_info = {
+diff --git a/hw/net/etraxfs_eth.c b/hw/net/etraxfs_eth.c
+index 1039913..374eb5a 100644
+--- a/hw/net/etraxfs_eth.c
++++ b/hw/net/etraxfs_eth.c
+@@ -639,6 +639,8 @@ static void etraxfs_eth_class_init(ObjectClass *klass, void *data)
+ 
+     k->init = fs_eth_init;
+     dc->props = etraxfs_eth_properties;
++    /* Reason: pointer properties "dma_out", "dma_in" */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo etraxfs_eth_info = {
+diff --git a/hw/net/lance.c b/hw/net/lance.c
+index 90641e7..df62dcb 100644
+--- a/hw/net/lance.c
++++ b/hw/net/lance.c
+@@ -154,6 +154,8 @@ static void lance_class_init(ObjectClass *klass, void *data)
+     dc->reset = lance_reset;
+     dc->vmsd = &vmstate_lance;
+     dc->props = lance_properties;
++    /* Reason: pointer property "dma" */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo lance_info = {
+-- 
+1.8.3.1
+

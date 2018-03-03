@@ -1,0 +1,177 @@
+From 0b0c86931a7da43b6358b202799510b20775aa17 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Tue, 16 Sep 2014 20:11:43 +0200
+Subject: [PATCH 05/20] block: do not abuse EMEDIUMTYPE
+
+Message-id: <e7489a9924b5a762f270901b59c974e79172f0fb.1410897407.git.jcody@redhat.com>
+Patchwork-id: 61209
+O-Subject: [PATCH qemu-kvm-rhel RHEL7.1 04/15] block: do not abuse EMEDIUMTYPE
+Bugzilla: 1098086
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+Returning "Wrong medium type" for an image that does not have a valid
+header is a bit weird.  Improve the error by mentioning what format
+was trying to open it.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 76abe4071d111a9ca6dcc9b9689a831c39ffa718)
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/bochs.c     |    3 ++-
+ block/cow.c       |    3 ++-
+ block/parallels.c |    3 ++-
+ block/qcow.c      |    3 ++-
+ block/qcow2.c     |    2 +-
+ block/qed.c       |    3 ++-
+ block/vdi.c       |    4 ++--
+ block/vmdk.c      |    6 ++++--
+ block/vpc.c       |    3 ++-
+ 9 files changed, 19 insertions(+), 11 deletions(-)
+
+diff --git a/block/bochs.c b/block/bochs.c
+index 5c74223..826ec12 100644
+--- a/block/bochs.c
++++ b/block/bochs.c
+@@ -113,7 +113,8 @@ static int bochs_open(BlockDriverState *bs, QDict *options, int flags,
+         strcmp(bochs.subtype, GROWING_TYPE) ||
+ 	((le32_to_cpu(bochs.version) != HEADER_VERSION) &&
+ 	(le32_to_cpu(bochs.version) != HEADER_V1))) {
+-        return -EMEDIUMTYPE;
++        error_setg(errp, "Image not in Bochs format");
++        return -EINVAL;
+     }
+ 
+     if (le32_to_cpu(bochs.version) == HEADER_V1) {
+diff --git a/block/cow.c b/block/cow.c
+index 909c3e7..46295d4 100644
+--- a/block/cow.c
++++ b/block/cow.c
+@@ -74,7 +74,8 @@ static int cow_open(BlockDriverState *bs, QDict *options, int flags,
+     }
+ 
+     if (be32_to_cpu(cow_header.magic) != COW_MAGIC) {
+-        ret = -EMEDIUMTYPE;
++        error_setg(errp, "Image not in COW format");
++        ret = -EINVAL;
+         goto fail;
+     }
+ 
+diff --git a/block/parallels.c b/block/parallels.c
+index d83cde4..1a5bd35 100644
+--- a/block/parallels.c
++++ b/block/parallels.c
+@@ -85,7 +85,8 @@ static int parallels_open(BlockDriverState *bs, QDict *options, int flags,
+ 
+     if (memcmp(ph.magic, HEADER_MAGIC, 16) ||
+         (le32_to_cpu(ph.version) != HEADER_VERSION)) {
+-        ret = -EMEDIUMTYPE;
++        error_setg(errp, "Image not in Parallels format");
++        ret = -EINVAL;
+         goto fail;
+     }
+ 
+diff --git a/block/qcow.c b/block/qcow.c
+index ad44f78..a5f601f 100644
+--- a/block/qcow.c
++++ b/block/qcow.c
+@@ -115,7 +115,8 @@ static int qcow_open(BlockDriverState *bs, QDict *options, int flags,
+     be64_to_cpus(&header.l1_table_offset);
+ 
+     if (header.magic != QCOW_MAGIC) {
+-        ret = -EMEDIUMTYPE;
++        error_setg(errp, "Image not in qcow format");
++        ret = -EINVAL;
+         goto fail;
+     }
+     if (header.version != QCOW_VERSION) {
+diff --git a/block/qcow2.c b/block/qcow2.c
+index 7398b16..0878d88 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -476,7 +476,7 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
+ 
+     if (header.magic != QCOW_MAGIC) {
+         error_setg(errp, "Image is not in qcow2 format");
+-        ret = -EMEDIUMTYPE;
++        ret = -EINVAL;
+         goto fail;
+     }
+     if (header.version < 2 || header.version > 3) {
+diff --git a/block/qed.c b/block/qed.c
+index 619f2d0..d1de0a2 100644
+--- a/block/qed.c
++++ b/block/qed.c
+@@ -391,7 +391,8 @@ static int bdrv_qed_open(BlockDriverState *bs, QDict *options, int flags,
+     qed_header_le_to_cpu(&le_header, &s->header);
+ 
+     if (s->header.magic != QED_MAGIC) {
+-        return -EMEDIUMTYPE;
++        error_setg(errp, "Image not in QED format");
++        return -EINVAL;
+     }
+     if (s->header.features & ~QED_FEATURE_MASK) {
+         /* image uses unsupported feature bits */
+diff --git a/block/vdi.c b/block/vdi.c
+index b095bee..0f8b294 100644
+--- a/block/vdi.c
++++ b/block/vdi.c
+@@ -408,8 +408,8 @@ static int vdi_open(BlockDriverState *bs, QDict *options, int flags,
+     }
+ 
+     if (header.signature != VDI_SIGNATURE) {
+-        logout("bad vdi signature %08x\n", header.signature);
+-        ret = -EMEDIUMTYPE;
++        error_setg(errp, "Image not in VDI format (bad signature %08x)", header.signature);
++        ret = -EINVAL;
+         goto fail;
+     } else if (header.version != VDI_VERSION_1_1) {
+         error_setg(errp, "unsupported VDI image (version %u.%u)",
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 4ff9531..eff0663 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -712,7 +712,8 @@ static int vmdk_open_sparse(BlockDriverState *bs,
+             return vmdk_open_vmdk4(bs, file, flags, errp);
+             break;
+         default:
+-            return -EMEDIUMTYPE;
++            error_setg(errp, "Image not in VMDK format");
++            return -EINVAL;
+             break;
+     }
+ }
+@@ -828,7 +829,8 @@ static int vmdk_open_desc_file(BlockDriverState *bs, int flags,
+         goto exit;
+     }
+     if (vmdk_parse_description(buf, "createType", ct, sizeof(ct))) {
+-        ret = -EMEDIUMTYPE;
++        error_setg(errp, "invalid VMDK image descriptor");
++        ret = -EINVAL;
+         goto exit;
+     }
+     if (strcmp(ct, "monolithicFlat") &&
+diff --git a/block/vpc.c b/block/vpc.c
+index 000d1c6..6e8fb33 100644
+--- a/block/vpc.c
++++ b/block/vpc.c
+@@ -193,7 +193,8 @@ static int vpc_open(BlockDriverState *bs, QDict *options, int flags,
+             goto fail;
+         }
+         if (strncmp(footer->creator, "conectix", 8)) {
+-            ret = -EMEDIUMTYPE;
++            error_setg(errp, "invalid VPC image");
++            ret = -EINVAL;
+             goto fail;
+         }
+         disk_type = VHD_FIXED;
+-- 
+1.7.1
+

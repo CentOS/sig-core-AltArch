@@ -1,0 +1,120 @@
+From 4d45b1791fb8bc24c17045a91b39c1d62e9e47c3 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Tue, 7 Jan 2014 21:57:07 +0100
+Subject: [PATCH 02/14] qcow2-refcount: Snapshot update for zero clusters
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1389131839-12920-3-git-send-email-mreitz@redhat.com>
+Patchwork-id: 56538
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 02/14] qcow2-refcount: Snapshot update for zero clusters
+Bugzilla: 1033490
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1033490
+
+Account for all cluster types in qcow2_update_snapshot_refcounts;
+this prevents this function from updating the refcount of unallocated
+zero clusters which effectively led to wrong adjustments of the refcount
+of cluster 0 (the main qcow2 header). This in turn resulted in images
+with (unallocated) zero clusters having a cluster 0 refcount greater
+than one after creating a snapshot.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 8b81a7b6ba8686f35f9cb0acdd54004d63206f03)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2-refcount.c | 52 +++++++++++++++++++++++++++++++++-----------------
+ 1 file changed, 35 insertions(+), 17 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-refcount.c |   52 ++++++++++++++++++++++++++++++++---------------
+ 1 files changed, 35 insertions(+), 17 deletions(-)
+
+diff --git a/block/qcow2-refcount.c b/block/qcow2-refcount.c
+index 3787314..2b72d5e 100644
+--- a/block/qcow2-refcount.c
++++ b/block/qcow2-refcount.c
+@@ -863,11 +863,14 @@ int qcow2_update_snapshot_refcount(BlockDriverState *bs,
+             }
+ 
+             for(j = 0; j < s->l2_size; j++) {
++                uint64_t cluster_index;
++
+                 offset = be64_to_cpu(l2_table[j]);
+-                if (offset != 0) {
+-                    old_offset = offset;
+-                    offset &= ~QCOW_OFLAG_COPIED;
+-                    if (offset & QCOW_OFLAG_COMPRESSED) {
++                old_offset = offset;
++                offset &= ~QCOW_OFLAG_COPIED;
++
++                switch (qcow2_get_cluster_type(offset)) {
++                    case QCOW2_CLUSTER_COMPRESSED:
+                         nb_csectors = ((offset >> s->csize_shift) &
+                                        s->csize_mask) + 1;
+                         if (addend != 0) {
+@@ -882,8 +885,16 @@ int qcow2_update_snapshot_refcount(BlockDriverState *bs,
+                         }
+                         /* compressed clusters are never modified */
+                         refcount = 2;
+-                    } else {
+-                        uint64_t cluster_index = (offset & L2E_OFFSET_MASK) >> s->cluster_bits;
++                        break;
++
++                    case QCOW2_CLUSTER_NORMAL:
++                    case QCOW2_CLUSTER_ZERO:
++                        cluster_index = (offset & L2E_OFFSET_MASK) >> s->cluster_bits;
++                        if (!cluster_index) {
++                            /* unallocated */
++                            refcount = 0;
++                            break;
++                        }
+                         if (addend != 0) {
+                             refcount = update_cluster_refcount(bs, cluster_index, addend,
+                                                                QCOW2_DISCARD_SNAPSHOT);
+@@ -895,19 +906,26 @@ int qcow2_update_snapshot_refcount(BlockDriverState *bs,
+                             ret = refcount;
+                             goto fail;
+                         }
+-                    }
++                        break;
+ 
+-                    if (refcount == 1) {
+-                        offset |= QCOW_OFLAG_COPIED;
+-                    }
+-                    if (offset != old_offset) {
+-                        if (addend > 0) {
+-                            qcow2_cache_set_dependency(bs, s->l2_table_cache,
+-                                s->refcount_block_cache);
+-                        }
+-                        l2_table[j] = cpu_to_be64(offset);
+-                        qcow2_cache_entry_mark_dirty(s->l2_table_cache, l2_table);
++                    case QCOW2_CLUSTER_UNALLOCATED:
++                        refcount = 0;
++                        break;
++
++                    default:
++                        abort();
++                }
++
++                if (refcount == 1) {
++                    offset |= QCOW_OFLAG_COPIED;
++                }
++                if (offset != old_offset) {
++                    if (addend > 0) {
++                        qcow2_cache_set_dependency(bs, s->l2_table_cache,
++                            s->refcount_block_cache);
+                     }
++                    l2_table[j] = cpu_to_be64(offset);
++                    qcow2_cache_entry_mark_dirty(s->l2_table_cache, l2_table);
+                 }
+             }
+ 
+-- 
+1.7.1
+

@@ -1,0 +1,195 @@
+From 39da81cf143ccc400263362a5319803063ad14cf Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 27 Jul 2016 07:35:07 +0200
+Subject: [PATCH 09/16] qjson: replace QString in JSONLexer with GString
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1469604913-12442-11-git-send-email-armbru@redhat.com>
+Patchwork-id: 71480
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 09/15] qjson: replace QString in JSONLexer with GString
+Bugzilla: 1276036
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+JSONLexer only needs a simple resizable buffer.  json-streamer.c
+can allocate memory for each token instead of relying on reference
+counting of QStrings.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Message-Id: <1448300659-23559-2-git-send-email-pbonzini@redhat.com>
+[Straightforwardly rebased on my patches, checkpatch made happy]
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit d2ca7c0b0d876cf0e219ae7a92252626b0913a28)
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ include/qapi/qmp/json-lexer.h    |  8 ++++----
+ include/qapi/qmp/json-streamer.h |  1 +
+ qobject/json-lexer.c             | 22 ++++++++--------------
+ qobject/json-streamer.c          |  9 +++++----
+ 4 files changed, 18 insertions(+), 22 deletions(-)
+
+diff --git a/include/qapi/qmp/json-lexer.h b/include/qapi/qmp/json-lexer.h
+index f3e8dc7..cb456d5 100644
+--- a/include/qapi/qmp/json-lexer.h
++++ b/include/qapi/qmp/json-lexer.h
+@@ -14,8 +14,7 @@
+ #ifndef QEMU_JSON_LEXER_H
+ #define QEMU_JSON_LEXER_H
+ 
+-#include "qapi/qmp/qstring.h"
+-#include "qapi/qmp/qlist.h"
++#include "glib-compat.h"
+ 
+ typedef enum json_token_type {
+     JSON_MIN = 100,
+@@ -36,13 +35,14 @@ typedef enum json_token_type {
+ 
+ typedef struct JSONLexer JSONLexer;
+ 
+-typedef void (JSONLexerEmitter)(JSONLexer *, QString *, JSONTokenType, int x, int y);
++typedef void (JSONLexerEmitter)(JSONLexer *, GString *,
++                                JSONTokenType, int x, int y);
+ 
+ struct JSONLexer
+ {
+     JSONLexerEmitter *emit;
+     int state;
+-    QString *token;
++    GString *token;
+     int x, y;
+ };
+ 
+diff --git a/include/qapi/qmp/json-streamer.h b/include/qapi/qmp/json-streamer.h
+index 823f7d7..e901144 100644
+--- a/include/qapi/qmp/json-streamer.h
++++ b/include/qapi/qmp/json-streamer.h
+@@ -14,6 +14,7 @@
+ #ifndef QEMU_JSON_STREAMER_H
+ #define QEMU_JSON_STREAMER_H
+ 
++#include <stdint.h>
+ #include "qapi/qmp/qlist.h"
+ #include "qapi/qmp/json-lexer.h"
+ 
+diff --git a/qobject/json-lexer.c b/qobject/json-lexer.c
+index 1bfff02..b89e24f 100644
+--- a/qobject/json-lexer.c
++++ b/qobject/json-lexer.c
+@@ -11,12 +11,9 @@
+  *
+  */
+ 
+-#include "qapi/qmp/qstring.h"
+-#include "qapi/qmp/qlist.h"
+-#include "qapi/qmp/qdict.h"
+-#include "qapi/qmp/qint.h"
+ #include "qemu-common.h"
+ #include "qapi/qmp/json-lexer.h"
++#include <stdint.h>
+ 
+ #define MAX_TOKEN_SIZE (64ULL << 20)
+ 
+@@ -276,7 +273,7 @@ void json_lexer_init(JSONLexer *lexer, JSONLexerEmitter func)
+ {
+     lexer->emit = func;
+     lexer->state = IN_START;
+-    lexer->token = qstring_new();
++    lexer->token = g_string_sized_new(3);
+     lexer->x = lexer->y = 0;
+ }
+ 
+@@ -295,7 +292,7 @@ static int json_lexer_feed_char(JSONLexer *lexer, char ch, bool flush)
+         new_state = json_lexer[lexer->state][(uint8_t)ch];
+         char_consumed = !TERMINAL_NEEDED_LOOKAHEAD(lexer->state, new_state);
+         if (char_consumed) {
+-            qstring_append_chr(lexer->token, ch);
++            g_string_append_c(lexer->token, ch);
+         }
+ 
+         switch (new_state) {
+@@ -313,8 +310,7 @@ static int json_lexer_feed_char(JSONLexer *lexer, char ch, bool flush)
+             lexer->emit(lexer, lexer->token, new_state, lexer->x, lexer->y);
+             /* fall through */
+         case JSON_SKIP:
+-            QDECREF(lexer->token);
+-            lexer->token = qstring_new();
++            g_string_truncate(lexer->token, 0);
+             new_state = IN_START;
+             break;
+         case IN_ERROR:
+@@ -332,8 +328,7 @@ static int json_lexer_feed_char(JSONLexer *lexer, char ch, bool flush)
+              * induce an error/flush state.
+              */
+             lexer->emit(lexer, lexer->token, JSON_ERROR, lexer->x, lexer->y);
+-            QDECREF(lexer->token);
+-            lexer->token = qstring_new();
++            g_string_truncate(lexer->token, 0);
+             new_state = IN_START;
+             lexer->state = new_state;
+             return 0;
+@@ -346,10 +341,9 @@ static int json_lexer_feed_char(JSONLexer *lexer, char ch, bool flush)
+     /* Do not let a single token grow to an arbitrarily large size,
+      * this is a security consideration.
+      */
+-    if (lexer->token->length > MAX_TOKEN_SIZE) {
++    if (lexer->token->len > MAX_TOKEN_SIZE) {
+         lexer->emit(lexer, lexer->token, lexer->state, lexer->x, lexer->y);
+-        QDECREF(lexer->token);
+-        lexer->token = qstring_new();
++        g_string_truncate(lexer->token, 0);
+         lexer->state = IN_START;
+     }
+ 
+@@ -379,5 +373,5 @@ int json_lexer_flush(JSONLexer *lexer)
+ 
+ void json_lexer_destroy(JSONLexer *lexer)
+ {
+-    QDECREF(lexer->token);
++    g_string_free(lexer->token, true);
+ }
+diff --git a/qobject/json-streamer.c b/qobject/json-streamer.c
+index 4a161a1..7292f3a 100644
+--- a/qobject/json-streamer.c
++++ b/qobject/json-streamer.c
+@@ -12,6 +12,7 @@
+  */
+ 
+ #include "qapi/qmp/qlist.h"
++#include "qapi/qmp/qstring.h"
+ #include "qapi/qmp/qint.h"
+ #include "qapi/qmp/qdict.h"
+ #include "qemu-common.h"
+@@ -21,7 +22,8 @@
+ #define MAX_TOKEN_SIZE (64ULL << 20)
+ #define MAX_NESTING (1ULL << 10)
+ 
+-static void json_message_process_token(JSONLexer *lexer, QString *token, JSONTokenType type, int x, int y)
++static void json_message_process_token(JSONLexer *lexer, GString *input,
++                                       JSONTokenType type, int x, int y)
+ {
+     JSONMessageParser *parser = container_of(lexer, JSONMessageParser, lexer);
+     QDict *dict;
+@@ -45,12 +47,11 @@ static void json_message_process_token(JSONLexer *lexer, QString *token, JSONTok
+ 
+     dict = qdict_new();
+     qdict_put(dict, "type", qint_from_int(type));
+-    QINCREF(token);
+-    qdict_put(dict, "token", token);
++    qdict_put(dict, "token", qstring_from_str(input->str));
+     qdict_put(dict, "x", qint_from_int(x));
+     qdict_put(dict, "y", qint_from_int(y));
+ 
+-    parser->token_size += token->length;
++    parser->token_size += input->len;
+ 
+     qlist_append(parser->tokens, dict);
+ 
+-- 
+1.8.3.1
+

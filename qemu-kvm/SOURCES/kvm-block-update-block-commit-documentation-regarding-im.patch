@@ -1,0 +1,156 @@
+From c7c21ebc0dcddd666c616e161b0f9bbb4ade9cf4 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Tue, 11 Feb 2014 16:14:27 +0100
+Subject: [PATCH 21/28] block: update block commit documentation regarding image truncation
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <d4d68c21d4b8936f3bcdc442abe0425e01352167.1392134912.git.jcody@redhat.com>
+Patchwork-id: 57217
+O-Subject: [RHEL7 qemu-kvm PATCH 3/6] block: update block commit documentation regarding image truncation
+Bugzilla: 1047254
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+This updates the documentation for commiting snapshot images.
+Specifically, this highlights what happens when the base image
+is either smaller or larger than the snapshot image being committed.
+
+In the case of the base image being smaller, it is resized to the
+larger size of the snapshot image.  In the case of the base image
+being larger, it is not resized automatically, but once the commit
+has completed it is safe for the user to truncate the base image.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 37222900743962e146a82b7077a18c3f39859a19)
+
+Conflicts:
+	qmp-commands.hx
+
+RHEL7 Notes: Conflict is due to 2 things: 1) drive-backup
+             not present in RHEL7, and 2) the block job
+             differentiation #ifdefs.
+---
+ hmp-commands.hx  |  5 +++++
+ qapi-schema.json |  7 +++++++
+ qemu-img.texi    |  7 ++++++-
+ qmp-commands.hx  | 40 ++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 58 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hmp-commands.hx  |    5 +++++
+ qapi-schema.json |    7 +++++++
+ qemu-img.texi    |    7 ++++++-
+ qmp-commands.hx  |   40 ++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 58 insertions(+), 1 deletions(-)
+
+diff --git a/hmp-commands.hx b/hmp-commands.hx
+index 8e08ebf..467dd70 100644
+--- a/hmp-commands.hx
++++ b/hmp-commands.hx
+@@ -35,6 +35,11 @@ STEXI
+ @item commit
+ @findex commit
+ Commit changes to the disk images (if -snapshot is used) or backing files.
++If the backing file is smaller than the snapshot, then the backing file will be
++resized to be the same size as the snapshot.  If the snapshot is smaller than
++the backing file, the backing file will not be truncated.  If you want the
++backing file to match the size of the smaller snapshot, you can safely truncate
++it yourself once the commit operation successfully completes.
+ ETEXI
+ 
+     {
+diff --git a/qapi-schema.json b/qapi-schema.json
+index 8b257e2..017b3b7 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -1846,6 +1846,13 @@
+ #                    user needs to complete the job with the block-job-complete
+ #                    command after getting the ready event. (Since 2.0)
+ #
++#                    If the base image is smaller than top, then the base image
++#                    will be resized to be the same size as top.  If top is
++#                    smaller than the base image, the base will not be
++#                    truncated.  If you want the base image size to match the
++#                    size of the smaller top, you can safely truncate it
++#                    yourself once the commit operation successfully completes.
++#
+ #
+ # @speed:  #optional the maximum speed, in bytes per second
+ #
+diff --git a/qemu-img.texi b/qemu-img.texi
+index 1078791..d75a780 100644
+--- a/qemu-img.texi
++++ b/qemu-img.texi
+@@ -136,7 +136,12 @@ it doesn't need to be specified separately in this case.
+ 
+ @item commit [-f @var{fmt}] [-t @var{cache}] @var{filename}
+ 
+-Commit the changes recorded in @var{filename} in its base image.
++Commit the changes recorded in @var{filename} in its base image or backing file.
++If the backing file is smaller than the snapshot, then the backing file will be
++resized to be the same size as the snapshot.  If the snapshot is smaller than
++the backing file, the backing file will not be truncated.  If you want the
++backing file to match the size of the smaller snapshot, you can safely truncate
++it yourself once the commit operation successfully completes.
+ 
+ @item compare [-f @var{fmt}] [-F @var{fmt}] [-p] [-s] [-q] @var{filename1} @var{filename2}
+ 
+diff --git a/qmp-commands.hx b/qmp-commands.hx
+index 7a1bfd4..08a01ee 100644
+--- a/qmp-commands.hx
++++ b/qmp-commands.hx
+@@ -1008,6 +1008,46 @@ EQMP
+         .args_type  = "device:B,base:s?,top:s,speed:o?",
+         .mhandler.cmd_new = qmp_marshal_input_block_commit,
+     },
++
++SQMP
++block-commit
++------------
++
++Live commit of data from overlay image nodes into backing nodes - i.e., writes
++data between 'top' and 'base' into 'base'.
++
++Arguments:
++
++- "device": The device's ID, must be unique (json-string)
++- "base": The file name of the backing image to write data into.
++          If not specified, this is the deepest backing image
++          (json-string, optional)
++- "top":  The file name of the backing image within the image chain,
++          which contains the topmost data to be committed down.
++
++          If top == base, that is an error.
++          If top == active, the job will not be completed by itself,
++          user needs to complete the job with the block-job-complete
++          command after getting the ready event. (Since 2.0)
++
++          If the base image is smaller than top, then the base image
++          will be resized to be the same size as top.  If top is
++          smaller than the base image, the base will not be
++          truncated.  If you want the base image size to match the
++          size of the smaller top, you can safely truncate it
++          yourself once the commit operation successfully completes.
++          (json-string)
++- "speed":  the maximum speed, in bytes per second (json-int, optional)
++
++
++Example:
++
++-> { "execute": "block-commit", "arguments": { "device": "virtio0",
++                                              "top": "/tmp/snap1.qcow2" } }
++<- { "return": {} }
++
++EQMP
++
+ #endif
+ 
+     {
+-- 
+1.7.1
+

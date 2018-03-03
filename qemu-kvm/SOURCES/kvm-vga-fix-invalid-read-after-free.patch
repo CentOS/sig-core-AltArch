@@ -1,0 +1,73 @@
+From 92ff5f7388ad0e0826c8ca6fc362b0f84a37f26c Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Wed, 12 Nov 2014 13:05:33 +0100
+Subject: [PATCH 31/41] vga: fix invalid read after free
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Message-id: <1415797533-28127-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 62323
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 1/1] vga: fix invalid read after free
+Bugzilla: 1161890
+RH-Acked-by: dgibson <dgibson@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: Marc-André Lureau <marcandre.lureau@gmail.com>
+
+After calling dpy_gfx_replace_surface(s->con, surface), the outer
+surface is invalid.
+
+==5370== Invalid read of size 4
+==5370==    at 0x460229: surface_bits_per_pixel (console.h:250)
+==5370==    by 0x466A81: get_depth_index (vga.c:1173)
+==5370==    by 0x467EC2: vga_draw_graphic (vga.c:1718)
+==5370==    by 0x4687A5: vga_update_display (vga.c:1914)
+==5370==    by 0x2A782E: qxl_hw_update (qxl.c:1766)
+==5370==    by 0x3EB83B: graphic_hw_update (console.c:254)
+==5370==    by 0x3FBE31: qemu_spice_display_refresh (spice-display.c:418)
+==5370==    by 0x2A7D01: display_refresh (qxl.c:1886)
+==5370==    by 0x3EEE1C: dpy_refresh (console.c:1436)
+==5370==    by 0x3EB543: gui_update (console.c:192)
+==5370==    by 0x3C43B3: timerlist_run_timers (qemu-timer.c:488)
+==5370==    by 0x3C4416: qemu_clock_run_timers (qemu-timer.c:499)
+==5370==  Address 0x22ffb1e0 is 0 bytes inside a block of size 56 free'd
+==5370==    at 0x4A074C4: free (in /usr/lib64/valgrind/vgpreload_memcheck-amd64-linux.so)
+==5370==    by 0x4245FC: free_and_trace (vl.c:2771)
+==5370==    by 0x50899AE: g_free (gmem.c:252)
+==5370==    by 0x3EE8D3: qemu_free_displaysurface (console.c:1332)
+==5370==    by 0x3EEDB7: dpy_gfx_replace_surface (console.c:1427)
+==5370==    by 0x467EB6: vga_draw_graphic (vga.c:1714)
+==5370==    by 0x4687A5: vga_update_display (vga.c:1914)
+==5370==    by 0x2A782E: qxl_hw_update (qxl.c:1766)
+==5370==    by 0x3EB83B: graphic_hw_update (console.c:254)
+==5370==    by 0x3FBE31: qemu_spice_display_refresh (spice-display.c:418)
+==5370==    by 0x2A7D01: display_refresh (qxl.c:1886)
+==5370==    by 0x3EEE1C: dpy_refresh (console.c:1436)
+
+Signed-off-by: Marc-André Lureau <marcandre.lureau@gmail.com>
+Reviewed-by: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: 1383664554-15248-1-git-send-email-marcandre.lureau@gmail.com
+Signed-off-by: Anthony Liguori <aliguori@amazon.com>
+(cherry picked from commit 2c8ebac7ccf51a8e683de593c4240d2ed7d592ec)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/display/vga.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/hw/display/vga.c b/hw/display/vga.c
+index de5d63d..0761b9e 100644
+--- a/hw/display/vga.c
++++ b/hw/display/vga.c
+@@ -1746,7 +1746,6 @@ static void vga_draw_graphic(VGACommonState *s, int full_update)
+     } else if (is_buffer_shared(surface) &&
+                (full_update || surface_data(surface) != s->vram_ptr
+                 + (s->start_addr * 4))) {
+-        DisplaySurface *surface;
+         surface = qemu_create_displaysurface_from(disp_width,
+                 height, depth, s->line_offset,
+                 s->vram_ptr + (s->start_addr * 4), byteswap);
+-- 
+1.8.3.1
+

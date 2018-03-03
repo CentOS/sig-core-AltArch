@@ -1,0 +1,112 @@
+From 80e1dce1b2b514b1553f6d02194110db0d330c2d Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 9 Sep 2013 14:27:53 +0200
+Subject: [PATCH 02/38] block: move input parsing code in qmp_transaction()
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1378736903-18489-3-git-send-email-kwolf@redhat.com>
+Patchwork-id: 54189
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 02/32] block: move input parsing code in qmp_transaction()
+Bugzilla: 1005818
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Wenchao Xia <xiawenc@linux.vnet.ibm.com>
+
+Bugzilla: 1005818
+
+The code is moved into preparation function, and changed
+a bit to tip more clearly what it is doing.
+
+Signed-off-by: Wenchao Xia <xiawenc@linux.vnet.ibm.com>
+Reviewed-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit e2a31e8798e8246bed8ab396a71cd06bf95edde6)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ blockdev.c | 38 +++++++++++++++++++-------------------
+ 1 file changed, 19 insertions(+), 19 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev.c |   38 +++++++++++++++++++-------------------
+ 1 files changed, 19 insertions(+), 19 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index 1bff654..9eab803 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -785,10 +785,7 @@ typedef struct BlkTransactionStates {
+     QSIMPLEQ_ENTRY(BlkTransactionStates) entry;
+ } BlkTransactionStates;
+ 
+-static void external_snapshot_prepare(const char *device,
+-                                      const char *format,
+-                                      const char *new_image_file,
+-                                      enum NewImageMode mode,
++static void external_snapshot_prepare(BlockdevAction *action,
+                                       BlkTransactionStates *states,
+                                       Error **errp)
+ {
+@@ -796,7 +793,24 @@ static void external_snapshot_prepare(const char *device,
+     BlockDriver *drv;
+     int flags, ret;
+     Error *local_err = NULL;
++    const char *device;
++    const char *new_image_file;
++    const char *format = "qcow2";
++    enum NewImageMode mode = NEW_IMAGE_MODE_ABSOLUTE_PATHS;
+ 
++    /* get parameters */
++    g_assert(action->kind == BLOCKDEV_ACTION_KIND_BLOCKDEV_SNAPSHOT_SYNC);
++
++    device = action->blockdev_snapshot_sync->device;
++    new_image_file = action->blockdev_snapshot_sync->snapshot_file;
++    if (action->blockdev_snapshot_sync->has_format) {
++        format = action->blockdev_snapshot_sync->format;
++    }
++    if (action->blockdev_snapshot_sync->has_mode) {
++        mode = action->blockdev_snapshot_sync->mode;
++    }
++
++    /* start processing */
+     drv = bdrv_find_format(format);
+     if (!drv) {
+         error_set(errp, QERR_INVALID_BLOCK_FORMAT, format);
+@@ -877,10 +891,6 @@ void qmp_transaction(BlockdevActionList *dev_list, Error **errp)
+     /* We don't do anything in this loop that commits us to the snapshot */
+     while (NULL != dev_entry) {
+         BlockdevAction *dev_info = NULL;
+-        enum NewImageMode mode;
+-        const char *new_image_file;
+-        const char *device;
+-        const char *format = "qcow2";
+ 
+         dev_info = dev_entry->value;
+         dev_entry = dev_entry->next;
+@@ -890,17 +900,7 @@ void qmp_transaction(BlockdevActionList *dev_list, Error **errp)
+ 
+         switch (dev_info->kind) {
+         case BLOCKDEV_ACTION_KIND_BLOCKDEV_SNAPSHOT_SYNC:
+-            device = dev_info->blockdev_snapshot_sync->device;
+-            if (!dev_info->blockdev_snapshot_sync->has_mode) {
+-                dev_info->blockdev_snapshot_sync->mode = NEW_IMAGE_MODE_ABSOLUTE_PATHS;
+-            }
+-            new_image_file = dev_info->blockdev_snapshot_sync->snapshot_file;
+-            if (dev_info->blockdev_snapshot_sync->has_format) {
+-                format = dev_info->blockdev_snapshot_sync->format;
+-            }
+-            mode = dev_info->blockdev_snapshot_sync->mode;
+-            external_snapshot_prepare(device, format, new_image_file,
+-                                      mode, states, &local_err);
++            external_snapshot_prepare(dev_info, states, errp);
+             if (error_is_set(&local_err)) {
+                 error_propagate(errp, local_err);
+                 goto delete_and_fail;
+-- 
+1.7.1
+

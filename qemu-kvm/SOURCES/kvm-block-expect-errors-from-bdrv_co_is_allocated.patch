@@ -1,0 +1,162 @@
+From ebd7d27935a5ec9d5c72403fc1cd60af2e450e7c Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Fri, 18 Oct 2013 08:14:33 +0200
+Subject: [PATCH 08/81] block: expect errors from bdrv_co_is_allocated
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1382084091-16636-9-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 54992
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 08/26] block: expect errors from bdrv_co_is_allocated
+Bugzilla: 989646
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+Some bdrv_is_allocated callers do not expect errors, but the fallback
+in qcow2.c might make other callers trip on assertion failures or
+infinite loops.
+
+Fix the callers to always look for errors.
+
+Cc: qemu-stable@nongnu.org
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit d663640c04f2aab810915c556390211d75457704)
+---
+ block.c        |  7 +++++--
+ block/cow.c    |  6 +++++-
+ block/qcow2.c  |  4 +---
+ block/stream.c |  2 +-
+ qemu-img.c     | 16 ++++++++++++++--
+ qemu-io.c      |  4 ++++
+ 6 files changed, 30 insertions(+), 9 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c        |    7 +++++--
+ block/cow.c    |    6 +++++-
+ block/qcow2.c  |    4 +---
+ block/stream.c |    2 +-
+ qemu-img.c     |   16 ++++++++++++++--
+ qemu-io.c      |    4 ++++
+ 6 files changed, 30 insertions(+), 9 deletions(-)
+
+diff --git a/block.c b/block.c
+index 46d9420..d838a3c 100644
+--- a/block.c
++++ b/block.c
+@@ -1815,8 +1815,11 @@ int bdrv_commit(BlockDriverState *bs)
+     buf = g_malloc(COMMIT_BUF_SECTORS * BDRV_SECTOR_SIZE);
+ 
+     for (sector = 0; sector < total_sectors; sector += n) {
+-        if (bdrv_is_allocated(bs, sector, COMMIT_BUF_SECTORS, &n)) {
+-
++        ret = bdrv_is_allocated(bs, sector, COMMIT_BUF_SECTORS, &n);
++        if (ret < 0) {
++            goto ro_cleanup;
++        }
++        if (ret) {
+             if (bdrv_read(bs, sector, buf, n) != 0) {
+                 ret = -EIO;
+                 goto ro_cleanup;
+diff --git a/block/cow.c b/block/cow.c
+index 21bceaa..5a33b46 100644
+--- a/block/cow.c
++++ b/block/cow.c
+@@ -212,7 +212,11 @@ static int coroutine_fn cow_read(BlockDriverState *bs, int64_t sector_num,
+     int ret, n;
+ 
+     while (nb_sectors > 0) {
+-        if (cow_co_is_allocated(bs, sector_num, nb_sectors, &n)) {
++        ret = cow_co_is_allocated(bs, sector_num, nb_sectors, &n);
++        if (ret < 0) {
++            return ret;
++        }
++        if (ret) {
+             ret = bdrv_pread(bs->file,
+                         s->cow_sectors_offset + sector_num * 512,
+                         buf, n * 512);
+diff --git a/block/qcow2.c b/block/qcow2.c
+index 70da5bd..f6e64d2 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -648,13 +648,11 @@ static int coroutine_fn qcow2_co_is_allocated(BlockDriverState *bs,
+     int ret;
+ 
+     *pnum = nb_sectors;
+-    /* FIXME We can get errors here, but the bdrv_co_is_allocated interface
+-     * can't pass them on today */
+     qemu_co_mutex_lock(&s->lock);
+     ret = qcow2_get_cluster_offset(bs, sector_num << 9, pnum, &cluster_offset);
+     qemu_co_mutex_unlock(&s->lock);
+     if (ret < 0) {
+-        *pnum = 0;
++        return ret;
+     }
+ 
+     return (cluster_offset != 0) || (ret == QCOW2_CLUSTER_ZERO);
+diff --git a/block/stream.c b/block/stream.c
+index 9674c31..995b97b 100644
+--- a/block/stream.c
++++ b/block/stream.c
+@@ -120,7 +120,7 @@ wait:
+         if (ret == 1) {
+             /* Allocated in the top, no need to copy.  */
+             copy = false;
+-        } else {
++        } else if (ret >= 0) {
+             /* Copy if allocated in the intermediate images.  Limit to the
+              * known-unallocated area [sector_num, sector_num+n).  */
+             ret = bdrv_is_allocated_above(bs->backing_hd, base,
+diff --git a/qemu-img.c b/qemu-img.c
+index 3b11414..28efb4f 100644
+--- a/qemu-img.c
++++ b/qemu-img.c
+@@ -1482,8 +1482,15 @@ static int img_convert(int argc, char **argv)
+                    are present in both the output's and input's base images (no
+                    need to copy them). */
+                 if (out_baseimg) {
+-                    if (!bdrv_is_allocated(bs[bs_i], sector_num - bs_offset,
+-                                           n, &n1)) {
++                    ret = bdrv_is_allocated(bs[bs_i], sector_num - bs_offset,
++                                            n, &n1);
++                    if (ret < 0) {
++                        error_report("error while reading metadata for sector "
++                                     "%" PRId64 ": %s",
++                                     sector_num - bs_offset, strerror(-ret));
++                        goto out;
++                    }
++                    if (!ret) {
+                         sector_num += n1;
+                         continue;
+                     }
+@@ -2217,6 +2224,11 @@ static int img_rebase(int argc, char **argv)
+ 
+             /* If the cluster is allocated, we don't need to take action */
+             ret = bdrv_is_allocated(bs, sector, n, &n);
++            if (ret < 0) {
++                error_report("error while reading image metadata: %s",
++                             strerror(-ret));
++                goto out;
++            }
+             if (ret) {
+                 continue;
+             }
+diff --git a/qemu-io.c b/qemu-io.c
+index 5045ff8..bdcce7f 100644
+--- a/qemu-io.c
++++ b/qemu-io.c
+@@ -1607,6 +1607,10 @@ static int alloc_f(int argc, char **argv)
+     sector_num = offset >> 9;
+     while (remaining) {
+         ret = bdrv_is_allocated(bs, sector_num, remaining, &num);
++        if (ret < 0) {
++            printf("is_allocated failed: %s\n", strerror(-ret));
++            return 0;
++        }
+         sector_num += num;
+         remaining -= num;
+         if (ret) {
+-- 
+1.7.1
+

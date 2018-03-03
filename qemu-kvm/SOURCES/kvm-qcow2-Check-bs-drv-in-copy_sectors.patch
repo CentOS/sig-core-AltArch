@@ -1,0 +1,53 @@
+From d8f974ead4b4c1f549441e7aac96262cf2b754ee Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 17 Mar 2014 22:45:29 +0100
+Subject: [PATCH 4/6] qcow2: Check bs->drv in copy_sectors()
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1395096331-12610-2-git-send-email-mreitz@redhat.com>
+Patchwork-id: 58119
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 1/3] qcow2: Check bs->drv in copy_sectors()
+Bugzilla: 1048575
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+BZ: 1048575
+
+Before dereferencing bs->drv for a call to its member bdrv_co_readv(),
+copy_sectors() should check whether that pointer is indeed valid, since
+it may have been set to NULL by e.g. a concurrent write triggering the
+corruption prevention mechanism.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit dba2855572c746836ad90ce9154403b5929d996b)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2-cluster.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-cluster.c |    4 ++++
+ 1 files changed, 4 insertions(+), 0 deletions(-)
+
+diff --git a/block/qcow2-cluster.c b/block/qcow2-cluster.c
+index 862df0f..87c13ce 100644
+--- a/block/qcow2-cluster.c
++++ b/block/qcow2-cluster.c
+@@ -370,6 +370,10 @@ static int coroutine_fn copy_sectors(BlockDriverState *bs,
+ 
+     BLKDBG_EVENT(bs->file, BLKDBG_COW_READ);
+ 
++    if (!bs->drv) {
++        return -ENOMEDIUM;
++    }
++
+     /* Call .bdrv_co_readv() directly instead of using the public block-layer
+      * interface.  This avoids double I/O throttling and request tracking,
+      * which can lead to deadlock when block layer copy-on-read is enabled.
+-- 
+1.7.1
+

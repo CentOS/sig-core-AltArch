@@ -1,0 +1,83 @@
+From 2ae5ce2fe476decb545f16c5af382e5959b2933a Mon Sep 17 00:00:00 2001
+Message-Id: <2ae5ce2fe476decb545f16c5af382e5959b2933a.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:09:19 +0100
+Subject: [PATCH 31/50] block drivers: expose requirement for write same
+ alignment from formats
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-34-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56070
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 33/52] block drivers: expose requirement for write same alignment from formats
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+This will let misaligned but large requests use zero clusters.  This
+is important because the cluster size is not guest visible.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit cffb1ec600de83f693a23578fc2f344c1af9b96f)
+
+Conflicts:
+	block/qed.c
+---
+ block/qcow2.c | 1 +
+ block/qed.c   | 1 +
+ block/vmdk.c  | 4 ++++
+ 3 files changed, 6 insertions(+)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ block/qcow2.c | 1 +
+ block/qed.c   | 1 +
+ block/vmdk.c  | 4 ++++
+ 3 files changed, 6 insertions(+)
+
+diff --git a/block/qcow2.c b/block/qcow2.c
+index bbba11f..bf1f66f 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -717,6 +717,7 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
+     }
+ 
+     qemu_opts_del(opts);
++    bs->bl.write_zeroes_alignment = s->cluster_sectors;
+ 
+     if (s->use_lazy_refcounts && s->qcow_version < 3) {
+         error_setg(errp, "Lazy refcounts require a qcow2 image with at least "
+diff --git a/block/qed.c b/block/qed.c
+index c470329..0805ba3 100644
+--- a/block/qed.c
++++ b/block/qed.c
+@@ -495,6 +495,7 @@ static int bdrv_qed_open(BlockDriverState *bs, QDict *options, int flags,
+         }
+     }
+ 
++    bs->bl.write_zeroes_alignment = s->header.cluster_size >> BDRV_SECTOR_BITS;
+     s->need_check_timer = qemu_new_timer_ns(vm_clock,
+                                             qed_need_check_timer_cb, s);
+ 
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 6d676e4..8662016 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -428,6 +428,10 @@ static int vmdk_add_extent(BlockDriverState *bs,
+     extent->l2_size = l2_size;
+     extent->cluster_sectors = flat ? sectors : cluster_sectors;
+ 
++    if (!flat) {
++        bs->bl.write_zeroes_alignment =
++            MAX(bs->bl.write_zeroes_alignment, cluster_sectors);
++    }
+     if (s->num_extents > 1) {
+         extent->end_sector = (*(extent - 1)).end_sector + extent->sectors;
+     } else {
+-- 
+1.7.11.7
+

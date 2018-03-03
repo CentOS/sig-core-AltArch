@@ -1,0 +1,116 @@
+From 0c8fb6c71c02e202235933781430efac5c0d7314 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 9 Sep 2013 14:28:08 +0200
+Subject: [PATCH 17/38] qapi-visit.py: Split off generate_visit_struct_fields()
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1378736903-18489-18-git-send-email-kwolf@redhat.com>
+Patchwork-id: 54204
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 17/32] qapi-visit.py: Split off generate_visit_struct_fields()
+Bugzilla: 1005818
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Bugzilla: 1005818
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit d131c897f3dea8b76d7a487af0f7f5f11d0500a3)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ scripts/qapi-visit.py | 62 ++++++++++++++++++++++++++++-----------------------
+ 1 file changed, 34 insertions(+), 28 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ scripts/qapi-visit.py |   62 ++++++++++++++++++++++++++----------------------
+ 1 files changed, 34 insertions(+), 28 deletions(-)
+
+diff --git a/scripts/qapi-visit.py b/scripts/qapi-visit.py
+index a276540..5adc2af 100644
+--- a/scripts/qapi-visit.py
++++ b/scripts/qapi-visit.py
+@@ -17,34 +17,9 @@ import os
+ import getopt
+ import errno
+ 
+-def generate_visit_struct_body(field_prefix, name, members):
+-    ret = mcgen('''
+-if (!error_is_set(errp)) {
+-''')
+-    push_indent()
+-
+-    if len(field_prefix):
+-        field_prefix = field_prefix + "."
+-        ret += mcgen('''
+-Error **errp = &err; /* from outer scope */
+-Error *err = NULL;
+-visit_start_struct(m, NULL, "", "%(name)s", 0, &err);
+-''',
+-                name=name)
+-    else:
+-        ret += mcgen('''
+-Error *err = NULL;
+-visit_start_struct(m, (void **)obj, "%(name)s", name, sizeof(%(name)s), &err);
+-''',
+-                name=name)
++def generate_visit_struct_fields(field_prefix, members):
++    ret = ''
+ 
+-    ret += mcgen('''
+-if (!err) {
+-    if (!obj || *obj) {
+-''')
+-
+-    push_indent()
+-    push_indent()
+     for argname, argentry, optional, structured in parse_args(members):
+         if optional:
+             ret += mcgen('''
+@@ -72,9 +47,40 @@ visit_type_%(type)s(m, obj ? &(*obj)->%(c_prefix)s%(c_name)s : NULL, "%(name)s",
+ visit_end_optional(m, &err);
+ ''')
+ 
+-    pop_indent()
++    return ret
++
++
++def generate_visit_struct_body(field_prefix, name, members):
++    ret = mcgen('''
++if (!error_is_set(errp)) {
++''')
++    push_indent()
++
++    if len(field_prefix):
++        field_prefix = field_prefix + "."
++        ret += mcgen('''
++Error **errp = &err; /* from outer scope */
++Error *err = NULL;
++visit_start_struct(m, NULL, "", "%(name)s", 0, &err);
++''',
++                name=name)
++    else:
++        ret += mcgen('''
++Error *err = NULL;
++visit_start_struct(m, (void **)obj, "%(name)s", name, sizeof(%(name)s), &err);
++''',
++                name=name)
++
+     ret += mcgen('''
++if (!err) {
++    if (!obj || *obj) {
++''')
++    push_indent()
++    push_indent()
+ 
++    ret += generate_visit_struct_fields(field_prefix, members)
++    pop_indent()
++    ret += mcgen('''
+     error_propagate(errp, err);
+     err = NULL;
+ }
+-- 
+1.7.1
+

@@ -1,0 +1,132 @@
+From b7cea737b24456765a21ed43ebd9b68ebbbf3537 Mon Sep 17 00:00:00 2001
+From: John Snow <jsnow@redhat.com>
+Date: Mon, 23 Nov 2015 17:38:21 +0100
+Subject: [PATCH 02/27] cutils: Support 'P' and 'E' suffixes in strtosz()
+
+RH-Author: John Snow <jsnow@redhat.com>
+Message-id: <1448300320-7772-3-git-send-email-jsnow@redhat.com>
+Patchwork-id: 68430
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 02/21] cutils: Support 'P' and 'E' suffixes in strtosz()
+Bugzilla: 1272523
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 5e00984aef7c1c317e27c0e8acf66526513c770f)
+Signed-off-by: John Snow <jsnow@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ include/qemu-common.h      |  2 ++
+ monitor.c                  |  8 ++++----
+ qemu-img.c                 | 10 ++++++----
+ tests/qemu-iotests/049.out |  8 ++++----
+ util/cutils.c              |  4 ++++
+ 5 files changed, 20 insertions(+), 12 deletions(-)
+
+diff --git a/include/qemu-common.h b/include/qemu-common.h
+index aee85e3..67f57c9 100644
+--- a/include/qemu-common.h
++++ b/include/qemu-common.h
+@@ -178,6 +178,8 @@ int parse_uint_full(const char *s, unsigned long long *value, int base);
+  * A-Z, as strtosz() will use qemu_toupper() on the given argument
+  * prior to comparison.
+  */
++#define STRTOSZ_DEFSUFFIX_EB	'E'
++#define STRTOSZ_DEFSUFFIX_PB	'P'
+ #define STRTOSZ_DEFSUFFIX_TB	'T'
+ #define STRTOSZ_DEFSUFFIX_GB	'G'
+ #define STRTOSZ_DEFSUFFIX_MB	'M'
+diff --git a/monitor.c b/monitor.c
+index 6a1d06e..33c5bc8 100644
+--- a/monitor.c
++++ b/monitor.c
+@@ -94,10 +94,10 @@
+  * 'M'          Non-negative target long (32 or 64 bit), in user mode the
+  *              value is multiplied by 2^20 (think Mebibyte)
+  * 'o'          octets (aka bytes)
+- *              user mode accepts an optional T, t, G, g, M, m, K, k
+- *              suffix, which multiplies the value by 2^40 for
+- *              suffixes T and t, 2^30 for suffixes G and g, 2^20 for
+- *              M and m, 2^10 for K and k
++ *              user mode accepts an optional E, e, P, p, T, t, G, g, M, m,
++ *              K, k suffix, which multiplies the value by 2^60 for suffixes E
++ *              and e, 2^50 for suffixes P and p, 2^40 for suffixes T and t,
++ *              2^30 for suffixes G and g, 2^20 for M and m, 2^10 for K and k
+  * 'T'          double
+  *              user mode accepts an optional ms, us, ns suffix,
+  *              which divides the value by 1e3, 1e6, 1e9, respectively
+diff --git a/qemu-img.c b/qemu-img.c
+index 9c021e7..eb2d4cb 100644
+--- a/qemu-img.c
++++ b/qemu-img.c
+@@ -87,8 +87,9 @@ static void help(void)
+            "  'src_cache' is the cache mode used to read input disk images, the valid\n"
+            "    options are the same as for the 'cache' option\n"
+            "  'size' is the disk image size in bytes. Optional suffixes\n"
+-           "    'k' or 'K' (kilobyte, 1024), 'M' (megabyte, 1024k), 'G' (gigabyte, 1024M)\n"
+-           "    and T (terabyte, 1024G) are supported. 'b' is ignored.\n"
++           "    'k' or 'K' (kilobyte, 1024), 'M' (megabyte, 1024k), 'G' (gigabyte, 1024M),\n"
++           "    'T' (terabyte, 1024G), 'P' (petabyte, 1024T) and 'E' (exabyte, 1024P)  are\n"
++           "    supported. 'b' is ignored.\n"
+            "  'output_filename' is the destination disk image filename\n"
+            "  'output_fmt' is the destination format\n"
+            "  'options' is a comma separated list of format specific options in a\n"
+@@ -417,8 +418,9 @@ static int img_create(int argc, char **argv)
+                 error_report("Image size must be less than 8 EiB!");
+             } else {
+                 error_report("Invalid image size specified! You may use k, M, "
+-                      "G or T suffixes for ");
+-                error_report("kilobytes, megabytes, gigabytes and terabytes.");
++                      "G, T, P or E suffixes for ");
++                error_report("kilobytes, megabytes, gigabytes, terabytes, "
++                             "petabytes and exabytes.");
+             }
+             goto fail;
+         }
+diff --git a/tests/qemu-iotests/049.out b/tests/qemu-iotests/049.out
+index b2fcf0b..3e56772 100644
+--- a/tests/qemu-iotests/049.out
++++ b/tests/qemu-iotests/049.out
+@@ -108,15 +108,15 @@ qemu-img: TEST_DIR/t.qcow2: Could not resize image: Operation not supported
+ Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=-1024 encryption=off cluster_size=65536 lazy_refcounts=off 
+ 
+ qemu-img create -f qcow2 TEST_DIR/t.qcow2 -- 1kilobyte
+-qemu-img: Invalid image size specified! You may use k, M, G or T suffixes for 
+-qemu-img: kilobytes, megabytes, gigabytes and terabytes.
++qemu-img: Invalid image size specified! You may use k, M, G, T, P or E suffixes for 
++qemu-img: kilobytes, megabytes, gigabytes, terabytes, petabytes and exabytes.
+ 
+ qemu-img create -f qcow2 -o size=1kilobyte TEST_DIR/t.qcow2
+ Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 size=1024 encryption=off cluster_size=65536 lazy_refcounts=off 
+ 
+ qemu-img create -f qcow2 TEST_DIR/t.qcow2 -- foobar
+-qemu-img: Invalid image size specified! You may use k, M, G or T suffixes for 
+-qemu-img: kilobytes, megabytes, gigabytes and terabytes.
++qemu-img: Invalid image size specified! You may use k, M, G, T, P or E suffixes for 
++qemu-img: kilobytes, megabytes, gigabytes, terabytes, petabytes and exabytes.
+ 
+ qemu-img create -f qcow2 -o size=foobar TEST_DIR/t.qcow2
+ qemu-img: Parameter 'size' expects a size
+diff --git a/util/cutils.c b/util/cutils.c
+index a165819..8f28896 100644
+--- a/util/cutils.c
++++ b/util/cutils.c
+@@ -267,6 +267,10 @@ static int64_t suffix_mul(char suffix, int64_t unit)
+         return unit * unit * unit;
+     case STRTOSZ_DEFSUFFIX_TB:
+         return unit * unit * unit * unit;
++    case STRTOSZ_DEFSUFFIX_PB:
++        return unit * unit * unit * unit * unit;
++    case STRTOSZ_DEFSUFFIX_EB:
++        return unit * unit * unit * unit * unit * unit;
+     }
+     return -1;
+ }
+-- 
+1.8.3.1
+

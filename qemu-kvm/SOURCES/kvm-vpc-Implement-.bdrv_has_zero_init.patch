@@ -1,0 +1,86 @@
+From 0e4b156f5e4c928c2f98c21d029b0b1c361bd2a8 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Tue, 16 Sep 2014 20:11:48 +0200
+Subject: [PATCH 10/20] vpc: Implement .bdrv_has_zero_init
+
+Message-id: <f9375563af1f63122af308c2f924f154e54e47d4.1410897407.git.jcody@redhat.com>
+Patchwork-id: 61214
+O-Subject: [PATCH qemu-kvm-rhel RHEL7.1 09/15] vpc: Implement .bdrv_has_zero_init
+Bugzilla: 1098086
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+Depending on the subformat, has_zero_init on VHD must behave like raw
+and query the underlying storage (fixed) or like other sparse formats
+that can always return 1 (dynamic, differencing).
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 72c6cc94daa727f41ecfc2b2ff94aa6f0e459b7f)
+
+Conflicts:
+	block/vpc.c
+
+RHEL7 Notes: Conflict due to out of order commits
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/vpc.c |   28 +++++++++++++++++++++-------
+ 1 files changed, 21 insertions(+), 7 deletions(-)
+
+diff --git a/block/vpc.c b/block/vpc.c
+index 6e8fb33..2f3d4ac 100644
+--- a/block/vpc.c
++++ b/block/vpc.c
+@@ -826,6 +826,18 @@ static int vpc_create(const char *filename, QEMUOptionParameter *options,
+     return ret;
+ }
+ 
++static int vpc_has_zero_init(BlockDriverState *bs)
++{
++    BDRVVPCState *s = bs->opaque;
++    struct vhd_footer *footer =  (struct vhd_footer *) s->footer_buf;
++
++    if (cpu_to_be32(footer->type) == VHD_FIXED) {
++        return bdrv_has_zero_init(bs->file);
++    } else {
++        return 1;
++    }
++}
++
+ static void vpc_close(BlockDriverState *bs)
+ {
+     BDRVVPCState *s = bs->opaque;
+@@ -858,17 +870,19 @@ static BlockDriver bdrv_vpc = {
+     .format_name    = "vpc",
+     .instance_size  = sizeof(BDRVVPCState),
+ 
+-    .bdrv_probe     = vpc_probe,
+-    .bdrv_open      = vpc_open,
+-    .bdrv_close     = vpc_close,
+-    .bdrv_reopen_prepare = vpc_reopen_prepare,
+-    .bdrv_create    = vpc_create,
++    .bdrv_probe             = vpc_probe,
++    .bdrv_open              = vpc_open,
++    .bdrv_close             = vpc_close,
++    .bdrv_reopen_prepare    = vpc_reopen_prepare,
++    .bdrv_create            = vpc_create,
+ 
+     .bdrv_read              = vpc_co_read,
+     .bdrv_write             = vpc_co_write,
+ 
+-    .create_options = vpc_create_options,
+-    .bdrv_get_info  = vpc_get_info,
++    .bdrv_get_info          = vpc_get_info,
++
++    .create_options         = vpc_create_options,
++    .bdrv_has_zero_init     = vpc_has_zero_init,
+ };
+ 
+ static void bdrv_vpc_init(void)
+-- 
+1.7.1
+

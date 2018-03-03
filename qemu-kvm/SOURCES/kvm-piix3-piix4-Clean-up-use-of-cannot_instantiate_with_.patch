@@ -1,0 +1,156 @@
+From 3a10d87d90ff5f2aeaf02addac57f5a3346f263c Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Wed, 6 Nov 2013 14:41:18 +0100
+Subject: [PATCH 42/81] piix3 piix4: Clean up use of cannot_instantiate_with_device_add_yet
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383748882-22831-14-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55539
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 13/17] piix3 piix4: Clean up use of cannot_instantiate_with_device_add_yet
+Bugzilla: 1001216
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+A PIIX3/PIIX4 southbridge has multiple functions.  We model each
+function as a separate qdev.  Two of them need some special wiring set
+up in pc_init1() or mips_malta_init() to work: the ISA bridge at 01.0,
+and the SMBus controller at 01.3.
+
+The IDE controller at 01.1 (piix3-ide, piix3-ide-xen, piix4-ide) has
+always had cannot_instantiate_with_device_add_yet set, but there is no
+obvious reason why device_add could not work for them.  Drop it.
+(cherry picked from pending upstream submission)
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ hw/acpi/piix4.c    |  6 +++++-
+ hw/ide/piix.c      |  3 ---
+ hw/isa/piix4.c     |  6 +++++-
+ hw/pci-host/piix.c | 12 ++++++++++--
+ 4 files changed, 20 insertions(+), 7 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/acpi/piix4.c    |    6 +++++-
+ hw/ide/piix.c      |    3 ---
+ hw/isa/piix4.c     |    6 +++++-
+ hw/pci-host/piix.c |   12 ++++++++++--
+ 4 files changed, 20 insertions(+), 7 deletions(-)
+
+diff --git a/hw/acpi/piix4.c b/hw/acpi/piix4.c
+index 46685b7..d79a7b0 100644
+--- a/hw/acpi/piix4.c
++++ b/hw/acpi/piix4.c
+@@ -494,9 +494,13 @@ static void piix4_pm_class_init(ObjectClass *klass, void *data)
+     k->revision = 0x03;
+     k->class_id = PCI_CLASS_BRIDGE_OTHER;
+     dc->desc = "PM";
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_acpi;
+     dc->props = piix4_pm_properties;
++    /*
++     * Reason: part of PIIX4 southbridge, needs to be wired up,
++     * e.g. by mips_malta_init()
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo piix4_pm_info = {
+diff --git a/hw/ide/piix.c b/hw/ide/piix.c
+index e6864b1..304cab0 100644
+--- a/hw/ide/piix.c
++++ b/hw/ide/piix.c
+@@ -249,7 +249,6 @@ static void piix3_ide_class_init(ObjectClass *klass, void *data)
+     k->device_id = PCI_DEVICE_ID_INTEL_82371SB_1;
+     k->class_id = PCI_CLASS_STORAGE_IDE;
+     set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo piix3_ide_info = {
+@@ -269,7 +268,6 @@ static void piix3_ide_xen_class_init(ObjectClass *klass, void *data)
+     k->device_id = PCI_DEVICE_ID_INTEL_82371SB_1;
+     k->class_id = PCI_CLASS_STORAGE_IDE;
+     set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->unplug = pci_piix3_xen_ide_unplug;
+ }
+ 
+@@ -292,7 +290,6 @@ static void piix4_ide_class_init(ObjectClass *klass, void *data)
+     k->device_id = PCI_DEVICE_ID_INTEL_82371AB;
+     k->class_id = PCI_CLASS_STORAGE_IDE;
+     set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo piix4_ide_info = {
+diff --git a/hw/isa/piix4.c b/hw/isa/piix4.c
+index 10bf8ff..e7c75f1 100644
+--- a/hw/isa/piix4.c
++++ b/hw/isa/piix4.c
+@@ -113,8 +113,12 @@ static void piix4_class_init(ObjectClass *klass, void *data)
+     k->device_id = PCI_DEVICE_ID_INTEL_82371AB_0;
+     k->class_id = PCI_CLASS_BRIDGE_ISA;
+     dc->desc = "ISA bridge";
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_piix4;
++    /*
++     * Reason: part of PIIX4 southbridge, needs to be wired up,
++     * e.g. by mips_malta_init()
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo piix4_info = {
+diff --git a/hw/pci-host/piix.c b/hw/pci-host/piix.c
+index 56fc7be..c89b76b 100644
+--- a/hw/pci-host/piix.c
++++ b/hw/pci-host/piix.c
+@@ -564,7 +564,6 @@ static void piix3_class_init(ObjectClass *klass, void *data)
+ 
+     dc->desc        = "ISA bridge";
+     dc->vmsd        = &vmstate_piix3;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     k->no_hotplug   = 1;
+     k->init         = piix3_initfn;
+     k->config_write = piix3_write_config;
+@@ -572,6 +571,11 @@ static void piix3_class_init(ObjectClass *klass, void *data)
+     /* 82371SB PIIX3 PCI-to-ISA bridge (Step A1) */
+     k->device_id    = PCI_DEVICE_ID_INTEL_82371SB_0;
+     k->class_id     = PCI_CLASS_BRIDGE_ISA;
++    /*
++     * Reason: part of PIIX3 southbridge, needs to be wired up by
++     * pc_piix.c's pc_init1()
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo piix3_info = {
+@@ -588,7 +592,6 @@ static void piix3_xen_class_init(ObjectClass *klass, void *data)
+ 
+     dc->desc        = "ISA bridge";
+     dc->vmsd        = &vmstate_piix3;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     k->no_hotplug   = 1;
+     k->init         = piix3_initfn;
+     k->config_write = piix3_write_config_xen;
+@@ -596,6 +599,11 @@ static void piix3_xen_class_init(ObjectClass *klass, void *data)
+     /* 82371SB PIIX3 PCI-to-ISA bridge (Step A1) */
+     k->device_id    = PCI_DEVICE_ID_INTEL_82371SB_0;
+     k->class_id     = PCI_CLASS_BRIDGE_ISA;
++    /*
++     * Reason: part of PIIX3 southbridge, needs to be wired up by
++     * pc_piix.c's pc_init1()
++     */
++    dc->cannot_instantiate_with_device_add_yet = true;
+ };
+ 
+ static const TypeInfo piix3_xen_info = {
+-- 
+1.7.1
+

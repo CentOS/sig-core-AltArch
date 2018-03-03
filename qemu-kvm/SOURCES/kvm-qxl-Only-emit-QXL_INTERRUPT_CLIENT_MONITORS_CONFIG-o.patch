@@ -1,0 +1,125 @@
+From de84e9659aa6b91bd1a7c4fb30fde859882b9201 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Thu, 5 Jan 2017 23:58:10 +0100
+Subject: [PATCH 4/4] qxl: Only emit QXL_INTERRUPT_CLIENT_MONITORS_CONFIG on
+ config changes
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20170105235810.27189-1-marcandre.lureau@redhat.com>
+Patchwork-id: 73185
+O-Subject: [RHEL-7.4 qemu-kvm PATCH] qxl: Only emit QXL_INTERRUPT_CLIENT_MONITORS_CONFIG on config changes
+Bugzilla: 1342489
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Christophe Fergeau <cfergeau@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Christophe Fergeau <cfergeau@redhat.com>
+
+Currently if the client keeps sending the same monitor config to
+QEMU/spice-server, QEMU will always raise
+a QXL_INTERRUPT_CLIENT_MONITORS_CONFIG regardless of whether there was a
+change or not.
+Guest-side (with fedora 25), the kernel QXL KMS driver will also forward the
+event to user-space without checking if there were actual changes.
+Next in line are gnome-shell/mutter (on a default f25 install), which
+will try to reconfigure everything without checking if there is anything
+to do.
+Where this gets ugly is that when applying the resolution changes,
+gnome-shell/mutter will call drmModeRmFB, drmModeAddFB, and
+drmModeSetCrtc, which will cause the primary surface to be destroyed and
+recreated by the QXL KMS driver. This in turn will cause the client to
+resend a client monitors config message, which will cause QEMU to reemit
+an interrupt with an unchanged monitors configuration, ...
+This causes https://bugzilla.redhat.com/show_bug.cgi?id=1266484
+
+This commit makes sure that we only emit
+QXL_INTERRUPT_CLIENT_MONITORS_CONFIG when there are actual configuration
+changes the guest should act on.
+
+Signed-off-by: Christophe Fergeau <cfergeau@redhat.com>
+Message-id: 20161028144840.18326-1-cfergeau@redhat.com
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+
+(cherry picked from commit 6c7565028c272c4c6f2a83c3a90b044eeaf2804a)
+
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/display/qxl.c | 37 ++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 36 insertions(+), 1 deletion(-)
+
+diff --git a/hw/display/qxl.c b/hw/display/qxl.c
+index f762439..c76c237 100644
+--- a/hw/display/qxl.c
++++ b/hw/display/qxl.c
+@@ -989,6 +989,34 @@ static uint32_t qxl_crc32(const uint8_t *p, unsigned len)
+     return crc32(0xffffffff, p, len) ^ 0xffffffff;
+ }
+ 
++static bool qxl_rom_monitors_config_changed(QXLRom *rom,
++        VDAgentMonitorsConfig *monitors_config,
++        unsigned int max_outputs)
++{
++    int i;
++    unsigned int monitors_count;
++
++    monitors_count = MIN(monitors_config->num_of_monitors, max_outputs);
++
++    if (rom->client_monitors_config.count != monitors_count) {
++        return true;
++    }
++
++    for (i = 0 ; i < rom->client_monitors_config.count ; ++i) {
++        VDAgentMonConfig *monitor = &monitors_config->monitors[i];
++        QXLURect *rect = &rom->client_monitors_config.heads[i];
++        /* monitor->depth ignored */
++        if ((rect->left != monitor->x) ||
++            (rect->top != monitor->y)  ||
++            (rect->right != monitor->x + monitor->width) ||
++            (rect->bottom != monitor->y + monitor->height)) {
++            return true;
++        }
++    }
++
++    return false;
++}
++
+ /* called from main context only */
+ static int interface_client_monitors_config(QXLInstance *sin,
+                                         VDAgentMonitorsConfig *monitors_config)
+@@ -997,6 +1025,7 @@ static int interface_client_monitors_config(QXLInstance *sin,
+     QXLRom *rom = memory_region_get_ram_ptr(&qxl->rom_bar);
+     int i;
+     unsigned max_outputs = ARRAY_SIZE(rom->client_monitors_config.heads);
++    bool config_changed = false;
+ 
+     if (qxl->revision < 4) {
+         trace_qxl_client_monitors_config_unsupported_by_device(qxl->id,
+@@ -1027,6 +1056,10 @@ static int interface_client_monitors_config(QXLInstance *sin,
+     }
+ #endif
+ 
++    config_changed = qxl_rom_monitors_config_changed(rom,
++                                                     monitors_config,
++                                                     max_outputs);
++
+     memset(&rom->client_monitors_config, 0,
+            sizeof(rom->client_monitors_config));
+     rom->client_monitors_config.count = monitors_config->num_of_monitors;
+@@ -1056,7 +1089,9 @@ static int interface_client_monitors_config(QXLInstance *sin,
+     trace_qxl_interrupt_client_monitors_config(qxl->id,
+                         rom->client_monitors_config.count,
+                         rom->client_monitors_config.heads);
+-    qxl_send_events(qxl, QXL_INTERRUPT_CLIENT_MONITORS_CONFIG);
++    if (config_changed) {
++        qxl_send_events(qxl, QXL_INTERRUPT_CLIENT_MONITORS_CONFIG);
++    }
+     return 1;
+ }
+ 
+-- 
+1.8.3.1
+

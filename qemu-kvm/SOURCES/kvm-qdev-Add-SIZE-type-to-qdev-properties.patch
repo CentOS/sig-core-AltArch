@@ -1,0 +1,163 @@
+From 6f520cfdd487bc2c8032b61ff48706a65345bad5 Mon Sep 17 00:00:00 2001
+Message-Id: <6f520cfdd487bc2c8032b61ff48706a65345bad5.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:16:58 +0100
+Subject: [PATCH 04/56] qdev: Add SIZE type to qdev properties
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-5-git-send-email-mst@redhat.com>
+Patchwork-id: 56309
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 04/57] qdev: Add SIZE type to qdev properties
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Vasilis Liaskovitis <vasilis.liaskovitis@profitbricks.com>
+
+This patch adds a 'SIZE' type property to qdev.
+
+Signed-off-by: Ian Molton <ian.molton@collabora.co.uk>
+Signed-off-by: Vasilis Liaskovitis <vasilis.liaskovitis@profitbricks.com>
+Signed-off-by: Hu Tao <hutao@cn.fujitsu.com>
+Signed-off-by: Igor Mammedov <imammedo@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Reviewed-by: Andreas Färber <afaerber@suse.de>
+Message-id: 1375109277-25561-7-git-send-email-imammedo@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit e8cd45c78f53501e75bd455140da63d1b7ed3685)
+---
+ include/hw/qdev-properties.h |  3 +++
+ include/qemu/option.h        |  2 ++
+ hw/core/qdev-properties.c    | 55 ++++++++++++++++++++++++++++++++++++++++++++
+ util/qemu-option.c           |  4 ++--
+ 4 files changed, 62 insertions(+), 2 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/core/qdev-properties.c    | 55 ++++++++++++++++++++++++++++++++++++++++++++
+ include/hw/qdev-properties.h |  3 +++
+ include/qemu/option.h        |  2 ++
+ util/qemu-option.c           |  4 ++--
+ 4 files changed, 62 insertions(+), 2 deletions(-)
+
+diff --git a/hw/core/qdev-properties.c b/hw/core/qdev-properties.c
+index 6e1ed1e..8d43a8d 100644
+--- a/hw/core/qdev-properties.c
++++ b/hw/core/qdev-properties.c
+@@ -1135,3 +1135,58 @@ void qdev_prop_set_globals(DeviceState *dev, Error **errp)
+         class = object_class_get_parent(class);
+     } while (class);
+ }
++
++/* --- 64bit unsigned int 'size' type --- */
++
++static void get_size(Object *obj, Visitor *v, void *opaque,
++                     const char *name, Error **errp)
++{
++    DeviceState *dev = DEVICE(obj);
++    Property *prop = opaque;
++    uint64_t *ptr = qdev_get_prop_ptr(dev, prop);
++
++    visit_type_size(v, ptr, name, errp);
++}
++
++static void set_size(Object *obj, Visitor *v, void *opaque,
++                     const char *name, Error **errp)
++{
++    DeviceState *dev = DEVICE(obj);
++    Property *prop = opaque;
++    uint64_t *ptr = qdev_get_prop_ptr(dev, prop);
++
++    visit_type_size(v, ptr, name, errp);
++}
++
++static int parse_size(DeviceState *dev, Property *prop, const char *str)
++{
++    uint64_t *ptr = qdev_get_prop_ptr(dev, prop);
++    Error *errp = NULL;
++
++    if (str != NULL) {
++        parse_option_size(prop->name, str, ptr, &errp);
++    }
++    assert_no_error(errp);
++    return 0;
++}
++
++static int print_size(DeviceState *dev, Property *prop, char *dest, size_t len)
++{
++    uint64_t *ptr = qdev_get_prop_ptr(dev, prop);
++    char suffixes[] = {'T', 'G', 'M', 'K', 'B'};
++    int i = 0;
++    uint64_t div;
++
++    for (div = (long int)1 << 40; !(*ptr / div) ; div >>= 10) {
++        i++;
++    }
++    return snprintf(dest, len, "%0.03f%c", (double)*ptr/div, suffixes[i]);
++}
++
++PropertyInfo qdev_prop_size = {
++    .name  = "size",
++    .parse = parse_size,
++    .print = print_size,
++    .get = get_size,
++    .set = set_size,
++};
+diff --git a/include/hw/qdev-properties.h b/include/hw/qdev-properties.h
+index 39448b7..692f82e 100644
+--- a/include/hw/qdev-properties.h
++++ b/include/hw/qdev-properties.h
+@@ -15,6 +15,7 @@ extern PropertyInfo qdev_prop_uint64;
+ extern PropertyInfo qdev_prop_hex8;
+ extern PropertyInfo qdev_prop_hex32;
+ extern PropertyInfo qdev_prop_hex64;
++extern PropertyInfo qdev_prop_size;
+ extern PropertyInfo qdev_prop_string;
+ extern PropertyInfo qdev_prop_chr;
+ extern PropertyInfo qdev_prop_ptr;
+@@ -116,6 +117,8 @@ extern PropertyInfo qdev_prop_arraylen;
+     DEFINE_PROP_DEFAULT(_n, _s, _f, _d, qdev_prop_hex32, uint32_t)
+ #define DEFINE_PROP_HEX64(_n, _s, _f, _d)                       \
+     DEFINE_PROP_DEFAULT(_n, _s, _f, _d, qdev_prop_hex64, uint64_t)
++#define DEFINE_PROP_SIZE(_n, _s, _f, _d)                       \
++    DEFINE_PROP_DEFAULT(_n, _s, _f, _d, qdev_prop_size, uint64_t)
+ #define DEFINE_PROP_PCI_DEVFN(_n, _s, _f, _d)                   \
+     DEFINE_PROP_DEFAULT(_n, _s, _f, _d, qdev_prop_pci_devfn, int32_t)
+ 
+diff --git a/include/qemu/option.h b/include/qemu/option.h
+index f5ebb05..96f70b6 100644
+--- a/include/qemu/option.h
++++ b/include/qemu/option.h
+@@ -73,6 +73,8 @@ QEMUOptionParameter *append_option_parameters(QEMUOptionParameter *dest,
+     QEMUOptionParameter *list);
+ QEMUOptionParameter *parse_option_parameters(const char *param,
+     QEMUOptionParameter *list, QEMUOptionParameter *dest);
++void parse_option_size(const char *name, const char *value,
++                       uint64_t *ret, Error **errp);
+ void free_option_parameters(QEMUOptionParameter *list);
+ void print_option_parameters(QEMUOptionParameter *list);
+ void print_option_help(QEMUOptionParameter *list);
+diff --git a/util/qemu-option.c b/util/qemu-option.c
+index fcbd1b8..1cefbfe 100644
+--- a/util/qemu-option.c
++++ b/util/qemu-option.c
+@@ -173,8 +173,8 @@ static void parse_option_number(const char *name, const char *value,
+     }
+ }
+ 
+-static void parse_option_size(const char *name, const char *value,
+-                              uint64_t *ret, Error **errp)
++void parse_option_size(const char *name, const char *value,
++                       uint64_t *ret, Error **errp)
+ {
+     char *postfix;
+     double sizef;
+-- 
+1.7.11.7
+

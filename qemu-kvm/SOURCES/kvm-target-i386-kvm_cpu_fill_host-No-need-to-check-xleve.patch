@@ -1,0 +1,68 @@
+From f51c618ce3598d9a6a3256e4dd2b9dd3164fbc81 Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Thu, 23 Feb 2017 14:29:36 +0100
+Subject: [PATCH 06/17] target-i386: kvm_cpu_fill_host(): No need to check
+ xlevel2
+
+RH-Author: Eduardo Habkost <ehabkost@redhat.com>
+Message-id: <20170223142945.17790-6-ehabkost@redhat.com>
+Patchwork-id: 74036
+O-Subject: [RHEL-7.4 qemu-kvm PATCH v2 05/14] target-i386: kvm_cpu_fill_host(): No need to check xlevel2
+Bugzilla: 1382122
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+There's no need to check CPU xlevel2 before calling
+kvm_arch_get_supported_cpuid(s, 0xC0000001, 0, R_EDX), because:
+
+ * The kernel won't return any entry for 0xC0000000 if host CPU vendor
+   is not Centaur (See kvm_dev_ioctl_get_supported_cpuid() on the kernel
+   code)
+ * Similarly, the kernel won't return any entry for 0xC0000001 if
+   CPUID[0xC0000000].EAX is < 0xC0000001
+ * kvm_arch_get_supported_cpuid() will return 0 if no entry is returned
+   by the kernel for the requested leaf
+
+For similar reasons, we can simply set x86_cpu_def->xlevel2 directly
+instead of making it conditional, because it will be set to 0 CPU vendor
+is not Centaur.
+
+This will simplify the kvm_cpu_fill_host() code a little.
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+[Remove unparseable comment. - Paolo]
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 803a932706e3ba335d4c98f3577a05cb000f1699)
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/cpu.c | 11 ++++-------
+ 1 file changed, 4 insertions(+), 7 deletions(-)
+
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index a10055b..02bd038 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -1285,13 +1285,10 @@ static void kvm_cpu_fill_host(x86_def_t *x86_cpu_def)
+     cpu_x86_fill_model_id(x86_cpu_def->model_id);
+ 
+     /* Call Centaur's CPUID instruction. */
+-    eax = kvm_arch_get_supported_cpuid(s, 0xC0000000, 0, R_EAX);
+-    if (eax >= 0xC0000001) {
+-        /* Support VIA max extended level */
+-        x86_cpu_def->xlevel2 = eax;
+-        x86_cpu_def->features[FEAT_C000_0001_EDX] =
+-                kvm_arch_get_supported_cpuid(s, 0xC0000001, 0, R_EDX);
+-    }
++    x86_cpu_def->xlevel2 =
++        kvm_arch_get_supported_cpuid(s, 0xC0000000, 0, R_EAX);
++    x86_cpu_def->features[FEAT_C000_0001_EDX] =
++        kvm_arch_get_supported_cpuid(s, 0xC0000001, 0, R_EDX);
+ 
+     /* Other KVM-specific feature fields: */
+     x86_cpu_def->features[FEAT_SVM] =
+-- 
+1.8.3.1
+

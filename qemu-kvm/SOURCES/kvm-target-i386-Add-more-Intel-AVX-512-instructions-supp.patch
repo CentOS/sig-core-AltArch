@@ -1,0 +1,93 @@
+From 73b0c0b62c08330e65e9ec3d54ae5738d4b5211d Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Fri, 9 Sep 2016 19:08:34 +0200
+Subject: [PATCH 2/2] target-i386: Add more Intel AVX-512 instructions support
+
+RH-Author: Eduardo Habkost <ehabkost@redhat.com>
+Message-id: <1473448114-1430-3-git-send-email-ehabkost@redhat.com>
+Patchwork-id: 72277
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 2/2] target-i386: Add more Intel AVX-512 instructions support
+Bugzilla: 1372459
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: Luwei Kang <luwei.kang@intel.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1372459
+
+Add more AVX512 feature bits, include AVX512DQ, AVX512IFMA,
+AVX512BW, AVX512VL, AVX512VBMI. Its spec can be found at:
+https://software.intel.com/sites/default/files/managed/b4/3a/319433-024.pdf
+
+Signed-off-by: Luwei Kang <luwei.kang@intel.com>
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+(cherry picked from commit cc728d1493eee3e20c1547191862e43d3f55e714)
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/cpu.c | 14 +++++++++-----
+ target-i386/cpu.h | 13 +++++++++++++
+ 2 files changed, 22 insertions(+), 5 deletions(-)
+
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index d9c214c..476306d 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -144,14 +144,18 @@ static const char *svm_feature_name[] = {
+ };
+ 
+ static const char *cpuid_7_0_ebx_feature_name[] = {
+-    "fsgsbase", NULL, NULL, "bmi1", "hle", "avx2", NULL, "smep",
+-    "bmi2", "erms", "invpcid", "rtm", NULL, NULL, "mpx", NULL,
+-    "avx512f", NULL, "rdseed", "adx", "smap", NULL, NULL, NULL,
+-    NULL, NULL, "avx512pf", "avx512er", "avx512cd", NULL, NULL, NULL,
++    "fsgsbase", NULL, NULL, "bmi1",
++    "hle", "avx2", NULL, "smep",
++    "bmi2", "erms", "invpcid", "rtm",
++    NULL, NULL, "mpx", NULL,
++    "avx512f", "avx512dq", "rdseed", "adx",
++    "smap", "avx512ifma", NULL, NULL,
++    NULL, NULL, "avx512pf", "avx512er",
++    "avx512cd", NULL, "avx512bw", "avx512vl",
+ };
+ 
+ static const char *cpuid_7_0_ecx_feature_name[] = {
+-    NULL, NULL, NULL, NULL,
++    NULL, "avx512vbmi", NULL, NULL,
+     NULL, NULL, NULL, NULL,
+     NULL, NULL, NULL, NULL,
+     NULL, NULL, NULL, NULL,
+diff --git a/target-i386/cpu.h b/target-i386/cpu.h
+index 5c62ee3..d541809 100644
+--- a/target-i386/cpu.h
++++ b/target-i386/cpu.h
+@@ -560,12 +560,25 @@ typedef uint32_t FeatureWordArray[FEATURE_WORDS];
+ #define CPUID_7_0_EBX_RTM      (1U << 11)
+ #define CPUID_7_0_EBX_MPX      (1U << 14)
+ #define CPUID_7_0_EBX_AVX512F  (1U << 16) /* AVX-512 Foundation */
++#define CPUID_7_0_EBX_AVX512DQ (1U << 17) /* AVX-512 Doubleword & Quadword Instrs */
+ #define CPUID_7_0_EBX_RDSEED   (1U << 18)
+ #define CPUID_7_0_EBX_ADX      (1U << 19)
+ #define CPUID_7_0_EBX_SMAP     (1U << 20)
++#define CPUID_7_0_EBX_AVX512IFMA (1U << 21) /* AVX-512 Integer Fused Multiply Add */
++#define CPUID_7_0_EBX_PCOMMIT  (1U << 22) /* Persistent Commit */
++#define CPUID_7_0_EBX_CLFLUSHOPT (1U << 23) /* Flush a Cache Line Optimized */
++#define CPUID_7_0_EBX_CLWB     (1U << 24) /* Cache Line Write Back */
+ #define CPUID_7_0_EBX_AVX512PF (1U << 26) /* AVX-512 Prefetch */
+ #define CPUID_7_0_EBX_AVX512ER (1U << 27) /* AVX-512 Exponential and Reciprocal */
+ #define CPUID_7_0_EBX_AVX512CD (1U << 28) /* AVX-512 Conflict Detection */
++#define CPUID_7_0_EBX_AVX512BW (1U << 30) /* AVX-512 Byte and Word Instructions */
++#define CPUID_7_0_EBX_AVX512VL (1U << 31) /* AVX-512 Vector Length Extensions */
++
++#define CPUID_7_0_ECX_VBMI     (1U << 1)  /* AVX-512 Vector Byte Manipulation Instrs */
++#define CPUID_7_0_ECX_UMIP     (1U << 2)
++#define CPUID_7_0_ECX_PKU      (1U << 3)
++#define CPUID_7_0_ECX_OSPKE    (1U << 4)
++#define CPUID_7_0_ECX_RDPID    (1U << 22)
+ 
+ #define CPUID_XSAVE_XSAVEOPT   (1U << 0)
+ #define CPUID_XSAVE_XSAVEC     (1U << 1)
+-- 
+1.8.3.1
+

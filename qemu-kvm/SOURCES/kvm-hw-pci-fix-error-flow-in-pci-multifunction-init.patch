@@ -1,0 +1,113 @@
+From e346f15b5c72e3cf58fbf1af4a89c929dea783ad Mon Sep 17 00:00:00 2001
+From: Marcel Apfelbaum <marcel.a@redhat.com>
+Date: Tue, 28 Oct 2014 14:13:15 +0100
+Subject: [PATCH 2/9] hw/pci: fix error flow in pci multifunction init
+
+Message-id: <1414505595-17009-1-git-send-email-marcel.a@redhat.com>
+Patchwork-id: 61953
+O-Subject: [RHEL-7.1 qemu-kvm PATCH] hw/pci: fix error flow in pci multifunction init
+Bugzilla: 1049734
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1049734
+Brew: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=8164686
+Upstream-status: 306077640a652e090779498aadbeb0c605feaacd
+
+Scenario:
+  - There is a non multifunction pci device A on 00:0X.0.
+  - Hot-plug another multifunction pci device B at 00:0X.1.
+  - The operation will fail of course.
+  - Try to hot-plug the B device 2-3 more times, qemu will crash.
+
+Reason: The error flow leaves the B's address space into global address spaces
+list, but the device object is freed. Fixed that.
+
+Signed-off-by: Marcel Apfelbaum <marcel.a@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 306077640a652e090779498aadbeb0c605feaacd)
+Signed-off-by: Marcel Apfelbaum <marcel.a@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	hw/pci/pci.c
+        - The patch moves a function within a file and the function's
+          content is different from upstream.
+        - The upstream does not call anymore to qemu_free_irqs, but
+          the downstream version still does. We need to check that
+          the irq is allocated before calling it.
+
+scripts/git-backport-diff:
+        001/1:[0021] [FC] 'hw/pci: fix error flow in pci multifunction init'
+
+Signed-off-by: Marcel Apfelbaum <marcel.a@redhat.com>
+---
+ hw/pci/pci.c | 33 ++++++++++++++++++---------------
+ 1 file changed, 18 insertions(+), 15 deletions(-)
+---
+ hw/pci/pci.c | 33 ++++++++++++++++++---------------
+ 1 file changed, 18 insertions(+), 15 deletions(-)
+
+diff --git a/hw/pci/pci.c b/hw/pci/pci.c
+index d166ab0..703b111 100644
+--- a/hw/pci/pci.c
++++ b/hw/pci/pci.c
+@@ -784,6 +784,23 @@ static void pci_config_free(PCIDevice *pci_dev)
+     g_free(pci_dev->used);
+ }
+ 
++static void do_pci_unregister_device(PCIDevice *pci_dev)
++{
++    if (pci_dev->irq) {
++        qemu_free_irqs(pci_dev->irq);
++    }
++
++    pci_dev->bus->devices[pci_dev->devfn] = NULL;
++    pci_config_free(pci_dev);
++
++    if (!pci_dev->bus->dma_context_fn) {
++        address_space_destroy(&pci_dev->bus_master_as);
++        memory_region_destroy(&pci_dev->bus_master_enable_region);
++        g_free(pci_dev->dma);
++        pci_dev->dma = NULL;
++    }
++}
++
+ /* -1 for devfn means auto assign */
+ static PCIDevice *do_pci_register_device(PCIDevice *pci_dev, PCIBus *bus,
+                                          const char *name, int devfn)
+@@ -852,7 +869,7 @@ static PCIDevice *do_pci_register_device(PCIDevice *pci_dev, PCIBus *bus,
+         pci_init_mask_bridge(pci_dev);
+     }
+     if (pci_init_multifunction(bus, pci_dev)) {
+-        pci_config_free(pci_dev);
++        do_pci_unregister_device(pci_dev);
+         return NULL;
+     }
+ 
+@@ -868,20 +885,6 @@ static PCIDevice *do_pci_register_device(PCIDevice *pci_dev, PCIBus *bus,
+     return pci_dev;
+ }
+ 
+-static void do_pci_unregister_device(PCIDevice *pci_dev)
+-{
+-    qemu_free_irqs(pci_dev->irq);
+-    pci_dev->bus->devices[pci_dev->devfn] = NULL;
+-    pci_config_free(pci_dev);
+-
+-    if (!pci_dev->bus->dma_context_fn) {
+-        address_space_destroy(&pci_dev->bus_master_as);
+-        memory_region_destroy(&pci_dev->bus_master_enable_region);
+-        g_free(pci_dev->dma);
+-        pci_dev->dma = NULL;
+-    }
+-}
+-
+ static void pci_unregister_io_regions(PCIDevice *pci_dev)
+ {
+     PCIIORegion *r;
+-- 
+1.8.3.1
+

@@ -1,0 +1,147 @@
+From 5fe07e00b182e79e2e8095916d18cc0f37348efe Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Fri, 2 May 2014 16:06:21 +0200
+Subject: [PATCH 03/31] qemu-iotests: Discard preallocated zero clusters
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1399046781-16359-3-git-send-email-mreitz@redhat.com>
+Patchwork-id: 58645
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 2/2] qemu-iotests: Discard preallocated zero clusters
+Bugzilla: 1052093
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+BZ: 1052093
+
+Add a new test case for discarding preallocated zero clusters; doing
+this should not result in any leaks.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 975a93c082452db9aa1397a797ca8f13ba367393)
+
+Conflicts:
+	tests/qemu-iotests/group
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ tests/qemu-iotests/066     | 63 ++++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/066.out | 13 ++++++++++
+ tests/qemu-iotests/group   |  1 +
+ 3 files changed, 77 insertions(+)
+ create mode 100755 tests/qemu-iotests/066
+ create mode 100644 tests/qemu-iotests/066.out
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/066     |   63 ++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/066.out |   13 +++++++++
+ tests/qemu-iotests/group   |    1 +
+ 3 files changed, 77 insertions(+), 0 deletions(-)
+ create mode 100755 tests/qemu-iotests/066
+ create mode 100644 tests/qemu-iotests/066.out
+
+diff --git a/tests/qemu-iotests/066 b/tests/qemu-iotests/066
+new file mode 100755
+index 0000000..1c2452b
+--- /dev/null
++++ b/tests/qemu-iotests/066
+@@ -0,0 +1,63 @@
++#!/bin/bash
++#
++# Test case for discarding preallocated zero clusters in qcow2
++#
++# Copyright (C) 2013 Red Hat, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++
++# creator
++owner=mreitz@redhat.com
++
++seq="$(basename $0)"
++echo "QA output created by $seq"
++
++here="$PWD"
++tmp=/tmp/$$
++status=1	# failure is the default!
++
++_cleanup()
++{
++	_cleanup_test_img
++}
++trap "_cleanup; exit \$status" 0 1 2 3 15
++
++# get standard environment, filters and checks
++. ./common.rc
++. ./common.filter
++
++# This tests qocw2-specific low-level functionality
++_supported_fmt qcow2
++_supported_proto generic
++_supported_os Linux
++
++IMGOPTS="compat=1.1"
++IMG_SIZE=64M
++
++echo
++echo "=== Testing snapshotting an image with zero clusters ==="
++echo
++_make_test_img $IMG_SIZE
++# Write some normal clusters, zero them (creating preallocated zero clusters)
++# and discard those
++$QEMU_IO -c "write 0 256k" -c "write -z 0 256k" -c "discard 0 256k" "$TEST_IMG" \
++         | _filter_qemu_io
++# Check the image (there shouldn't be any leaks)
++_check_test_img
++
++# success, all done
++echo "*** done"
++rm -f $seq.full
++status=0
+diff --git a/tests/qemu-iotests/066.out b/tests/qemu-iotests/066.out
+new file mode 100644
+index 0000000..9139780
+--- /dev/null
++++ b/tests/qemu-iotests/066.out
+@@ -0,0 +1,13 @@
++QA output created by 066
++
++=== Testing snapshotting an image with zero clusters ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++wrote 262144/262144 bytes at offset 0
++256 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote 262144/262144 bytes at offset 0
++256 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++discard 262144/262144 bytes at offset 0
++256 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++No errors were found on the image.
++*** done
+diff --git a/tests/qemu-iotests/group b/tests/qemu-iotests/group
+index ad96fcf..1c91036 100644
+--- a/tests/qemu-iotests/group
++++ b/tests/qemu-iotests/group
+@@ -68,6 +68,7 @@
+ 063 rw auto
+ 064 rw auto
+ 065 rw auto
++066 rw auto
+ 067 rw auto
+ 068 rw auto
+ 070 rw auto
+-- 
+1.7.1
+

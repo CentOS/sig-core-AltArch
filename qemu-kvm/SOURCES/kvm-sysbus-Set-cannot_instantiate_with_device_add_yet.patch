@@ -1,0 +1,499 @@
+From a44e7ab97ff7ed0494ba8746c73aa66afa506ef4 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Wed, 6 Nov 2013 14:41:13 +0100
+Subject: [PATCH 37/81] sysbus: Set cannot_instantiate_with_device_add_yet
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383748882-22831-9-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55534
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 08/17] sysbus: Set cannot_instantiate_with_device_add_yet
+Bugzilla: 1001216
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+device_add plugs devices into suitable bus.  For "real" buses, that
+actually connects the device.  For sysbus, the connections need to be
+made separately, and device_add can't do that.  The device would be
+left unconnected, and could not possibly work.
+
+Quite a few, but not all sysbus devices already set
+cannot_instantiate_with_device_add_yet in their class init function.
+
+Set it in their abstract base's class init function
+sysbus_device_class_init(), and remove the now redundant assignments
+from device class init functions.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Marcel Apfelbaum <marcel.a@redhat.com>
+(cherry picked from pending upstream submission)
+
+Conflicts:
+	hw/dma/pl080.c
+	hw/i386/kvm/clock.c
+	hw/nvram/fw_cfg.c
+	hw/pci-host/piix.c
+	hw/timer/hpet.c
+
+Conflict resolution is always the same: drop redundant assignment,
+keep context intact.  Three additional redundant assignments dropped
+in hw/display/pl110.c and hw/dma/pl080.c.
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ hw/alpha/typhoon.c         | 2 --
+ hw/arm/versatilepb.c       | 1 -
+ hw/audio/pl041.c           | 1 -
+ hw/core/sysbus.c           | 7 +++++++
+ hw/display/pl110.c         | 3 ---
+ hw/dma/pl080.c             | 2 --
+ hw/i386/kvm/clock.c        | 1 -
+ hw/i386/kvmvapic.c         | 1 -
+ hw/intc/arm_gic.c          | 1 -
+ hw/intc/arm_gic_common.c   | 1 -
+ hw/intc/arm_gic_kvm.c      | 1 -
+ hw/intc/ioapic_common.c    | 1 -
+ hw/intc/pl190.c            | 1 -
+ hw/isa/isa-bus.c           | 1 -
+ hw/misc/arm_l2x0.c         | 1 -
+ hw/nvram/fw_cfg.c          | 1 -
+ hw/pci-host/bonito.c       | 2 --
+ hw/pci-host/grackle.c      | 2 --
+ hw/pci-host/piix.c         | 1 -
+ hw/pci-host/prep.c         | 1 -
+ hw/ppc/spapr_vio.c         | 2 --
+ hw/s390x/ipl.c             | 1 -
+ hw/s390x/s390-virtio-bus.c | 2 --
+ hw/s390x/virtio-ccw.c      | 2 --
+ hw/sd/pl181.c              | 1 -
+ hw/timer/arm_mptimer.c     | 1 -
+ hw/timer/hpet.c            | 1 -
+ hw/timer/pl031.c           | 1 -
+ 28 files changed, 7 insertions(+), 36 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/alpha/typhoon.c         |    2 --
+ hw/arm/versatilepb.c       |    1 -
+ hw/audio/pl041.c           |    1 -
+ hw/core/sysbus.c           |    7 +++++++
+ hw/display/pl110.c         |    3 ---
+ hw/dma/pl080.c             |    2 --
+ hw/i386/kvm/clock.c        |    1 -
+ hw/i386/kvmvapic.c         |    1 -
+ hw/intc/arm_gic.c          |    1 -
+ hw/intc/arm_gic_common.c   |    1 -
+ hw/intc/arm_gic_kvm.c      |    1 -
+ hw/intc/ioapic_common.c    |    1 -
+ hw/intc/pl190.c            |    1 -
+ hw/isa/isa-bus.c           |    1 -
+ hw/misc/arm_l2x0.c         |    1 -
+ hw/nvram/fw_cfg.c          |    1 -
+ hw/pci-host/bonito.c       |    2 --
+ hw/pci-host/grackle.c      |    2 --
+ hw/pci-host/piix.c         |    1 -
+ hw/pci-host/prep.c         |    1 -
+ hw/ppc/spapr_vio.c         |    2 --
+ hw/s390x/ipl.c             |    1 -
+ hw/s390x/s390-virtio-bus.c |    2 --
+ hw/s390x/virtio-ccw.c      |    2 --
+ hw/sd/pl181.c              |    1 -
+ hw/timer/arm_mptimer.c     |    1 -
+ hw/timer/hpet.c            |    1 -
+ hw/timer/pl031.c           |    1 -
+ 28 files changed, 7 insertions(+), 36 deletions(-)
+
+diff --git a/hw/alpha/typhoon.c b/hw/alpha/typhoon.c
+index 55a0e76..070c34b 100644
+--- a/hw/alpha/typhoon.c
++++ b/hw/alpha/typhoon.c
+@@ -819,11 +819,9 @@ static int typhoon_pcihost_init(SysBusDevice *dev)
+ 
+ static void typhoon_pcihost_class_init(ObjectClass *klass, void *data)
+ {
+-    DeviceClass *dc = DEVICE_CLASS(klass);
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = typhoon_pcihost_init;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo typhoon_pcihost_info = {
+diff --git a/hw/arm/versatilepb.c b/hw/arm/versatilepb.c
+index 84cd1ed..adc7a5d 100644
+--- a/hw/arm/versatilepb.c
++++ b/hw/arm/versatilepb.c
+@@ -387,7 +387,6 @@ static void vpb_sic_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = vpb_sic_init;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_vpb_sic;
+ }
+ 
+diff --git a/hw/audio/pl041.c b/hw/audio/pl041.c
+index 36a7ecb..227ddf9 100644
+--- a/hw/audio/pl041.c
++++ b/hw/audio/pl041.c
+@@ -627,7 +627,6 @@ static void pl041_device_class_init(ObjectClass *klass, void *data)
+ 
+     k->init = pl041_init;
+     set_bit(DEVICE_CATEGORY_SOUND, dc->categories);
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->reset = pl041_device_reset;
+     dc->vmsd = &vmstate_pl041;
+     dc->props = pl041_device_properties;
+diff --git a/hw/core/sysbus.c b/hw/core/sysbus.c
+index 9004d8c..e07f1c4 100644
+--- a/hw/core/sysbus.c
++++ b/hw/core/sysbus.c
+@@ -257,6 +257,13 @@ static void sysbus_device_class_init(ObjectClass *klass, void *data)
+     DeviceClass *k = DEVICE_CLASS(klass);
+     k->init = sysbus_device_init;
+     k->bus_type = TYPE_SYSTEM_BUS;
++    /*
++     * device_add plugs devices into suitable bus.  For "real" buses,
++     * that actually connects the device.  For sysbus, the connections
++     * need to be made separately, and device_add can't do that.  The
++     * device would be left unconncected, and could not possibly work.
++     */
++    k->cannot_instantiate_with_device_add_yet = true;
+ }
+ 
+ static const TypeInfo sysbus_device_type_info = {
+diff --git a/hw/display/pl110.c b/hw/display/pl110.c
+index 173ddf8..f4acf78 100644
+--- a/hw/display/pl110.c
++++ b/hw/display/pl110.c
+@@ -482,7 +482,6 @@ static void pl110_class_init(ObjectClass *klass, void *data)
+ 
+     k->init = pl110_init;
+     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_pl110;
+ }
+ 
+@@ -500,7 +499,6 @@ static void pl110_versatile_class_init(ObjectClass *klass, void *data)
+ 
+     k->init = pl110_versatile_init;
+     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_pl110;
+ }
+ 
+@@ -518,7 +516,6 @@ static void pl111_class_init(ObjectClass *klass, void *data)
+ 
+     k->init = pl111_init;
+     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_pl110;
+ }
+ 
+diff --git a/hw/dma/pl080.c b/hw/dma/pl080.c
+index 2920780..e00ccdb 100644
+--- a/hw/dma/pl080.c
++++ b/hw/dma/pl080.c
+@@ -382,7 +382,6 @@ static void pl080_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = pl080_init;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_pl080;
+ }
+ 
+@@ -399,7 +398,6 @@ static void pl081_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = pl081_init;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_pl080;
+ }
+ 
+diff --git a/hw/i386/kvm/clock.c b/hw/i386/kvm/clock.c
+index 6204939..6d6f3a7 100644
+--- a/hw/i386/kvm/clock.c
++++ b/hw/i386/kvm/clock.c
+@@ -110,7 +110,6 @@ static void kvmclock_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = kvmclock_init;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &kvmclock_vmsd;
+ }
+ 
+diff --git a/hw/i386/kvmvapic.c b/hw/i386/kvmvapic.c
+index e6405da..a7db94d 100644
+--- a/hw/i386/kvmvapic.c
++++ b/hw/i386/kvmvapic.c
+@@ -809,7 +809,6 @@ static void vapic_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *sc = SYS_BUS_DEVICE_CLASS(klass);
+     DeviceClass *dc = DEVICE_CLASS(klass);
+ 
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->reset   = vapic_reset;
+     dc->vmsd    = &vmstate_vapic;
+     sc->init    = vapic_init;
+diff --git a/hw/intc/arm_gic.c b/hw/intc/arm_gic.c
+index 243cbf1..8c72437 100644
+--- a/hw/intc/arm_gic.c
++++ b/hw/intc/arm_gic.c
+@@ -702,7 +702,6 @@ static void arm_gic_class_init(ObjectClass *klass, void *data)
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     ARMGICClass *agc = ARM_GIC_CLASS(klass);
+ 
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     agc->parent_realize = dc->realize;
+     dc->realize = arm_gic_realize;
+ }
+diff --git a/hw/intc/arm_gic_common.c b/hw/intc/arm_gic_common.c
+index 26b7756..0192537 100644
+--- a/hw/intc/arm_gic_common.c
++++ b/hw/intc/arm_gic_common.c
+@@ -156,7 +156,6 @@ static void arm_gic_common_class_init(ObjectClass *klass, void *data)
+     dc->realize = arm_gic_common_realize;
+     dc->props = arm_gic_common_properties;
+     dc->vmsd = &vmstate_gic;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo arm_gic_common_type = {
+diff --git a/hw/intc/arm_gic_kvm.c b/hw/intc/arm_gic_kvm.c
+index cb4ce23..9b8a106 100644
+--- a/hw/intc/arm_gic_kvm.c
++++ b/hw/intc/arm_gic_kvm.c
+@@ -148,7 +148,6 @@ static void kvm_arm_gic_class_init(ObjectClass *klass, void *data)
+     kgc->parent_reset = dc->reset;
+     dc->realize = kvm_arm_gic_realize;
+     dc->reset = kvm_arm_gic_reset;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo kvm_arm_gic_info = {
+diff --git a/hw/intc/ioapic_common.c b/hw/intc/ioapic_common.c
+index ce610b7..8e555de 100644
+--- a/hw/intc/ioapic_common.c
++++ b/hw/intc/ioapic_common.c
+@@ -100,7 +100,6 @@ static void ioapic_common_class_init(ObjectClass *klass, void *data)
+ 
+     sc->init = ioapic_init_common;
+     dc->vmsd = &vmstate_ioapic_common;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo ioapic_common_type = {
+diff --git a/hw/intc/pl190.c b/hw/intc/pl190.c
+index ff0e5b0..2cda150 100644
+--- a/hw/intc/pl190.c
++++ b/hw/intc/pl190.c
+@@ -269,7 +269,6 @@ static void pl190_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = pl190_init;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->reset = pl190_reset;
+     dc->vmsd = &vmstate_pl190;
+ }
+diff --git a/hw/isa/isa-bus.c b/hw/isa/isa-bus.c
+index a87a841..3471d0f 100644
+--- a/hw/isa/isa-bus.c
++++ b/hw/isa/isa-bus.c
+@@ -217,7 +217,6 @@ static void isabus_bridge_class_init(ObjectClass *klass, void *data)
+ 
+     k->init = isabus_bridge_init;
+     dc->fw_name = "isa";
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo isabus_bridge_info = {
+diff --git a/hw/misc/arm_l2x0.c b/hw/misc/arm_l2x0.c
+index 2b19e34..21bf291 100644
+--- a/hw/misc/arm_l2x0.c
++++ b/hw/misc/arm_l2x0.c
+@@ -174,7 +174,6 @@ static void l2x0_class_init(ObjectClass *klass, void *data)
+ 
+     k->init = l2x0_priv_init;
+     dc->vmsd = &vmstate_l2x0;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->props = l2x0_properties;
+     dc->reset = l2x0_priv_reset;
+ }
+diff --git a/hw/nvram/fw_cfg.c b/hw/nvram/fw_cfg.c
+index 155edd4..3fa1488 100644
+--- a/hw/nvram/fw_cfg.c
++++ b/hw/nvram/fw_cfg.c
+@@ -559,7 +559,6 @@ static void fw_cfg_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = fw_cfg_init1;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->reset = fw_cfg_reset;
+     dc->vmsd = &vmstate_fw_cfg;
+     dc->props = fw_cfg_properties;
+diff --git a/hw/pci-host/bonito.c b/hw/pci-host/bonito.c
+index b73359e..c2a056a 100644
+--- a/hw/pci-host/bonito.c
++++ b/hw/pci-host/bonito.c
+@@ -824,11 +824,9 @@ static const TypeInfo bonito_info = {
+ 
+ static void bonito_pcihost_class_init(ObjectClass *klass, void *data)
+ {
+-    DeviceClass *dc = DEVICE_CLASS(klass);
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = bonito_pcihost_initfn;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo bonito_pcihost_info = {
+diff --git a/hw/pci-host/grackle.c b/hw/pci-host/grackle.c
+index 5eb2840..4643beb 100644
+--- a/hw/pci-host/grackle.c
++++ b/hw/pci-host/grackle.c
+@@ -143,10 +143,8 @@ static const TypeInfo grackle_pci_info = {
+ static void pci_grackle_class_init(ObjectClass *klass, void *data)
+ {
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+-    DeviceClass *dc = DEVICE_CLASS(klass);
+ 
+     k->init = pci_grackle_init_device;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo grackle_pci_host_info = {
+diff --git a/hw/pci-host/piix.c b/hw/pci-host/piix.c
+index b9c2dcf..20cc682 100644
+--- a/hw/pci-host/piix.c
++++ b/hw/pci-host/piix.c
+@@ -636,7 +636,6 @@ static void i440fx_pcihost_class_init(ObjectClass *klass, void *data)
+ 
+     k->init = i440fx_pcihost_initfn;
+     dc->fw_name = "pci";
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo i440fx_pcihost_info = {
+diff --git a/hw/pci-host/prep.c b/hw/pci-host/prep.c
+index eec538e..cdb401f 100644
+--- a/hw/pci-host/prep.c
++++ b/hw/pci-host/prep.c
+@@ -213,7 +213,6 @@ static void raven_pcihost_class_init(ObjectClass *klass, void *data)
+     set_bit(DEVICE_CATEGORY_BRIDGE, dc->categories);
+     dc->realize = raven_pcihost_realizefn;
+     dc->fw_name = "pci";
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo raven_pcihost_info = {
+diff --git a/hw/ppc/spapr_vio.c b/hw/ppc/spapr_vio.c
+index 42b6367..0cc840e 100644
+--- a/hw/ppc/spapr_vio.c
++++ b/hw/ppc/spapr_vio.c
+@@ -529,11 +529,9 @@ static int spapr_vio_bridge_init(SysBusDevice *dev)
+ 
+ static void spapr_vio_bridge_class_init(ObjectClass *klass, void *data)
+ {
+-    DeviceClass *dc = DEVICE_CLASS(klass);
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = spapr_vio_bridge_init;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo spapr_vio_bridge_info = {
+diff --git a/hw/s390x/ipl.c b/hw/s390x/ipl.c
+index f86a4af..cc29d8e 100644
+--- a/hw/s390x/ipl.c
++++ b/hw/s390x/ipl.c
+@@ -181,7 +181,6 @@ static void s390_ipl_class_init(ObjectClass *klass, void *data)
+     k->init = s390_ipl_init;
+     dc->props = s390_ipl_properties;
+     dc->reset = s390_ipl_reset;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo s390_ipl_info = {
+diff --git a/hw/s390x/s390-virtio-bus.c b/hw/s390x/s390-virtio-bus.c
+index 9078bfb..2fce4c5 100644
+--- a/hw/s390x/s390-virtio-bus.c
++++ b/hw/s390x/s390-virtio-bus.c
+@@ -675,11 +675,9 @@ static int s390_virtio_bridge_init(SysBusDevice *dev)
+ 
+ static void s390_virtio_bridge_class_init(ObjectClass *klass, void *data)
+ {
+-    DeviceClass *dc = DEVICE_CLASS(klass);
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = s390_virtio_bridge_init;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo s390_virtio_bridge_info = {
+diff --git a/hw/s390x/virtio-ccw.c b/hw/s390x/virtio-ccw.c
+index 74eb559..d981101 100644
+--- a/hw/s390x/virtio-ccw.c
++++ b/hw/s390x/virtio-ccw.c
+@@ -1071,11 +1071,9 @@ static int virtual_css_bridge_init(SysBusDevice *dev)
+ 
+ static void virtual_css_bridge_class_init(ObjectClass *klass, void *data)
+ {
+-    DeviceClass *dc = DEVICE_CLASS(klass);
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = virtual_css_bridge_init;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo virtual_css_bridge_info = {
+diff --git a/hw/sd/pl181.c b/hw/sd/pl181.c
+index 95e4587..c5ad890 100644
+--- a/hw/sd/pl181.c
++++ b/hw/sd/pl181.c
+@@ -497,7 +497,6 @@ static void pl181_class_init(ObjectClass *klass, void *data)
+     sdc->init = pl181_init;
+     k->vmsd = &vmstate_pl181;
+     k->reset = pl181_reset;
+-    k->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+ }
+ 
+ static const TypeInfo pl181_info = {
+diff --git a/hw/timer/arm_mptimer.c b/hw/timer/arm_mptimer.c
+index 6b088fa..aab4ae4 100644
+--- a/hw/timer/arm_mptimer.c
++++ b/hw/timer/arm_mptimer.c
+@@ -290,7 +290,6 @@ static void arm_mptimer_class_init(ObjectClass *klass, void *data)
+     sbc->init = arm_mptimer_init;
+     dc->vmsd = &vmstate_arm_mptimer;
+     dc->reset = arm_mptimer_reset;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->props = arm_mptimer_properties;
+ }
+ 
+diff --git a/hw/timer/hpet.c b/hw/timer/hpet.c
+index 3f7f457..dd486a1 100644
+--- a/hw/timer/hpet.c
++++ b/hw/timer/hpet.c
+@@ -739,7 +739,6 @@ static void hpet_device_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = hpet_init;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->reset = hpet_reset;
+     dc->vmsd = &vmstate_hpet;
+     dc->props = hpet_device_properties;
+diff --git a/hw/timer/pl031.c b/hw/timer/pl031.c
+index aa9c5a6..241e7c8 100644
+--- a/hw/timer/pl031.c
++++ b/hw/timer/pl031.c
+@@ -246,7 +246,6 @@ static void pl031_class_init(ObjectClass *klass, void *data)
+     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+ 
+     k->init = pl031_init;
+-    dc->cannot_instantiate_with_device_add_yet = true; /* FIXME explain why */
+     dc->vmsd = &vmstate_pl031;
+ }
+ 
+-- 
+1.7.1
+

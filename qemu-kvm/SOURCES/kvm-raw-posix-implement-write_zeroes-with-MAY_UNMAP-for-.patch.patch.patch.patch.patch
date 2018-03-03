@@ -1,0 +1,98 @@
+From f1b8961cbef828b62ba1ca7da79cd516f7dfc52b Mon Sep 17 00:00:00 2001
+Message-Id: <f1b8961cbef828b62ba1ca7da79cd516f7dfc52b.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:09:28 +0100
+Subject: [PATCH 40/50] raw-posix: implement write_zeroes with MAY_UNMAP for
+ block devices
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-43-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56079
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 42/52] raw-posix: implement write_zeroes with MAY_UNMAP for block devices
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+See the next commit for the description of the Linux kernel problem
+that is worked around in raw_open_common.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit d0b4503ed2d8713791c38839341b023f78d1a3d9)
+---
+ block/raw-posix.c | 37 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ block/raw-posix.c | 37 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+diff --git a/block/raw-posix.c b/block/raw-posix.c
+index ca5bcb3..815a80b 100644
+--- a/block/raw-posix.c
++++ b/block/raw-posix.c
+@@ -335,6 +335,22 @@ static int raw_open_common(BlockDriverState *bs, QDict *options,
+     if (S_ISREG(st.st_mode)) {
+         s->discard_zeroes = true;
+     }
++    if (S_ISBLK(st.st_mode)) {
++#ifdef BLKDISCARDZEROES
++        unsigned int arg;
++        if (ioctl(s->fd, BLKDISCARDZEROES, &arg) == 0 && arg) {
++            s->discard_zeroes = true;
++        }
++#endif
++#ifdef __linux__
++        /* On Linux 3.10, BLKDISCARD leaves stale data in the page cache.  Do
++         * not rely on the contents of discarded blocks unless using O_DIRECT.
++         */
++        if (!(bs->open_flags & BDRV_O_NOCACHE)) {
++            s->discard_zeroes = false;
++        }
++#endif
++    }
+ 
+ #ifdef CONFIG_XFS
+     if (platform_test_xfs_fd(s->fd)) {
+@@ -1586,6 +1602,26 @@ static coroutine_fn BlockDriverAIOCB *hdev_aio_discard(BlockDriverState *bs,
+                        cb, opaque, QEMU_AIO_DISCARD|QEMU_AIO_BLKDEV);
+ }
+ 
++static coroutine_fn int hdev_co_write_zeroes(BlockDriverState *bs,
++    int64_t sector_num, int nb_sectors, BdrvRequestFlags flags)
++{
++    BDRVRawState *s = bs->opaque;
++    int rc;
++
++    rc = fd_open(bs);
++    if (rc < 0) {
++        return rc;
++    }
++    if (!(flags & BDRV_REQ_MAY_UNMAP)) {
++        return -ENOTSUP;
++    }
++    if (!s->discard_zeroes) {
++        return -ENOTSUP;
++    }
++    return paio_submit_co(bs, s->fd, sector_num, NULL, nb_sectors,
++                          QEMU_AIO_DISCARD|QEMU_AIO_BLKDEV);
++}
++
+ static int hdev_create(const char *filename, QEMUOptionParameter *options,
+                        Error **errp)
+ {
+@@ -1637,6 +1673,7 @@ static BlockDriver bdrv_host_device = {
+     .bdrv_reopen_abort   = raw_reopen_abort,
+     .bdrv_create        = hdev_create,
+     .create_options     = raw_create_options,
++    .bdrv_co_write_zeroes = hdev_co_write_zeroes,
+ 
+     .bdrv_aio_readv	= raw_aio_readv,
+     .bdrv_aio_writev	= raw_aio_writev,
+-- 
+1.7.11.7
+

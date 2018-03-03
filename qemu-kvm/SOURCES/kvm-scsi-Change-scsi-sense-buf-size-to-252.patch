@@ -1,0 +1,101 @@
+From 79d13d1e7d0934198a2774235b70f688aa5f433f Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Wed, 19 Mar 2014 05:33:13 +0100
+Subject: [PATCH 1/2] scsi: Change scsi sense buf size to 252
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1395207194-25330-2-git-send-email-famz@redhat.com>
+Patchwork-id: 58139
+O-Subject: [RHEL-7 qemu-kvm PATCH v2 1/2] scsi: Change scsi sense buf size to 252
+Bugzilla: 1058173
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1058173
+Brew:     http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7141744
+
+Current buffer size fails the assersion check in like
+
+    hw/scsi/scsi-bus.c:1655:    assert(req->sense_len <= sizeof(req->sense));
+
+when backend (block/iscsi.c) returns more data then 96.
+
+Exercise the core dump path by booting an Gentoo ISO with scsi-generic
+device backed with iscsi (built with libiscsi 1.7.0):
+
+    x86_64-softmmu/qemu-system-x86_64 \
+    -drive file=iscsi://localhost:3260/iqn.foobar/0,if=none,id=drive-disk \
+    -device virtio-scsi-pci,id=scsi1,bus=pci.0,addr=0x6 \
+    -device scsi-generic,drive=drive-disk,bus=scsi1.0,id=iscsi-disk \
+    -boot d \
+    -cdrom gentoo.iso
+
+    qemu-system-x86_64: hw/scsi/scsi-bus.c:1655: scsi_req_complete:
+    Assertion `req->sense_len <= sizeof(req->sense)' failed.
+
+According to SPC-4, section 4.5.2.1, 252 is the limit of sense data. So
+increase the value to fix it.
+
+Also remove duplicated define for the macro.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit c5f52875b980e54e6bebad6121c76863356e1d7f)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ hw/scsi/scsi-generic.c | 2 --
+ hw/scsi/spapr_vscsi.c  | 1 -
+ include/hw/scsi/scsi.h | 2 +-
+ 3 files changed, 1 insertion(+), 4 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/scsi/scsi-generic.c |    2 --
+ hw/scsi/spapr_vscsi.c  |    1 -
+ include/hw/scsi/scsi.h |    2 +-
+ 3 files changed, 1 insertions(+), 4 deletions(-)
+
+diff --git a/hw/scsi/scsi-generic.c b/hw/scsi/scsi-generic.c
+index f08b64e..8d92e0d 100644
+--- a/hw/scsi/scsi-generic.c
++++ b/hw/scsi/scsi-generic.c
+@@ -37,8 +37,6 @@ do { fprintf(stderr, "scsi-generic: " fmt , ## __VA_ARGS__); } while (0)
+ #include <scsi/sg.h>
+ #include "block/scsi.h"
+ 
+-#define SCSI_SENSE_BUF_SIZE 96
+-
+ #define SG_ERR_DRIVER_TIMEOUT  0x06
+ #define SG_ERR_DRIVER_SENSE    0x08
+ 
+diff --git a/hw/scsi/spapr_vscsi.c b/hw/scsi/spapr_vscsi.c
+index e8978bf..514ab88 100644
+--- a/hw/scsi/spapr_vscsi.c
++++ b/hw/scsi/spapr_vscsi.c
+@@ -60,7 +60,6 @@
+ #define VSCSI_MAX_SECTORS       4096
+ #define VSCSI_REQ_LIMIT         24
+ 
+-#define SCSI_SENSE_BUF_SIZE     96
+ #define SRP_RSP_SENSE_DATA_LEN  18
+ 
+ typedef union vscsi_crq {
+diff --git a/include/hw/scsi/scsi.h b/include/hw/scsi/scsi.h
+index 2eccb72..4a1de1b 100644
+--- a/include/hw/scsi/scsi.h
++++ b/include/hw/scsi/scsi.h
+@@ -31,7 +31,7 @@ typedef struct SCSISense {
+     uint8_t ascq;
+ } SCSISense;
+ 
+-#define SCSI_SENSE_BUF_SIZE 96
++#define SCSI_SENSE_BUF_SIZE 252
+ 
+ struct SCSICommand {
+     uint8_t buf[SCSI_CMD_BUF_SIZE];
+-- 
+1.7.1
+

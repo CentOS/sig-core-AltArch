@@ -1,0 +1,90 @@
+From f3ba81ab59dcb21f79cf2f2053206d6b03431658 Mon Sep 17 00:00:00 2001
+Message-Id: <f3ba81ab59dcb21f79cf2f2053206d6b03431658.1389014116.git.minovotn@redhat.com>
+In-Reply-To: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+References: <c8cc35838d42aa286242772d97e3a9be7bb786ba.1389014116.git.minovotn@redhat.com>
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 9 Dec 2013 14:09:03 +0100
+Subject: [PATCH 15/50] block: honour BlockLimits in bdrv_co_discard
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1386598178-11845-18-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56053
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 17/52] block: honour BlockLimits in bdrv_co_discard
+Bugzilla: 1007815
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Peter Lieven <pl@kamp.de>
+
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 6f14da5247076bde1e00444f6d5b2b7ca8075a09)
+---
+ block.c | 37 ++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 36 insertions(+), 1 deletion(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ block.c | 37 ++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 36 insertions(+), 1 deletion(-)
+
+diff --git a/block.c b/block.c
+index 2ed9aa9..23dbafd 100644
+--- a/block.c
++++ b/block.c
+@@ -4424,6 +4424,11 @@ static void coroutine_fn bdrv_discard_co_entry(void *opaque)
+     rwco->ret = bdrv_co_discard(rwco->bs, rwco->sector_num, rwco->nb_sectors);
+ }
+ 
++/* if no limit is specified in the BlockLimits use a default
++ * of 32768 512-byte sectors (16 MiB) per request.
++ */
++#define MAX_DISCARD_DEFAULT 32768
++
+ int coroutine_fn bdrv_co_discard(BlockDriverState *bs, int64_t sector_num,
+                                  int nb_sectors)
+ {
+@@ -4445,7 +4450,37 @@ int coroutine_fn bdrv_co_discard(BlockDriverState *bs, int64_t sector_num,
+     }
+ 
+     if (bs->drv->bdrv_co_discard) {
+-        return bs->drv->bdrv_co_discard(bs, sector_num, nb_sectors);
++        int max_discard = bs->bl.max_discard ?
++                          bs->bl.max_discard : MAX_DISCARD_DEFAULT;
++
++        while (nb_sectors > 0) {
++            int ret;
++            int num = nb_sectors;
++
++            /* align request */
++            if (bs->bl.discard_alignment &&
++                num >= bs->bl.discard_alignment &&
++                sector_num % bs->bl.discard_alignment) {
++                if (num > bs->bl.discard_alignment) {
++                    num = bs->bl.discard_alignment;
++                }
++                num -= sector_num % bs->bl.discard_alignment;
++            }
++
++            /* limit request size */
++            if (num > max_discard) {
++                num = max_discard;
++            }
++
++            ret = bs->drv->bdrv_co_discard(bs, sector_num, num);
++            if (ret) {
++                return ret;
++            }
++
++            sector_num += num;
++            nb_sectors -= num;
++        }
++        return 0;
+     } else if (bs->drv->bdrv_aio_discard) {
+         BlockDriverAIOCB *acb;
+         CoroutineIOCompletion co = {
+-- 
+1.7.11.7
+

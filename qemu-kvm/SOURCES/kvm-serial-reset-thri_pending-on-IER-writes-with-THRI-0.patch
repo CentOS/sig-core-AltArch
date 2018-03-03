@@ -1,0 +1,85 @@
+From 09ff2706109ce647d1fe59e99f44f96810d80b7c Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 18 May 2017 09:21:24 +0200
+Subject: [PATCH 11/18] serial: reset thri_pending on IER writes with THRI=0
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <20170518092131.16571-12-famz@redhat.com>
+Patchwork-id: 75302
+O-Subject: [RHEL-7.4 qemu-kvm PATCH v3 11/18] serial: reset thri_pending on IER writes with THRI=0
+Bugzilla: 1451470
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+This is responsible for failure of migration from 2.2 to 2.1, because
+thr_ipending is always one in practice.
+
+serial.c is setting thr_ipending unconditionally.  However, thr_ipending
+is not used at all if THRI=0, and it will be overwritten again the next
+time THRE or THRI changes.  For that reason, we can set thr_ipending to
+zero every time THRI is reset.
+
+There is disagreement on whether LSR.THRE should be resampled when IER.THRI
+goes from 1 to 1.  This patch does not touch the code, leaving that for
+QEMU 2.3+.
+
+This has no semantic change and is enough to fix migration in the common
+case where the interrupt is not pending or is reported in IIR.  It does not
+change the migration format, so 2.2.0 -> 2.1 will remain broken but we
+can fix 2.2.1 -> 2.1 without breaking 2.2.1 <-> 2.2.0.
+
+The case that remains broken (the one in which the subsection is strictly
+necessary) is when THRE=1, the THRI interrupt has *not* been acknowledged
+yet, and a higher-priority interrupt comes.  In this case, you need the
+subsection to tell the source that the lower-priority THRI interrupt is
+pending.  The subsection's breakage of migration, in this case, prevents
+continuing the VM on the destination with an invalid state.
+
+Cc: qemu-stable@nongnu.org
+Reported-by: Igor Mammedov <imammedo@redhat.com>
+Reviewed-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 4e02b0fcf5c97579d0d3261c80c65abcf92870fe)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/char/serial.c | 18 ++++++++++++++++--
+ 1 file changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/hw/char/serial.c b/hw/char/serial.c
+index 5ef9b95..15c628f 100644
+--- a/hw/char/serial.c
++++ b/hw/char/serial.c
+@@ -320,10 +320,24 @@ static void serial_ioport_write(void *opaque, hwaddr addr, uint64_t val,
+                      s->poll_msl = 0;
+                 }
+             }
+-            if (s->lsr & UART_LSR_THRE) {
++
++            /* Turning on the THRE interrupt on IER can trigger the interrupt
++             * if LSR.THRE=1, even if it had been masked before by reading IIR.
++             * This is not in the datasheet, but Windows relies on it.  It is
++             * unclear if THRE has to be resampled every time THRI becomes
++             * 1, or only on the rising edge.  Bochs does the latter, and Windows
++             * always toggles IER to all zeroes and back to all ones.  But for
++             * now leave it as it has always been in QEMU.
++             *
++             * If IER.THRI is zero, thr_ipending is not used.  Set it to zero
++             * so that the thr_ipending subsection is not migrated.
++             */
++            if ((s->ier & UART_IER_THRI) && (s->lsr & UART_LSR_THRE)) {
+                 s->thr_ipending = 1;
+-                serial_update_irq(s);
++            } else {
++                s->thr_ipending = 0;
+             }
++            serial_update_irq(s);
+         }
+         break;
+     case 2:
+-- 
+1.8.3.1
+

@@ -1,0 +1,234 @@
+From 9482cf37df20d18140b24751972697f9349f1441 Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Fri, 19 Sep 2014 03:18:58 +0200
+Subject: [PATCH 19/20] block: add backing-file option to block-stream
+
+Message-id: <5b8611fab581db6b4c5eb31c998378090819268d.1411096194.git.jcody@redhat.com>
+Patchwork-id: 61312
+O-Subject: [PATCH qemu-kvm-rhev RHEL7.0.z 3/4] block: add backing-file option to block-stream
+Bugzilla: 1122925
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Eric Blake <eblake@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+On some image chains, QEMU may not always be able to resolve the
+filenames properly, when updating the backing file of an image
+after a block job.
+
+For instance, certain relative pathnames may fail, or drives may
+have been specified originally by file descriptor (e.g. /dev/fd/???),
+or a relative protocol pathname may have been used.
+
+In these instances, QEMU may lack the information to be able to make
+the correct choice, but the user or management layer most likely does
+have that knowledge.
+
+With this extension to the block-stream api, the user is able to change
+the backing file of the active layer as part of the block-stream
+operation.
+
+This allows the change to be 'safe', in the sense that if the attempt
+to write the active image metadata fails, then the block-stream
+operation returns failure, without disrupting the guest.
+
+If a backing file string is not specified in the command, the backing
+file string to use is determined in the same manner as it was
+previously.
+
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 13d8cc515dfcf5574077f964332d34890c0101d0)
+
+Conflicts:
+	block/stream.c
+	blockdev.c
+	qapi/block-core.json
+
+RHEL7 Notes:  Conflicts due to: surrounding context differences, and
+                                and the qapi json not being split into
+                                separate files like upstream.  Also
+                                upstream used 1024 for local backing
+                                file string size, and downstream we
+                                already use PATH_MAX instead.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/stream.c   |   11 +++++------
+ blockdev.c       |   23 +++++++++++++++++++----
+ hmp.c            |    2 +-
+ qapi-schema.json |   19 +++++++++++++++++--
+ qmp-commands.hx  |    2 +-
+ 5 files changed, 43 insertions(+), 14 deletions(-)
+
+diff --git a/block/stream.c b/block/stream.c
+index 2a6f533..367120d 100644
+--- a/block/stream.c
++++ b/block/stream.c
+@@ -32,7 +32,7 @@ typedef struct StreamBlockJob {
+     RateLimit limit;
+     BlockDriverState *base;
+     BlockdevOnError on_error;
+-    char backing_file_id[PATH_MAX];
++    char *backing_file_str;
+ } StreamBlockJob;
+ 
+ static int coroutine_fn stream_populate(BlockDriverState *bs,
+@@ -182,7 +182,7 @@ wait:
+     if (!block_job_is_cancelled(&s->common) && sector_num == end && ret == 0) {
+         const char *base_id = NULL, *base_fmt = NULL;
+         if (base) {
+-            base_id = s->backing_file_id;
++            base_id = s->backing_file_str;
+             if (base->drv) {
+                 base_fmt = base->drv->format_name;
+             }
+@@ -192,6 +192,7 @@ wait:
+     }
+ 
+     qemu_vfree(buf);
++    g_free(s->backing_file_str);
+     block_job_completed(&s->common, ret);
+ }
+ 
+@@ -213,7 +214,7 @@ static const BlockJobDriver stream_job_driver = {
+ };
+ 
+ void stream_start(BlockDriverState *bs, BlockDriverState *base,
+-                  const char *base_id, int64_t speed,
++                  const char *backing_file_str, int64_t speed,
+                   BlockdevOnError on_error,
+                   BlockDriverCompletionFunc *cb,
+                   void *opaque, Error **errp)
+@@ -233,9 +234,7 @@ void stream_start(BlockDriverState *bs, BlockDriverState *base,
+     }
+ 
+     s->base = base;
+-    if (base_id) {
+-        pstrcpy(s->backing_file_id, sizeof(s->backing_file_id), base_id);
+-    }
++    s->backing_file_str = g_strdup(backing_file_str);
+ 
+     s->on_error = on_error;
+     s->common.co = qemu_coroutine_create(stream_run);
+diff --git a/blockdev.c b/blockdev.c
+index 96dc3df..09ef3f7 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -1425,14 +1425,17 @@ static void block_job_cb(void *opaque, int ret)
+     bdrv_put_ref_bh_schedule(bs);
+ }
+ 
+-void qmp_block_stream(const char *device, bool has_base,
+-                      const char *base, bool has_speed, int64_t speed,
++void qmp_block_stream(const char *device,
++                      bool has_base, const char *base,
++                      bool has_backing_file, const char *backing_file,
++                      bool has_speed, int64_t speed,
+                       bool has_on_error, BlockdevOnError on_error,
+                       Error **errp)
+ {
+     BlockDriverState *bs;
+     BlockDriverState *base_bs = NULL;
+     Error *local_err = NULL;
++    const char *base_name = NULL;
+ 
+     if (!has_on_error) {
+         on_error = BLOCKDEV_ON_ERROR_REPORT;
+@@ -1444,15 +1447,27 @@ void qmp_block_stream(const char *device, bool has_base,
+         return;
+     }
+ 
+-    if (base) {
++    if (has_base) {
+         base_bs = bdrv_find_backing_image(bs, base);
+         if (base_bs == NULL) {
+             error_set(errp, QERR_BASE_NOT_FOUND, base);
+             return;
+         }
++        base_name = base;
+     }
+ 
+-    stream_start(bs, base_bs, base, has_speed ? speed : 0,
++    /* if we are streaming the entire chain, the result will have no backing
++     * file, and specifying one is therefore an error */
++    if (base_bs == NULL && has_backing_file) {
++        error_setg(errp, "backing file specified, but streaming the "
++                         "entire chain");
++        return;
++    }
++
++    /* backing_file string overrides base bs filename */
++    base_name = has_backing_file ? backing_file : base_name;
++
++    stream_start(bs, base_bs, base_name, has_speed ? speed : 0,
+                  on_error, block_job_cb, bs, &local_err);
+     if (error_is_set(&local_err)) {
+         error_propagate(errp, local_err);
+diff --git a/hmp.c b/hmp.c
+index 841929d..b723b26 100644
+--- a/hmp.c
++++ b/hmp.c
+@@ -1046,7 +1046,7 @@ void hmp_block_stream(Monitor *mon, const QDict *qdict)
+     const char *base = qdict_get_try_str(qdict, "base");
+     int64_t speed = qdict_get_try_int(qdict, "speed", 0);
+ 
+-    qmp_block_stream(device, base != NULL, base,
++    qmp_block_stream(device, base != NULL, base, false, NULL,
+                      qdict_haskey(qdict, "speed"), speed,
+                      BLOCKDEV_ON_ERROR_REPORT, true, &error);
+ 
+diff --git a/qapi-schema.json b/qapi-schema.json
+index ed79eb9..40bd2a6 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -2280,6 +2280,21 @@
+ #
+ # @base:   #optional the common backing file name
+ #
++# @backing-file: #optional The backing file string to write into the active
++#                          layer. This filename is not validated.
++#
++#                          If a pathname string is such that it cannot be
++#                          resolved by QEMU, that means that subsequent QMP or
++#                          HMP commands must use node-names for the image in
++#                          question, as filename lookup methods will fail.
++#
++#                          If not specified, QEMU will automatically determine
++#                          the backing file string to use, or error out if there
++#                          is no obvious choice.  Care should be taken when
++#                          specifying the string, to specify a valid filename or
++#                          protocol.
++#                          (Since 2.1)
++#
+ # @speed:  #optional the maximum speed, in bytes per second
+ #
+ # @on-error: #optional the action to take on an error (default report).
+@@ -2292,8 +2307,8 @@
+ # Since: 1.1
+ ##
+ { 'command': 'block-stream',
+-  'data': { 'device': 'str', '*base': 'str', '*speed': 'int',
+-            '*on-error': 'BlockdevOnError' } }
++  'data': { 'device': 'str', '*base': 'str', '*backing-file': 'str',
++            '*speed': 'int', '*on-error': 'BlockdevOnError' } }
+ #_end-rhev-only
+ 
+ ##
+diff --git a/qmp-commands.hx b/qmp-commands.hx
+index 5ece4f9..c07cf8a 100644
+--- a/qmp-commands.hx
++++ b/qmp-commands.hx
+@@ -999,7 +999,7 @@ EQMP
+ #ifdef CONFIG_LIVE_BLOCK_OPS
+     {
+         .name       = "block-stream",
+-        .args_type  = "device:B,base:s?,speed:o?,on-error:s?",
++        .args_type  = "device:B,base:s?,speed:o?,backing-file:s?,on-error:s?",
+         .mhandler.cmd_new = qmp_marshal_input_block_stream,
+     },
+ 
+-- 
+1.7.1
+

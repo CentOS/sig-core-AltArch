@@ -1,0 +1,85 @@
+From 5ed1e31ed43f8bdfe765c7c564d69fb437961d42 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 5 Mar 2014 17:32:58 +0100
+Subject: [PATCH 02/16] QMP: Relax __com.redhat_drive_add parameter checking
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1394040778-1544-2-git-send-email-armbru@redhat.com>
+Patchwork-id: 58021
+O-Subject: [PATCH 7.0 qemu-kvm 1/1] QMP: Relax __com.redhat_drive_add parameter checking
+Bugzilla: 1057471
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+I/O throttling and many new features are unavailable with this
+command, because its parameter checking is overly restrictive.
+Relax it.
+
+The command was forward-ported from RHEL-6 (commit 75ad257).  It
+provides access to drive_init() via QMP with the parameters restricted
+to a subset of the ones recognized by drive_init().  We did that
+because some parameters make sense only when configuring a frontend in
+addition to a backend, and the command doesn't do that.
+
+The parameter filtering is implemented as a whitelist.  The
+forward-port neglected to update the whitelist for all the stuff that
+has changed since RHEL-6.
+
+Due to new features like driver-specific parameters, a whitelist is no
+longer convenient.  Replace by a blacklist that contains exactly the
+drive_init() parameters that are already filtered out on RHEL-6.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+---
+ device-hotplug.c | 15 +++++----------
+ 1 file changed, 5 insertions(+), 10 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ device-hotplug.c |   15 +++++----------
+ 1 files changed, 5 insertions(+), 10 deletions(-)
+
+diff --git a/device-hotplug.c b/device-hotplug.c
+index 20f6b7f..78a18f2 100644
+--- a/device-hotplug.c
++++ b/device-hotplug.c
+@@ -80,13 +80,8 @@ err:
+ 
+ static void check_parm(const char *key, QObject *obj, void *opaque)
+ {
+-    static const char *valid_keys[] = {
+-        "id", "cyls", "heads", "secs", "trans", "media", "snapshot",
+-        "file", "cache", "aio", "format", "serial", "rerror", "werror",
+-        "readonly", "copy-on-read",
+-#ifdef CONFIG_BLOCK_IO_THROTTLING
+-        "bps", "bps_rd", "bps_wr", "iops", "iops_rd", "iops_wr",
+-#endif
++    static const char *unwanted_keys[] = {
++        "bus", "unit", "index", "if", "boot", "addr",
+         NULL
+ 
+     };
+@@ -97,14 +92,14 @@ static void check_parm(const char *key, QObject *obj, void *opaque)
+         return;
+     }
+ 
+-    for (p = valid_keys; *p; p++) {
++    for (p = unwanted_keys; *p; p++) {
+         if (!strcmp(key, *p)) {
++            qerror_report(QERR_INVALID_PARAMETER, key);
++            *stopped = 1;
+             return;
+         }
+     }
+ 
+-    qerror_report(QERR_INVALID_PARAMETER, key);
+-    *stopped = 1;
+ }
+ 
+ int simple_drive_add(Monitor *mon, const QDict *qdict, QObject **ret_data)
+-- 
+1.7.1
+

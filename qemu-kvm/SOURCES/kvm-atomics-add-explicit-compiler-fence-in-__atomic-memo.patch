@@ -1,0 +1,80 @@
+From d37475eb567b61ce6a18f9fcbf35eb929be8d99f Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Fri, 19 Jun 2015 10:45:29 +0200
+Subject: [PATCH] atomics: add explicit compiler fence in __atomic memory
+ barriers
+
+Message-id: <1434710730-26183-1-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 66333
+O-Subject: [RHEL7.2/7.1.z qemu-kvm PATCH] atomics: add explicit compiler fence in __atomic memory barriers
+Bugzilla: 1142857
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+
+Bugzilla: 1142857 (aka 8*10^6/7)
+
+Brew build: 9393725
+
+__atomic_thread_fence does not include a compiler barrier; in the
+C++11 memory model, fences take effect in combination with other
+atomic operations.  GCC implements this by making __atomic_load and
+__atomic_store access memory as if the pointer was volatile, and
+leaves no trace whatsoever of acquire and release fences in the
+compiler's intermediate representation.
+
+In QEMU, we want memory barriers to act on all memory, but at the same
+time we would like to use __atomic_thread_fence for portability reasons.
+Add compiler barriers manually around the __atomic_thread_fence.
+
+Thanks to Uli and Kevin for analyzing this bug!
+
+Message-Id: <1433334080-14912-1-git-send-email-pbonzini@redhat.com>
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 3bbf572345c65813f86a8fc434ea1b23beb08e16)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ include/qemu/atomic.h | 12 +++++++++---
+ 1 file changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/include/qemu/atomic.h b/include/qemu/atomic.h
+index 0aa8913..690d0d6 100644
+--- a/include/qemu/atomic.h
++++ b/include/qemu/atomic.h
+@@ -99,7 +99,13 @@
+ 
+ #ifndef smp_wmb
+ #ifdef __ATOMIC_RELEASE
+-#define smp_wmb()   __atomic_thread_fence(__ATOMIC_RELEASE)
++/* __atomic_thread_fence does not include a compiler barrier; instead,
++ * the barrier is part of __atomic_load/__atomic_store's "volatile-like"
++ * semantics. If smp_wmb() is a no-op, absence of the barrier means that
++ * the compiler is free to reorder stores on each side of the barrier.
++ * Add one here, and similarly in smp_rmb() and smp_read_barrier_depends().
++ */
++#define smp_wmb()   ({ barrier(); __atomic_thread_fence(__ATOMIC_RELEASE); barrier(); })
+ #else
+ #define smp_wmb()   __sync_synchronize()
+ #endif
+@@ -107,7 +113,7 @@
+ 
+ #ifndef smp_rmb
+ #ifdef __ATOMIC_ACQUIRE
+-#define smp_rmb()   __atomic_thread_fence(__ATOMIC_ACQUIRE)
++#define smp_rmb()   ({ barrier(); __atomic_thread_fence(__ATOMIC_ACQUIRE); barrier(); })
+ #else
+ #define smp_rmb()   __sync_synchronize()
+ #endif
+@@ -115,7 +121,7 @@
+ 
+ #ifndef smp_read_barrier_depends
+ #ifdef __ATOMIC_CONSUME
+-#define smp_read_barrier_depends()   __atomic_thread_fence(__ATOMIC_CONSUME)
++#define smp_read_barrier_depends()   ({ barrier(); __atomic_thread_fence(__ATOMIC_CONSUME); barrier(); })
+ #else
+ #define smp_read_barrier_depends()   barrier()
+ #endif
+-- 
+1.8.3.1
+

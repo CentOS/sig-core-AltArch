@@ -1,0 +1,126 @@
+From d43267efbe5634bfe9c8ca9cccd3d3d0a36759ae Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Wed, 5 Feb 2014 15:02:19 +0100
+Subject: [PATCH 09/28] configure: add option to disable -fstack-protect
+
+RH-Author: Miroslav Rezanina <mrezanin@redhat.com>
+Message-id: <fbd17542d86a4fd4beb4d9c672df14f237b51a62.1391612088.git.mrezanin@redhat.com>
+Patchwork-id: 57118
+O-Subject: [RHEL7 qemu-kvm PATCH 1/2] configure: add option to disable -fstack-protect
+Bugzilla: 1044182
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+From: Miroslav Rezanina <mrezanin@redhat.com>
+
+upstream: submitted
+(Do not wait for apply to get to RHEL 7.0 before Snapshot 8)
+
+The -fstack-protector flag family is useful for ensuring safety and for
+debugging, but has a performance impact. Here are some boot time comparisons
+of the various versions of -fstack-protector using qemu-system-arm on an
+x86_64 host:
+    # -fstack-protector-all
+    Startup finished in 1.810s (kernel) + 12.331s (initrd) + 49.016s
+(userspace) = 1min 3.159s
+    Startup finished in 1.801s (kernel) + 12.287s (initrd) + 47.925s
+(userspace) = 1min 2.013s
+    Startup finished in 1.812s (kernel) + 12.302s (initrd) + 47.995s
+(userspace) = 1min 2.111s
+
+    # -fstack-protector-strong
+    Startup finished in 1.744s (kernel) + 11.223s (initrd) + 44.688s
+(userspace) = 57.657s
+    Startup finished in 1.721s (kernel) + 11.222s (initrd) + 44.194s
+(userspace) = 57.138s
+    Startup finished in 1.693s (kernel) + 11.250s (initrd) + 44.426s
+(userspace) = 57.370s
+
+    # -fstack-protector
+    Startup finished in 1.705s (kernel) + 11.409s (initrd) + 43.563s
+(userspace) = 56.677s
+    Startup finished in 1.877s (kernel) + 11.137s (initrd) + 43.719s
+(userspace) = 56.734s
+    Startup finished in 1.708s (kernel) + 11.141s (initrd) + 43.628s
+(userspace) = 56.478s
+
+    # no stack protector
+    Startup finished in 1.743s (kernel) + 11.190s (initrd) + 43.709s
+(userspace) = 56.643s
+    Startup finished in 1.763s (kernel) + 11.216s (initrd) + 43.767s
+(userspace) = 56.747s
+    Startup finished in 1.711s (kernel) + 11.283s (initrd) + 43.878s
+(userspace) = 56.873s
+
+This patch introduces a configure option to disable the stack protector
+entirely, and conditional stack protector flag selection (in order, based on
+availability): -fstack-protector-strong, -fstack-protector, no stack protector.
+
+Signed-off-by: Steven Noonan <address@hidden>
+Cc: Anthony Liguori <address@hidden>
+Reviewed-by: Stefan Weil <address@hidden>
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ configure | 18 +++++++++++++++---
+ 1 file changed, 15 insertions(+), 3 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ configure |   18 +++++++++++++++---
+ 1 files changed, 15 insertions(+), 3 deletions(-)
+
+diff --git a/configure b/configure
+index b892b88..3f68220 100755
+--- a/configure
++++ b/configure
+@@ -134,6 +134,7 @@ audio_win_int=""
+ cc_i386=i386-pc-linux-gnu-gcc
+ libs_qga=""
+ debug_info="yes"
++stack_protector=""
+ 
+ # Don't accept a target_list environment variable.
+ unset target_list
+@@ -839,6 +840,10 @@ for opt do
+   ;;
+   --disable-werror) werror="no"
+   ;;
++  --enable-stack-protector) stack_protector="yes"
++  ;;
++  --disable-stack-protector) stack_protector="no"
++  ;;
+   --disable-curses) curses="no"
+   ;;
+   --enable-curses) curses="yes"
+@@ -1115,6 +1120,7 @@ echo "  --enable-sparse          enable sparse checker"
+ echo "  --disable-sparse         disable sparse checker (default)"
+ echo "  --disable-strip          disable stripping binaries"
+ echo "  --disable-werror         disable compilation abort on warning"
++echo "  --disable-stack-protector disable compiler-provided stack protection"
+ echo "  --disable-sdl            disable SDL"
+ echo "  --enable-sdl             enable SDL"
+ echo "  --disable-gtk            disable gtk UI"
+@@ -1296,9 +1302,15 @@ for flag in $gcc_flags; do
+     fi
+ done
+ 
+-if compile_prog "-Werror -fstack-protector-all" "" ; then
+-    QEMU_CFLAGS="$QEMU_CFLAGS -fstack-protector-all"
+-    LIBTOOLFLAGS="$LIBTOOLFLAGS -Wc,-fstack-protector-all"
++if test "$stack_protector" != "no" ; then
++  gcc_flags="-fstack-protector-strong -fstack-protector"
++  for flag in $gcc_flags; do
++    if compile_prog "-Werror $flag" "" ; then
++      QEMU_CFLAGS="$QEMU_CFLAGS $flag"
++      LIBTOOLFLAGS="$LIBTOOLFLAGS -Wc,$flag"
++      break
++    fi
++  done
+ fi
+ 
+ # Workaround for http://gcc.gnu.org/PR55489.  Happens with -fPIE/-fPIC and
+-- 
+1.7.1
+

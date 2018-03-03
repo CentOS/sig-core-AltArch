@@ -1,0 +1,75 @@
+From 496cf1296786c104f08a04263d59abf701759374 Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 20 Jan 2014 12:49:44 +0100
+Subject: [PATCH 28/34] scsi-bus: fix transfer length and direction for VERIFY command
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1390222185-24969-2-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 56833
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 1/2] scsi-bus: fix transfer length and direction for VERIFY command
+Bugzilla: 1035644
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+
+The amount of bytes to transfer depends on the BYTCHK field.
+If any data is transferred, it is sent to the device.
+
+Cc: qemu-stable@nongnu.org
+Tested-by: Hervé Poussineau <hpoussin@reactos.org>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit d12ad44cc4cc9142179e64295608611f118b8ad8)
+---
+ hw/scsi/scsi-bus.c | 14 +++++++++++++-
+ 1 file changed, 13 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/scsi/scsi-bus.c |   14 +++++++++++++-
+ 1 files changed, 13 insertions(+), 1 deletions(-)
+
+diff --git a/hw/scsi/scsi-bus.c b/hw/scsi/scsi-bus.c
+index 6733c1a..0f02208 100644
+--- a/hw/scsi/scsi-bus.c
++++ b/hw/scsi/scsi-bus.c
+@@ -874,7 +874,6 @@ static int scsi_req_length(SCSICommand *cmd, SCSIDevice *dev, uint8_t *buf)
+     case RELEASE:
+     case ERASE:
+     case ALLOW_MEDIUM_REMOVAL:
+-    case VERIFY_10:
+     case SEEK_10:
+     case SYNCHRONIZE_CACHE:
+     case SYNCHRONIZE_CACHE_16:
+@@ -891,6 +890,16 @@ static int scsi_req_length(SCSICommand *cmd, SCSIDevice *dev, uint8_t *buf)
+     case ALLOW_OVERWRITE:
+         cmd->xfer = 0;
+         break;
++    case VERIFY_10:
++    case VERIFY_12:
++    case VERIFY_16:
++        if ((buf[1] & 2) == 0) {
++            cmd->xfer = 0;
++        } else if ((buf[1] & 4) == 1) {
++            cmd->xfer = 1;
++        }
++        cmd->xfer *= dev->blocksize;
++        break;
+     case MODE_SENSE:
+         break;
+     case WRITE_SAME_10:
+@@ -1088,6 +1097,9 @@ static void scsi_cmd_xfer_mode(SCSICommand *cmd)
+     case WRITE_VERIFY_12:
+     case WRITE_16:
+     case WRITE_VERIFY_16:
++    case VERIFY_10:
++    case VERIFY_12:
++    case VERIFY_16:
+     case COPY:
+     case COPY_VERIFY:
+     case COMPARE:
+-- 
+1.7.1
+

@@ -1,0 +1,65 @@
+From 8328cafa2406bcfed728c236fce8e5121f6c0b6d Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Tue, 5 Nov 2013 15:10:43 +0100
+Subject: [PATCH 52/81] x86: fix migration from pre-version 12
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1383664244-14818-2-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 55408
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 1/2] x86: fix migration from pre-version 12
+Bugzilla: 1005695
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+On KVM, the KVM_SET_XSAVE would be executed with a 0 xstate_bv,
+and not restore anything.
+
+Since FP and SSE data are always valid, set them in xstate_bv at reset
+time.  In fact, that value is the same that KVM_GET_XSAVE returns on
+pre-XSAVE hosts.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Gleb Natapov <gleb@redhat.com>
+(cherry picked from commit c74f41bbcc83d12787ac42f2c74fc2be54e9f222)
+---
+ target-i386/cpu.c | 1 +
+ target-i386/cpu.h | 4 ++++
+ 2 files changed, 5 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/cpu.c |    1 +
+ target-i386/cpu.h |    4 ++++
+ 2 files changed, 5 insertions(+), 0 deletions(-)
+
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index 170a46c..bc077ca 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -2269,6 +2269,7 @@ static void x86_cpu_reset(CPUState *s)
+     env->fpuc = 0x37f;
+ 
+     env->mxcsr = 0x1f80;
++    env->xstate_bv = XSTATE_FP | XSTATE_SSE;
+ 
+     env->pat = 0x0007040600070406ULL;
+     env->msr_ia32_misc_enable = MSR_IA32_MISC_ENABLE_DEFAULT;
+diff --git a/target-i386/cpu.h b/target-i386/cpu.h
+index 6aebc80..9c55953 100644
+--- a/target-i386/cpu.h
++++ b/target-i386/cpu.h
+@@ -379,6 +379,10 @@
+ 
+ #define MSR_VM_HSAVE_PA                 0xc0010117
+ 
++#define XSTATE_FP                       1
++#define XSTATE_SSE                      2
++#define XSTATE_YMM                      4
++
+ /* CPUID feature words */
+ typedef enum FeatureWord {
+     FEAT_1_EDX,         /* CPUID[1].EDX */
+-- 
+1.7.1
+

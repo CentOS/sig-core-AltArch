@@ -1,0 +1,369 @@
+From 828d09abacc6ae7f0643957301cc3ddee269d7a0 Mon Sep 17 00:00:00 2001
+From: John Snow <jsnow@redhat.com>
+Date: Mon, 23 Nov 2015 17:38:31 +0100
+Subject: [PATCH 12/27] qemu-io: Move command_loop() and friends
+
+RH-Author: John Snow <jsnow@redhat.com>
+Message-id: <1448300320-7772-13-git-send-email-jsnow@redhat.com>
+Patchwork-id: 68441
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 12/21] qemu-io: Move command_loop() and friends
+Bugzilla: 1272523
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit d1174f13e78e2f43f7ae33d59b62b0b94468c8db)
+Signed-off-by: John Snow <jsnow@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ cmd.c     | 139 --------------------------------------------------------------
+ cmd.h     |   9 ----
+ qemu-io.c | 139 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 139 insertions(+), 148 deletions(-)
+
+diff --git a/cmd.c b/cmd.c
+index 6616d61..26d38a8 100644
+--- a/cmd.c
++++ b/cmd.c
+@@ -31,145 +31,6 @@
+ 
+ /* from libxcmd/command.c */
+ 
+-static int		ncmdline;
+-static char		**cmdline;
+-
+-
+-void add_user_command(char *optarg)
+-{
+-    cmdline = g_realloc(cmdline, ++ncmdline * sizeof(char *));
+-    cmdline[ncmdline-1] = optarg;
+-}
+-
+-static void prep_fetchline(void *opaque)
+-{
+-    int *fetchable = opaque;
+-
+-    qemu_set_fd_handler(STDIN_FILENO, NULL, NULL, NULL);
+-    *fetchable= 1;
+-}
+-
+-static char *get_prompt(void);
+-
+-void command_loop(void)
+-{
+-    int i, done = 0, fetchable = 0, prompted = 0;
+-    char *input;
+-
+-    for (i = 0; !done && i < ncmdline; i++) {
+-        done = qemuio_command(cmdline[i]);
+-    }
+-    if (cmdline) {
+-        g_free(cmdline);
+-        return;
+-    }
+-
+-    while (!done) {
+-        if (!prompted) {
+-            printf("%s", get_prompt());
+-            fflush(stdout);
+-            qemu_set_fd_handler(STDIN_FILENO, prep_fetchline, NULL, &fetchable);
+-            prompted = 1;
+-        }
+-
+-        main_loop_wait(false);
+-
+-        if (!fetchable) {
+-            continue;
+-        }
+-
+-        input = fetchline();
+-        if (input == NULL) {
+-            break;
+-        }
+-        done = qemuio_command(input);
+-        free(input);
+-
+-        prompted = 0;
+-        fetchable = 0;
+-    }
+-    qemu_set_fd_handler(STDIN_FILENO, NULL, NULL, NULL);
+-}
+-
+-/* from libxcmd/input.c */
+-
+-#if defined(ENABLE_READLINE)
+-# include <readline/history.h>
+-# include <readline/readline.h>
+-#elif defined(ENABLE_EDITLINE)
+-# include <histedit.h>
+-#endif
+-
+-static char *
+-get_prompt(void)
+-{
+-	static char	prompt[FILENAME_MAX + 2 /*"> "*/ + 1 /*"\0"*/ ];
+-
+-	if (!prompt[0])
+-		snprintf(prompt, sizeof(prompt), "%s> ", progname);
+-	return prompt;
+-}
+-
+-#if defined(ENABLE_READLINE)
+-char *
+-fetchline(void)
+-{
+-	char	*line;
+-
+-	line = readline(get_prompt());
+-	if (line && *line)
+-		add_history(line);
+-	return line;
+-}
+-#elif defined(ENABLE_EDITLINE)
+-static char *el_get_prompt(EditLine *e) { return get_prompt(); }
+-char *
+-fetchline(void)
+-{
+-	static EditLine	*el;
+-	static History	*hist;
+-	HistEvent	hevent;
+-	char		*line;
+-	int		count;
+-
+-	if (!el) {
+-		hist = history_init();
+-		history(hist, &hevent, H_SETSIZE, 100);
+-		el = el_init(progname, stdin, stdout, stderr);
+-		el_source(el, NULL);
+-		el_set(el, EL_SIGNAL, 1);
+-		el_set(el, EL_PROMPT, el_get_prompt);
+-		el_set(el, EL_HIST, history, (const char *)hist);
+-	}
+-	line = strdup(el_gets(el, &count));
+-	if (line) {
+-		if (count > 0)
+-			line[count-1] = '\0';
+-		if (*line)
+-			history(hist, &hevent, H_ENTER, line);
+-	}
+-	return line;
+-}
+-#else
+-# define MAXREADLINESZ	1024
+-char *
+-fetchline(void)
+-{
+-	char	*p, *line = malloc(MAXREADLINESZ);
+-
+-	if (!line)
+-		return NULL;
+-	if (!fgets(line, MAXREADLINESZ, stdin)) {
+-		free(line);
+-		return NULL;
+-	}
+-	p = line + strlen(line);
+-	if (p != line && p[-1] == '\n')
+-		p[-1] = '\0';
+-	return line;
+-}
+-#endif
+-
+ #define EXABYTES(x)	((long long)(x) << 60)
+ #define PETABYTES(x)	((long long)(x) << 50)
+ #define TERABYTES(x)	((long long)(x) << 40)
+diff --git a/cmd.h b/cmd.h
+index 0d01a33..da0c7cf 100644
+--- a/cmd.h
++++ b/cmd.h
+@@ -39,18 +39,11 @@ typedef struct cmdinfo {
+ 	helpfunc_t      help;
+ } cmdinfo_t;
+ 
+-typedef int (*checkfunc_t)(BlockDriverState *bs, const cmdinfo_t *ci);
+-
+ void qemuio_add_command(const cmdinfo_t *ci);
+-void add_user_command(char *optarg);
+-void add_check_command(checkfunc_t cf);
+ 
+-void command_loop(void);
+ int qemuio_command_usage(const cmdinfo_t *ci);
+ 
+ /* from input.h */
+-char *fetchline(void);
+-
+ void cvtstr(double value, char *str, size_t sz);
+ 
+ struct timeval tsub(struct timeval t1, struct timeval t2);
+@@ -64,8 +57,6 @@ enum {
+ 
+ void timestr(struct timeval *tv, char *str, size_t sz, int flags);
+ 
+-extern char *progname;
+-
+ bool qemuio_command(const char *cmd);
+ 
+ #endif	/* __COMMAND_H__ */
+diff --git a/qemu-io.c b/qemu-io.c
+index 97af39e..da9944e 100644
+--- a/qemu-io.c
++++ b/qemu-io.c
+@@ -34,6 +34,10 @@ BlockDriverState *qemuio_bs;
+ 
+ extern int qemuio_misalign;
+ 
++/* qemu-io commands passed using -c */
++static int ncmdline;
++static char **cmdline;
++
+ static int close_f(BlockDriverState *bs, int argc, char **argv)
+ {
+     bdrv_unref(bs);
+@@ -207,6 +211,141 @@ static void usage(const char *name)
+ }
+ 
+ 
++#if defined(ENABLE_READLINE)
++# include <readline/history.h>
++# include <readline/readline.h>
++#elif defined(ENABLE_EDITLINE)
++# include <histedit.h>
++#endif
++
++static char *get_prompt(void)
++{
++    static char prompt[FILENAME_MAX + 2 /*"> "*/ + 1 /*"\0"*/ ];
++
++    if (!prompt[0]) {
++        snprintf(prompt, sizeof(prompt), "%s> ", progname);
++    }
++
++    return prompt;
++}
++
++#if defined(ENABLE_READLINE)
++static char *fetchline(void)
++{
++    char *line = readline(get_prompt());
++    if (line && *line) {
++        add_history(line);
++    }
++    return line;
++}
++#elif defined(ENABLE_EDITLINE)
++static char *el_get_prompt(EditLine *e)
++{
++    return get_prompt();
++}
++
++static char *fetchline(void)
++{
++    static EditLine *el;
++    static History *hist;
++    HistEvent hevent;
++    char *line;
++    int count;
++
++    if (!el) {
++        hist = history_init();
++        history(hist, &hevent, H_SETSIZE, 100);
++        el = el_init(progname, stdin, stdout, stderr);
++        el_source(el, NULL);
++        el_set(el, EL_SIGNAL, 1);
++        el_set(el, EL_PROMPT, el_get_prompt);
++        el_set(el, EL_HIST, history, (const char *)hist);
++    }
++    line = strdup(el_gets(el, &count));
++    if (line) {
++        if (count > 0) {
++            line[count-1] = '\0';
++        }
++        if (*line) {
++            history(hist, &hevent, H_ENTER, line);
++        }
++    }
++    return line;
++}
++#else
++# define MAXREADLINESZ 1024
++static char *fetchline(void)
++{
++    char *p, *line = g_malloc(MAXREADLINESZ);
++
++    if (!fgets(line, MAXREADLINESZ, stdin)) {
++        g_free(line);
++        return NULL;
++    }
++
++    p = line + strlen(line);
++    if (p != line && p[-1] == '\n') {
++        p[-1] = '\0';
++    }
++
++    return line;
++}
++#endif
++
++static void prep_fetchline(void *opaque)
++{
++    int *fetchable = opaque;
++
++    qemu_set_fd_handler(STDIN_FILENO, NULL, NULL, NULL);
++    *fetchable= 1;
++}
++
++static void command_loop(void)
++{
++    int i, done = 0, fetchable = 0, prompted = 0;
++    char *input;
++
++    for (i = 0; !done && i < ncmdline; i++) {
++        done = qemuio_command(cmdline[i]);
++    }
++    if (cmdline) {
++        g_free(cmdline);
++        return;
++    }
++
++    while (!done) {
++        if (!prompted) {
++            printf("%s", get_prompt());
++            fflush(stdout);
++            qemu_set_fd_handler(STDIN_FILENO, prep_fetchline, NULL, &fetchable);
++            prompted = 1;
++        }
++
++        main_loop_wait(false);
++
++        if (!fetchable) {
++            continue;
++        }
++
++        input = fetchline();
++        if (input == NULL) {
++            break;
++        }
++        done = qemuio_command(input);
++        g_free(input);
++
++        prompted = 0;
++        fetchable = 0;
++    }
++    qemu_set_fd_handler(STDIN_FILENO, NULL, NULL, NULL);
++}
++
++static void add_user_command(char *optarg)
++{
++    cmdline = g_realloc(cmdline, ++ncmdline * sizeof(char *));
++    cmdline[ncmdline-1] = optarg;
++}
++
+ int main(int argc, char **argv)
+ {
+     int readonly = 0;
+-- 
+1.8.3.1
+

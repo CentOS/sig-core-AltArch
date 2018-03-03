@@ -1,0 +1,81 @@
+From 2e9c1d07ca7609d66fa0433c0eebe8ab0d2508ed Mon Sep 17 00:00:00 2001
+From: Jeffrey Cody <jcody@redhat.com>
+Date: Tue, 27 May 2014 18:34:03 +0200
+Subject: [PATCH 06/13] block: Ignore duplicate or NULL format_name in bdrv_iterate_format
+
+RH-Author: Jeffrey Cody <jcody@redhat.com>
+Message-id: <d4929261531a1ad759bbaed14cec6968e554f7c6.1401215469.git.jcody@redhat.com>
+Patchwork-id: 59038
+O-Subject: [PATCH qemu-kvm RHEL7.1] block: Ignore duplicate or NULL format_name in bdrv_iterate_format
+Bugzilla: 1088695 1093983
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+Some block drivers have multiple BlockDriver instances with identical
+format_name fields (e.g. gluster, nbd).
+
+Both qemu-img and qemu will use bdrv_iterate_format() to list the
+supported formats when a help option is invoked.  As protocols and
+formats may register multiple drivers, redundant listings of formats
+occur (e.g., "Supported formats: ... gluster gluster gluster gluster ...
+").
+
+Since the list of driver formats will be small, this performs a simple
+linear search on format_name, and ignores any duplicates.
+
+The end result change is that the iterator will no longer receive
+duplicate string names, nor will it receive NULL pointers.
+
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit e855e4fb7b97f7f605e1f44427b98022e39e6f8f)
+---
+
+RHEL7 Notes:
+Brew: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7505698
+BZ: 1093983
+BZ: 1088695
+
+ block.c | 17 ++++++++++++++++-
+ 1 file changed, 16 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c |   17 ++++++++++++++++-
+ 1 files changed, 16 insertions(+), 1 deletions(-)
+
+diff --git a/block.c b/block.c
+index 4906f6b..43e325e 100644
+--- a/block.c
++++ b/block.c
+@@ -3402,10 +3402,25 @@ void bdrv_iterate_format(void (*it)(void *opaque, const char *name),
+                          void *opaque)
+ {
+     BlockDriver *drv;
++    int count = 0;
++    const char **formats = NULL;
+ 
+     QLIST_FOREACH(drv, &bdrv_drivers, list) {
+-        it(opaque, drv->format_name);
++        if (drv->format_name) {
++            bool found = false;
++            int i = count;
++            while (formats && i && !found) {
++                found = !strcmp(formats[--i], drv->format_name);
++            }
++
++            if (!found) {
++                formats = g_realloc(formats, (count + 1) * sizeof(char *));
++                formats[count++] = drv->format_name;
++                it(opaque, drv->format_name);
++            }
++        }
+     }
++    g_free(formats);
+ }
+ 
+ BlockDriverState *bdrv_find(const char *name)
+-- 
+1.7.1
+

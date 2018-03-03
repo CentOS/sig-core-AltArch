@@ -1,0 +1,107 @@
+From 470f4cc7e63a96872463ab7a4a1c23689e32036b Mon Sep 17 00:00:00 2001
+From: Eric Blake <eblake@redhat.com>
+Date: Wed, 20 Aug 2014 16:40:11 +0200
+Subject: [PATCH 08/11] qemu-iotests: Test BLOCK_JOB_READY event for 0Kb image active commit
+
+Message-id: <1408552814-23031-5-git-send-email-eblake@redhat.com>
+Patchwork-id: 60649
+O-Subject: [qemu-kvm-rhev 7.0.z PATCH 4/7] qemu-iotests: Test BLOCK_JOB_READY event for 0Kb image active commit
+Bugzilla: 1130603
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: Fam Zheng <famz@redhat.com>
+
+There should be a BLOCK_JOB_READY event with active commit, regardless
+of image length. Let's test the 0 length image case, and make sure it
+goes through the ready->complete process.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 8b9a30ca5bc10545637429486836f3c206c39fab)
+
+Conflicts:
+	tests/qemu-iotests/040 - context, due to no common event infrastructure
+
+Signed-off-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/040     |   12 +++++++++---
+ tests/qemu-iotests/040.out |    4 ++--
+ 2 files changed, 11 insertions(+), 5 deletions(-)
+
+diff --git a/tests/qemu-iotests/040 b/tests/qemu-iotests/040
+index f210fb7..cf80e0c 100755
+--- a/tests/qemu-iotests/040
++++ b/tests/qemu-iotests/040
+@@ -63,12 +63,13 @@ class ImageCommitTestCase(iotests.QMPTestCase):
+             i = i + 512
+         file.close()
+ 
+-    def run_commit_test(self, top, base):
++    def run_commit_test(self, top, base, need_ready=False):
+         self.assert_no_active_commit()
+         result = self.vm.qmp('block-commit', device='drive0', top=top, base=base)
+         self.assert_qmp(result, 'return', {})
+ 
+         completed = False
++        ready = False
+         while not completed:
+             for event in self.vm.get_qmp_events(wait=True):
+                 if event['event'] == 'BLOCK_JOB_COMPLETED':
+@@ -76,8 +77,11 @@ class ImageCommitTestCase(iotests.QMPTestCase):
+                     self.assert_qmp(event, 'data/device', 'drive0')
+                     self.assert_qmp(event, 'data/offset', self.image_len)
+                     self.assert_qmp(event, 'data/len', self.image_len)
++                    if need_ready:
++                        self.assertTrue(ready, "Expecting BLOCK_JOB_COMPLETED event")
+                     completed = True
+                 elif event['event'] == 'BLOCK_JOB_READY':
++                    ready = True
+                     self.assert_qmp(event, 'data/type', 'commit')
+                     self.assert_qmp(event, 'data/device', 'drive0')
+                     self.assert_qmp(event, 'data/len', self.image_len)
+@@ -91,7 +95,7 @@ class TestSingleDrive(ImageCommitTestCase):
+     test_len = 1 * 1024 * 256
+ 
+     def setUp(self):
+-        self.create_image(backing_img, TestSingleDrive.image_len)
++        self.create_image(backing_img, self.image_len)
+         qemu_img('create', '-f', iotests.imgfmt, '-o', 'backing_file=%s' % backing_img, mid_img)
+         qemu_img('create', '-f', iotests.imgfmt, '-o', 'backing_file=%s' % mid_img, test_img)
+         qemu_io('-c', 'write -P 0xab 0 524288', backing_img)
+@@ -133,7 +137,7 @@ class TestSingleDrive(ImageCommitTestCase):
+         self.assert_qmp(result, 'error/desc', 'Base \'badfile\' not found')
+ 
+     def test_top_is_active(self):
+-        self.run_commit_test(test_img, backing_img)
++        self.run_commit_test(test_img, backing_img, need_ready=True)
+         self.assertEqual(-1, qemu_io('-c', 'read -P 0xab 0 524288', backing_img).find("verification failed"))
+         self.assertEqual(-1, qemu_io('-c', 'read -P 0xef 524288 524288', backing_img).find("verification failed"))
+ 
+@@ -265,6 +269,8 @@ class TestSetSpeed(ImageCommitTestCase):
+ 
+         self.cancel_and_wait()
+ 
++class TestActiveZeroLengthImage(TestSingleDrive):
++    image_len = 0
+ 
+ if __name__ == '__main__':
+     iotests.main(supported_fmts=['qcow2', 'qed'])
+diff --git a/tests/qemu-iotests/040.out b/tests/qemu-iotests/040.out
+index b6f2576..42314e9 100644
+--- a/tests/qemu-iotests/040.out
++++ b/tests/qemu-iotests/040.out
+@@ -1,5 +1,5 @@
+-................
++........................
+ ----------------------------------------------------------------------
+-Ran 16 tests
++Ran 24 tests
+ 
+ OK
+-- 
+1.7.1
+

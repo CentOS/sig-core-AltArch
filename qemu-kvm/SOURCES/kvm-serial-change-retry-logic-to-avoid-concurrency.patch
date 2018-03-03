@@ -1,0 +1,143 @@
+From 19651bdbf15a4ce03d6fc6e3a6be514a3f46a118 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 18 May 2017 09:21:21 +0200
+Subject: [PATCH 08/18] serial: change retry logic to avoid concurrency
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <20170518092131.16571-9-famz@redhat.com>
+Patchwork-id: 75300
+O-Subject: [RHEL-7.4 qemu-kvm PATCH v3 08/18] serial: change retry logic to avoid concurrency
+Bugzilla: 1451470
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+From: Kirill Batuzov <batuzovk@ispras.ru>
+
+Whenever serial_xmit fails to transmit a byte it adds a watch that would
+call it again when the "line" becomes ready. This results in a retry
+chain:
+  serial_xmit -> add_watch -> serial_xmit
+Each chain is able to transmit one character, and for every character
+passed to serial by the guest driver a new chain is spawned.
+
+The problem lays with the fact that a new chain is spawned even when
+there is one already waiting on the watch. So there can be several retry
+chains waiting concurrently on one "line". Every chain tries to transmit
+current character, so character order is not messed up. But also every
+chain increases retry counter (tsr_retry). If there are enough
+concurrent chains this counter will hit MAX_XMIT_RETRY value and
+the character will be dropped.
+
+To reproduce this bug you need to feed serial output to some program
+consuming it slowly enough. A python script from bug #1335444
+description is an example of such program.
+
+This commit changes retry logic in the following way to avoid
+concurrency: instead of spawning a new chain for each character being
+transmitted spawn only one and make it transmit characters until FIFO is
+empty.
+
+The change consists of two parts:
+ - add a do {} while () loop in serial_xmit (diff is a bit erratic
+   for this part, diff -w will show actual change),
+ - do not call serial_xmit from serial_ioport_write if there is one
+   waiting on the watch already.
+
+This should fix another issue causing bug #1335444.
+
+Signed-off-by: Kirill Batuzov <batuzovk@ispras.ru>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit f702e62a193e9ddb41cef95068717e5582b39a64)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/char/serial.c | 59 +++++++++++++++++++++++++++++++-------------------------
+ 1 file changed, 33 insertions(+), 26 deletions(-)
+
+diff --git a/hw/char/serial.c b/hw/char/serial.c
+index add4738..33e06fb 100644
+--- a/hw/char/serial.c
++++ b/hw/char/serial.c
+@@ -223,37 +223,42 @@ static gboolean serial_xmit(GIOChannel *chan, GIOCondition cond, void *opaque)
+ {
+     SerialState *s = opaque;
+ 
+-    if (s->tsr_retry <= 0) {
+-        if (s->fcr & UART_FCR_FE) {
+-            if (fifo8_is_empty(&s->xmit_fifo)) {
++    do {
++        if (s->tsr_retry <= 0) {
++            if (s->fcr & UART_FCR_FE) {
++                if (fifo8_is_empty(&s->xmit_fifo)) {
++                    return FALSE;
++                }
++                s->tsr = fifo8_pop(&s->xmit_fifo);
++                if (!s->xmit_fifo.num) {
++                    s->lsr |= UART_LSR_THRE;
++                }
++            } else if ((s->lsr & UART_LSR_THRE)) {
+                 return FALSE;
+-            }
+-            s->tsr = fifo8_pop(&s->xmit_fifo);
+-            if (!s->xmit_fifo.num) {
++            } else {
++                s->tsr = s->thr;
+                 s->lsr |= UART_LSR_THRE;
++                s->lsr &= ~UART_LSR_TEMT;
+             }
+-        } else if ((s->lsr & UART_LSR_THRE)) {
+-            return FALSE;
+-        } else {
+-            s->tsr = s->thr;
+-            s->lsr |= UART_LSR_THRE;
+-            s->lsr &= ~UART_LSR_TEMT;
+         }
+-    }
+ 
+-    if (s->mcr & UART_MCR_LOOP) {
+-        /* in loopback mode, say that we just received a char */
+-        serial_receive1(s, &s->tsr, 1);
+-    } else if (qemu_chr_fe_write(s->chr, &s->tsr, 1) != 1) {
+-        if (s->tsr_retry >= 0 && s->tsr_retry < MAX_XMIT_RETRY &&
+-            qemu_chr_fe_add_watch(s->chr, G_IO_OUT|G_IO_HUP, serial_xmit, s) > 0) {
+-            s->tsr_retry++;
+-            return FALSE;
++        if (s->mcr & UART_MCR_LOOP) {
++            /* in loopback mode, say that we just received a char */
++            serial_receive1(s, &s->tsr, 1);
++        } else if (qemu_chr_fe_write(s->chr, &s->tsr, 1) != 1) {
++            if (s->tsr_retry >= 0 && s->tsr_retry < MAX_XMIT_RETRY &&
++                qemu_chr_fe_add_watch(s->chr, G_IO_OUT|G_IO_HUP,
++                                      serial_xmit, s) > 0) {
++                s->tsr_retry++;
++                return FALSE;
++            }
++            s->tsr_retry = 0;
++        } else {
++            s->tsr_retry = 0;
+         }
+-        s->tsr_retry = 0;
+-    } else {
+-        s->tsr_retry = 0;
+-    }
++        /* Transmit another byte if it is already available. It is only
++           possible when FIFO is enabled and not empty. */
++    } while ((s->fcr & UART_FCR_FE) && !fifo8_is_empty(&s->xmit_fifo));
+ 
+     s->last_xmit_ts = qemu_get_clock_ns(vm_clock);
+ 
+@@ -293,7 +298,9 @@ static void serial_ioport_write(void *opaque, hwaddr addr, uint64_t val,
+             s->thr_ipending = 0;
+             s->lsr &= ~UART_LSR_THRE;
+             serial_update_irq(s);
+-            serial_xmit(NULL, G_IO_OUT, s);
++            if (s->tsr_retry <= 0) {
++                serial_xmit(NULL, G_IO_OUT, s);
++            }
+         }
+         break;
+     case 1:
+-- 
+1.8.3.1
+

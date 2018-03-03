@@ -1,0 +1,116 @@
+From 5eef8556fa85c070a242f93b675e7fb8e24a2fa0 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 13 Mar 2017 17:46:56 +0100
+Subject: [PATCH 15/24] iotests: Fix test 039
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <20170313174659.29164-1-mreitz@redhat.com>
+Patchwork-id: 74277
+O-Subject: [RHEL-7.4 qemu-kvm PATCH 6/9] iotests: Fix test 039
+Bugzilla: 1427176
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+Test 039 used qemu-io -c abort for simulating a qemu crash; however,
+abort() generally results in a core dump and ulimit -c 0 is no reliable
+way of preventing that. Use "sigraise $(kill -l KILL)" instead to have
+it crash without a core dump.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Message-id: 1418032092-16813-4-git-send-email-mreitz@redhat.com
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 3f394472c5bca59de5cab9baafdff1984b0213a3)
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/039     | 18 +++++++++++++-----
+ tests/qemu-iotests/039.out |  6 +++---
+ 2 files changed, 16 insertions(+), 8 deletions(-)
+
+diff --git a/tests/qemu-iotests/039 b/tests/qemu-iotests/039
+index 1e50651..ac85476 100755
+--- a/tests/qemu-iotests/039
++++ b/tests/qemu-iotests/039
+@@ -46,9 +46,11 @@ _supported_proto generic
+ _supported_os Linux
+ _unsupported_qemu_io_options --nocache
+ 
+-_no_dump_exec()
++_subshell_exec()
+ {
+-    (ulimit -c 0; exec "$@")
++    # Executing crashing commands in a subshell prevents information like the
++    # "Killed" line from being lost
++    (exec "$@")
+ }
+ 
+ size=128M
+@@ -71,7 +73,9 @@ echo "== Creating a dirty image file =="
+ IMGOPTS="compat=1.1,lazy_refcounts=on"
+ _make_test_img $size
+ 
+-_no_dump_exec $QEMU_IO -c "write -P 0x5a 0 512" -c "abort" "$TEST_IMG" 2>&1 | _filter_qemu_io
++_subshell_exec $QEMU_IO -c "write -P 0x5a 0 512" \
++                        -c "sigraise $(kill -l KILL)" "$TEST_IMG" 2>&1 \
++    | _filter_qemu_io
+ 
+ # The dirty bit must be set
+ ./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
+@@ -104,7 +108,9 @@ echo "== Opening a dirty image read/write should repair it =="
+ IMGOPTS="compat=1.1,lazy_refcounts=on"
+ _make_test_img $size
+ 
+-_no_dump_exec $QEMU_IO -c "write -P 0x5a 0 512" -c "abort" "$TEST_IMG" 2>&1 | _filter_qemu_io
++_subshell_exec $QEMU_IO -c "write -P 0x5a 0 512" \
++                        -c "sigraise $(kill -l KILL)" "$TEST_IMG" 2>&1 \
++    | _filter_qemu_io
+ 
+ # The dirty bit must be set
+ ./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
+@@ -120,7 +126,9 @@ echo "== Creating an image file with lazy_refcounts=off =="
+ IMGOPTS="compat=1.1,lazy_refcounts=off"
+ _make_test_img $size
+ 
+-_no_dump_exec $QEMU_IO -c "write -P 0x5a 0 512" -c "abort" "$TEST_IMG" 2>&1 | _filter_qemu_io
++_subshell_exec $QEMU_IO -c "write -P 0x5a 0 512" \
++                        -c "sigraise $(kill -l KILL)" "$TEST_IMG" 2>&1 \
++    | _filter_qemu_io
+ 
+ # The dirty bit must not be set since lazy_refcounts=off
+ ./qcow2.py "$TEST_IMG" dump-header | grep incompatible_features
+diff --git a/tests/qemu-iotests/039.out b/tests/qemu-iotests/039.out
+index af62da1..f3fe58b 100644
+--- a/tests/qemu-iotests/039.out
++++ b/tests/qemu-iotests/039.out
+@@ -11,7 +11,7 @@ No errors were found on the image.
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=134217728 
+ wrote 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+-./039: Aborted                 ( ulimit -c 0; exec "$@" )
++./039: Killed                  ( exec "$@" )
+ incompatible_features     0x1
+ ERROR cluster 5 refcount=0 reference=1
+ ERROR OFLAG_COPIED data cluster: l2_entry=8000000000050000 refcount=0
+@@ -46,7 +46,7 @@ read 512/512 bytes at offset 0
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=134217728 
+ wrote 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+-./039: Aborted                 ( ulimit -c 0; exec "$@" )
++./039: Killed                  ( exec "$@" )
+ incompatible_features     0x1
+ ERROR cluster 5 refcount=0 reference=1
+ Rebuilding refcount structure
+@@ -60,7 +60,7 @@ incompatible_features     0x0
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=134217728 
+ wrote 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+-./039: Aborted                 ( ulimit -c 0; exec "$@" )
++./039: Killed                  ( exec "$@" )
+ incompatible_features     0x0
+ No errors were found on the image.
+ *** done
+-- 
+1.8.3.1
+

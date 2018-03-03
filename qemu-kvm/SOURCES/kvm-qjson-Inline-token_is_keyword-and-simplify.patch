@@ -1,0 +1,81 @@
+From 3cf8ec8ff0ad3920ce23166b2576655bcd886c5a Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 27 Jul 2016 07:35:05 +0200
+Subject: [PATCH 07/16] qjson: Inline token_is_keyword() and simplify
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1469604913-12442-9-git-send-email-armbru@redhat.com>
+Patchwork-id: 71483
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 07/15] qjson: Inline token_is_keyword() and simplify
+Bugzilla: 1276036
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Message-Id: <1448486613-17634-7-git-send-email-armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit 50e2a467f5315fa36c547fb6330659ba45f6bb83)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	qobject/json-parser.c
+
+Straighforward conflict because lacking commit fc48ffc "qobject: Use
+'bool' for qbool", we still use qbool_from_int(), and we lack commit
+e549e71 "json-parser: Accept 'null' in QMP".
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+---
+ qobject/json-parser.c | 18 ++++++------------
+ 1 file changed, 6 insertions(+), 12 deletions(-)
+
+diff --git a/qobject/json-parser.c b/qobject/json-parser.c
+index 50bf30c..e3690de 100644
+--- a/qobject/json-parser.c
++++ b/qobject/json-parser.c
+@@ -64,15 +64,6 @@ static JSONTokenType token_get_type(QObject *obj)
+     return qdict_get_int(qobject_to_qdict(obj), "type");
+ }
+ 
+-static int token_is_keyword(QObject *obj, const char *value)
+-{
+-    if (token_get_type(obj) != JSON_KEYWORD) {
+-        return 0;
+-    }
+-
+-    return strcmp(token_get_value(obj), value) == 0;
+-}
+-
+ static int token_is_escape(QObject *obj, const char *value)
+ {
+     if (token_get_type(obj) != JSON_ESCAPE) {
+@@ -534,6 +525,7 @@ static QObject *parse_keyword(JSONParserContext *ctxt)
+ {
+     QObject *token, *ret;
+     JSONParserContext saved_ctxt = parser_context_save(ctxt);
++    const char *val;
+ 
+     token = parser_context_pop_token(ctxt);
+     if (token == NULL) {
+@@ -544,12 +536,14 @@ static QObject *parse_keyword(JSONParserContext *ctxt)
+         goto out;
+     }
+ 
+-    if (token_is_keyword(token, "true")) {
++    val = token_get_value(token);
++
++    if (!strcmp(val, "true")) {
+         ret = QOBJECT(qbool_from_int(true));
+-    } else if (token_is_keyword(token, "false")) {
++    } else if (!strcmp(val, "false")) {
+         ret = QOBJECT(qbool_from_int(false));
+     } else {
+-        parse_error(ctxt, token, "invalid keyword `%s'", token_get_value(token));
++        parse_error(ctxt, token, "invalid keyword '%s'", val);
+         goto out;
+     }
+ 
+-- 
+1.8.3.1
+

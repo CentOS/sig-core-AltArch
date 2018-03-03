@@ -1,0 +1,321 @@
+From 3ba5256b9642a3313b9ffaf8abc0f6302e3e39e6 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 4 Nov 2013 22:32:10 +0100
+Subject: [PATCH 17/87] bdrv: Use "Error" for creating images
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-20-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55319
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 19/43] bdrv: Use "Error" for creating images
+Bugzilla: 1026524
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1026524
+
+Add an Error ** parameter to BlockDriver.bdrv_create to allow more
+specific error messages.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit d5124c00d80b4d948509f2c7f6b54228d9981f75)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+
+Conflicts:
+	block/raw.c
+	block/raw_bsd.c
+
+Conflicts because raw_bsd.c does not exist downstream; instead, there is
+raw.c.
+---
+ block.c                   | 2 +-
+ block/cow.c               | 3 ++-
+ block/gluster.c           | 2 +-
+ block/iscsi.c             | 3 ++-
+ block/qcow.c              | 3 ++-
+ block/qcow2.c             | 3 ++-
+ block/qed.c               | 3 ++-
+ block/raw-posix.c         | 6 ++++--
+ block/raw-win32.c         | 3 ++-
+ block/raw.c               | 3 ++-
+ block/rbd.c               | 3 ++-
+ block/sheepdog.c          | 3 ++-
+ block/ssh.c               | 3 ++-
+ block/vdi.c               | 3 ++-
+ block/vmdk.c              | 3 ++-
+ block/vpc.c               | 3 ++-
+ include/block/block_int.h | 3 ++-
+ 17 files changed, 34 insertions(+), 18 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c                   |    2 +-
+ block/cow.c               |    3 ++-
+ block/gluster.c           |    2 +-
+ block/iscsi.c             |    3 ++-
+ block/qcow.c              |    3 ++-
+ block/qcow2.c             |    3 ++-
+ block/qed.c               |    3 ++-
+ block/raw-posix.c         |    6 ++++--
+ block/raw-win32.c         |    3 ++-
+ block/raw.c               |    3 ++-
+ block/rbd.c               |    3 ++-
+ block/sheepdog.c          |    3 ++-
+ block/ssh.c               |    3 ++-
+ block/vdi.c               |    3 ++-
+ block/vmdk.c              |    3 ++-
+ block/vpc.c               |    3 ++-
+ include/block/block_int.h |    3 ++-
+ 17 files changed, 34 insertions(+), 18 deletions(-)
+
+diff --git a/block.c b/block.c
+index 921fa33..0cb5ac9 100644
+--- a/block.c
++++ b/block.c
+@@ -373,7 +373,7 @@ static void coroutine_fn bdrv_create_co_entry(void *opaque)
+     CreateCo *cco = opaque;
+     assert(cco->drv);
+ 
+-    cco->ret = cco->drv->bdrv_create(cco->filename, cco->options);
++    cco->ret = cco->drv->bdrv_create(cco->filename, cco->options, NULL);
+ }
+ 
+ int bdrv_create(BlockDriver *drv, const char* filename,
+diff --git a/block/cow.c b/block/cow.c
+index ce8deb8..c1d2dc8 100644
+--- a/block/cow.c
++++ b/block/cow.c
+@@ -295,7 +295,8 @@ static void cow_close(BlockDriverState *bs)
+ {
+ }
+ 
+-static int cow_create(const char *filename, QEMUOptionParameter *options)
++static int cow_create(const char *filename, QEMUOptionParameter *options,
++                      Error **errp)
+ {
+     struct cow_header_v2 cow_header;
+     struct stat st;
+diff --git a/block/gluster.c b/block/gluster.c
+index fa46b6f..bf39264 100644
+--- a/block/gluster.c
++++ b/block/gluster.c
+@@ -366,7 +366,7 @@ out:
+ }
+ 
+ static int qemu_gluster_create(const char *filename,
+-        QEMUOptionParameter *options)
++        QEMUOptionParameter *options, Error **errp)
+ {
+     struct glfs *glfs;
+     struct glfs_fd *fd;
+diff --git a/block/iscsi.c b/block/iscsi.c
+index 8d49e35..ac35caa 100644
+--- a/block/iscsi.c
++++ b/block/iscsi.c
+@@ -1249,7 +1249,8 @@ static int iscsi_has_zero_init(BlockDriverState *bs)
+     return 0;
+ }
+ 
+-static int iscsi_create(const char *filename, QEMUOptionParameter *options)
++static int iscsi_create(const char *filename, QEMUOptionParameter *options,
++                        Error **errp)
+ {
+     int ret = 0;
+     int64_t total_size = 0;
+diff --git a/block/qcow.c b/block/qcow.c
+index b8887f0..1a6926f 100644
+--- a/block/qcow.c
++++ b/block/qcow.c
+@@ -659,7 +659,8 @@ static void qcow_close(BlockDriverState *bs)
+     error_free(s->migration_blocker);
+ }
+ 
+-static int qcow_create(const char *filename, QEMUOptionParameter *options)
++static int qcow_create(const char *filename, QEMUOptionParameter *options,
++                       Error **errp)
+ {
+     int header_size, backing_filename_len, l1_size, shift, i;
+     QCowHeader header;
+diff --git a/block/qcow2.c b/block/qcow2.c
+index 2e7e9f5..b6e50af 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -1467,7 +1467,8 @@ out:
+     return ret;
+ }
+ 
+-static int qcow2_create(const char *filename, QEMUOptionParameter *options)
++static int qcow2_create(const char *filename, QEMUOptionParameter *options,
++                        Error **errp)
+ {
+     const char *backing_file = NULL;
+     const char *backing_fmt = NULL;
+diff --git a/block/qed.c b/block/qed.c
+index d49e0cd..c56b5e2 100644
+--- a/block/qed.c
++++ b/block/qed.c
+@@ -604,7 +604,8 @@ out:
+     return ret;
+ }
+ 
+-static int bdrv_qed_create(const char *filename, QEMUOptionParameter *options)
++static int bdrv_qed_create(const char *filename, QEMUOptionParameter *options,
++                           Error **errp)
+ {
+     uint64_t image_size = 0;
+     uint32_t cluster_size = QED_DEFAULT_CLUSTER_SIZE;
+diff --git a/block/raw-posix.c b/block/raw-posix.c
+index 5f4e824..249bffb 100644
+--- a/block/raw-posix.c
++++ b/block/raw-posix.c
+@@ -1041,7 +1041,8 @@ static int64_t raw_get_allocated_file_size(BlockDriverState *bs)
+     return (int64_t)st.st_blocks * 512;
+ }
+ 
+-static int raw_create(const char *filename, QEMUOptionParameter *options)
++static int raw_create(const char *filename, QEMUOptionParameter *options,
++                      Error **errp)
+ {
+     int fd;
+     int result = 0;
+@@ -1505,7 +1506,8 @@ static coroutine_fn BlockDriverAIOCB *hdev_aio_discard(BlockDriverState *bs,
+                        cb, opaque, QEMU_AIO_DISCARD|QEMU_AIO_BLKDEV);
+ }
+ 
+-static int hdev_create(const char *filename, QEMUOptionParameter *options)
++static int hdev_create(const char *filename, QEMUOptionParameter *options,
++                       Error **errp)
+ {
+     int fd;
+     int ret = 0;
+diff --git a/block/raw-win32.c b/block/raw-win32.c
+index 1cfec65..9ebb083 100644
+--- a/block/raw-win32.c
++++ b/block/raw-win32.c
+@@ -421,7 +421,8 @@ static int64_t raw_get_allocated_file_size(BlockDriverState *bs)
+     return st.st_size;
+ }
+ 
+-static int raw_create(const char *filename, QEMUOptionParameter *options)
++static int raw_create(const char *filename, QEMUOptionParameter *options,
++                      Error **errp)
+ {
+     int fd;
+     int64_t total_size = 0;
+diff --git a/block/raw.c b/block/raw.c
+index 801591d..f92c04e 100644
+--- a/block/raw.c
++++ b/block/raw.c
+@@ -105,7 +105,8 @@ static BlockDriverAIOCB *raw_aio_ioctl(BlockDriverState *bs,
+    return bdrv_aio_ioctl(bs->file, req, buf, cb, opaque);
+ }
+ 
+-static int raw_create(const char *filename, QEMUOptionParameter *options)
++static int raw_create(const char *filename, QEMUOptionParameter *options,
++                      Error **errp)
+ {
+     return bdrv_create_file(filename, options);
+ }
+diff --git a/block/rbd.c b/block/rbd.c
+index 8d4ae9f..169d3cf 100644
+--- a/block/rbd.c
++++ b/block/rbd.c
+@@ -286,7 +286,8 @@ static int qemu_rbd_set_conf(rados_t cluster, const char *conf)
+     return ret;
+ }
+ 
+-static int qemu_rbd_create(const char *filename, QEMUOptionParameter *options)
++static int qemu_rbd_create(const char *filename, QEMUOptionParameter *options,
++                           Error **errp)
+ {
+     int64_t bytes = 0;
+     int64_t objsize;
+diff --git a/block/sheepdog.c b/block/sheepdog.c
+index a8ce933..952d703 100644
+--- a/block/sheepdog.c
++++ b/block/sheepdog.c
+@@ -1455,7 +1455,8 @@ out:
+     return ret;
+ }
+ 
+-static int sd_create(const char *filename, QEMUOptionParameter *options)
++static int sd_create(const char *filename, QEMUOptionParameter *options,
++                     Error **errp)
+ {
+     int ret = 0;
+     uint32_t vid = 0, base_vid = 0;
+diff --git a/block/ssh.c b/block/ssh.c
+index f950fcc..fa3c78d 100644
+--- a/block/ssh.c
++++ b/block/ssh.c
+@@ -651,7 +651,8 @@ static QEMUOptionParameter ssh_create_options[] = {
+     { NULL }
+ };
+ 
+-static int ssh_create(const char *filename, QEMUOptionParameter *options)
++static int ssh_create(const char *filename, QEMUOptionParameter *options,
++                      Error **errp)
+ {
+     int r, ret;
+     Error *local_err = NULL;
+diff --git a/block/vdi.c b/block/vdi.c
+index 661c3f0..84860fe 100644
+--- a/block/vdi.c
++++ b/block/vdi.c
+@@ -645,7 +645,8 @@ static int vdi_co_write(BlockDriverState *bs,
+     return ret;
+ }
+ 
+-static int vdi_create(const char *filename, QEMUOptionParameter *options)
++static int vdi_create(const char *filename, QEMUOptionParameter *options,
++                      Error **errp)
+ {
+     int fd;
+     int result = 0;
+diff --git a/block/vmdk.c b/block/vmdk.c
+index d9e2545..fa64f05 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -1552,7 +1552,8 @@ static int filename_decompose(const char *filename, char *path, char *prefix,
+     return VMDK_OK;
+ }
+ 
+-static int vmdk_create(const char *filename, QEMUOptionParameter *options)
++static int vmdk_create(const char *filename, QEMUOptionParameter *options,
++                       Error **errp)
+ {
+     int fd, idx = 0;
+     char desc[BUF_SIZE];
+diff --git a/block/vpc.c b/block/vpc.c
+index cf5e751..5d65756 100644
+--- a/block/vpc.c
++++ b/block/vpc.c
+@@ -684,7 +684,8 @@ static int create_fixed_disk(int fd, uint8_t *buf, int64_t total_size)
+     return ret;
+ }
+ 
+-static int vpc_create(const char *filename, QEMUOptionParameter *options)
++static int vpc_create(const char *filename, QEMUOptionParameter *options,
++                      Error **errp)
+ {
+     uint8_t buf[1024];
+     struct vhd_footer *footer = (struct vhd_footer *) buf;
+diff --git a/include/block/block_int.h b/include/block/block_int.h
+index 3450b46..696bbb9 100644
+--- a/include/block/block_int.h
++++ b/include/block/block_int.h
+@@ -96,7 +96,8 @@ struct BlockDriver {
+                       const uint8_t *buf, int nb_sectors);
+     void (*bdrv_close)(BlockDriverState *bs);
+     void (*bdrv_rebind)(BlockDriverState *bs);
+-    int (*bdrv_create)(const char *filename, QEMUOptionParameter *options);
++    int (*bdrv_create)(const char *filename, QEMUOptionParameter *options,
++                       Error **errp);
+     int (*bdrv_set_key)(BlockDriverState *bs, const char *key);
+     int (*bdrv_make_empty)(BlockDriverState *bs);
+     /* aio */
+-- 
+1.7.1
+

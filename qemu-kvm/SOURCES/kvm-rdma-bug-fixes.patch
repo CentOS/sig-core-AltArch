@@ -1,0 +1,91 @@
+From 41048b716132906fe54b6dbca48421a24f78affb Mon Sep 17 00:00:00 2001
+From: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+Date: Fri, 11 Jul 2014 09:05:28 +0200
+Subject: [PATCH 01/11] rdma: bug fixes
+
+Message-id: <1405069528-20466-2-git-send-email-dgilbert@redhat.com>
+Patchwork-id: 59778
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 1/1] rdma: bug fixes
+Bugzilla: 1107821
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: "Michael R. Hines" <mrhines@us.ibm.com>
+
+1. Fix small memory leak in parsing inet address from command line in data_init()
+2. Fix ibv_post_send() return value check and pass error code back up correctly.
+3. Fix rdma_destroy_qp() segfault after failure to connect to destination.
+
+Reported-by: frank.yangjie@gmail.com
+Reported-by: dgilbert@redhat.com
+Signed-off-by: Michael R. Hines <mrhines@us.ibm.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit e325b49a320b493cc5d69e263751ff716dc458fe)
+---
+ migration-rdma.c | 20 ++++++++++----------
+ 1 file changed, 10 insertions(+), 10 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ migration-rdma.c |   20 ++++++++++----------
+ 1 files changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/migration-rdma.c b/migration-rdma.c
+index f79be20..ba4ad76 100644
+--- a/migration-rdma.c
++++ b/migration-rdma.c
+@@ -1589,13 +1589,11 @@ static int qemu_rdma_post_send_control(RDMAContext *rdma, uint8_t *buf,
+     }
+ 
+ 
+-    if (ibv_post_send(rdma->qp, &send_wr, &bad_wr)) {
+-        return -1;
+-    }
++    ret = ibv_post_send(rdma->qp, &send_wr, &bad_wr);
+ 
+-    if (ret < 0) {
++    if (ret > 0) {
+         fprintf(stderr, "Failed to use post IB SEND for control!\n");
+-        return ret;
++        return -ret;
+     }
+ 
+     ret = qemu_rdma_block_for_wrid(rdma, RDMA_WRID_SEND_CONTROL, NULL);
+@@ -2237,10 +2235,6 @@ static void qemu_rdma_cleanup(RDMAContext *rdma)
+         }
+     }
+ 
+-    if (rdma->qp) {
+-        rdma_destroy_qp(rdma->cm_id);
+-        rdma->qp = NULL;
+-    }
+     if (rdma->cq) {
+         ibv_destroy_cq(rdma->cq);
+         rdma->cq = NULL;
+@@ -2258,6 +2252,10 @@ static void qemu_rdma_cleanup(RDMAContext *rdma)
+         rdma->listen_id = NULL;
+     }
+     if (rdma->cm_id) {
++        if (rdma->qp) {
++            rdma_destroy_qp(rdma->cm_id);
++            rdma->qp = NULL;
++        }
+         rdma_destroy_id(rdma->cm_id);
+         rdma->cm_id = NULL;
+     }
+@@ -2512,8 +2510,10 @@ static void *qemu_rdma_data_init(const char *host_port, Error **errp)
+         } else {
+             ERROR(errp, "bad RDMA migration address '%s'", host_port);
+             g_free(rdma);
+-            return NULL;
++            rdma = NULL;
+         }
++
++        qapi_free_InetSocketAddress(addr);
+     }
+ 
+     return rdma;
+-- 
+1.7.1
+

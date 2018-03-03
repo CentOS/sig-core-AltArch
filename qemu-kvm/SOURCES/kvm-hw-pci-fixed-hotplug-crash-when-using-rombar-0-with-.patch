@@ -1,0 +1,52 @@
+From bdd21901f9f1f10de38611d3b2b36e6e3d20fbd4 Mon Sep 17 00:00:00 2001
+From: Marcel Apfelbaum <marcel.a@redhat.com>
+Date: Thu, 20 Nov 2014 10:33:14 +0100
+Subject: [PATCH 2/2] hw/pci: fixed hotplug crash when using rombar=0 with
+ devices having romfile
+
+Message-id: <1416479594-22022-3-git-send-email-marcel.a@redhat.com>
+Patchwork-id: 62485
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 2/2] hw/pci: fixed hotplug crash when using rombar=0 with devices having romfile
+Bugzilla: 1046007
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Eric Blake <eblake@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+Hot-plugging a device that has a romfile (either supplied by user
+or built-in) using rombar=0 option is a user error,
+do not allow the device to be hot-plugged.
+
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Marcel Apfelbaum <marcel.a@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit db80c7b974f4ccab56bd5e8ff2248c7339b00c73)
+Signed-off-by: Marcel Apfelbaum <marcel.a@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/pci/pci.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/hw/pci/pci.c b/hw/pci/pci.c
+index 0918f4e..18773fe 100644
+--- a/hw/pci/pci.c
++++ b/hw/pci/pci.c
+@@ -1924,6 +1924,15 @@ static int pci_add_option_rom(PCIDevice *pdev, bool is_default_rom)
+          * for 0.11 compatibility.
+          */
+         int class = pci_get_word(pdev->config + PCI_CLASS_DEVICE);
++
++        /*
++         * Hot-plugged devices can't use the option ROM
++         * if the rom bar is disabled.
++         */
++        if (DEVICE(pdev)->hotplugged) {
++            return -1;
++        }
++
+         if (class == 0x0300) {
+             rom_add_vga(pdev->romfile);
+         } else {
+-- 
+1.8.3.1
+

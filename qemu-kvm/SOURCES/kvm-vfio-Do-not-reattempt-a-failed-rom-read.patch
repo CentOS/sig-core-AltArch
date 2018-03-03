@@ -1,0 +1,72 @@
+From d8cc073c06a4c79e24a86a958b8c1ac7a26fa039 Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Fri, 10 Apr 2015 16:33:45 +0200
+Subject: [PATCH 02/14] vfio: Do not reattempt a failed rom read
+
+Message-id: <20150410163345.15324.23733.stgit@gimli.home>
+Patchwork-id: 64790
+O-Subject: [RHEL7.2 qemu-kvm PATCH 2/8] vfio: Do not reattempt a failed rom read
+Bugzilla: 1210503
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+
+From: Bandan Das <bsd@redhat.com>
+
+Upstream: e638073c569e801ce9def2016a84f955cbbca779
+
+During lazy rom loading, if rom read fails, and the
+guest attempts a read again, vfio will again attempt it.
+Add a boolean to prevent this. There could be a case where
+a failed rom read might succeed the next time because of
+a device reset or such, but it's best to exclude unpredictable
+behavior
+
+Signed-off-by: Bandan Das <bsd@redhat.com>
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index c9dbc28..f3bf491 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -206,6 +206,7 @@ typedef struct VFIODevice {
+     bool has_flr;
+     bool has_pm_reset;
+     bool needs_reset;
++    bool rom_read_failed;
+ } VFIODevice;
+ 
+ typedef struct VFIOGroup {
+@@ -1197,6 +1198,7 @@ static void vfio_pci_load_rom(VFIODevice *vdev)
+     vdev->rom_offset = reg_info.offset;
+ 
+     if (!vdev->rom_size) {
++        vdev->rom_read_failed = true;
+         error_report("vfio-pci: Cannot read device rom at "
+                     "%04x:%02x:%02x.%x\n",
+                     vdev->host.domain, vdev->host.bus, vdev->host.slot,
+@@ -1235,6 +1237,9 @@ static uint64_t vfio_rom_read(void *opaque, hwaddr addr, unsigned size)
+     /* Load the ROM lazily when the guest tries to read it */
+     if (unlikely(!vdev->rom)) {
+         vfio_pci_load_rom(vdev);
++        if (unlikely(!vdev->rom && !vdev->rom_read_failed)) {
++            vfio_pci_load_rom(vdev);
++        }
+     }
+ 
+     memcpy(&val, vdev->rom + addr,
+@@ -1352,6 +1357,7 @@ static void vfio_pci_size_rom(VFIODevice *vdev)
+                      PCI_BASE_ADDRESS_SPACE_MEMORY, &vdev->pdev.rom);
+ 
+     vdev->pdev.has_rom = true;
++    vdev->rom_read_failed = false;
+ }
+ 
+ static void vfio_vga_write(void *opaque, hwaddr addr,
+-- 
+1.8.3.1
+

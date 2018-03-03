@@ -1,0 +1,59 @@
+From 60ad1bad25ea99c538b745ff95e6e0a877d37d1f Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 27 Jul 2016 07:35:11 +0200
+Subject: [PATCH 13/16] qjson: Limit number of tokens in addition to total size
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1469604913-12442-15-git-send-email-armbru@redhat.com>
+Patchwork-id: 71476
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 13/15] qjson: Limit number of tokens in addition to total size
+Bugzilla: 1276036
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Commit 29c75dd "json-streamer: limit the maximum recursion depth and
+maximum token count" attempts to guard against excessive heap usage by
+limiting total token size (it says "token count", but that's a lie).
+
+Total token size is a rather imprecise predictor of heap usage: many
+small tokens use more space than few large tokens with the same input
+size, because there's a constant per-token overhead: 37 bytes on my
+system.
+
+Tighten this up: limit the token count to 2Mi.  Chosen to roughly
+match the 64MiB total token size limit.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Message-Id: <1448486613-17634-13-git-send-email-armbru@redhat.com>
+(cherry picked from commit df649835fe48f635a93316fdefe96ced7189316e)
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qobject/json-streamer.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/qobject/json-streamer.c b/qobject/json-streamer.c
+index e87230d..a4db4b8 100644
+--- a/qobject/json-streamer.c
++++ b/qobject/json-streamer.c
+@@ -16,6 +16,7 @@
+ #include "qapi/qmp/json-streamer.h"
+ 
+ #define MAX_TOKEN_SIZE (64ULL << 20)
++#define MAX_TOKEN_COUNT (2ULL << 20)
+ #define MAX_NESTING (1ULL << 10)
+ 
+ static void json_message_free_tokens(JSONMessageParser *parser)
+@@ -68,6 +69,7 @@ static void json_message_process_token(JSONLexer *lexer, GString *input,
+          parser->bracket_count == 0)) {
+         goto out_emit;
+     } else if (parser->token_size > MAX_TOKEN_SIZE ||
++               g_queue_get_length(parser->tokens) > MAX_TOKEN_COUNT ||
+                parser->bracket_count + parser->brace_count > MAX_NESTING) {
+         /* Security consideration, we limit total memory allocated per object
+          * and the maximum recursion depth that a message can force.
+-- 
+1.8.3.1
+

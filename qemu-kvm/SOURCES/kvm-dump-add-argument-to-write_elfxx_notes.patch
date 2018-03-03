@@ -1,0 +1,115 @@
+From 1f9d175ded89c7d1e3d3b76b32d107c565887e81 Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Fri, 7 Nov 2014 17:17:51 +0100
+Subject: [PATCH 04/41] dump: add argument to write_elfxx_notes
+
+Message-id: <1415380693-16593-5-git-send-email-lersek@redhat.com>
+Patchwork-id: 62190
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 04/26] dump: add argument to write_elfxx_notes
+Bugzilla: 1157798
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: dgibson <dgibson@redhat.com>
+
+From: qiaonuohan <qiaonuohan@cn.fujitsu.com>
+
+write_elf32_notes/wirte_elf64_notes use fd_write_vmcore to write elf notes to
+vmcore. Adding parameter "WriteCoreDumpFunction f" makes it available to choose
+the method of writing elf notes
+
+Signed-off-by: Qiao Nuohan <qiaonuohan@cn.fujitsu.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit 6a519918b3f666759e20bcd0bb88378f3e4ffb57)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	dump.c
+
+Conflicts are due to our not having upstream commit 182735ef ("cpu: Make
+first_cpu and next_cpu CPUState").
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+---
+ dump.c | 16 ++++++++--------
+ 1 file changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/dump.c b/dump.c
+index aa56aba..fed8bd6 100644
+--- a/dump.c
++++ b/dump.c
+@@ -271,7 +271,7 @@ static inline int cpu_index(CPUState *cpu)
+     return cpu->cpu_index + 1;
+ }
+ 
+-static int write_elf64_notes(DumpState *s)
++static int write_elf64_notes(WriteCoreDumpFunction f, DumpState *s)
+ {
+     CPUArchState *env;
+     CPUState *cpu;
+@@ -281,7 +281,7 @@ static int write_elf64_notes(DumpState *s)
+     for (env = first_cpu; env != NULL; env = env->next_cpu) {
+         cpu = ENV_GET_CPU(env);
+         id = cpu_index(cpu);
+-        ret = cpu_write_elf64_note(fd_write_vmcore, cpu, id, s);
++        ret = cpu_write_elf64_note(f, cpu, id, s);
+         if (ret < 0) {
+             dump_error(s, "dump: failed to write elf notes.\n");
+             return -1;
+@@ -290,7 +290,7 @@ static int write_elf64_notes(DumpState *s)
+ 
+     for (env = first_cpu; env != NULL; env = env->next_cpu) {
+         cpu = ENV_GET_CPU(env);
+-        ret = cpu_write_elf64_qemunote(fd_write_vmcore, cpu, s);
++        ret = cpu_write_elf64_qemunote(f, cpu, s);
+         if (ret < 0) {
+             dump_error(s, "dump: failed to write CPU status.\n");
+             return -1;
+@@ -324,7 +324,7 @@ static int write_elf32_note(DumpState *s)
+     return 0;
+ }
+ 
+-static int write_elf32_notes(DumpState *s)
++static int write_elf32_notes(WriteCoreDumpFunction f, DumpState *s)
+ {
+     CPUArchState *env;
+     CPUState *cpu;
+@@ -334,7 +334,7 @@ static int write_elf32_notes(DumpState *s)
+     for (env = first_cpu; env != NULL; env = env->next_cpu) {
+         cpu = ENV_GET_CPU(env);
+         id = cpu_index(cpu);
+-        ret = cpu_write_elf32_note(fd_write_vmcore, cpu, id, s);
++        ret = cpu_write_elf32_note(f, cpu, id, s);
+         if (ret < 0) {
+             dump_error(s, "dump: failed to write elf notes.\n");
+             return -1;
+@@ -343,7 +343,7 @@ static int write_elf32_notes(DumpState *s)
+ 
+     for (env = first_cpu; env != NULL; env = env->next_cpu) {
+         cpu = ENV_GET_CPU(env);
+-        ret = cpu_write_elf32_qemunote(fd_write_vmcore, cpu, s);
++        ret = cpu_write_elf32_qemunote(f, cpu, s);
+         if (ret < 0) {
+             dump_error(s, "dump: failed to write CPU status.\n");
+             return -1;
+@@ -580,7 +580,7 @@ static int dump_begin(DumpState *s)
+         }
+ 
+         /* write notes to vmcore */
+-        if (write_elf64_notes(s) < 0) {
++        if (write_elf64_notes(fd_write_vmcore, s) < 0) {
+             return -1;
+         }
+ 
+@@ -603,7 +603,7 @@ static int dump_begin(DumpState *s)
+         }
+ 
+         /* write notes to vmcore */
+-        if (write_elf32_notes(s) < 0) {
++        if (write_elf32_notes(fd_write_vmcore, s) < 0) {
+             return -1;
+         }
+     }
+-- 
+1.8.3.1
+

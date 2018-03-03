@@ -1,0 +1,57 @@
+From be5e59136ca2d08576c189ae008e0ae806065e62 Mon Sep 17 00:00:00 2001
+Message-Id: <be5e59136ca2d08576c189ae008e0ae806065e62.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:17:16 +0100
+Subject: [PATCH 11/56] arch_init: align MR size to target page size
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-12-git-send-email-mst@redhat.com>
+Patchwork-id: 56316
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 11/57] arch_init: align MR size to target page size
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Migration code assumes that each MR is a multiple of TARGET_PAGE_SIZE:
+MR size is divided by TARGET_PAGE_SIZE, so if it isn't migration
+never completes.
+But this isn't really required for regions set up with
+memory_region_init_ram, since that calls qemu_ram_alloc
+which aligns size up using TARGET_PAGE_ALIGN.
+
+Align MR size up to full target page sizes, this way
+migration completes even if we create a RAM MR
+which is not a full target page size.
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+(cherry picked from commit 0851c9f75ccb0baf28f5bf901b9ffe3c91fcf969)
+---
+ arch_init.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ arch_init.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/arch_init.c b/arch_init.c
+index 5301cfd..2c0ea1b 100644
+--- a/arch_init.c
++++ b/arch_init.c
+@@ -341,7 +341,8 @@ ram_addr_t migration_bitmap_find_and_reset_dirty(MemoryRegion *mr,
+ {
+     unsigned long base = mr->ram_addr >> TARGET_PAGE_BITS;
+     unsigned long nr = base + (start >> TARGET_PAGE_BITS);
+-    unsigned long size = base + (int128_get64(mr->size) >> TARGET_PAGE_BITS);
++    uint64_t mr_size = TARGET_PAGE_ALIGN(memory_region_size(mr));
++    unsigned long size = base + (mr_size >> TARGET_PAGE_BITS);
+ 
+     unsigned long next;
+ 
+-- 
+1.7.11.7
+

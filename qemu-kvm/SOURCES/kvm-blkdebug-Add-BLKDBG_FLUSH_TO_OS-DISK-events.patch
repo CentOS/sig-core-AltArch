@@ -1,0 +1,100 @@
+From 89f3f5eafd6aed8a79b4570553af711dffc3a1d6 Mon Sep 17 00:00:00 2001
+From: John Snow <jsnow@redhat.com>
+Date: Mon, 23 Nov 2015 17:38:36 +0100
+Subject: [PATCH 17/27] blkdebug: Add BLKDBG_FLUSH_TO_OS/DISK events
+
+RH-Author: John Snow <jsnow@redhat.com>
+Message-id: <1448300320-7772-18-git-send-email-jsnow@redhat.com>
+Patchwork-id: 68448
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 17/21] blkdebug: Add BLKDBG_FLUSH_TO_OS/DISK events
+Bugzilla: 1272523
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit bf736fe34caba0688c9095c31b9d097ea15c1296)
+Signed-off-by: John Snow <jsnow@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+  block/blkdebug.c:      debug event ordering
+  include/block/block.h: debug event ordering
+
+Signed-off-by: John Snow <jsnow@redhat.com>
+---
+ block.c               | 8 ++++----
+ block/blkdebug.c      | 3 +++
+ include/block/block.h | 3 +++
+ 3 files changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/block.c b/block.c
+index bc6e75c..ecb2b09 100644
+--- a/block.c
++++ b/block.c
+@@ -4026,13 +4026,11 @@ int bdrv_load_vmstate(BlockDriverState *bs, uint8_t *buf,
+ 
+ void bdrv_debug_event(BlockDriverState *bs, BlkDebugEvent event)
+ {
+-    BlockDriver *drv = bs->drv;
+-
+-    if (!drv || !drv->bdrv_debug_event) {
++    if (!bs || !bs->drv || !bs->drv->bdrv_debug_event) {
+         return;
+     }
+ 
+-    drv->bdrv_debug_event(bs, event);
++    bs->drv->bdrv_debug_event(bs, event);
+ }
+ 
+ int bdrv_debug_breakpoint(BlockDriverState *bs, const char *event,
+@@ -4879,6 +4877,7 @@ int coroutine_fn bdrv_co_flush(BlockDriverState *bs)
+     }
+ 
+     /* Write back cached data to the OS even with cache=unsafe */
++    BLKDBG_EVENT(bs->file, BLKDBG_FLUSH_TO_OS);
+     if (bs->drv->bdrv_co_flush_to_os) {
+         ret = bs->drv->bdrv_co_flush_to_os(bs);
+         if (ret < 0) {
+@@ -4891,6 +4890,7 @@ int coroutine_fn bdrv_co_flush(BlockDriverState *bs)
+         goto flush_parent;
+     }
+ 
++    BLKDBG_EVENT(bs->file, BLKDBG_FLUSH_TO_DISK);
+     if (bs->drv->bdrv_co_flush_to_disk) {
+         ret = bs->drv->bdrv_co_flush_to_disk(bs);
+     } else if (bs->drv->bdrv_aio_flush) {
+diff --git a/block/blkdebug.c b/block/blkdebug.c
+index c61ce52..8e468b2 100644
+--- a/block/blkdebug.c
++++ b/block/blkdebug.c
+@@ -184,6 +184,9 @@ static const char *event_names[BLKDBG_EVENT_MAX] = {
+     [BLKDBG_CLUSTER_ALLOC_BYTES]            = "cluster_alloc_bytes",
+     [BLKDBG_CLUSTER_FREE]                   = "cluster_free",
+ 
++    [BLKDBG_FLUSH_TO_OS]                    = "flush_to_os",
++    [BLKDBG_FLUSH_TO_DISK]                  = "flush_to_disk",
++
+     [BLKDBG_PWRITEV_RMW_HEAD]               = "pwritev_rmw.head",
+     [BLKDBG_PWRITEV_RMW_AFTER_HEAD]         = "pwritev_rmw.after_head",
+     [BLKDBG_PWRITEV_RMW_TAIL]               = "pwritev_rmw.tail",
+diff --git a/include/block/block.h b/include/block/block.h
+index 8339cac..75147b2 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -508,6 +508,9 @@ typedef enum {
+     BLKDBG_CLUSTER_ALLOC_BYTES,
+     BLKDBG_CLUSTER_FREE,
+ 
++    BLKDBG_FLUSH_TO_OS,
++    BLKDBG_FLUSH_TO_DISK,
++
+     BLKDBG_PWRITEV_RMW_HEAD,
+     BLKDBG_PWRITEV_RMW_AFTER_HEAD,
+     BLKDBG_PWRITEV_RMW_TAIL,
+-- 
+1.8.3.1
+

@@ -1,0 +1,53 @@
+From 2ded69dfa67b8243d579e26839db43a288c251b8 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 4 Nov 2013 22:32:25 +0100
+Subject: [PATCH 32/87] qcow2: Correct endianness in overlap check
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-35-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55334
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 34/43] qcow2: Correct endianness in overlap check
+Bugzilla: 1004347
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1004347
+
+If an inactive L1 table is loaded from disk, its entries are in big
+endian and have to be converted to host byte order before using them.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 1e242b5544a48bc43eca9c637dc91ec06bcf3a31)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/qcow2-refcount.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/qcow2-refcount.c |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/block/qcow2-refcount.c b/block/qcow2-refcount.c
+index 2a589b8..34fcf2f 100644
+--- a/block/qcow2-refcount.c
++++ b/block/qcow2-refcount.c
+@@ -1713,8 +1713,8 @@ int qcow2_check_metadata_overlap(BlockDriverState *bs, int chk, int64_t offset,
+             }
+ 
+             for (j = 0; j < l1_sz; j++) {
+-                if ((l1[j] & L1E_OFFSET_MASK) &&
+-                    overlaps_with(l1[j] & L1E_OFFSET_MASK, s->cluster_size)) {
++                uint64_t l2_ofs = be64_to_cpu(l1[j]) & L1E_OFFSET_MASK;
++                if (l2_ofs && overlaps_with(l2_ofs, s->cluster_size)) {
+                     g_free(l1);
+                     return QCOW2_OL_INACTIVE_L2;
+                 }
+-- 
+1.7.1
+

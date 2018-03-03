@@ -1,0 +1,145 @@
+From 714d313805542063ea68e26a0d47b5059ee9952e Mon Sep 17 00:00:00 2001
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Tue, 13 Aug 2013 09:06:36 +0200
+Subject: dataplane: enable virtio-blk x-data-plane=on live migration
+
+RH-Author: Stefan Hajnoczi <stefanha@redhat.com>
+Message-id: <1376384797-4701-6-git-send-email-stefanha@redhat.com>
+Patchwork-id: 53210
+O-Subject: [PATCH v2 5/6] dataplane: enable virtio-blk x-data-plane=on live migration
+Bugzilla: 995030
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+
+Although the dataplane thread does not cooperate with dirty memory
+logging yet it's fairly easy to temporarily disable dataplane during
+live migration.  This way virtio-blk can live migrate when
+x-data-plane=on.
+
+The dataplane thread will restart after migration is cancelled or if the
+guest resuming virtio-blk operation after migration completes.
+
+Reviewed-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 84db52d059f3296abf7783968645c4a96d21b099)
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+diff --git a/hw/block/dataplane/virtio-blk.c b/hw/block/dataplane/virtio-blk.c
+index 2faed43..63c3ffa 100644
+--- a/hw/block/dataplane/virtio-blk.c
++++ b/hw/block/dataplane/virtio-blk.c
+@@ -18,7 +18,6 @@
+ #include "qemu/error-report.h"
+ #include "hw/virtio/dataplane/vring.h"
+ #include "ioq.h"
+-#include "migration/migration.h"
+ #include "block/block.h"
+ #include "hw/virtio/virtio-blk.h"
+ #include "virtio-blk.h"
+@@ -69,8 +68,6 @@ struct VirtIOBlockDataPlane {
+                                              queue */
+ 
+     unsigned int num_reqs;
+-
+-    Error *migration_blocker;
+ };
+ 
+ /* Raise an interrupt to signal guest, if necessary */
+@@ -433,10 +430,6 @@ bool virtio_blk_data_plane_create(VirtIODevice *vdev, VirtIOBlkConf *blk,
+     /* Prevent block operations that conflict with data plane thread */
+     bdrv_set_in_use(blk->conf.bs, 1);
+ 
+-    error_setg(&s->migration_blocker,
+-            "x-data-plane does not support migration");
+-    migrate_add_blocker(s->migration_blocker);
+-
+     *dataplane = s;
+     return true;
+ }
+@@ -448,8 +441,6 @@ void virtio_blk_data_plane_destroy(VirtIOBlockDataPlane *s)
+     }
+ 
+     virtio_blk_data_plane_stop(s);
+-    migrate_del_blocker(s->migration_blocker);
+-    error_free(s->migration_blocker);
+     bdrv_set_in_use(s->blk->conf.bs, 0);
+     g_free(s);
+ }
+diff --git a/hw/block/virtio-blk.c b/hw/block/virtio-blk.c
+index cf12469..cca0c77 100644
+--- a/hw/block/virtio-blk.c
++++ b/hw/block/virtio-blk.c
+@@ -19,6 +19,7 @@
+ #include "hw/virtio/virtio-blk.h"
+ #ifdef CONFIG_VIRTIO_BLK_DATA_PLANE
+ # include "dataplane/virtio-blk.h"
++# include "migration/migration.h"
+ #endif
+ #include "block/scsi.h"
+ #ifdef __linux__
+@@ -628,6 +629,34 @@ void virtio_blk_set_conf(DeviceState *dev, VirtIOBlkConf *blk)
+     memcpy(&(s->blk), blk, sizeof(struct VirtIOBlkConf));
+ }
+ 
++#ifdef CONFIG_VIRTIO_BLK_DATA_PLANE
++/* Disable dataplane thread during live migration since it does not
++ * update the dirty memory bitmap yet.
++ */
++static void virtio_blk_migration_state_changed(Notifier *notifier, void *data)
++{
++    VirtIOBlock *s = container_of(notifier, VirtIOBlock,
++                                  migration_state_notifier);
++    MigrationState *mig = data;
++
++    if (migration_is_active(mig)) {
++        if (!s->dataplane) {
++            return;
++        }
++        virtio_blk_data_plane_destroy(s->dataplane);
++        s->dataplane = NULL;
++    } else if (migration_has_finished(mig) ||
++               migration_has_failed(mig)) {
++        if (s->dataplane) {
++            return;
++        }
++        bdrv_drain_all(); /* complete in-flight non-dataplane requests */
++        virtio_blk_data_plane_create(VIRTIO_DEVICE(s), &s->blk,
++                                     &s->dataplane);
++    }
++}
++#endif /* CONFIG_VIRTIO_BLK_DATA_PLANE */
++
+ static int virtio_blk_device_init(VirtIODevice *vdev)
+ {
+     DeviceState *qdev = DEVICE(vdev);
+@@ -664,6 +693,8 @@ static int virtio_blk_device_init(VirtIODevice *vdev)
+         virtio_cleanup(vdev);
+         return -1;
+     }
++    s->migration_state_notifier.notify = virtio_blk_migration_state_changed;
++    add_migration_state_change_notifier(&s->migration_state_notifier);
+ #endif
+ 
+     s->change = qemu_add_vm_change_state_handler(virtio_blk_dma_restart_cb, s);
+@@ -683,6 +714,7 @@ static int virtio_blk_device_exit(DeviceState *dev)
+     VirtIODevice *vdev = VIRTIO_DEVICE(dev);
+     VirtIOBlock *s = VIRTIO_BLK(dev);
+ #ifdef CONFIG_VIRTIO_BLK_DATA_PLANE
++    remove_migration_state_change_notifier(&s->migration_state_notifier);
+     virtio_blk_data_plane_destroy(s->dataplane);
+     s->dataplane = NULL;
+ #endif
+diff --git a/include/hw/virtio/virtio-blk.h b/include/hw/virtio/virtio-blk.h
+index fc71853..b87cf49 100644
+--- a/include/hw/virtio/virtio-blk.h
++++ b/include/hw/virtio/virtio-blk.h
+@@ -125,6 +125,7 @@ typedef struct VirtIOBlock {
+     unsigned short sector_mask;
+     VMChangeStateEntry *change;
+ #ifdef CONFIG_VIRTIO_BLK_DATA_PLANE
++    Notifier migration_state_notifier;
+     struct VirtIOBlockDataPlane *dataplane;
+ #endif
+ } VirtIOBlock;

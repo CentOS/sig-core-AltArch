@@ -1,0 +1,218 @@
+From 5f073207f144613806bc0b004a01ef66da9ad5e0 Mon Sep 17 00:00:00 2001
+Message-Id: <5f073207f144613806bc0b004a01ef66da9ad5e0.1387288155.git.minovotn@redhat.com>
+In-Reply-To: <527da6c2ce2c09d0183aa8595fc95f136f61b6df.1387288155.git.minovotn@redhat.com>
+References: <527da6c2ce2c09d0183aa8595fc95f136f61b6df.1387288155.git.minovotn@redhat.com>
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Thu, 12 Dec 2013 16:21:25 +0100
+Subject: [PATCH 5/8] libqtest: add qmp(fmt, ...) -> QDict* function
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Stefan Hajnoczi <stefanha@redhat.com>
+Message-id: <1386865288-1575-6-git-send-email-stefanha@redhat.com>
+Patchwork-id: 56259
+O-Subject: [RHEL7 qemu-kvm PATCH 5/8] libqtest: add qmp(fmt, ...) -> QDict* function
+Bugzilla: 1003773
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+Add a qtest qmp() function that returns the response object.  This
+allows test cases to verify the result or to check for error responses.
+It also allows waiting for QMP events.
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Andreas Färber <afaerber@suse.de>
+(cherry picked from commit 0c460dac03e7919079525d8e24ef2c4c607c219d)
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+---
+ tests/libqtest.c | 66 ++++++++++++++++++++++++++++++++++++++++++++------------
+ tests/libqtest.h | 37 +++++++++++++++++++++++++++++++
+ 2 files changed, 89 insertions(+), 14 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ tests/libqtest.c | 66 ++++++++++++++++++++++++++++++++++++++++++++------------
+ tests/libqtest.h | 37 +++++++++++++++++++++++++++++++
+ 2 files changed, 89 insertions(+), 14 deletions(-)
+
+diff --git a/tests/libqtest.c b/tests/libqtest.c
+index dc4c983..83424c3 100644
+--- a/tests/libqtest.c
++++ b/tests/libqtest.c
+@@ -30,6 +30,8 @@
+ 
+ #include "qemu/compiler.h"
+ #include "qemu/osdep.h"
++#include "qapi/qmp/json-streamer.h"
++#include "qapi/qmp/json-parser.h"
+ 
+ #define MAX_IRQ 256
+ 
+@@ -291,16 +293,38 @@ redo:
+     return words;
+ }
+ 
+-void qtest_qmpv_discard_response(QTestState *s, const char *fmt, va_list ap)
++typedef struct {
++    JSONMessageParser parser;
++    QDict *response;
++} QMPResponseParser;
++
++static void qmp_response(JSONMessageParser *parser, QList *tokens)
+ {
+-    bool has_reply = false;
+-    int nesting = 0;
++    QMPResponseParser *qmp = container_of(parser, QMPResponseParser, parser);
++    QObject *obj;
++
++    obj = json_parser_parse(tokens, NULL);
++    if (!obj) {
++        fprintf(stderr, "QMP JSON response parsing failed\n");
++        exit(1);
++    }
++
++    g_assert(qobject_type(obj) == QTYPE_QDICT);
++    g_assert(!qmp->response);
++    qmp->response = (QDict *)obj;
++}
++
++QDict *qtest_qmpv(QTestState *s, const char *fmt, va_list ap)
++{
++    QMPResponseParser qmp;
+ 
+     /* Send QMP request */
+     socket_sendf(s->qmp_fd, fmt, ap);
+ 
+     /* Receive reply */
+-    while (!has_reply || nesting > 0) {
++    qmp.response = NULL;
++    json_message_parser_init(&qmp.parser, qmp_response);
++    while (!qmp.response) {
+         ssize_t len;
+         char c;
+ 
+@@ -314,25 +338,39 @@ void qtest_qmpv_discard_response(QTestState *s, const char *fmt, va_list ap)
+             exit(1);
+         }
+ 
+-        switch (c) {
+-        case '{':
+-            nesting++;
+-            has_reply = true;
+-            break;
+-        case '}':
+-            nesting--;
+-            break;
+-        }
++        json_message_parser_feed(&qmp.parser, &c, 1);
+     }
++    json_message_parser_destroy(&qmp.parser);
++
++    return qmp.response;
++}
++
++QDict *qtest_qmp(QTestState *s, const char *fmt, ...)
++{
++    va_list ap;
++    QDict *response;
++
++    va_start(ap, fmt);
++    response = qtest_qmpv(s, fmt, ap);
++    va_end(ap);
++    return response;
++}
++
++void qtest_qmpv_discard_response(QTestState *s, const char *fmt, va_list ap)
++{
++    QDict *response = qtest_qmpv(s, fmt, ap);
++    QDECREF(response);
+ }
+ 
+ void qtest_qmp_discard_response(QTestState *s, const char *fmt, ...)
+ {
+     va_list ap;
++    QDict *response;
+ 
+     va_start(ap, fmt);
+-    qtest_qmpv_discard_response(s, fmt, ap);
++    response = qtest_qmpv(s, fmt, ap);
+     va_end(ap);
++    QDECREF(response);
+ }
+ 
+ const char *qtest_get_arch(void)
+diff --git a/tests/libqtest.h b/tests/libqtest.h
+index 3faa49b..0d914f6 100644
+--- a/tests/libqtest.h
++++ b/tests/libqtest.h
+@@ -22,6 +22,7 @@
+ #include <stdbool.h>
+ #include <stdarg.h>
+ #include <sys/types.h>
++#include "qapi/qmp/qdict.h"
+ 
+ typedef struct QTestState QTestState;
+ 
+@@ -53,6 +54,15 @@ void qtest_quit(QTestState *s);
+ void qtest_qmp_discard_response(QTestState *s, const char *fmt, ...);
+ 
+ /**
++ * qtest_qmp:
++ * @s: #QTestState instance to operate on.
++ * @fmt...: QMP message to send to qemu
++ *
++ * Sends a QMP message to QEMU and returns the response.
++ */
++QDict *qtest_qmp(QTestState *s, const char *fmt, ...);
++
++/**
+  * qtest_qmpv_discard_response:
+  * @s: #QTestState instance to operate on.
+  * @fmt: QMP message to send to QEMU
+@@ -63,6 +73,16 @@ void qtest_qmp_discard_response(QTestState *s, const char *fmt, ...);
+ void qtest_qmpv_discard_response(QTestState *s, const char *fmt, va_list ap);
+ 
+ /**
++ * qtest_qmpv:
++ * @s: #QTestState instance to operate on.
++ * @fmt: QMP message to send to QEMU
++ * @ap: QMP message arguments
++ *
++ * Sends a QMP message to QEMU and returns the response.
++ */
++QDict *qtest_qmpv(QTestState *s, const char *fmt, va_list ap);
++
++/**
+  * qtest_get_irq:
+  * @s: #QTestState instance to operate on.
+  * @num: Interrupt to observe.
+@@ -331,6 +351,23 @@ static inline void qtest_end(void)
+ }
+ 
+ /**
++ * qmp:
++ * @fmt...: QMP message to send to qemu
++ *
++ * Sends a QMP message to QEMU and returns the response.
++ */
++static inline QDict *qmp(const char *fmt, ...)
++{
++    va_list ap;
++    QDict *response;
++
++    va_start(ap, fmt);
++    response = qtest_qmpv(global_qtest, fmt, ap);
++    va_end(ap);
++    return response;
++}
++
++/**
+  * qmp_discard_response:
+  * @fmt...: QMP message to send to qemu
+  *
+-- 
+1.7.11.7
+

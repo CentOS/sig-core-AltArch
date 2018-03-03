@@ -1,0 +1,383 @@
+From 86459b009f0402a2cdf3ef6a944684b62ac2ea0a Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Fri, 7 Nov 2014 17:17:58 +0100
+Subject: [PATCH 11/41] dump: add API to write dump header
+
+Message-id: <1415380693-16593-12-git-send-email-lersek@redhat.com>
+Patchwork-id: 62197
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 11/26] dump: add API to write dump header
+Bugzilla: 1157798
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: dgibson <dgibson@redhat.com>
+
+From: qiaonuohan <qiaonuohan@cn.fujitsu.com>
+
+the functions are used to write header of kdump-compressed format to vmcore.
+Header of kdump-compressed format includes:
+1. common header: DiskDumpHeader32 / DiskDumpHeader64
+2. sub header: KdumpSubHeader32 / KdumpSubHeader64
+3. extra information: only elf notes here
+
+Signed-off-by: Qiao Nuohan <qiaonuohan@cn.fujitsu.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+(cherry picked from commit 298f116827405f37dde10a2a6cbc75d20f9ba99c)
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c                | 223 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ include/sysemu/dump.h |  96 ++++++++++++++++++++++
+ 2 files changed, 319 insertions(+)
+
+diff --git a/dump.c b/dump.c
+index 88e8cc0..4d135fd 100644
+--- a/dump.c
++++ b/dump.c
+@@ -784,6 +784,229 @@ static int buf_write_note(const void *buf, size_t size, void *opaque)
+     return 0;
+ }
+ 
++/* write common header, sub header and elf note to vmcore */
++static int create_header32(DumpState *s)
++{
++    int ret = 0;
++    DiskDumpHeader32 *dh = NULL;
++    KdumpSubHeader32 *kh = NULL;
++    size_t size;
++    int endian = s->dump_info.d_endian;
++    uint32_t block_size;
++    uint32_t sub_hdr_size;
++    uint32_t bitmap_blocks;
++    uint32_t status = 0;
++    uint64_t offset_note;
++
++    /* write common header, the version of kdump-compressed format is 6th */
++    size = sizeof(DiskDumpHeader32);
++    dh = g_malloc0(size);
++
++    strncpy(dh->signature, KDUMP_SIGNATURE, strlen(KDUMP_SIGNATURE));
++    dh->header_version = cpu_convert_to_target32(6, endian);
++    block_size = s->page_size;
++    dh->block_size = cpu_convert_to_target32(block_size, endian);
++    sub_hdr_size = sizeof(struct KdumpSubHeader32) + s->note_size;
++    sub_hdr_size = DIV_ROUND_UP(sub_hdr_size, block_size);
++    dh->sub_hdr_size = cpu_convert_to_target32(sub_hdr_size, endian);
++    /* dh->max_mapnr may be truncated, full 64bit is in kh.max_mapnr_64 */
++    dh->max_mapnr = cpu_convert_to_target32(MIN(s->max_mapnr, UINT_MAX),
++                                            endian);
++    dh->nr_cpus = cpu_convert_to_target32(s->nr_cpus, endian);
++    bitmap_blocks = DIV_ROUND_UP(s->len_dump_bitmap, block_size) * 2;
++    dh->bitmap_blocks = cpu_convert_to_target32(bitmap_blocks, endian);
++    memcpy(&(dh->utsname.machine), "i686", 4);
++
++    if (s->flag_compress & DUMP_DH_COMPRESSED_ZLIB) {
++        status |= DUMP_DH_COMPRESSED_ZLIB;
++    }
++#ifdef CONFIG_LZO
++    if (s->flag_compress & DUMP_DH_COMPRESSED_LZO) {
++        status |= DUMP_DH_COMPRESSED_LZO;
++    }
++#endif
++#ifdef CONFIG_SNAPPY
++    if (s->flag_compress & DUMP_DH_COMPRESSED_SNAPPY) {
++        status |= DUMP_DH_COMPRESSED_SNAPPY;
++    }
++#endif
++    dh->status = cpu_convert_to_target32(status, endian);
++
++    if (write_buffer(s->fd, 0, dh, size) < 0) {
++        dump_error(s, "dump: failed to write disk dump header.\n");
++        ret = -1;
++        goto out;
++    }
++
++    /* write sub header */
++    size = sizeof(KdumpSubHeader32);
++    kh = g_malloc0(size);
++
++    /* 64bit max_mapnr_64 */
++    kh->max_mapnr_64 = cpu_convert_to_target64(s->max_mapnr, endian);
++    kh->phys_base = cpu_convert_to_target32(PHYS_BASE, endian);
++    kh->dump_level = cpu_convert_to_target32(DUMP_LEVEL, endian);
++
++    offset_note = DISKDUMP_HEADER_BLOCKS * block_size + size;
++    kh->offset_note = cpu_convert_to_target64(offset_note, endian);
++    kh->note_size = cpu_convert_to_target32(s->note_size, endian);
++
++    if (write_buffer(s->fd, DISKDUMP_HEADER_BLOCKS *
++                     block_size, kh, size) < 0) {
++        dump_error(s, "dump: failed to write kdump sub header.\n");
++        ret = -1;
++        goto out;
++    }
++
++    /* write note */
++    s->note_buf = g_malloc0(s->note_size);
++    s->note_buf_offset = 0;
++
++    /* use s->note_buf to store notes temporarily */
++    if (write_elf32_notes(buf_write_note, s) < 0) {
++        ret = -1;
++        goto out;
++    }
++
++    if (write_buffer(s->fd, offset_note, s->note_buf,
++                     s->note_size) < 0) {
++        dump_error(s, "dump: failed to write notes");
++        ret = -1;
++        goto out;
++    }
++
++    /* get offset of dump_bitmap */
++    s->offset_dump_bitmap = (DISKDUMP_HEADER_BLOCKS + sub_hdr_size) *
++                             block_size;
++
++    /* get offset of page */
++    s->offset_page = (DISKDUMP_HEADER_BLOCKS + sub_hdr_size + bitmap_blocks) *
++                     block_size;
++
++out:
++    g_free(dh);
++    g_free(kh);
++    g_free(s->note_buf);
++
++    return ret;
++}
++
++/* write common header, sub header and elf note to vmcore */
++static int create_header64(DumpState *s)
++{
++    int ret = 0;
++    DiskDumpHeader64 *dh = NULL;
++    KdumpSubHeader64 *kh = NULL;
++    size_t size;
++    int endian = s->dump_info.d_endian;
++    uint32_t block_size;
++    uint32_t sub_hdr_size;
++    uint32_t bitmap_blocks;
++    uint32_t status = 0;
++    uint64_t offset_note;
++
++    /* write common header, the version of kdump-compressed format is 6th */
++    size = sizeof(DiskDumpHeader64);
++    dh = g_malloc0(size);
++
++    strncpy(dh->signature, KDUMP_SIGNATURE, strlen(KDUMP_SIGNATURE));
++    dh->header_version = cpu_convert_to_target32(6, endian);
++    block_size = s->page_size;
++    dh->block_size = cpu_convert_to_target32(block_size, endian);
++    sub_hdr_size = sizeof(struct KdumpSubHeader64) + s->note_size;
++    sub_hdr_size = DIV_ROUND_UP(sub_hdr_size, block_size);
++    dh->sub_hdr_size = cpu_convert_to_target32(sub_hdr_size, endian);
++    /* dh->max_mapnr may be truncated, full 64bit is in kh.max_mapnr_64 */
++    dh->max_mapnr = cpu_convert_to_target32(MIN(s->max_mapnr, UINT_MAX),
++                                            endian);
++    dh->nr_cpus = cpu_convert_to_target32(s->nr_cpus, endian);
++    bitmap_blocks = DIV_ROUND_UP(s->len_dump_bitmap, block_size) * 2;
++    dh->bitmap_blocks = cpu_convert_to_target32(bitmap_blocks, endian);
++    memcpy(&(dh->utsname.machine), "x86_64", 6);
++
++    if (s->flag_compress & DUMP_DH_COMPRESSED_ZLIB) {
++        status |= DUMP_DH_COMPRESSED_ZLIB;
++    }
++#ifdef CONFIG_LZO
++    if (s->flag_compress & DUMP_DH_COMPRESSED_LZO) {
++        status |= DUMP_DH_COMPRESSED_LZO;
++    }
++#endif
++#ifdef CONFIG_SNAPPY
++    if (s->flag_compress & DUMP_DH_COMPRESSED_SNAPPY) {
++        status |= DUMP_DH_COMPRESSED_SNAPPY;
++    }
++#endif
++    dh->status = cpu_convert_to_target32(status, endian);
++
++    if (write_buffer(s->fd, 0, dh, size) < 0) {
++        dump_error(s, "dump: failed to write disk dump header.\n");
++        ret = -1;
++        goto out;
++    }
++
++    /* write sub header */
++    size = sizeof(KdumpSubHeader64);
++    kh = g_malloc0(size);
++
++    /* 64bit max_mapnr_64 */
++    kh->max_mapnr_64 = cpu_convert_to_target64(s->max_mapnr, endian);
++    kh->phys_base = cpu_convert_to_target64(PHYS_BASE, endian);
++    kh->dump_level = cpu_convert_to_target32(DUMP_LEVEL, endian);
++
++    offset_note = DISKDUMP_HEADER_BLOCKS * block_size + size;
++    kh->offset_note = cpu_convert_to_target64(offset_note, endian);
++    kh->note_size = cpu_convert_to_target64(s->note_size, endian);
++
++    if (write_buffer(s->fd, DISKDUMP_HEADER_BLOCKS *
++                     block_size, kh, size) < 0) {
++        dump_error(s, "dump: failed to write kdump sub header.\n");
++        ret = -1;
++        goto out;
++    }
++
++    /* write note */
++    s->note_buf = g_malloc0(s->note_size);
++    s->note_buf_offset = 0;
++
++    /* use s->note_buf to store notes temporarily */
++    if (write_elf64_notes(buf_write_note, s) < 0) {
++        ret = -1;
++        goto out;
++    }
++
++    if (write_buffer(s->fd, offset_note, s->note_buf,
++                     s->note_size) < 0) {
++        dump_error(s, "dump: failed to write notes");
++        ret = -1;
++        goto out;
++    }
++
++    /* get offset of dump_bitmap */
++    s->offset_dump_bitmap = (DISKDUMP_HEADER_BLOCKS + sub_hdr_size) *
++                             block_size;
++
++    /* get offset of page */
++    s->offset_page = (DISKDUMP_HEADER_BLOCKS + sub_hdr_size + bitmap_blocks) *
++                     block_size;
++
++out:
++    g_free(dh);
++    g_free(kh);
++    g_free(s->note_buf);
++
++    return ret;
++}
++
++static int write_dump_header(DumpState *s)
++{
++    if (s->dump_info.d_machine == EM_386) {
++        return create_header32(s);
++    } else {
++        return create_header64(s);
++    }
++}
++
+ static ram_addr_t get_start_block(DumpState *s)
+ {
+     GuestPhysBlock *block;
+diff --git a/include/sysemu/dump.h b/include/sysemu/dump.h
+index 995bf47..dfee238 100644
+--- a/include/sysemu/dump.h
++++ b/include/sysemu/dump.h
+@@ -27,6 +27,19 @@
+ #define pfn_to_paddr(X, page_shift) \
+     (((unsigned long long)(X) + ARCH_PFN_OFFSET) << (page_shift))
+ 
++/*
++ * flag for compressed format
++ */
++#define DUMP_DH_COMPRESSED_ZLIB     (0x1)
++#define DUMP_DH_COMPRESSED_LZO      (0x2)
++#define DUMP_DH_COMPRESSED_SNAPPY   (0x4)
++
++#define KDUMP_SIGNATURE             "KDUMP   "
++#define SIG_LEN                     (sizeof(KDUMP_SIGNATURE) - 1)
++#define PHYS_BASE                   (0)
++#define DUMP_LEVEL                  (1)
++#define DISKDUMP_HEADER_BLOCKS      (1)
++
+ typedef struct ArchDumpInfo {
+     int d_machine;  /* Architecture */
+     int d_endian;   /* ELFDATA2LSB or ELFDATA2MSB */
+@@ -44,6 +57,89 @@ typedef struct QEMU_PACKED MakedumpfileDataHeader {
+     int64_t buf_size;
+ } MakedumpfileDataHeader;
+ 
++typedef struct QEMU_PACKED NewUtsname {
++    char sysname[65];
++    char nodename[65];
++    char release[65];
++    char version[65];
++    char machine[65];
++    char domainname[65];
++} NewUtsname;
++
++typedef struct QEMU_PACKED DiskDumpHeader32 {
++    char signature[SIG_LEN];        /* = "KDUMP   " */
++    uint32_t header_version;        /* Dump header version */
++    NewUtsname utsname;             /* copy of system_utsname */
++    char timestamp[10];             /* Time stamp */
++    uint32_t status;                /* Above flags */
++    uint32_t block_size;            /* Size of a block in byte */
++    uint32_t sub_hdr_size;          /* Size of arch dependent header in block */
++    uint32_t bitmap_blocks;         /* Size of Memory bitmap in block */
++    uint32_t max_mapnr;             /* = max_mapnr ,
++                                       obsoleted in header_version 6 */
++    uint32_t total_ram_blocks;      /* Number of blocks should be written */
++    uint32_t device_blocks;         /* Number of total blocks in dump device */
++    uint32_t written_blocks;        /* Number of written blocks */
++    uint32_t current_cpu;           /* CPU# which handles dump */
++    uint32_t nr_cpus;               /* Number of CPUs */
++} DiskDumpHeader32;
++
++typedef struct QEMU_PACKED DiskDumpHeader64 {
++    char signature[SIG_LEN];        /* = "KDUMP   " */
++    uint32_t header_version;        /* Dump header version */
++    NewUtsname utsname;             /* copy of system_utsname */
++    char timestamp[22];             /* Time stamp */
++    uint32_t status;                /* Above flags */
++    uint32_t block_size;            /* Size of a block in byte */
++    uint32_t sub_hdr_size;          /* Size of arch dependent header in block */
++    uint32_t bitmap_blocks;         /* Size of Memory bitmap in block */
++    uint32_t max_mapnr;             /* = max_mapnr,
++                                       obsoleted in header_version 6 */
++    uint32_t total_ram_blocks;      /* Number of blocks should be written */
++    uint32_t device_blocks;         /* Number of total blocks in dump device */
++    uint32_t written_blocks;        /* Number of written blocks */
++    uint32_t current_cpu;           /* CPU# which handles dump */
++    uint32_t nr_cpus;               /* Number of CPUs */
++} DiskDumpHeader64;
++
++typedef struct QEMU_PACKED KdumpSubHeader32 {
++    uint32_t phys_base;
++    uint32_t dump_level;            /* header_version 1 and later */
++    uint32_t split;                 /* header_version 2 and later */
++    uint32_t start_pfn;             /* header_version 2 and later,
++                                       obsoleted in header_version 6 */
++    uint32_t end_pfn;               /* header_version 2 and later,
++                                       obsoleted in header_version 6 */
++    uint64_t offset_vmcoreinfo;     /* header_version 3 and later */
++    uint32_t size_vmcoreinfo;       /* header_version 3 and later */
++    uint64_t offset_note;           /* header_version 4 and later */
++    uint32_t note_size;             /* header_version 4 and later */
++    uint64_t offset_eraseinfo;      /* header_version 5 and later */
++    uint32_t size_eraseinfo;        /* header_version 5 and later */
++    uint64_t start_pfn_64;          /* header_version 6 and later */
++    uint64_t end_pfn_64;            /* header_version 6 and later */
++    uint64_t max_mapnr_64;          /* header_version 6 and later */
++} KdumpSubHeader32;
++
++typedef struct QEMU_PACKED KdumpSubHeader64 {
++    uint64_t phys_base;
++    uint32_t dump_level;            /* header_version 1 and later */
++    uint32_t split;                 /* header_version 2 and later */
++    uint64_t start_pfn;             /* header_version 2 and later,
++                                       obsoleted in header_version 6 */
++    uint64_t end_pfn;               /* header_version 2 and later,
++                                       obsoleted in header_version 6 */
++    uint64_t offset_vmcoreinfo;     /* header_version 3 and later */
++    uint64_t size_vmcoreinfo;       /* header_version 3 and later */
++    uint64_t offset_note;           /* header_version 4 and later */
++    uint64_t note_size;             /* header_version 4 and later */
++    uint64_t offset_eraseinfo;      /* header_version 5 and later */
++    uint64_t size_eraseinfo;        /* header_version 5 and later */
++    uint64_t start_pfn_64;          /* header_version 6 and later */
++    uint64_t end_pfn_64;            /* header_version 6 and later */
++    uint64_t max_mapnr_64;          /* header_version 6 and later */
++} KdumpSubHeader64;
++
+ struct GuestPhysBlockList; /* memory_mapping.h */
+ int cpu_get_dump_info(ArchDumpInfo *info,
+                       const struct GuestPhysBlockList *guest_phys_blocks);
+-- 
+1.8.3.1
+

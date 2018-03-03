@@ -1,0 +1,135 @@
+From 6707cb9501355de8244d224b3a8140c0fe62a983 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 25 Mar 2014 14:23:30 +0100
+Subject: [PATCH 23/49] qcow2: Validate refcount table offset
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1395753835-7591-24-git-send-email-kwolf@redhat.com>
+Patchwork-id: n/a
+O-Subject: [virt-devel] [EMBARGOED RHEL-7.0 qemu-kvm PATCH 23/48] qcow2: Validate refcount table offset
+Bugzilla: 1066691
+RH-Acked-by: Jeff Cody <jcody@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1066691
+Upstream status: Series embargoed
+
+The end of the refcount table must not exceed INT64_MAX so that integer
+overflows are avoided.
+
+Also check for misaligned refcount table. Such images are invalid and
+probably the result of data corruption. Error out to avoid further
+corruption.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block/qcow2.c              |   33 +++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/080     |   13 +++++++++++++
+ tests/qemu-iotests/080.out |   10 ++++++++++
+ 3 files changed, 56 insertions(+), 0 deletions(-)
+
+diff --git a/block/qcow2.c b/block/qcow2.c
+index a7780ac..5513fac 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -329,6 +329,32 @@ static int qcow2_check(BlockDriverState *bs, BdrvCheckResult *result,
+     return ret;
+ }
+ 
++static int validate_table_offset(BlockDriverState *bs, uint64_t offset,
++                                 uint64_t entries, size_t entry_len)
++{
++    BDRVQcowState *s = bs->opaque;
++    uint64_t size;
++
++    /* Use signed INT64_MAX as the maximum even for uint64_t header fields,
++     * because values will be passed to qemu functions taking int64_t. */
++    if (entries > INT64_MAX / entry_len) {
++        return -EINVAL;
++    }
++
++    size = entries * entry_len;
++
++    if (INT64_MAX - size < offset) {
++        return -EINVAL;
++    }
++
++    /* Tables must be cluster aligned */
++    if (offset & (s->cluster_size - 1)) {
++        return -EINVAL;
++    }
++
++    return 0;
++}
++
+ static QemuOptsList qcow2_runtime_opts = {
+     .name = "qcow2",
+     .head = QTAILQ_HEAD_INITIALIZER(qcow2_runtime_opts.head),
+@@ -589,6 +615,13 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
+         goto fail;
+     }
+ 
++    ret = validate_table_offset(bs, s->refcount_table_offset,
++                                s->refcount_table_size, sizeof(uint64_t));
++    if (ret < 0) {
++        error_setg(errp, "Invalid reference count table offset");
++        goto fail;
++    }
++
+     s->snapshots_offset = header.snapshots_offset;
+     s->nb_snapshots = header.nb_snapshots;
+ 
+diff --git a/tests/qemu-iotests/080 b/tests/qemu-iotests/080
+index 6179e05..f58ac73 100755
+--- a/tests/qemu-iotests/080
++++ b/tests/qemu-iotests/080
+@@ -45,6 +45,7 @@ _supported_os Linux
+ header_size=104
+ 
+ offset_backing_file_offset=8
++offset_refcount_table_offset=48
+ offset_refcount_table_clusters=56
+ offset_header_size=100
+ offset_ext_magic=$header_size
+@@ -76,6 +77,18 @@ poke_file "$TEST_IMG" "$offset_refcount_table_clusters" "\xff\xff\xff\xff"
+ poke_file "$TEST_IMG" "$offset_refcount_table_clusters" "\x00\x02\x00\x01"
+ { $QEMU_IO -c "read 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
+ 
++echo
++echo "== Misaligned refcount table =="
++_make_test_img 64M
++poke_file "$TEST_IMG" "$offset_refcount_table_offset" "\x12\x34\x56\x78\x90\xab\xcd\xef"
++{ $QEMU_IO -c "read 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
++
++echo
++echo "== Huge refcount offset =="
++_make_test_img 64M
++poke_file "$TEST_IMG" "$offset_refcount_table_offset" "\xff\xff\xff\xff\xff\xff\x00\x00"
++poke_file "$TEST_IMG" "$offset_refcount_table_clusters" "\x00\x00\x00\x7f"
++{ $QEMU_IO -c "read 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
+ 
+ # success, all done
+ echo "*** done"
+diff --git a/tests/qemu-iotests/080.out b/tests/qemu-iotests/080.out
+index 6fef6d9..f919b58 100644
+--- a/tests/qemu-iotests/080.out
++++ b/tests/qemu-iotests/080.out
+@@ -20,4 +20,14 @@ qemu-io: can't open device TEST_DIR/t.qcow2: Reference count table too large
+ no file open, try 'help open'
+ qemu-io: can't open device TEST_DIR/t.qcow2: Reference count table too large
+ no file open, try 'help open'
++
++== Misaligned refcount table ==
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++qemu-io: can't open device TEST_DIR/t.qcow2: Invalid reference count table offset
++no file open, try 'help open'
++
++== Huge refcount offset ==
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++qemu-io: can't open device TEST_DIR/t.qcow2: Invalid reference count table offset
++no file open, try 'help open'
+ *** done
+-- 
+1.7.1
+

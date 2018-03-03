@@ -1,0 +1,124 @@
+From 4b71b3a9e37d06da2ecc48e06eea7e4a4ae1cfe9 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 18 May 2017 09:21:20 +0200
+Subject: [PATCH 07/18] serial: poll the serial console with G_IO_HUP
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <20170518092131.16571-8-famz@redhat.com>
+Patchwork-id: 75297
+O-Subject: [RHEL-7.4 qemu-kvm PATCH v3 07/18] serial: poll the serial console with G_IO_HUP
+Bugzilla: 1451470
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+From: Roger Pau Monne <roger.pau@citrix.com>
+
+On FreeBSD polling a master pty while the other end is not connected
+with G_IO_OUT only results in an endless wait. This is different from
+the Linux behaviour, that returns immediately. In order to demonstrate
+this, I have the following example code:
+
+http://xenbits.xen.org/people/royger/test_poll.c
+
+When executed on Linux:
+
+$ ./test_poll
+In callback
+
+On FreeBSD instead, the callback never gets called:
+
+$ ./test_poll
+
+So, in order to workaround this, poll the source with G_IO_HUP (which
+makes the code behave the same way on both Linux and FreeBSD).
+
+Signed-off-by: Roger Pau Monné <roger.pau@citrix.com>
+Cc: Peter Crosthwaite <peter.crosthwaite@xilinx.com>
+Cc: Michael Tokarev <mjt@tls.msk.ru>
+Cc: "Andreas Färber" <afaerber@suse.de>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Cc: xen-devel@lists.xenproject.org
+[Add hw/char/cadence_uart.c too. - Paolo]
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+
+(cherry picked from commit e02bc6de30c44fd668dc0d6e1cd1804f2eed3ed3)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	hw/char/cadence_uart.c
+
+Downstream doesn't use qemu_chr_fe_add_watch because we don't have
+38acd64b1c etc.
+
+	monitor.c
+
+The changed line is different because we don't have 6cff3e8594 (monitor:
+protect outbuf and mux_out with mutex).
+---
+ hw/char/serial.c         | 2 +-
+ hw/char/virtio-console.c | 3 ++-
+ hw/usb/redirect.c        | 2 +-
+ monitor.c                | 2 +-
+ 4 files changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/hw/char/serial.c b/hw/char/serial.c
+index e020b0e..add4738 100644
+--- a/hw/char/serial.c
++++ b/hw/char/serial.c
+@@ -246,7 +246,7 @@ static gboolean serial_xmit(GIOChannel *chan, GIOCondition cond, void *opaque)
+         serial_receive1(s, &s->tsr, 1);
+     } else if (qemu_chr_fe_write(s->chr, &s->tsr, 1) != 1) {
+         if (s->tsr_retry >= 0 && s->tsr_retry < MAX_XMIT_RETRY &&
+-            qemu_chr_fe_add_watch(s->chr, G_IO_OUT, serial_xmit, s) > 0) {
++            qemu_chr_fe_add_watch(s->chr, G_IO_OUT|G_IO_HUP, serial_xmit, s) > 0) {
+             s->tsr_retry++;
+             return FALSE;
+         }
+diff --git a/hw/char/virtio-console.c b/hw/char/virtio-console.c
+index 1b01dcd..69dd95a 100644
+--- a/hw/char/virtio-console.c
++++ b/hw/char/virtio-console.c
+@@ -66,7 +66,8 @@ static ssize_t flush_buf(VirtIOSerialPort *port,
+         if (!k->is_console) {
+             virtio_serial_throttle_port(port, true);
+             if (!vcon->watch) {
+-                vcon->watch = qemu_chr_fe_add_watch(vcon->chr, G_IO_OUT,
++                vcon->watch = qemu_chr_fe_add_watch(vcon->chr,
++                                                    G_IO_OUT|G_IO_HUP,
+                                                     chr_write_unblocked, vcon);
+             }
+         }
+diff --git a/hw/usb/redirect.c b/hw/usb/redirect.c
+index e3b9f32..3fe2106 100644
+--- a/hw/usb/redirect.c
++++ b/hw/usb/redirect.c
+@@ -284,7 +284,7 @@ static int usbredir_write(void *priv, uint8_t *data, int count)
+     r = qemu_chr_fe_write(dev->cs, data, count);
+     if (r < count) {
+         if (!dev->watch) {
+-            dev->watch = qemu_chr_fe_add_watch(dev->cs, G_IO_OUT,
++            dev->watch = qemu_chr_fe_add_watch(dev->cs, G_IO_OUT|G_IO_HUP,
+                                                usbredir_write_unblocked, dev);
+         }
+         if (r < 0) {
+diff --git a/monitor.c b/monitor.c
+index 1b28ff3..393a508 100644
+--- a/monitor.c
++++ b/monitor.c
+@@ -300,7 +300,7 @@ void monitor_flush(Monitor *mon)
+             mon->outbuf = tmp;
+         }
+         if (mon->watch == 0) {
+-            mon->watch = qemu_chr_fe_add_watch(mon->chr, G_IO_OUT,
++            mon->watch = qemu_chr_fe_add_watch(mon->chr, G_IO_OUT|G_IO_HUP,
+                                                monitor_unblocked, mon);
+         }
+     }
+-- 
+1.8.3.1
+

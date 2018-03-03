@@ -1,0 +1,316 @@
+From de29d97cab7b97d776cbb1077079eff0bfc46186 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 29 Nov 2011 12:42:20 +0100
+Subject: [PATCH 10/37] raw: Probe required direct I/O alignment
+
+Message-id: <1392117622-28812-11-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57175
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 10/37] raw: Probe required direct I/O alignment
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+Add a bs->request_alignment field that contains the required
+offset/length alignment for I/O requests and fill it in the raw block
+drivers. Use ioctls if possible, else see what alignment it takes for
+O_DIRECT to succeed.
+
+While at it, also expose the memory alignment requirements, which may be
+(and in practice are) different from the disk alignment requirements.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+(cherry picked from commit c25f53b06eba1575d5d0e92a0132455c97825b83)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c                   |   3 ++
+ block/raw-posix.c         | 102 ++++++++++++++++++++++++++++++++++++++--------
+ block/raw-win32.c         |  41 +++++++++++++++++++
+ include/block/block_int.h |   3 ++
+ 4 files changed, 132 insertions(+), 17 deletions(-)
+---
+ block.c                   |    3 +
+ block/raw-posix.c         |  102 +++++++++++++++++++++++++++++++++++++-------
+ block/raw-win32.c         |   41 ++++++++++++++++++
+ include/block/block_int.h |    3 +
+ 4 files changed, 132 insertions(+), 17 deletions(-)
+
+diff --git a/block.c b/block.c
+index f2102bc..40a4a34 100644
+--- a/block.c
++++ b/block.c
+@@ -780,6 +780,7 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
+ 
+     bs->open_flags = flags;
+     bs->guest_block_size = 512;
++    bs->request_alignment = 512;
+     bs->zero_beyond_eof = true;
+     open_flags = bdrv_open_flags(bs, flags);
+     bs->read_only = !(open_flags & BDRV_O_RDWR);
+@@ -845,6 +846,8 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
+     }
+ 
+     bdrv_refresh_limits(bs);
++    assert(bdrv_opt_mem_align(bs) != 0);
++    assert(bs->request_alignment != 0);
+ 
+ #ifndef _WIN32
+     if (bs->is_temporary) {
+diff --git a/block/raw-posix.c b/block/raw-posix.c
+index f410668..9ee5b8e 100644
+--- a/block/raw-posix.c
++++ b/block/raw-posix.c
+@@ -127,6 +127,8 @@ typedef struct BDRVRawState {
+     int fd;
+     int type;
+     int open_flags;
++    size_t buf_align;
++
+ #if defined(__linux__)
+     /* linux floppy specific */
+     int64_t fd_open_time;
+@@ -213,6 +215,76 @@ static int raw_normalize_devicepath(const char **filename)
+ }
+ #endif
+ 
++static void raw_probe_alignment(BlockDriverState *bs)
++{
++    BDRVRawState *s = bs->opaque;
++    char *buf;
++    unsigned int sector_size;
++
++    /* For /dev/sg devices the alignment is not really used.
++       With buffered I/O, we don't have any restrictions. */
++    if (bs->sg || !(s->open_flags & O_DIRECT)) {
++        bs->request_alignment = 1;
++        s->buf_align = 1;
++        return;
++    }
++
++    /* Try a few ioctls to get the right size */
++    bs->request_alignment = 0;
++    s->buf_align = 0;
++
++#ifdef BLKSSZGET
++    if (ioctl(s->fd, BLKSSZGET, &sector_size) >= 0) {
++        bs->request_alignment = sector_size;
++    }
++#endif
++#ifdef DKIOCGETBLOCKSIZE
++    if (ioctl(s->fd, DKIOCGETBLOCKSIZE, &sector_size) >= 0) {
++        bs->request_alignment = sector_size;
++    }
++#endif
++#ifdef DIOCGSECTORSIZE
++    if (ioctl(s->fd, DIOCGSECTORSIZE, &sector_size) >= 0) {
++        bs->request_alignment = sector_size;
++    }
++#endif
++#ifdef CONFIG_XFS
++    if (s->is_xfs) {
++        struct dioattr da;
++        if (xfsctl(NULL, s->fd, XFS_IOC_DIOINFO, &da) >= 0) {
++            bs->request_alignment = da.d_miniosz;
++            /* The kernel returns wrong information for d_mem */
++            /* s->buf_align = da.d_mem; */
++        }
++    }
++#endif
++
++    /* If we could not get the sizes so far, we can only guess them */
++    if (!s->buf_align) {
++        size_t align;
++        buf = qemu_memalign(MAX_BLOCKSIZE, 2 * MAX_BLOCKSIZE);
++        for (align = 512; align <= MAX_BLOCKSIZE; align <<= 1) {
++            if (pread(s->fd, buf + align, MAX_BLOCKSIZE, 0) >= 0) {
++                s->buf_align = align;
++                break;
++            }
++        }
++        qemu_vfree(buf);
++    }
++
++    if (!bs->request_alignment) {
++        size_t align;
++        buf = qemu_memalign(s->buf_align, MAX_BLOCKSIZE);
++        for (align = 512; align <= MAX_BLOCKSIZE; align <<= 1) {
++            if (pread(s->fd, buf, align, 0) >= 0) {
++                bs->request_alignment = align;
++                break;
++            }
++        }
++        qemu_vfree(buf);
++    }
++}
++
+ static void raw_parse_flags(int bdrv_flags, int *open_flags)
+ {
+     assert(open_flags != NULL);
+@@ -464,7 +536,6 @@ static int raw_reopen_prepare(BDRVReopenState *state,
+     return ret;
+ }
+ 
+-
+ static void raw_reopen_commit(BDRVReopenState *state)
+ {
+     BDRVRawReopenState *raw_s = state->opaque;
+@@ -500,23 +571,15 @@ static void raw_reopen_abort(BDRVReopenState *state)
+     state->opaque = NULL;
+ }
+ 
++static int raw_refresh_limits(BlockDriverState *bs)
++{
++    BDRVRawState *s = bs->opaque;
+ 
+-/* XXX: use host sector size if necessary with:
+-#ifdef DIOCGSECTORSIZE
+-        {
+-            unsigned int sectorsize = 512;
+-            if (!ioctl(fd, DIOCGSECTORSIZE, &sectorsize) &&
+-                sectorsize > bufsize)
+-                bufsize = sectorsize;
+-        }
+-#endif
+-#ifdef CONFIG_COCOA
+-        uint32_t blockSize = 512;
+-        if ( !ioctl( fd, DKIOCGETBLOCKSIZE, &blockSize ) && blockSize > bufsize) {
+-            bufsize = blockSize;
+-        }
+-#endif
+-*/
++    raw_probe_alignment(bs);
++    bs->bl.opt_mem_alignment = s->buf_align;
++
++    return 0;
++}
+ 
+ static ssize_t handle_aiocb_ioctl(RawPosixAIOData *aiocb)
+ {
+@@ -1363,6 +1426,7 @@ static BlockDriver bdrv_file = {
+     .bdrv_aio_writev = raw_aio_writev,
+     .bdrv_aio_flush = raw_aio_flush,
+     .bdrv_aio_discard = raw_aio_discard,
++    .bdrv_refresh_limits = raw_refresh_limits,
+ 
+     .bdrv_truncate = raw_truncate,
+     .bdrv_getlength = raw_getlength,
+@@ -1739,6 +1803,7 @@ static BlockDriver bdrv_host_device = {
+     .bdrv_aio_writev	= raw_aio_writev,
+     .bdrv_aio_flush	= raw_aio_flush,
+     .bdrv_aio_discard   = hdev_aio_discard,
++    .bdrv_refresh_limits = raw_refresh_limits,
+ 
+     .bdrv_truncate      = raw_truncate,
+     .bdrv_getlength	= raw_getlength,
+@@ -1869,6 +1934,7 @@ static BlockDriver bdrv_host_floppy = {
+     .bdrv_aio_readv     = raw_aio_readv,
+     .bdrv_aio_writev    = raw_aio_writev,
+     .bdrv_aio_flush	= raw_aio_flush,
++    .bdrv_refresh_limits = raw_refresh_limits,
+ 
+     .bdrv_truncate      = raw_truncate,
+     .bdrv_getlength      = raw_getlength,
+@@ -1978,6 +2044,7 @@ static BlockDriver bdrv_host_cdrom = {
+     .bdrv_aio_readv     = raw_aio_readv,
+     .bdrv_aio_writev    = raw_aio_writev,
+     .bdrv_aio_flush	= raw_aio_flush,
++    .bdrv_refresh_limits = raw_refresh_limits,
+ 
+     .bdrv_truncate      = raw_truncate,
+     .bdrv_getlength      = raw_getlength,
+@@ -2105,6 +2172,7 @@ static BlockDriver bdrv_host_cdrom = {
+     .bdrv_aio_readv     = raw_aio_readv,
+     .bdrv_aio_writev    = raw_aio_writev,
+     .bdrv_aio_flush	= raw_aio_flush,
++    .bdrv_refresh_limits = raw_refresh_limits,
+ 
+     .bdrv_truncate      = raw_truncate,
+     .bdrv_getlength      = raw_getlength,
+diff --git a/block/raw-win32.c b/block/raw-win32.c
+index 6ac3797..ac20370 100644
+--- a/block/raw-win32.c
++++ b/block/raw-win32.c
+@@ -201,6 +201,35 @@ static int set_sparse(int fd)
+ 				 NULL, 0, NULL, 0, &returned, NULL);
+ }
+ 
++static void raw_probe_alignment(BlockDriverState *bs)
++{
++    BDRVRawState *s = bs->opaque;
++    DWORD sectorsPerCluster, freeClusters, totalClusters, count;
++    DISK_GEOMETRY_EX dg;
++    BOOL status;
++
++    if (s->type == FTYPE_CD) {
++        bs->request_alignment = 2048;
++        return;
++    }
++    if (s->type == FTYPE_HARDDISK) {
++        status = DeviceIoControl(s->hfile, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
++                                 NULL, 0, &dg, sizeof(dg), &count, NULL);
++        if (status != 0) {
++            bs->request_alignment = dg.Geometry.BytesPerSector;
++            return;
++        }
++        /* try GetDiskFreeSpace too */
++    }
++
++    if (s->drive_path[0]) {
++        GetDiskFreeSpace(s->drive_path, &sectorsPerCluster,
++                         &dg.Geometry.BytesPerSector,
++                         &freeClusters, &totalClusters);
++        bs->request_alignment = dg.Geometry.BytesPerSector;
++    }
++}
++
+ static void raw_parse_flags(int flags, int *access_flags, DWORD *overlapped)
+ {
+     assert(access_flags != NULL);
+@@ -268,6 +297,17 @@ static int raw_open(BlockDriverState *bs, QDict *options, int flags,
+         }
+     }
+ 
++    if (filename[0] && filename[1] == ':') {
++        snprintf(s->drive_path, sizeof(s->drive_path), "%c:\\", filename[0]);
++    } else if (filename[0] == '\\' && filename[1] == '\\') {
++        s->drive_path[0] = 0;
++    } else {
++        /* Relative path.  */
++        char buf[MAX_PATH];
++        GetCurrentDirectory(MAX_PATH, buf);
++        snprintf(s->drive_path, sizeof(s->drive_path), "%c:\\", buf[0]);
++    }
++
+     s->hfile = CreateFile(filename, access_flags,
+                           FILE_SHARE_READ, NULL,
+                           OPEN_EXISTING, overlapped, NULL);
+@@ -293,6 +333,7 @@ static int raw_open(BlockDriverState *bs, QDict *options, int flags,
+         s->aio = aio;
+     }
+ 
++    raw_probe_alignment(bs);
+     ret = 0;
+ fail:
+     qemu_opts_del(opts);
+diff --git a/include/block/block_int.h b/include/block/block_int.h
+index 0445e6b..e66bd5f 100644
+--- a/include/block/block_int.h
++++ b/include/block/block_int.h
+@@ -307,6 +307,9 @@ struct BlockDriverState {
+     /* Whether produces zeros when read beyond eof */
+     bool zero_beyond_eof;
+ 
++    /* Alignment requirement for offset/length of I/O requests */
++    unsigned int request_alignment;
++
+     /* the block size for which the guest device expects atomicity */
+     int guest_block_size;
+ 
+-- 
+1.7.1
+

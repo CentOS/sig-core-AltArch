@@ -1,0 +1,218 @@
+From 8f9ad0991d9dd978f342ff4dcc58a18d8f1a73c4 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 9 Sep 2013 14:27:58 +0200
+Subject: [PATCH 07/38] block: Don't parse protocol from file.filename
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1378736903-18489-8-git-send-email-kwolf@redhat.com>
+Patchwork-id: 54194
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 07/32] block: Don't parse protocol from file.filename
+Bugzilla: 1005818
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Bugzilla: 1005818
+
+One of the major reasons for doing something new for -blockdev and
+blockdev-add was that the old block layer code parses filenames instead
+of just taking them literally. So we should really leave it untouched
+when it's passing using the new interfaces (like -drive
+file.filename=...).
+
+This allows opening relative file names that contain a colon.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit 98289620e0460fa595581020ab20127da4a2fc44)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c                    | 17 ++++++++++++-----
+ block/sheepdog.c           |  2 +-
+ include/block/block.h      |  3 ++-
+ qemu-img.c                 |  4 ++--
+ tests/qemu-iotests/051     | 12 ++++++++++++
+ tests/qemu-iotests/051.out | 14 ++++++++++++++
+ 6 files changed, 43 insertions(+), 9 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c                    |   17 ++++++++++++-----
+ block/sheepdog.c           |    2 +-
+ include/block/block.h      |    3 ++-
+ qemu-img.c                 |    4 ++--
+ tests/qemu-iotests/051     |   12 ++++++++++++
+ tests/qemu-iotests/051.out |   14 ++++++++++++++
+ 6 files changed, 43 insertions(+), 9 deletions(-)
+
+diff --git a/block.c b/block.c
+index 3c869e4..2584ec7 100644
+--- a/block.c
++++ b/block.c
+@@ -419,7 +419,7 @@ int bdrv_create_file(const char* filename, QEMUOptionParameter *options)
+ {
+     BlockDriver *drv;
+ 
+-    drv = bdrv_find_protocol(filename);
++    drv = bdrv_find_protocol(filename, true);
+     if (drv == NULL) {
+         return -ENOENT;
+     }
+@@ -484,7 +484,8 @@ static BlockDriver *find_hdev_driver(const char *filename)
+     return drv;
+ }
+ 
+-BlockDriver *bdrv_find_protocol(const char *filename)
++BlockDriver *bdrv_find_protocol(const char *filename,
++                                bool allow_protocol_prefix)
+ {
+     BlockDriver *drv1;
+     char protocol[128];
+@@ -505,9 +506,10 @@ BlockDriver *bdrv_find_protocol(const char *filename)
+         return drv1;
+     }
+ 
+-    if (!path_has_protocol(filename)) {
++    if (!path_has_protocol(filename) || !allow_protocol_prefix) {
+         return bdrv_find_format("file");
+     }
++
+     p = strchr(filename, ':');
+     assert(p != NULL);
+     len = p - filename;
+@@ -786,6 +788,7 @@ int bdrv_file_open(BlockDriverState **pbs, const char *filename,
+     BlockDriverState *bs;
+     BlockDriver *drv;
+     const char *drvname;
++    bool allow_protocol_prefix = false;
+     int ret;
+ 
+     /* NULL means an empty set of options */
+@@ -802,6 +805,7 @@ int bdrv_file_open(BlockDriverState **pbs, const char *filename,
+         filename = qdict_get_try_str(options, "filename");
+     } else if (filename && !qdict_haskey(options, "filename")) {
+         qdict_put(options, "filename", qstring_from_str(filename));
++        allow_protocol_prefix = true;
+     } else {
+         qerror_report(ERROR_CLASS_GENERIC_ERROR, "Can't specify 'file' and "
+                       "'filename' options at the same time");
+@@ -815,7 +819,10 @@ int bdrv_file_open(BlockDriverState **pbs, const char *filename,
+         drv = bdrv_find_whitelisted_format(drvname, !(flags & BDRV_O_RDWR));
+         qdict_del(options, "driver");
+     } else if (filename) {
+-        drv = bdrv_find_protocol(filename);
++        drv = bdrv_find_protocol(filename, allow_protocol_prefix);
++        if (!drv) {
++            qerror_report(ERROR_CLASS_GENERIC_ERROR, "Unknown protocol");
++        }
+     } else {
+         qerror_report(ERROR_CLASS_GENERIC_ERROR,
+                       "Must specify either driver or file");
+@@ -4770,7 +4777,7 @@ void bdrv_img_create(const char *filename, const char *fmt,
+         return;
+     }
+ 
+-    proto_drv = bdrv_find_protocol(filename);
++    proto_drv = bdrv_find_protocol(filename, true);
+     if (!proto_drv) {
+         error_setg(errp, "Unknown protocol '%s'", filename);
+         return;
+diff --git a/block/sheepdog.c b/block/sheepdog.c
+index 21a4edf..2758c26 100644
+--- a/block/sheepdog.c
++++ b/block/sheepdog.c
+@@ -1510,7 +1510,7 @@ static int sd_create(const char *filename, QEMUOptionParameter *options)
+         BlockDriver *drv;
+ 
+         /* Currently, only Sheepdog backing image is supported. */
+-        drv = bdrv_find_protocol(backing_file);
++        drv = bdrv_find_protocol(backing_file, true);
+         if (!drv || strcmp(drv->protocol_name, "sheepdog") != 0) {
+             error_report("backing_file must be a sheepdog image");
+             ret = -EINVAL;
+diff --git a/include/block/block.h b/include/block/block.h
+index db7bc4f..174295b 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -122,7 +122,8 @@ bool bdrv_io_limits_enabled(BlockDriverState *bs);
+ 
+ void bdrv_init(void);
+ void bdrv_init_with_whitelist(void);
+-BlockDriver *bdrv_find_protocol(const char *filename);
++BlockDriver *bdrv_find_protocol(const char *filename,
++                                bool allow_protocol_prefix);
+ BlockDriver *bdrv_find_format(const char *format_name);
+ BlockDriver *bdrv_find_whitelisted_format(const char *format_name,
+                                           bool readonly);
+diff --git a/qemu-img.c b/qemu-img.c
+index 673d80f..3b11414 100644
+--- a/qemu-img.c
++++ b/qemu-img.c
+@@ -238,7 +238,7 @@ static int print_block_option_help(const char *filename, const char *fmt)
+         return 1;
+     }
+ 
+-    proto_drv = bdrv_find_protocol(filename);
++    proto_drv = bdrv_find_protocol(filename, true);
+     if (!proto_drv) {
+         error_report("Unknown protocol '%s'", filename);
+         return 1;
+@@ -1261,7 +1261,7 @@ static int img_convert(int argc, char **argv)
+         goto out;
+     }
+ 
+-    proto_drv = bdrv_find_protocol(out_filename);
++    proto_drv = bdrv_find_protocol(out_filename, true);
+     if (!proto_drv) {
+         error_report("Unknown protocol '%s'", out_filename);
+         ret = -1;
+diff --git a/tests/qemu-iotests/051 b/tests/qemu-iotests/051
+index 8039e23..1cf8bf7 100755
+--- a/tests/qemu-iotests/051
++++ b/tests/qemu-iotests/051
+@@ -149,6 +149,18 @@ echo
+ run_qemu -drive file=$TEST_IMG,file.driver=file
+ run_qemu -drive file=$TEST_IMG,file.driver=qcow2
+ 
++echo
++echo === Parsing protocol from file name ===
++echo
++
++# Protocol strings are supposed to be parsed from traditional option strings,
++# but not when using driver-specific options. We can distinguish them by the
++# error message for non-existing files.
++
++run_qemu -hda foo:bar
++run_qemu -drive file=foo:bar
++run_qemu -drive file.filename=foo:bar
++
+ # success, all done
+ echo "*** done"
+ rm -f $seq.full
+diff --git a/tests/qemu-iotests/051.out b/tests/qemu-iotests/051.out
+index 3d1ac7b..6b3d636 100644
+--- a/tests/qemu-iotests/051.out
++++ b/tests/qemu-iotests/051.out
+@@ -169,4 +169,18 @@ Testing: -drive file=TEST_DIR/t.qcow2,file.driver=qcow2
+ QEMU_PROG: -drive file=TEST_DIR/t.qcow2,file.driver=qcow2: Can't use 'qcow2' as a block driver for the protocol level
+ QEMU_PROG: -drive file=TEST_DIR/t.qcow2,file.driver=qcow2: could not open disk image TEST_DIR/t.qcow2: Invalid argument
+ 
++
++=== Parsing protocol from file name ===
++
++Testing: -hda foo:bar
++QEMU_PROG: -hda foo:bar: Unknown protocol
++QEMU_PROG: -hda foo:bar: could not open disk image foo:bar: No such file or directory
++
++Testing: -drive file=foo:bar
++QEMU_PROG: -drive file=foo:bar: Unknown protocol
++QEMU_PROG: -drive file=foo:bar: could not open disk image foo:bar: No such file or directory
++
++Testing: -drive file.filename=foo:bar
++QEMU_PROG: -drive file.filename=foo:bar: could not open disk image ide0-hd0: No such file or directory
++
+ *** done
+-- 
+1.7.1
+

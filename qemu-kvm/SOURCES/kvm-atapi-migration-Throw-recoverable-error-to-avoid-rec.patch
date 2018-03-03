@@ -1,0 +1,118 @@
+From e44bfb41173183a85bb6fa94a6f48486ac4ab0a2 Mon Sep 17 00:00:00 2001
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+Date: Tue, 10 Feb 2015 11:45:36 +0100
+Subject: [PATCH 10/16] atapi migration: Throw recoverable error to avoid
+ recovery
+
+Message-id: <1423568736-19538-3-git-send-email-dgilbert@redhat.com>
+Patchwork-id: 63779
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 2/2] atapi migration: Throw recoverable error to avoid recovery
+Bugzilla: 892258
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+
+(With the previous atapi_dma flag recovery)
+If migration happens between the ATAPI command being written and the
+bmdma being started, the DMA is dropped.  Eventually the guest times
+out and recovers, but that can take many seconds.
+(This is rare, on a pingpong reading the CD continuously I hit
+this about ~1/30-1/50 migrates)
+
+I don't think we've got enough state to be able to recover safely
+at this point, so I throw a 'medium error, no seek complete'
+that I'm assuming guests will try and recover from an apparently
+dirty CD.
+
+OK, it's a hack, the real solution is probably to push a lot of
+ATAPI state into the migration stream, but this is a fix that
+works with no stream changes. Tested only on Linux (both RHEL5
+(pre-libata) and RHEL7).
+
+Signed-off-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Reviewed-by: John Snow <jsnow@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit a71754e5b03fd3b8b8c6d3bc2a39f75bead729de)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/ide/atapi.c    | 17 +++++++++++++++++
+ hw/ide/internal.h |  2 ++
+ hw/ide/pci.c      | 11 +++++++++++
+ 3 files changed, 30 insertions(+)
+
+diff --git a/hw/ide/atapi.c b/hw/ide/atapi.c
+index 05e60b1..46a2c26 100644
+--- a/hw/ide/atapi.c
++++ b/hw/ide/atapi.c
+@@ -393,6 +393,23 @@ static void ide_atapi_cmd_read(IDEState *s, int lba, int nb_sectors,
+     }
+ }
+ 
++
++/* Called by *_restart_bh when the transfer function points
++ * to ide_atapi_cmd
++ */
++void ide_atapi_dma_restart(IDEState *s)
++{
++    /*
++     * I'm not sure we have enough stored to restart the command
++     * safely, so give the guest an error it should recover from.
++     * I'm assuming most guests will try to recover from something
++     * listed as a medium error on a CD; it seems to work on Linux.
++     * This would be more of a problem if we did any other type of
++     * DMA operation.
++     */
++    ide_atapi_cmd_error(s, MEDIUM_ERROR, ASC_NO_SEEK_COMPLETE);
++}
++
+ static inline uint8_t ide_atapi_set_profile(uint8_t *buf, uint8_t *index,
+                                             uint16_t profile)
+ {
+diff --git a/hw/ide/internal.h b/hw/ide/internal.h
+index 048a052..0a2d6bc 100644
+--- a/hw/ide/internal.h
++++ b/hw/ide/internal.h
+@@ -289,6 +289,7 @@ typedef struct IDEDMAOps IDEDMAOps;
+ #define ATAPI_INT_REASON_TAG            0xf8
+ 
+ /* same constants as bochs */
++#define ASC_NO_SEEK_COMPLETE                 0x02
+ #define ASC_ILLEGAL_OPCODE                   0x20
+ #define ASC_LOGICAL_BLOCK_OOR                0x21
+ #define ASC_INV_FIELD_IN_CMD_PACKET          0x24
+@@ -536,6 +537,7 @@ void ide_dma_error(IDEState *s);
+ 
+ void ide_atapi_cmd_ok(IDEState *s);
+ void ide_atapi_cmd_error(IDEState *s, int sense_key, int asc);
++void ide_atapi_dma_restart(IDEState *s);
+ void ide_atapi_io_error(IDEState *s, int ret);
+ 
+ void ide_ioport_write(void *opaque, uint32_t addr, uint32_t val);
+diff --git a/hw/ide/pci.c b/hw/ide/pci.c
+index 635a364..cf7acb0 100644
+--- a/hw/ide/pci.c
++++ b/hw/ide/pci.c
+@@ -220,6 +220,17 @@ static void bmdma_restart_bh(void *opaque)
+         }
+     } else if (error_status & BM_STATUS_RETRY_FLUSH) {
+         ide_flush_cache(bmdma_active_if(bm));
++    } else {
++        IDEState *s = bmdma_active_if(bm);
++
++        /*
++         * We've not got any bits to tell us about ATAPI - but
++         * we do have the end_transfer_func that tells us what
++         * we're trying to do.
++         */
++        if (s->end_transfer_func == ide_atapi_cmd) {
++            ide_atapi_dma_restart(s);
++        }
+     }
+ }
+ 
+-- 
+1.8.3.1
+

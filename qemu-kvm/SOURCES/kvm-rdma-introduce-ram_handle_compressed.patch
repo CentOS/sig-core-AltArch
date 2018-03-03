@@ -1,0 +1,111 @@
+From 6499b6033f8aff6482cfa7942b0c16b386a519f5 Mon Sep 17 00:00:00 2001
+Message-Id: <6499b6033f8aff6482cfa7942b0c16b386a519f5.1387382496.git.minovotn@redhat.com>
+In-Reply-To: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+References: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+From: Nigel Croxon <ncroxon@redhat.com>
+Date: Thu, 14 Nov 2013 22:52:50 +0100
+Subject: [PATCH 14/46] rdma: introduce ram_handle_compressed()
+
+RH-Author: Nigel Croxon <ncroxon@redhat.com>
+Message-id: <1384469598-13137-15-git-send-email-ncroxon@redhat.com>
+Patchwork-id: 55706
+O-Subject: [RHEL7.0 PATCH 14/42] rdma: introduce ram_handle_compressed()
+Bugzilla: 1011720
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: 1011720
+https://bugzilla.redhat.com/show_bug.cgi?id=1011720
+
+>From commit ID:
+commit 44c3b58cf9b2c91a38363f0b45d20f3f40b8f2b3
+Author: Michael R. Hines <mrhines@us.ibm.com>
+Date:   Mon Jul 22 10:01:53 2013 -0400
+
+    rdma: introduce ram_handle_compressed()
+
+    This gives RDMA shared access to madvise() on the destination side
+    when an entire chunk is found to be zero.
+
+    Reviewed-by: Juan Quintela <quintela@redhat.com>
+    Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+    Reviewed-by: Chegu Vinod <chegu_vinod@hp.com>
+    Tested-by: Chegu Vinod <chegu_vinod@hp.com>
+    Tested-by: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Michael R. Hines <mrhines@us.ibm.com>
+    Signed-off-by: Juan Quintela <quintela@redhat.com>
+---
+ arch_init.c                   |   29 +++++++++++++++++++----------
+ include/migration/migration.h |    2 ++
+ 2 files changed, 21 insertions(+), 10 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ arch_init.c                   | 29 +++++++++++++++++++----------
+ include/migration/migration.h |  2 ++
+ 2 files changed, 21 insertions(+), 10 deletions(-)
+
+diff --git a/arch_init.c b/arch_init.c
+index e940ede..e7da520 100644
+--- a/arch_init.c
++++ b/arch_init.c
+@@ -809,6 +809,24 @@ static inline void *host_from_stream_offset(QEMUFile *f,
+     return NULL;
+ }
+ 
++/*
++ * If a page (or a whole RDMA chunk) has been
++ * determined to be zero, then zap it.
++ */
++void ram_handle_compressed(void *host, uint8_t ch, uint64_t size)
++{
++    if (ch != 0 || !is_zero_page(host)) {
++        memset(host, ch, size);
++#ifndef _WIN32
++        if (ch == 0 &&
++            (!kvm_enabled() || kvm_has_sync_mmu()) &&
++            getpagesize() <= TARGET_PAGE_SIZE) {
++            qemu_madvise(host, TARGET_PAGE_SIZE, QEMU_MADV_DONTNEED);
++        }
++#endif
++    }
++}
++
+ static int ram_load(QEMUFile *f, void *opaque, int version_id)
+ {
+     ram_addr_t addr;
+@@ -876,16 +894,7 @@ static int ram_load(QEMUFile *f, void *opaque, int version_id)
+             }
+ 
+             ch = qemu_get_byte(f);
+-            if (ch != 0 || !is_zero_page(host)) {
+-                memset(host, ch, TARGET_PAGE_SIZE);
+-#ifndef _WIN32
+-                if (ch == 0 &&
+-                    (!kvm_enabled() || kvm_has_sync_mmu()) &&
+-                    getpagesize() <= TARGET_PAGE_SIZE) {
+-                    qemu_madvise(host, TARGET_PAGE_SIZE, QEMU_MADV_DONTNEED);
+-                }
+-#endif
+-            }
++            ram_handle_compressed(host, ch, TARGET_PAGE_SIZE);
+         } else if (flags & RAM_SAVE_FLAG_PAGE) {
+             void *host;
+ 
+diff --git a/include/migration/migration.h b/include/migration/migration.h
+index 701709a..90b5021 100644
+--- a/include/migration/migration.h
++++ b/include/migration/migration.h
+@@ -109,6 +109,8 @@ uint64_t xbzrle_mig_pages_transferred(void);
+ uint64_t xbzrle_mig_pages_overflow(void);
+ uint64_t xbzrle_mig_pages_cache_miss(void);
+ 
++void ram_handle_compressed(void *host, uint8_t ch, uint64_t size);
++
+ /**
+  * @migrate_add_blocker - prevent migration from proceeding
+  *
+-- 
+1.7.11.7
+

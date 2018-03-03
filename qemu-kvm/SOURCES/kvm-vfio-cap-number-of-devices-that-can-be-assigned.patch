@@ -1,0 +1,73 @@
+From 4110ee428550f672ee1a1a73a634d5392bf9c55f Mon Sep 17 00:00:00 2001
+Message-Id: <4110ee428550f672ee1a1a73a634d5392bf9c55f.1387382496.git.minovotn@redhat.com>
+In-Reply-To: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+References: <c5386144fbf09f628148101bc674e2421cdd16e3.1387382496.git.minovotn@redhat.com>
+From: Bandan Das <bsd@redhat.com>
+Date: Tue, 3 Dec 2013 20:05:13 +0100
+Subject: [PATCH 44/46] vfio: cap number of devices that can be assigned
+
+RH-Author: Bandan Das <bsd@redhat.com>
+Message-id: <1386101113-31560-3-git-send-email-bsd@redhat.com>
+Patchwork-id: 55984
+O-Subject: [PATCH RHEL7 qemu-kvm v2 2/2] vfio: cap number of devices that can be assigned
+Bugzilla: 678368
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+RH-Acked-by: Marcelo Tosatti <mtosatti@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+
+Go through all groups to get count of total number of devices
+active to enforce limit
+
+Reasoning from Alex for the limit(32) - Assuming 3 slots per
+device, with 125 slots (number of memory slots for RHEL 7),
+we can support almost 40 devices and still have few slots left
+for other uses. Stepping down a bit, the number 32 arbitrarily
+matches the number of slots on a PCI bus and is also a nice power
+of two.
+
+Signed-off-by: Bandan Das <bsd@redhat.com>
+---
+ hw/misc/vfio.c | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/misc/vfio.c | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index 250f96f..bd30130 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -201,6 +201,7 @@ typedef struct VFIOGroup {
+ } VFIOGroup;
+ 
+ #define MSIX_CAP_LENGTH 12
++#define MAX_DEV_ASSIGN_CMDLINE 32
+ 
+ static QLIST_HEAD(, VFIOContainer)
+     container_list = QLIST_HEAD_INITIALIZER(container_list);
+@@ -3557,7 +3558,19 @@ static int vfio_initfn(PCIDevice *pdev)
+     ssize_t len;
+     struct stat st;
+     int groupid;
+-    int ret;
++    int ret, i = 0;
++
++    QLIST_FOREACH(group, &group_list, next) {
++        QLIST_FOREACH(pvdev, &group->device_list, next) {
++            i++;
++        }
++    }
++
++    if (i >= MAX_DEV_ASSIGN_CMDLINE) {
++        error_report("vfio: Maximum supported vfio devices (%d) "
++                     "already attached\n", MAX_DEV_ASSIGN_CMDLINE);
++        return -1;
++    }
+ 
+     /* Check that the host device exists */
+     snprintf(path, sizeof(path),
+-- 
+1.7.11.7
+

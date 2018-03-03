@@ -1,0 +1,101 @@
+From 153d5ee0b61926664684a28cdfc982f956c329a2 Mon Sep 17 00:00:00 2001
+Message-Id: <153d5ee0b61926664684a28cdfc982f956c329a2.1418766606.git.jen@redhat.com>
+In-Reply-To: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+References: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 4 Dec 2014 00:05:07 -0600
+Subject: [CHANGE 13/31] vmdk: do not try opening a file as both image and
+ descriptor
+To: rhvirt-patches@redhat.com,
+    jen@redhat.com
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1417651524-18041-14-git-send-email-famz@redhat.com>
+Patchwork-id: 62686
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v5 13/30] vmdk: do not try opening a file as both image and descriptor
+Bugzilla: 1134251
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+This prepares for propagating errors from vmdk_open_sparse and
+vmdk_open_desc_file up to the caller of vmdk_open.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 37f09e5e3d206e7c555d28a7755cecfa137dad22)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Jeff E. Nelson <jen@redhat.com>
+---
+ block/vmdk.c               | 22 +++++++++++++++-------
+ tests/qemu-iotests/059.out |  4 ++--
+ 2 files changed, 17 insertions(+), 9 deletions(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 458bceb..94f7dae 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -887,20 +887,28 @@ static int vmdk_open(BlockDriverState *bs, QDict *options, int flags,
+     char *buf = NULL;
+     int ret;
+     BDRVVmdkState *s = bs->opaque;
++    uint32_t magic;
+ 
+     buf = vmdk_read_desc(bs->file, 0, errp);
+     if (!buf) {
+         return -EINVAL;
+     }
+ 
+-    if (vmdk_open_sparse(bs, bs->file, flags, buf, errp) == 0) {
+-        s->desc_offset = 0x200;
+-    } else {
+-        ret = vmdk_open_desc_file(bs, flags, buf, errp);
+-        if (ret) {
+-            goto fail;
+-        }
++    magic = ldl_be_p(buf);
++    switch (magic) {
++        case VMDK3_MAGIC:
++        case VMDK4_MAGIC:
++            ret = vmdk_open_sparse(bs, bs->file, flags, buf, errp);
++            s->desc_offset = 0x200;
++            break;
++        default:
++            ret = vmdk_open_desc_file(bs, flags, buf, errp);
++            break;
+     }
++    if (ret) {
++        goto fail;
++    }
++
+     /* try to open parent images, if exist */
+     ret = vmdk_parent_open(bs);
+     if (ret) {
+diff --git a/tests/qemu-iotests/059.out b/tests/qemu-iotests/059.out
+index f4ca52d..0220774 100644
+--- a/tests/qemu-iotests/059.out
++++ b/tests/qemu-iotests/059.out
+@@ -8,7 +8,7 @@ no file open, try 'help open'
+ 
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864
+ L2 table size too big
+-qemu-io: can't open device TEST_DIR/t.vmdk: Could not open 'TEST_DIR/t.vmdk': Wrong medium type
++qemu-io: can't open device TEST_DIR/t.vmdk: Could not open 'TEST_DIR/t.vmdk': Invalid argument
+ no file open, try 'help open'
+ === Testing too big L1 table size ===
+ 
+@@ -2046,7 +2046,7 @@ RW 12582912 VMFS "dummy.IMGFMT" 1
+ === Testing truncated sparse ===
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=107374182400
+ qemu-img: File truncated, expecting at least 13172736 bytes
+-qemu-img: Could not open 'TEST_DIR/t.IMGFMT': Could not open 'TEST_DIR/t.IMGFMT': Wrong medium type
++qemu-img: Could not open 'TEST_DIR/t.IMGFMT': Could not open 'TEST_DIR/t.IMGFMT': Invalid argument
+ 
+ === Testing version 3 ===
+ image: TEST_DIR/iotest-version3.IMGFMT
+-- 
+2.1.0
+

@@ -1,0 +1,70 @@
+From ae4902714a5ff8e905e69c25d48652a7a5e930f0 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Mon, 14 Apr 2014 09:59:22 +0200
+Subject: [PATCH 06/12] iscsi: ignore flushes on scsi-generic devices
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1397469562-5050-1-git-send-email-famz@redhat.com>
+Patchwork-id: 58458
+O-Subject: [RHEL-7 0day qemu-kvm PATCH v2 6/7] iscsi: ignore flushes on scsi-generic devices
+Bugzilla: 1083413
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1083413
+Brew: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=7342452
+
+Non-block SCSI devices do not support flushing, but we may still send
+them requests via bdrv_flush_all.  Just ignore them.
+
+Reviewed-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit b2f9c08a4f11f16ec101e95feab8e71d7cfcfee9)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+
+Conflicts:
+	block/iscsi.c
+        Because upstream iscsi driver is converted to coroutine while
+        downstream is aio. So the bdrv_flush code is different.
+
+---
+v2: Schedule BH instead of returning NULL (which is interpreted as error
+for AIO). (Thanks Kevin)
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ block/iscsi.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/iscsi.c |   10 ++++++++++
+ 1 files changed, 10 insertions(+), 0 deletions(-)
+
+diff --git a/block/iscsi.c b/block/iscsi.c
+index 268da2f..b80ebd3 100644
+--- a/block/iscsi.c
++++ b/block/iscsi.c
+@@ -617,6 +617,16 @@ iscsi_aio_flush(BlockDriverState *bs,
+     acb->iscsilun    = iscsilun;
+     acb->retries     = ISCSI_CMD_RETRIES;
+ 
++    if (bs->sg) {
++        acb->canceled = 0;
++        acb->status = 0;
++        acb->bh = NULL;
++        acb->buf = NULL;
++        acb->task = NULL;
++        iscsi_schedule_bh(acb);
++        return &acb->common;
++    }
++
+     if (iscsi_aio_flush_acb(acb) != 0) {
+         qemu_aio_release(acb);
+         return NULL;
+-- 
+1.7.1
+

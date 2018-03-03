@@ -1,0 +1,292 @@
+From 489749c38620620dced8e638c7f8d724cbb81943 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Thu, 7 Nov 2013 12:49:49 +0100
+Subject: [PATCH 58/87] qemu-iotests: Check autodel behaviour for device_del
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383660558-32096-18-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55397
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 17/24] qemu-iotests: Check autodel behaviour for device_del
+Bugzilla: 978402
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Block devices creates with -drive and drive_add should automatically
+disappear if the guest device is unplugged. blockdev-add ones shouldn't.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit a9b43397a9782d028f45b63fb4affee164f85948)
+
+Conflicts:
+	tests/qemu-iotests/group
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/067           |  133 ++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/067.out       |   80 +++++++++++++++++++++++
+ tests/qemu-iotests/common.filter |    8 ++
+ tests/qemu-iotests/group         |    1 +
+ 4 files changed, 222 insertions(+), 0 deletions(-)
+ create mode 100644 tests/qemu-iotests/067
+ create mode 100644 tests/qemu-iotests/067.out
+
+diff --git a/tests/qemu-iotests/067 b/tests/qemu-iotests/067
+new file mode 100644
+index 0000000..79dc38b
+--- /dev/null
++++ b/tests/qemu-iotests/067
+@@ -0,0 +1,133 @@
++#!/bin/bash
++#
++# Test automatic deletion of BDSes created by -drive/drive_add
++#
++# Copyright (C) 2013 Red Hat, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++
++# creator
++owner=kwolf@redhat.com
++
++seq=`basename $0`
++echo "QA output created by $seq"
++
++here=`pwd`
++tmp=/tmp/$$
++status=1	# failure is the default!
++
++# get standard environment, filters and checks
++. ./common.rc
++. ./common.filter
++
++_supported_fmt qcow2
++_supported_proto file
++_supported_os Linux
++
++function do_run_qemu()
++{
++    echo Testing: "$@"
++    $QEMU -nographic -qmp stdio -serial none "$@"
++    echo
++}
++
++function run_qemu()
++{
++    do_run_qemu "$@" 2>&1 | _filter_testdir | _filter_qmp
++}
++
++size=128M
++
++_make_test_img $size
++
++echo
++echo === -drive/-device and device_del ===
++echo
++
++run_qemu -drive file=$TEST_IMG,format=$IMGFMT,if=none,id=disk -device virtio-blk-pci,drive=disk,id=virtio0 <<EOF
++{ "execute": "qmp_capabilities" }
++{ "execute": "query-block" }
++{ "execute": "device_del", "arguments": { "id": "virtio0" } }
++{ "execute": "system_reset" }
++{ "execute": "query-block" }
++{ "execute": "quit" }
++EOF
++
++echo
++echo === -drive/device_add and device_del ===
++echo
++
++run_qemu -drive file=$TEST_IMG,format=$IMGFMT,if=none,id=disk <<EOF
++{ "execute": "qmp_capabilities" }
++{ "execute": "query-block" }
++{ "execute": "device_add",
++   "arguments": { "driver": "virtio-blk-pci", "drive": "disk",
++                  "id": "virtio0" } }
++{ "execute": "device_del", "arguments": { "id": "virtio0" } }
++{ "execute": "system_reset" }
++{ "execute": "query-block" }
++{ "execute": "quit" }
++EOF
++
++echo
++echo === drive_add/device_add and device_del ===
++echo
++
++run_qemu <<EOF
++{ "execute": "qmp_capabilities" }
++{ "execute": "human-monitor-command",
++  "arguments": { "command-line": "drive_add 0 file=$TEST_IMG,format=$IMGFMT,if=none,id=disk" } }
++{ "execute": "query-block" }
++{ "execute": "device_add",
++   "arguments": { "driver": "virtio-blk-pci", "drive": "disk",
++                  "id": "virtio0" } }
++{ "execute": "device_del", "arguments": { "id": "virtio0" } }
++{ "execute": "system_reset" }
++{ "execute": "query-block" }
++{ "execute": "quit" }
++EOF
++
++echo
++echo === blockdev_add/device_add and device_del ===
++echo
++
++run_qemu <<EOF
++{ "execute": "qmp_capabilities" }
++{ "execute": "blockdev-add",
++  "arguments": {
++      "options": {
++        "driver": "$IMGFMT",
++        "id": "disk",
++        "file": {
++            "driver": "file",
++            "filename": "$TEST_IMG"
++        }
++      }
++    }
++  }
++{ "execute": "query-block" }
++{ "execute": "device_add",
++   "arguments": { "driver": "virtio-blk-pci", "drive": "disk",
++                  "id": "virtio0" } }
++{ "execute": "device_del", "arguments": { "id": "virtio0" } }
++{ "execute": "system_reset" }
++{ "execute": "query-block" }
++{ "execute": "quit" }
++EOF
++
++# success, all done
++echo "*** done"
++rm -f $seq.full
++status=0
+diff --git a/tests/qemu-iotests/067.out b/tests/qemu-iotests/067.out
+new file mode 100644
+index 0000000..4bb9ff9
+--- /dev/null
++++ b/tests/qemu-iotests/067.out
+@@ -0,0 +1,80 @@
++QA output created by 067
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=134217728 
++
++=== -drive/-device and device_del ===
++
++Testing: -drive file=TEST_DIR/t.qcow2,format=qcow2,if=none,id=disk -device virtio-blk-pci,drive=disk,id=virtio0
++QMP_VERSION
++{"return": {}}
++{"return": [{"io-status": "ok", "device": "disk", "locked": false, "removable": false, "inserted": {"iops_rd": 0, "image": {"virtual-size": 134217728, "filename": "TEST_DIR/t.qcow2", "cluster-size": 65536, "format": "qcow2", "actual-size": 139264, "format-specific": {"type": "qcow2", "data": {"compat": "1.1", "lazy-refcounts": false}}, "dirty-flag": false}, "iops_wr": 0, "ro": false, "backing_file_depth": 0, "drv": "qcow2", "iops": 0, "bps_wr": 0, "encrypted": false, "bps": 0, "bps_rd": 0, "file": "TEST_DIR/t.qcow2", "encryption_key_missing": false}, "type": "unknown"}, {"io-status": "ok", "device": "ide1-cd0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}, {"device": "floppy0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}, {"device": "sd0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}]}
++{"return": {}}
++{"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_DELETED", "data": {"path": "/machine/peripheral/virtio0/virtio-backend"}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_DELETED", "data": {"device": "virtio0", "path": "/machine/peripheral/virtio0"}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "RESET"}
++{"return": [{"io-status": "ok", "device": "ide1-cd0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}, {"device": "floppy0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}, {"device": "sd0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}]}
++{"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN"}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_TRAY_MOVED", "data": {"device": "ide1-cd0", "tray-open": true}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_TRAY_MOVED", "data": {"device": "floppy0", "tray-open": true}}
++
++
++=== -drive/device_add and device_del ===
++
++Testing: -drive file=TEST_DIR/t.qcow2,format=qcow2,if=none,id=disk
++QMP_VERSION
++{"return": {}}
++{"return": [{"device": "disk", "locked": false, "removable": true, "inserted": {"iops_rd": 0, "image": {"virtual-size": 134217728, "filename": "TEST_DIR/t.qcow2", "cluster-size": 65536, "format": "qcow2", "actual-size": 139264, "format-specific": {"type": "qcow2", "data": {"compat": "1.1", "lazy-refcounts": false}}, "dirty-flag": false}, "iops_wr": 0, "ro": false, "backing_file_depth": 0, "drv": "qcow2", "iops": 0, "bps_wr": 0, "encrypted": false, "bps": 0, "bps_rd": 0, "file": "TEST_DIR/t.qcow2", "encryption_key_missing": false}, "tray_open": false, "type": "unknown"}, {"io-status": "ok", "device": "ide1-cd0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}, {"device": "floppy0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}, {"device": "sd0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}]}
++{"return": {}}
++{"return": {}}
++{"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_DELETED", "data": {"path": "/machine/peripheral/virtio0/virtio-backend"}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_DELETED", "data": {"device": "virtio0", "path": "/machine/peripheral/virtio0"}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "RESET"}
++{"return": [{"io-status": "ok", "device": "ide1-cd0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}, {"device": "floppy0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}, {"device": "sd0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}]}
++{"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN"}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_TRAY_MOVED", "data": {"device": "ide1-cd0", "tray-open": true}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_TRAY_MOVED", "data": {"device": "floppy0", "tray-open": true}}
++
++
++=== drive_add/device_add and device_del ===
++
++Testing:
++QMP_VERSION
++{"return": {}}
++{"return": "OK\r\n"}
++{"return": [{"io-status": "ok", "device": "ide1-cd0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}, {"device": "floppy0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}, {"device": "sd0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}, {"device": "disk", "locked": false, "removable": true, "inserted": {"iops_rd": 0, "image": {"virtual-size": 134217728, "filename": "TEST_DIR/t.qcow2", "cluster-size": 65536, "format": "qcow2", "actual-size": 139264, "format-specific": {"type": "qcow2", "data": {"compat": "1.1", "lazy-refcounts": false}}, "dirty-flag": false}, "iops_wr": 0, "ro": false, "backing_file_depth": 0, "drv": "qcow2", "iops": 0, "bps_wr": 0, "encrypted": false, "bps": 0, "bps_rd": 0, "file": "TEST_DIR/t.qcow2", "encryption_key_missing": false}, "tray_open": false, "type": "unknown"}]}
++{"return": {}}
++{"return": {}}
++{"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_DELETED", "data": {"path": "/machine/peripheral/virtio0/virtio-backend"}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_DELETED", "data": {"device": "virtio0", "path": "/machine/peripheral/virtio0"}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "RESET"}
++{"return": [{"io-status": "ok", "device": "ide1-cd0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}, {"device": "floppy0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}, {"device": "sd0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}]}
++{"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN"}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_TRAY_MOVED", "data": {"device": "ide1-cd0", "tray-open": true}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_TRAY_MOVED", "data": {"device": "floppy0", "tray-open": true}}
++
++
++=== blockdev_add/device_add and device_del ===
++
++Testing:
++QMP_VERSION
++{"return": {}}
++{"return": {}}
++{"return": [{"io-status": "ok", "device": "ide1-cd0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}, {"device": "floppy0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}, {"device": "sd0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}, {"device": "disk", "locked": false, "removable": true, "inserted": {"iops_rd": 0, "image": {"virtual-size": 134217728, "filename": "TEST_DIR/t.qcow2", "cluster-size": 65536, "format": "qcow2", "actual-size": 139264, "format-specific": {"type": "qcow2", "data": {"compat": "1.1", "lazy-refcounts": false}}, "dirty-flag": false}, "iops_wr": 0, "ro": false, "backing_file_depth": 0, "drv": "qcow2", "iops": 0, "bps_wr": 0, "encrypted": false, "bps": 0, "bps_rd": 0, "file": "TEST_DIR/t.qcow2", "encryption_key_missing": false}, "tray_open": false, "type": "unknown"}]}
++{"return": {}}
++{"return": {}}
++{"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_DELETED", "data": {"path": "/machine/peripheral/virtio0/virtio-backend"}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_DELETED", "data": {"device": "virtio0", "path": "/machine/peripheral/virtio0"}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "RESET"}
++{"return": [{"io-status": "ok", "device": "ide1-cd0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}, {"device": "floppy0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}, {"device": "sd0", "locked": false, "removable": true, "tray_open": false, "type": "unknown"}, {"io-status": "ok", "device": "disk", "locked": false, "removable": true, "inserted": {"iops_rd": 0, "image": {"virtual-size": 134217728, "filename": "TEST_DIR/t.qcow2", "cluster-size": 65536, "format": "qcow2", "actual-size": 139264, "format-specific": {"type": "qcow2", "data": {"compat": "1.1", "lazy-refcounts": false}}, "dirty-flag": false}, "iops_wr": 0, "ro": false, "backing_file_depth": 0, "drv": "qcow2", "iops": 0, "bps_wr": 0, "encrypted": false, "bps": 0, "bps_rd": 0, "file": "TEST_DIR/t.qcow2", "encryption_key_missing": false}, "tray_open": false, "type": "unknown"}]}
++{"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN"}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_TRAY_MOVED", "data": {"device": "ide1-cd0", "tray-open": true}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "DEVICE_TRAY_MOVED", "data": {"device": "floppy0", "tray-open": true}}
++
++*** done
+diff --git a/tests/qemu-iotests/common.filter b/tests/qemu-iotests/common.filter
+index 5dfda63..8e7b1a4 100644
+--- a/tests/qemu-iotests/common.filter
++++ b/tests/qemu-iotests/common.filter
+@@ -159,5 +159,13 @@ _filter_qemu()
+         -e 's#^QEMU [0-9]\+\.[0-9]\+\.[0-9]\+ monitor#QEMU X.Y.Z monitor#'
+ }
+ 
++# replace problematic QMP output like timestamps
++_filter_qmp()
++{
++    _filter_win32 | \
++    sed -e 's#\("\(micro\)\?seconds": \)[0-9]\+#\1 TIMESTAMP#g' \
++        -e 's#^{"QMP":.*}$#QMP_VERSION#'
++}
++
+ # make sure this script returns success
+ /bin/true
+diff --git a/tests/qemu-iotests/group b/tests/qemu-iotests/group
+index ff3c505..c841c5e 100644
+--- a/tests/qemu-iotests/group
++++ b/tests/qemu-iotests/group
+@@ -63,4 +63,5 @@
+ 059 rw auto
+ 060 rw auto
+ 063 rw auto
++067 rw auto
+ 068 rw auto
+-- 
+1.7.1
+

@@ -1,0 +1,114 @@
+From 8a7a5d92f6d6e0980e9f4119cdab88fd6e7b83e3 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 6 Nov 2013 09:11:26 +0100
+Subject: [PATCH 24/29] smbios: Factor out smbios_maybe_add_str()
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1383386488-29789-8-git-send-email-armbru@redhat.com>
+Patchwork-id: 55248
+O-Subject: [PATCH 7.0 qemu-kvm 07/11] smbios: Factor out smbios_maybe_add_str()
+Bugzilla: 994490
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit e26d3e734650640fabd7d95ace4f3a6f88725e0b)
+---
+ hw/i386/smbios.c | 61 +++++++++++++++++++++++---------------------------------
+ 1 file changed, 25 insertions(+), 36 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/smbios.c |   61 ++++++++++++++++++++++-------------------------------
+ 1 files changed, 25 insertions(+), 36 deletions(-)
+
+diff --git a/hw/i386/smbios.c b/hw/i386/smbios.c
+index d2dba6c..d3f1ee6 100644
+--- a/hw/i386/smbios.c
++++ b/hw/i386/smbios.c
+@@ -210,21 +210,22 @@ static void smbios_add_field(int type, int offset, const void *data, size_t len)
+             cpu_to_le16(le16_to_cpu(*(uint16_t *)smbios_entries) + 1);
+ }
+ 
+-static void smbios_build_type_0_fields(void)
++static void smbios_maybe_add_str(int type, int offset, const char *data)
+ {
+-    if (type0.vendor) {
+-        smbios_add_field(0, offsetof(struct smbios_type_0, vendor_str),
+-                         type0.vendor, strlen(type0.vendor) + 1);
+-    }
+-    if (type0.version) {
+-        smbios_add_field(0, offsetof(struct smbios_type_0, bios_version_str),
+-                         type0.version, strlen(type0.version) + 1);
++    if (data) {
++        smbios_add_field(type, offset, data, strlen(data) + 1);
+     }
+-    if (type0.date) {
+-        smbios_add_field(0, offsetof(struct smbios_type_0,
++}
++
++static void smbios_build_type_0_fields(void)
++{
++    smbios_maybe_add_str(0, offsetof(struct smbios_type_0, vendor_str),
++                         type0.vendor);
++    smbios_maybe_add_str(0, offsetof(struct smbios_type_0, bios_version_str),
++                         type0.version);
++    smbios_maybe_add_str(0, offsetof(struct smbios_type_0,
+                                      bios_release_date_str),
+-                         type0.date, strlen(type0.date) + 1);
+-    }
++                         type0.date);
+     if (type0.have_major_minor) {
+         smbios_add_field(0, offsetof(struct smbios_type_0,
+                                      system_bios_major_release),
+@@ -237,30 +238,18 @@ static void smbios_build_type_0_fields(void)
+ 
+ static void smbios_build_type_1_fields(void)
+ {
+-    if (type1.manufacturer) {
+-        smbios_add_field(1, offsetof(struct smbios_type_1, manufacturer_str),
+-                         type1.manufacturer, strlen(type1.manufacturer) + 1);
+-    }
+-    if (type1.product) {
+-        smbios_add_field(1, offsetof(struct smbios_type_1, product_name_str),
+-                         type1.product, strlen(type1.product) + 1);
+-    }
+-    if (type1.version) {
+-        smbios_add_field(1, offsetof(struct smbios_type_1, version_str),
+-                         type1.version, strlen(type1.version) + 1);
+-    }
+-    if (type1.serial) {
+-        smbios_add_field(1, offsetof(struct smbios_type_1, serial_number_str),
+-                         type1.serial, strlen(type1.serial) + 1);
+-    }
+-    if (type1.sku) {
+-        smbios_add_field(1, offsetof(struct smbios_type_1, sku_number_str),
+-                         type1.sku, strlen(type1.sku) + 1);
+-    }
+-    if (type1.family) {
+-        smbios_add_field(1, offsetof(struct smbios_type_1, family_str),
+-                         type1.family, strlen(type1.family) + 1);
+-    }
++    smbios_maybe_add_str(1, offsetof(struct smbios_type_1, manufacturer_str),
++                         type1.manufacturer);
++    smbios_maybe_add_str(1, offsetof(struct smbios_type_1, product_name_str),
++                         type1.product);
++    smbios_maybe_add_str(1, offsetof(struct smbios_type_1, version_str),
++                         type1.version);
++    smbios_maybe_add_str(1, offsetof(struct smbios_type_1, serial_number_str),
++                         type1.serial);
++    smbios_maybe_add_str(1, offsetof(struct smbios_type_1, sku_number_str),
++                         type1.sku);
++    smbios_maybe_add_str(1, offsetof(struct smbios_type_1, family_str),
++                         type1.family);
+     if (qemu_uuid_set) {
+         smbios_add_field(1, offsetof(struct smbios_type_1, uuid),
+                          qemu_uuid, 16);
+-- 
+1.7.1
+

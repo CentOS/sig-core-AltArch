@@ -1,0 +1,142 @@
+From b9295fa6535d7092f9234e63ed6b5670bd862d0c Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Tue, 22 Jul 2014 18:31:22 +0200
+Subject: [PATCH 02/11] virtio-serial: report frontend connection state via monitor
+
+Message-id: <1406053883-21237-2-git-send-email-lersek@redhat.com>
+Patchwork-id: 60229
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 1/2] virtio-serial: report frontend connection state via monitor
+Bugzilla: 1122151
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+RH-Acked-by: Eric Blake <eblake@redhat.com>
+
+Libvirt wants to know about the guest-side connection state of some
+virtio-serial ports (in particular the one(s) assigned to guest agent(s)).
+Report such states with a new monitor event.
+
+RHBZ: https://bugzilla.redhat.com/show_bug.cgi?id=1080376
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Amit Shah <amit.shah@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+
+RHEL-7 notes: manual reimplementation of upstream commit
+e2ae6159de2482ee5e22532301eb7f2795828d07, because we don't have Wenchao
+Xia's qapi-event series.
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+---
+ include/monitor/monitor.h |  1 +
+ hw/char/virtio-console.c  | 17 ++++++++++++++---
+ monitor.c                 |  2 ++
+ QMP/qmp-events.txt        | 16 ++++++++++++++++
+ 4 files changed, 33 insertions(+), 3 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ QMP/qmp-events.txt        |   16 ++++++++++++++++
+ hw/char/virtio-console.c  |   17 ++++++++++++++---
+ include/monitor/monitor.h |    1 +
+ monitor.c                 |    2 ++
+ 4 files changed, 33 insertions(+), 3 deletions(-)
+
+diff --git a/QMP/qmp-events.txt b/QMP/qmp-events.txt
+index fc4b7db..ec4e4b9 100644
+--- a/QMP/qmp-events.txt
++++ b/QMP/qmp-events.txt
+@@ -485,6 +485,22 @@ Example:
+                     "host": "127.0.0.1", "sasl_username": "luiz" } },
+         "timestamp": { "seconds": 1263475302, "microseconds": 150772 } }
+ 
++VSERPORT_CHANGE
++---------------
++
++Emitted when the guest opens or closes a virtio-serial port.
++
++Data:
++
++- "id": device identifier of the virtio-serial port (json-string)
++- "open": true if the guest has opened the virtio-serial port (json-bool)
++
++Example:
++
++{ "event": "VSERPORT_CHANGE",
++    "data": { "id": "channel0",  "open": true },
++    "timestamp": { "seconds": 1401385907, "microseconds": 422329 } }
++
+ WAKEUP
+ ------
+ 
+diff --git a/hw/char/virtio-console.c b/hw/char/virtio-console.c
+index 2e00ad2..1b01dcd 100644
+--- a/hw/char/virtio-console.c
++++ b/hw/char/virtio-console.c
+@@ -14,6 +14,8 @@
+ #include "qemu/error-report.h"
+ #include "trace.h"
+ #include "hw/virtio/virtio-serial.h"
++#include "monitor/monitor.h"
++#include "qapi/qmp/qjson.h"
+ 
+ typedef struct VirtConsole {
+     VirtIOSerialPort port;
+@@ -76,11 +78,20 @@ static ssize_t flush_buf(VirtIOSerialPort *port,
+ static void set_guest_connected(VirtIOSerialPort *port, int guest_connected)
+ {
+     VirtConsole *vcon = DO_UPCAST(VirtConsole, port, port);
++    DeviceState *dev = DEVICE(port);
+ 
+-    if (!vcon->chr) {
+-        return;
++    if (vcon->chr) {
++        qemu_chr_fe_set_open(vcon->chr, guest_connected);
+     }
+-    qemu_chr_fe_set_open(vcon->chr, guest_connected);
++
++    if (dev->id) {
++        QObject *data;
++
++        data = qobject_from_jsonf("{ 'id': %s, 'open': %i }",
++                                  dev->id, guest_connected);
++        monitor_protocol_event(QEVENT_VSERPORT_CHANGE, data);
++        qobject_decref(data);
++     }
+ }
+ 
+ /* Readiness of the guest to accept data on a port */
+diff --git a/include/monitor/monitor.h b/include/monitor/monitor.h
+index dcce609..6c128e9 100644
+--- a/include/monitor/monitor.h
++++ b/include/monitor/monitor.h
+@@ -52,6 +52,7 @@ typedef enum MonitorEvent {
+     QEVENT_SPICE_MIGRATE_COMPLETED,
+     QEVENT_GUEST_PANICKED,
+     QEVENT_BLOCK_IMAGE_CORRUPTED,
++    QEVENT_VSERPORT_CHANGE,
+ 
+     /* Add to 'monitor_event_names' array in monitor.c when
+      * defining new events here */
+diff --git a/monitor.c b/monitor.c
+index a6abfb5..798885d 100644
+--- a/monitor.c
++++ b/monitor.c
+@@ -506,6 +506,7 @@ static const char *monitor_event_names[] = {
+     [QEVENT_SPICE_MIGRATE_COMPLETED] = "SPICE_MIGRATE_COMPLETED",
+     [QEVENT_GUEST_PANICKED] = "GUEST_PANICKED",
+     [QEVENT_BLOCK_IMAGE_CORRUPTED] = "BLOCK_IMAGE_CORRUPTED",
++    [QEVENT_VSERPORT_CHANGE] = "VSERPORT_CHANGE",
+ };
+ QEMU_BUILD_BUG_ON(ARRAY_SIZE(monitor_event_names) != QEVENT_MAX)
+ 
+@@ -642,6 +643,7 @@ static void monitor_protocol_event_init(void)
+     monitor_protocol_event_throttle(QEVENT_RTC_CHANGE, 1000);
+     monitor_protocol_event_throttle(QEVENT_BALLOON_CHANGE, 1000);
+     monitor_protocol_event_throttle(QEVENT_WATCHDOG, 1000);
++    monitor_protocol_event_throttle(QEVENT_VSERPORT_CHANGE, 1000);
+ }
+ 
+ /**
+-- 
+1.7.1
+

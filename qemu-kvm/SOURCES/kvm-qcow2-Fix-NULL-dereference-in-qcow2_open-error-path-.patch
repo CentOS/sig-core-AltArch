@@ -1,0 +1,91 @@
+From 4ce3cdbea5f0006ec857767f2dc74a02fffd0cb5 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 25 Mar 2014 14:23:50 +0100
+Subject: [PATCH 43/49] qcow2: Fix NULL dereference in qcow2_open() error path (CVE-2014-0146)
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1395753835-7591-44-git-send-email-kwolf@redhat.com>
+Patchwork-id: n/a
+O-Subject: [virt-devel] [EMBARGOED RHEL-7.0 qemu-kvm PATCH 43/48] qcow2: Fix NULL dereference in qcow2_open() error path (CVE-2014-0146)
+Bugzilla: 1079333
+RH-Acked-by: Jeff Cody <jcody@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1079333
+Upstream status: Embargoed
+
+The qcow2 code assumes that s->snapshots is non-NULL if s->nb_snapshots
+!= 0. By having the initialisation of both fields separated in
+qcow2_open(), any error occuring in between would cause the error path
+to dereference NULL in qcow2_free_snapshots() if the image had any
+snapshots.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block/qcow2.c              |    7 ++++---
+ tests/qemu-iotests/080     |    7 +++++++
+ tests/qemu-iotests/080.out |    4 ++++
+ 3 files changed, 15 insertions(+), 3 deletions(-)
+
+diff --git a/block/qcow2.c b/block/qcow2.c
+index db9f667..33b46b8 100644
+--- a/block/qcow2.c
++++ b/block/qcow2.c
+@@ -636,9 +636,6 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
+         goto fail;
+     }
+ 
+-    s->snapshots_offset = header.snapshots_offset;
+-    s->nb_snapshots = header.nb_snapshots;
+-
+     /* read the level 1 table */
+     if (header.l1_size > 0x2000000) {
+         /* 32 MB L1 table is enough for 2 PB images at 64k cluster size
+@@ -733,6 +730,10 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
+         bs->backing_file[len] = '\0';
+     }
+ 
++    /* Internal snapshots */
++    s->snapshots_offset = header.snapshots_offset;
++    s->nb_snapshots = header.nb_snapshots;
++
+     ret = qcow2_read_snapshots(bs);
+     if (ret < 0) {
+         error_setg_errno(errp, -ret, "Could not read snapshots");
+diff --git a/tests/qemu-iotests/080 b/tests/qemu-iotests/080
+index 56f8903..59e7a44 100755
+--- a/tests/qemu-iotests/080
++++ b/tests/qemu-iotests/080
+@@ -139,6 +139,13 @@ poke_file "$TEST_IMG" "$offset_l1_size" "\x00\x00\x00\x01"
+ { $QEMU_IO -c "read 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
+ 
+ echo
++echo "== Invalid L1 table (with internal snapshot in the image) =="
++_make_test_img 64M
++{ $QEMU_IMG snapshot -c foo $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
++poke_file "$TEST_IMG" "$offset_l1_size" "\x00\x00\x00\x00"
++_img_info
++
++echo
+ echo "== Invalid backing file size =="
+ _make_test_img 64M
+ poke_file "$TEST_IMG" "$offset_backing_file_offset" "\x00\x00\x00\x00\x00\x00\x10\x00"
+diff --git a/tests/qemu-iotests/080.out b/tests/qemu-iotests/080.out
+index 303d6c3..4d84fbf 100644
+--- a/tests/qemu-iotests/080.out
++++ b/tests/qemu-iotests/080.out
+@@ -59,6 +59,10 @@ no file open, try 'help open'
+ qemu-io: can't open device TEST_DIR/t.qcow2: Invalid L1 table offset
+ no file open, try 'help open'
+ 
++== Invalid L1 table (with internal snapshot in the image) ==
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
++qemu-img: Could not open 'TEST_DIR/t.IMGFMT': L1 table is too small
++
+ == Invalid backing file size ==
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
+ qemu-io: can't open device TEST_DIR/t.qcow2: Backing file name too long
+-- 
+1.7.1
+

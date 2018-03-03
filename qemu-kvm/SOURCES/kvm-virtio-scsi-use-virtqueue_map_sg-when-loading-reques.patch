@@ -1,0 +1,57 @@
+From c732ec0ec457f0cb003b3b1db56c0bd96432baac Mon Sep 17 00:00:00 2001
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Mon, 3 Aug 2015 16:51:19 +0200
+Subject: [PATCH 05/13] virtio-scsi: use virtqueue_map_sg() when loading
+ requests
+
+Message-id: <1438620680-24121-2-git-send-email-stefanha@redhat.com>
+Patchwork-id: 67255
+O-Subject: [RHEL-7.2 qemu-kvm PATCH 1/2] virtio-scsi: use virtqueue_map_sg() when loading requests
+Bugzilla: 1249718
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+The VirtQueueElement struct is serialized during migration but the
+in_sg[]/out_sg[] iovec arrays are not usable on the destination host
+because the pointers are meaningless.
+
+Use virtqueue_map_sg() to refresh in_sg[]/out_sg[] to valid pointers
+based on in_addr[]/out_addr[] hwaddrs.
+
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Message-Id: <1438262173-11546-2-git-send-email-stefanha@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 1cc933453bf2baae1feb7c8e757bdfd0ef639002)
+
+Conficts:
+ * Context conflict because upstream has error handling code for
+   virtio_scsi_parse_req().
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/scsi/virtio-scsi.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/hw/scsi/virtio-scsi.c b/hw/scsi/virtio-scsi.c
+index cda8f8a..8232fc9 100644
+--- a/hw/scsi/virtio-scsi.c
++++ b/hw/scsi/virtio-scsi.c
+@@ -154,6 +154,12 @@ static void *virtio_scsi_load_request(QEMUFile *f, SCSIRequest *sreq)
+ #endif
+     assert(req->elem.in_num <= ARRAY_SIZE(req->elem.in_sg));
+     assert(req->elem.out_num <= ARRAY_SIZE(req->elem.out_sg));
++
++    virtqueue_map_sg(req->elem.in_sg, req->elem.in_addr,
++                     req->elem.in_num, 1);
++    virtqueue_map_sg(req->elem.out_sg, req->elem.out_addr,
++                     req->elem.out_num, 0);
++
+     virtio_scsi_parse_req(s, vs->cmd_vqs[n], req);
+ 
+     scsi_req_ref(sreq);
+-- 
+1.8.3.1
+

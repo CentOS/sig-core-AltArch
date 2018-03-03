@@ -1,0 +1,78 @@
+From 2059082c26d40f083807ae81476fedd0c22c613f Mon Sep 17 00:00:00 2001
+Message-Id: <2059082c26d40f083807ae81476fedd0c22c613f.1387298827.git.minovotn@redhat.com>
+In-Reply-To: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+References: <3ed0fb61a3dc912ef036d7ef450bed192090709e.1387298827.git.minovotn@redhat.com>
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Tue, 17 Dec 2013 15:17:08 +0100
+Subject: [PATCH 08/56] pci: fix up w64 size calculation helper
+
+RH-Author: Michael S. Tsirkin <mst@redhat.com>
+Message-id: <1387293161-4085-9-git-send-email-mst@redhat.com>
+Patchwork-id: 56313
+O-Subject: [PATCH qemu-kvm RHEL7.0 v2 08/57] pci: fix up w64 size calculation helper
+Bugzilla: 1034876
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Marcel Apfelbaum <marcel.a@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+BAR base was calculated incorrectly.
+Use existing pci_bar_address to get it right.
+
+Tested-by: Igor Mammedov <imammedo@redhat.com>
+Reviewed-by: Igor Mammedov <imammedo@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit 77d6f4ea7608fe7f47c9d7beddd19191b2e852b2)
+---
+ hw/pci/pci.c | 20 ++++++++++++--------
+ 1 file changed, 12 insertions(+), 8 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ hw/pci/pci.c | 20 ++++++++++++--------
+ 1 file changed, 12 insertions(+), 8 deletions(-)
+
+diff --git a/hw/pci/pci.c b/hw/pci/pci.c
+index d550851..598d288 100644
+--- a/hw/pci/pci.c
++++ b/hw/pci/pci.c
+@@ -2249,7 +2249,7 @@ static void pci_dev_get_w64(PCIBus *b, PCIDevice *dev, void *opaque)
+     Range *range = opaque;
+     PCIDeviceClass *pc = PCI_DEVICE_GET_CLASS(dev);
+     uint16_t cmd = pci_get_word(dev->config + PCI_COMMAND);
+-    int r;
++    int i;
+ 
+     if (!(cmd & PCI_COMMAND_MEMORY)) {
+         return;
+@@ -2268,17 +2268,21 @@ static void pci_dev_get_w64(PCIBus *b, PCIDevice *dev, void *opaque)
+             range_extend(range, &pref_range);
+         }
+     }
+-    for (r = 0; r < PCI_NUM_REGIONS; ++r) {
+-        PCIIORegion *region = &dev->io_regions[r];
++    for (i = 0; i < PCI_NUM_REGIONS; ++i) {
++        PCIIORegion *r = &dev->io_regions[i];
+         Range region_range;
+ 
+-        if (!region->size ||
+-            (region->type & PCI_BASE_ADDRESS_SPACE_IO) ||
+-            !(region->type & PCI_BASE_ADDRESS_MEM_TYPE_64)) {
++        if (!r->size ||
++            (r->type & PCI_BASE_ADDRESS_SPACE_IO) ||
++            !(r->type & PCI_BASE_ADDRESS_MEM_TYPE_64)) {
++            continue;
++        }
++        region_range.begin = pci_bar_address(dev, i, r->type, r->size);
++        region_range.end = region_range.begin + r->size;
++
++        if (region_range.begin == PCI_BAR_UNMAPPED) {
+             continue;
+         }
+-        region_range.begin = pci_get_quad(dev->config + pci_bar(dev, r));
+-        region_range.end = region_range.begin + region->size;
+ 
+         region_range.begin = MAX(region_range.begin, 0x1ULL << 32);
+ 
+-- 
+1.7.11.7
+

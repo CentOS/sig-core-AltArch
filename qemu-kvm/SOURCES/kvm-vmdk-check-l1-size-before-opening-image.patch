@@ -1,0 +1,90 @@
+From e00b646f642f10be545014c866a71b268d90e67a Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Tue, 6 Aug 2013 15:44:53 +0800
+Subject: [PATCH 07/13] vmdk: check l1 size before opening image
+
+Message-id: <1377573001-27070-8-git-send-email-famz@redhat.com>
+Patchwork-id: 53786
+O-Subject: [RHEL-7 qemu-kvm PATCH 07/13] vmdk: check l1 size before opening image
+Bugzilla: 995866
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+L1 table size is calculated from capacity, granularity and l2 table
+size. If capacity is too big or later two are too small, the L1 table
+will be too big to allocate in memory. Limit it to a reasonable range.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit 2c43e43c8cec130fff95ef720a860e91efb36685)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ block/vmdk.c               |    8 ++++++++
+ tests/qemu-iotests/059     |    8 ++++++++
+ tests/qemu-iotests/059.out |    6 ++++++
+ 3 files changed, 22 insertions(+), 0 deletions(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index b2a3fe2..58163ef 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -597,6 +597,14 @@ static int vmdk_open_vmdk4(BlockDriverState *bs,
+     }
+     l1_size = (le64_to_cpu(header.capacity) + l1_entry_sectors - 1)
+                 / l1_entry_sectors;
++    if (l1_size > 512 * 1024 * 1024) {
++        /* although with big capacity and small l1_entry_sectors, we can get a
++         * big l1_size, we don't want unbounded value to allocate the table.
++         * Limit it to 512M, which is 16PB for default cluster and L2 table
++         * size */
++        error_report("L1 size too big");
++        return -EFBIG;
++    }
+     if (le32_to_cpu(header.flags) & VMDK4_FLAG_RGD) {
+         l1_backup_offset = le64_to_cpu(header.rgd_offset) << 9;
+     }
+diff --git a/tests/qemu-iotests/059 b/tests/qemu-iotests/059
+index 301eaca..b03429d 100755
+--- a/tests/qemu-iotests/059
++++ b/tests/qemu-iotests/059
+@@ -43,6 +43,7 @@ _supported_fmt vmdk
+ _supported_proto generic
+ _supported_os Linux
+ 
++capacity_offset=16
+ granularity_offset=20
+ grain_table_size_offset=44
+ 
+@@ -58,6 +59,13 @@ _make_test_img 64M
+ poke_file "$TEST_IMG" "$grain_table_size_offset" "\xff\xff\xff\xff"
+ { $QEMU_IO -c "read 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
+ 
++echo "=== Testing too big L1 table size ==="
++echo
++_make_test_img 64M
++poke_file "$TEST_IMG" "$capacity_offset" "\xff\xff\xff\xff"
++poke_file "$TEST_IMG" "$grain_table_size_offset" "\x01\x00\x00\x00"
++{ $QEMU_IO -c "read 0 512" $TEST_IMG; } 2>&1 | _filter_qemu_io | _filter_testdir
++
+ # success, all done
+ echo "*** done"
+ rm -f $seq.full
+diff --git a/tests/qemu-iotests/059.out b/tests/qemu-iotests/059.out
+index 583955f..9e715e5 100644
+--- a/tests/qemu-iotests/059.out
++++ b/tests/qemu-iotests/059.out
+@@ -11,4 +11,10 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864
+ L2 table size too big
+ qemu-io: can't open device TEST_DIR/t.vmdk
+ no file open, try 'help open'
++=== Testing too big L1 table size ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864
++L1 size too big
++qemu-io: can't open device TEST_DIR/t.vmdk
++no file open, try 'help open'
+ *** done
+-- 
+1.7.1
+

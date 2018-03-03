@@ -1,0 +1,108 @@
+From 8ddf0e61ad5bc3ab854a04f6b20d996ef4ed0ae2 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 17 Mar 2014 22:45:31 +0100
+Subject: [PATCH 6/6] iotests: Test corruption during COW request
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1395096331-12610-4-git-send-email-mreitz@redhat.com>
+Patchwork-id: 58121
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 3/3] iotests: Test corruption during COW request
+Bugzilla: 1048575
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+
+BZ: 1048575
+
+Extend test file 060 by a test case for corruption occuring concurrently
+to a COW request. QEMU should not crash but rather return an appropriate
+error message.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 98d39e34fe95f8609be3ccbd1b67926631d2c7c0)
+
+Conflicts:
+	tests/qemu-iotests/060
+
+As the series allowing blkdebug to be used through the QMP interfaces
+has not yet been backported, this test may not use
+"-o file.driver=blkdebug" to select the blkdebug block driver, but
+rather "blkdebug::$TEST_IMG" as the filename.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ tests/qemu-iotests/060     | 26 ++++++++++++++++++++++++++
+ tests/qemu-iotests/060.out | 15 +++++++++++++++
+ 2 files changed, 41 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/060     |   26 ++++++++++++++++++++++++++
+ tests/qemu-iotests/060.out |   15 +++++++++++++++
+ 2 files changed, 41 insertions(+), 0 deletions(-)
+
+diff --git a/tests/qemu-iotests/060 b/tests/qemu-iotests/060
+index bbb1909..2abd566 100644
+--- a/tests/qemu-iotests/060
++++ b/tests/qemu-iotests/060
+@@ -138,6 +138,32 @@ $QEMU_IMG snapshot -a foo "$TEST_IMG"
+ _check_test_img
+ $QEMU_IO -c "$OPEN_RO" -c "read -P 1 0 512" | _filter_qemu_io
+ 
++echo
++echo "=== Testing overlap while COW is in flight ==="
++echo
++# compat=0.10 is required in order to make the following discard actually
++# unallocate the sector rather than make it a zero sector - we want COW, after
++# all.
++IMGOPTS='compat=0.10' _make_test_img 1G
++# Write two clusters, the second one enforces creation of an L2 table after
++# the first data cluster.
++$QEMU_IO -c 'write 0k 64k' -c 'write 512M 64k' "$TEST_IMG" | _filter_qemu_io
++# Discard the first cluster. This cluster will soon enough be reallocated and
++# used for COW.
++$QEMU_IO -c 'discard 0k 64k' "$TEST_IMG" | _filter_qemu_io
++# Now, corrupt the image by marking the second L2 table cluster as free.
++poke_file "$TEST_IMG" '131084' "\x00\x00" # 0x2000c
++# Start a write operation requiring COW on the image stopping it right before
++# doing the read; then, trigger the corruption prevention by writing anything to
++# any unallocated cluster, leading to an attempt to overwrite the second L2
++# table. Finally, resume the COW write and see it fail (but not crash).
++echo "open blkdebug::$TEST_IMG
++break cow_read 0
++aio_write 0k 1k
++wait_break 0
++write 64k 64k
++resume 0" | $QEMU_IO | _filter_qemu_io
++
+ # success, all done
+ echo "*** done"
+ rm -f $seq.full
+diff --git a/tests/qemu-iotests/060.out b/tests/qemu-iotests/060.out
+index 6c7bdbb..a517948 100644
+--- a/tests/qemu-iotests/060.out
++++ b/tests/qemu-iotests/060.out
+@@ -78,4 +78,19 @@ read 512/512 bytes at offset 0
+ No errors were found on the image.
+ read 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++=== Testing overlap while COW is in flight ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=1073741824 
++wrote 65536/65536 bytes at offset 0
++64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote 65536/65536 bytes at offset 536870912
++64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++discard 65536/65536 bytes at offset 0
++64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++qcow2: Preventing invalid write on metadata (overlaps with active L2 table); image marked as corrupt.
++blkdebug: Suspended request '0'
++write failed: Input/output error
++blkdebug: Resuming request '0'
++aio_write failed: No medium found
+ *** done
+-- 
+1.7.1
+

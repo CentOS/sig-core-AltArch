@@ -1,0 +1,77 @@
+From 83423f42cd68e8b3ee644f38686dc4eabba9ce37 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Fri, 11 Jul 2014 14:20:51 +0200
+Subject: [PATCH 17/43] usb-hcd-xhci: Update endpoint context dequeue pointer
+ for streams too
+
+Message-id: <1405088470-24115-19-git-send-email-kraxel@redhat.com>
+Patchwork-id: 59838
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 18/37] usb-hcd-xhci: Update endpoint context dequeue pointer for streams too
+Bugzilla: 980747
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Hans de Goede <hdegoede@redhat.com>
+
+With streams the endpoint context dequeue pointer should point to the
+dequeue value for the currently active stream.
+
+At least Linux guests expect it to point to value set by an set_ep_dequeue
+upon completion of the set_ep_dequeue (before kicking the ep).
+
+Otherwise the Linux kernel will complain (and things won't work):
+
+xhci_hcd 0000:00:05.0: Mismatch between completed Set TR Deq Ptr command & xHCI internal state.
+xhci_hcd 0000:00:05.0: ep deq seg = ffff8800366f0880, deq ptr = ffff8800366ec010
+
+Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit c90daa1c109348099088c1cc954c1e9f3392ae03)
+---
+ hw/usb/hcd-xhci.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/hcd-xhci.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/hw/usb/hcd-xhci.c b/hw/usb/hcd-xhci.c
+index fc3b330..ef0c073 100644
+--- a/hw/usb/hcd-xhci.c
++++ b/hw/usb/hcd-xhci.c
+@@ -1189,6 +1189,7 @@ static XHCIStreamContext *xhci_find_stream(XHCIEPContext *epctx,
+ static void xhci_set_ep_state(XHCIState *xhci, XHCIEPContext *epctx,
+                               XHCIStreamContext *sctx, uint32_t state)
+ {
++    XHCIRing *ring = NULL;
+     uint32_t ctx[5];
+     uint32_t ctx2[2];
+ 
+@@ -1199,6 +1200,7 @@ static void xhci_set_ep_state(XHCIState *xhci, XHCIEPContext *epctx,
+     /* update ring dequeue ptr */
+     if (epctx->nr_pstreams) {
+         if (sctx != NULL) {
++            ring = &sctx->ring;
+             xhci_dma_read_u32s(xhci, sctx->pctx, ctx2, sizeof(ctx2));
+             ctx2[0] &= 0xe;
+             ctx2[0] |= sctx->ring.dequeue | sctx->ring.ccs;
+@@ -1206,8 +1208,12 @@ static void xhci_set_ep_state(XHCIState *xhci, XHCIEPContext *epctx,
+             xhci_dma_write_u32s(xhci, sctx->pctx, ctx2, sizeof(ctx2));
+         }
+     } else {
+-        ctx[2] = epctx->ring.dequeue | epctx->ring.ccs;
+-        ctx[3] = (epctx->ring.dequeue >> 16) >> 16;
++        ring = &epctx->ring;
++    }
++    if (ring) {
++        ctx[2] = ring->dequeue | ring->ccs;
++        ctx[3] = (ring->dequeue >> 16) >> 16;
++
+         DPRINTF("xhci: set epctx: " DMA_ADDR_FMT " state=%d dequeue=%08x%08x\n",
+                 epctx->pctx, state, ctx[3], ctx[2]);
+     }
+-- 
+1.8.3.1
+

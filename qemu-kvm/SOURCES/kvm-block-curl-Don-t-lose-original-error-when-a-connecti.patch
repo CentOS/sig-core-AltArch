@@ -1,0 +1,100 @@
+From 264a2066904d31c46860e0bac8790d57e6498b80 Mon Sep 17 00:00:00 2001
+From: Richard Jones <rjones@redhat.com>
+Date: Thu, 16 Jul 2015 15:41:54 +0200
+Subject: [PATCH 1/5] block/curl: Don't lose original error when a connection
+ fails.
+
+Message-id: <1437061314-4775-1-git-send-email-rjones@redhat.com>
+Patchwork-id: 67043
+O-Subject: [RHEL-7.2 qemu-kvm PATCH v3] block/curl: Don't lose original error when a connection fails.
+Bugzilla: 1235812
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+From: "Richard W.M. Jones" <rjones@redhat.com>
+
+Currently if qemu is connected to a curl source (eg. web server), and
+the web server fails / times out / dies, you always see a bogus EIO
+"Input/output error".
+
+For example, choose a large file located on any local webserver which
+you control:
+
+  $ qemu-img convert -p http://example.com/large.iso /tmp/test
+
+Once it starts copying the file, stop the webserver and you will see
+qemu-img fail with:
+
+  qemu-img: error while reading sector 61440: Input/output error
+
+This patch does two things: Firstly print the actual error from curl
+so it doesn't get lost.  Secondly, change EIO to EPROTO.  EPROTO is a
+POSIX.1 compatible errno which more accurately reflects that there was
+a protocol error, rather than some kind of hardware failure.
+
+After this patch is applied, the error changes to:
+
+  $ qemu-img convert -p http://example.com/large.iso /tmp/test
+  qemu-img: curl: transfer closed with 469989 bytes remaining to read
+  qemu-img: error while reading sector 16384: Protocol error
+
+Signed-off-by: Richard W.M. Jones <rjones@redhat.com>
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Jeff Cody <jcody@redhat.com>
+
+BZ: https://bugzilla.redhat.com/1235812
+Brew: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=9529354
+Upstream-status: 796a060bc0fab40953997976a2e30d9d6235bc7b
+---
+ block/curl.c | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/curl.c | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/block/curl.c b/block/curl.c
+index 3088329..dfa8cee 100644
+--- a/block/curl.c
++++ b/block/curl.c
+@@ -22,6 +22,7 @@
+  * THE SOFTWARE.
+  */
+ #include "qemu-common.h"
++#include "qemu/error-report.h"
+ #include "block/block_int.h"
+ #include "qapi/qmp/qbool.h"
+ #include <curl/curl.h>
+@@ -294,6 +295,18 @@ static void curl_multi_check_completion(BDRVCURLState *s)
+             /* ACBs for successful messages get completed in curl_read_cb */
+             if (msg->data.result != CURLE_OK) {
+                 int i;
++                static int errcount = 100;
++
++                /* Don't lose the original error message from curl, since
++                 * it contains extra data.
++                 */
++                if (errcount > 0) {
++                    error_report("curl: %s", state->errmsg);
++                    if (--errcount == 0) {
++                        error_report("curl: further errors suppressed");
++                    }
++                }
++
+                 for (i = 0; i < CURL_NUM_ACB; i++) {
+                     CURLAIOCB *acb = state->acb[i];
+ 
+@@ -301,7 +314,7 @@ static void curl_multi_check_completion(BDRVCURLState *s)
+                         continue;
+                     }
+ 
+-                    acb->common.cb(acb->common.opaque, -EIO);
++                    acb->common.cb(acb->common.opaque, -EPROTO);
+                     qemu_aio_release(acb);
+                     state->acb[i] = NULL;
+                 }
+-- 
+1.8.3.1
+

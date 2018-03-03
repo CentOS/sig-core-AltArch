@@ -1,0 +1,72 @@
+From fc1acb16e008aea013d59435fc14b967f1c8a144 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Fri, 11 Jul 2014 14:20:49 +0200
+Subject: [PATCH 15/43] usb-hcd-xhci: Remove unused cancelled member from
+ XHCITransfer
+
+Message-id: <1405088470-24115-17-git-send-email-kraxel@redhat.com>
+Patchwork-id: 59831
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 16/37] usb-hcd-xhci: Remove unused cancelled member from XHCITransfer
+Bugzilla: 980747
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Hans de Goede <hdegoede@redhat.com>
+
+Since qemu's USB model is geared towards emulated devices cancellation
+is instanteneous, so no need to wait for cancellation to complete, as
+such there is no wait for cancellation code, and the cancelled bool
+as well as the bogus comment about it can be removed.
+
+Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 8de1838afed4b5b05d18cc42a3e5a6fe9b19f29b)
+---
+ hw/usb/hcd-xhci.c | 5 -----
+ 1 file changed, 5 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/usb/hcd-xhci.c | 5 -----
+ 1 file changed, 5 deletions(-)
+
+diff --git a/hw/usb/hcd-xhci.c b/hw/usb/hcd-xhci.c
+index af0c42d..3b4cd01 100644
+--- a/hw/usb/hcd-xhci.c
++++ b/hw/usb/hcd-xhci.c
+@@ -346,7 +346,6 @@ typedef struct XHCITransfer {
+     QEMUSGList sgl;
+     bool running_async;
+     bool running_retry;
+-    bool cancelled;
+     bool complete;
+     bool int_req;
+     unsigned int iso_pkts;
+@@ -1312,8 +1311,6 @@ static int xhci_ep_nuke_one_xfer(XHCITransfer *t)
+     if (t->running_async) {
+         usb_cancel_packet(&t->packet);
+         t->running_async = 0;
+-        t->cancelled = 1;
+-        DPRINTF("xhci: cancelling transfer, waiting for it to complete\n");
+         killed = 1;
+     }
+     if (t->running_retry) {
+@@ -1730,14 +1727,12 @@ static int xhci_complete_packet(XHCITransfer *xfer)
+         xfer->running_async = 1;
+         xfer->running_retry = 0;
+         xfer->complete = 0;
+-        xfer->cancelled = 0;
+         return 0;
+     } else if (xfer->packet.status == USB_RET_NAK) {
+         trace_usb_xhci_xfer_nak(xfer);
+         xfer->running_async = 0;
+         xfer->running_retry = 1;
+         xfer->complete = 0;
+-        xfer->cancelled = 0;
+         return 0;
+     } else {
+         xfer->running_async = 0;
+-- 
+1.8.3.1
+

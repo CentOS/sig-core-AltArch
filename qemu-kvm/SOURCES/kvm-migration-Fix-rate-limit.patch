@@ -1,0 +1,50 @@
+From 43f7374cfc7133025aa4c94f51d6733ee89b713d Mon Sep 17 00:00:00 2001
+From: "Dr. David Alan Gilbert (git)" <dgilbert@redhat.com>
+Date: Tue, 14 Jan 2014 15:27:12 -0500
+Subject: [PATCH 03/14] migration: Fix rate limit
+
+Message-id: <1389713232-30999-3-git-send-email-dgilbert@redhat.com>
+Patchwork-id: 56698
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 2/2] migration: Fix rate limit
+Bugzilla: 1003467
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Matthew Garrett <matthew.garrett@nebula.com>
+
+The migration thread appears to want to allow writeout to occur at full
+speed rather than being rate limited during completion of state saving,
+but sets the limit to INT_MAX when xfer_limit is INT64_MAX. This causes
+problems if there's more than 2GB of state left to save at this point. It
+probably ought to just be INT64_MAX instead.
+
+Signed-off-by: Matthew Garrett <matthew.garrett@nebula.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit 40596834c0d57a223124a956ccbe39dfeadc9f0e)
+---
+ migration.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ migration.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/migration.c b/migration.c
+index 13fc59b..ef9a61f 100644
+--- a/migration.c
++++ b/migration.c
+@@ -589,7 +589,7 @@ static void *migration_thread(void *opaque)
+ 
+                 ret = vm_stop_force_state(RUN_STATE_FINISH_MIGRATE);
+                 if (ret >= 0) {
+-                    qemu_file_set_rate_limit(s->file, INT_MAX);
++                    qemu_file_set_rate_limit(s->file, INT64_MAX);
+                     qemu_savevm_state_complete(s->file);
+                 }
+                 qemu_mutex_unlock_iothread();
+-- 
+1.8.3.1
+

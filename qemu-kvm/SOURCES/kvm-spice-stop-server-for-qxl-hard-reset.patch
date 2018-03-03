@@ -1,0 +1,62 @@
+From 4997362f21fdf91a47dbcce2c8c27fcad673d21a Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Fri, 5 Sep 2014 12:30:37 +0200
+Subject: [PATCH 03/12] spice: stop server for qxl hard reset
+
+Message-id: <1409920238-9070-4-git-send-email-kraxel@redhat.com>
+Patchwork-id: 60876
+O-Subject: [RHEL-7.1 qemu-kvm PATCH 3/4] spice: stop server for qxl hard reset
+Bugzilla: 1054077
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+
+Hard reset can happen at any time.  We should be able to put qxl into a
+known-good state no matter what.  Stop spice server thread for reset so
+it can't be confused by fetching stale commands lingering around in the
+rings while we reset is ongoing.
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 75c70e37bc4a6bdc394b4d1b163fe730abb82c72)
+---
+ hw/display/qxl.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/display/qxl.c |   10 ++++++++++
+ 1 files changed, 10 insertions(+), 0 deletions(-)
+
+diff --git a/hw/display/qxl.c b/hw/display/qxl.c
+index 4fe4f1b..6f8adc8 100644
+--- a/hw/display/qxl.c
++++ b/hw/display/qxl.c
+@@ -1146,8 +1146,14 @@ static void qxl_soft_reset(PCIQXLDevice *d)
+ 
+ static void qxl_hard_reset(PCIQXLDevice *d, int loadvm)
+ {
++    bool startstop = qemu_spice_display_is_running(&d->ssd);
++
+     trace_qxl_hard_reset(d->id, loadvm);
+ 
++    if (startstop) {
++        qemu_spice_display_stop();
++    }
++
+     qxl_spice_reset_cursor(d);
+     qxl_spice_reset_image_cache(d);
+     qxl_reset_surfaces(d);
+@@ -1161,6 +1167,10 @@ static void qxl_hard_reset(PCIQXLDevice *d, int loadvm)
+     }
+     qemu_spice_create_host_memslot(&d->ssd);
+     qxl_soft_reset(d);
++
++    if (startstop) {
++        qemu_spice_display_start();
++    }
+ }
+ 
+ static void qxl_reset_handler(DeviceState *dev)
+-- 
+1.7.1
+

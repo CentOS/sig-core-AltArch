@@ -1,0 +1,120 @@
+From adef92fecbb5d4e37e5e513954c088f9f1704418 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 9 Sep 2013 14:28:13 +0200
+Subject: [PATCH 22/38] qapi: Add consume argument to qmp_input_get_object()
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1378736903-18489-23-git-send-email-kwolf@redhat.com>
+Patchwork-id: 54209
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 22/32] qapi: Add consume argument to qmp_input_get_object()
+Bugzilla: 1005818
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Bugzilla: 1005818
+
+This allows to just look at the next element without actually consuming
+it.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit e8316d7e8e8339a9ea593ba821a0aad26908c0d5)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ qapi/qmp-input-visitor.c | 19 ++++++++++---------
+ 1 file changed, 10 insertions(+), 9 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qapi/qmp-input-visitor.c |   19 ++++++++++---------
+ 1 files changed, 10 insertions(+), 9 deletions(-)
+
+diff --git a/qapi/qmp-input-visitor.c b/qapi/qmp-input-visitor.c
+index 59c5cac..70864a1 100644
+--- a/qapi/qmp-input-visitor.c
++++ b/qapi/qmp-input-visitor.c
+@@ -41,13 +41,14 @@ static QmpInputVisitor *to_qiv(Visitor *v)
+ }
+ 
+ static QObject *qmp_input_get_object(QmpInputVisitor *qiv,
+-                                     const char *name)
++                                     const char *name,
++                                     bool consume)
+ {
+     QObject *qobj = qiv->stack[qiv->nb_stack - 1].obj;
+ 
+     if (qobj) {
+         if (name && qobject_type(qobj) == QTYPE_QDICT) {
+-            if (qiv->stack[qiv->nb_stack - 1].h) {
++            if (qiv->stack[qiv->nb_stack - 1].h && consume) {
+                 g_hash_table_remove(qiv->stack[qiv->nb_stack - 1].h, name);
+             }
+             return qdict_get(qobject_to_qdict(qobj), name);
+@@ -117,7 +118,7 @@ static void qmp_input_start_struct(Visitor *v, void **obj, const char *kind,
+                                    const char *name, size_t size, Error **errp)
+ {
+     QmpInputVisitor *qiv = to_qiv(v);
+-    QObject *qobj = qmp_input_get_object(qiv, name);
++    QObject *qobj = qmp_input_get_object(qiv, name, true);
+     Error *err = NULL;
+ 
+     if (!qobj || qobject_type(qobj) != QTYPE_QDICT) {
+@@ -159,7 +160,7 @@ static void qmp_input_end_implicit_struct(Visitor *v, Error **errp)
+ static void qmp_input_start_list(Visitor *v, const char *name, Error **errp)
+ {
+     QmpInputVisitor *qiv = to_qiv(v);
+-    QObject *qobj = qmp_input_get_object(qiv, name);
++    QObject *qobj = qmp_input_get_object(qiv, name, true);
+ 
+     if (!qobj || qobject_type(qobj) != QTYPE_QLIST) {
+         error_set(errp, QERR_INVALID_PARAMETER_TYPE, name ? name : "null",
+@@ -211,7 +212,7 @@ static void qmp_input_type_int(Visitor *v, int64_t *obj, const char *name,
+                                Error **errp)
+ {
+     QmpInputVisitor *qiv = to_qiv(v);
+-    QObject *qobj = qmp_input_get_object(qiv, name);
++    QObject *qobj = qmp_input_get_object(qiv, name, true);
+ 
+     if (!qobj || qobject_type(qobj) != QTYPE_QINT) {
+         error_set(errp, QERR_INVALID_PARAMETER_TYPE, name ? name : "null",
+@@ -226,7 +227,7 @@ static void qmp_input_type_bool(Visitor *v, bool *obj, const char *name,
+                                 Error **errp)
+ {
+     QmpInputVisitor *qiv = to_qiv(v);
+-    QObject *qobj = qmp_input_get_object(qiv, name);
++    QObject *qobj = qmp_input_get_object(qiv, name, true);
+ 
+     if (!qobj || qobject_type(qobj) != QTYPE_QBOOL) {
+         error_set(errp, QERR_INVALID_PARAMETER_TYPE, name ? name : "null",
+@@ -241,7 +242,7 @@ static void qmp_input_type_str(Visitor *v, char **obj, const char *name,
+                                Error **errp)
+ {
+     QmpInputVisitor *qiv = to_qiv(v);
+-    QObject *qobj = qmp_input_get_object(qiv, name);
++    QObject *qobj = qmp_input_get_object(qiv, name, true);
+ 
+     if (!qobj || qobject_type(qobj) != QTYPE_QSTRING) {
+         error_set(errp, QERR_INVALID_PARAMETER_TYPE, name ? name : "null",
+@@ -256,7 +257,7 @@ static void qmp_input_type_number(Visitor *v, double *obj, const char *name,
+                                   Error **errp)
+ {
+     QmpInputVisitor *qiv = to_qiv(v);
+-    QObject *qobj = qmp_input_get_object(qiv, name);
++    QObject *qobj = qmp_input_get_object(qiv, name, true);
+ 
+     if (!qobj || (qobject_type(qobj) != QTYPE_QFLOAT &&
+         qobject_type(qobj) != QTYPE_QINT)) {
+@@ -276,7 +277,7 @@ static void qmp_input_start_optional(Visitor *v, bool *present,
+                                      const char *name, Error **errp)
+ {
+     QmpInputVisitor *qiv = to_qiv(v);
+-    QObject *qobj = qmp_input_get_object(qiv, name);
++    QObject *qobj = qmp_input_get_object(qiv, name, true);
+ 
+     if (!qobj) {
+         *present = false;
+-- 
+1.7.1
+

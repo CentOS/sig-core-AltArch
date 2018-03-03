@@ -1,0 +1,118 @@
+From 1144c6fa17e7d3fca1e2940c8bd0da966c74e4c5 Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Mon, 20 Jan 2014 19:05:30 +0100
+Subject: [PATCH 33/34] pc: Enable x2apic by default on more recent CPU models (v2)
+
+RH-Author: Eduardo Habkost <ehabkost@redhat.com>
+Message-id: <1390244730-31038-3-git-send-email-ehabkost@redhat.com>
+Patchwork-id: 56848
+O-Subject: [RHEL7 qemu-kvm PATCH 2/2] pc: Enable x2apic by default on more recent CPU models (v2)
+Bugzilla: 1049706
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+Bugzilla: 1049706
+Brew scratch build: http://brewweb.devel.redhat.com/brew/taskinfo?taskID=6900764
+Upstream status: not applicable (see notes below)
+
+On RHEL-6 we already enabled x2apic by default on Conroe, Penryn,
+Nehalem, Westmere, SandyBridge, Haswell, Opteron_G{1,2,3}.
+
+To not introduce performance regressions, this patch changes the rhel7
+machine-types to enable x2apic by default on all those models and also
+on Opteron_G{4,5}.
+
+Quoting the patch I sent upstream[1]:
+
+> Normally we try to keep the CPU model definitions as close as the real
+> CPUs as possible, but x2apic can be emulated by KVM without host CPU
+> support for x2apic, and it improves performance by reducing APIC access
+> overhead. x2apic emulation is available on KVM since 2009 (Linux
+> 2.6.32-rc1), there's no reason for not enabling x2apic by default when
+> running KVM.
+
+Upstream status is "not applicable" because this patch touches only the
+rhel7-specific PC code. I am doing this because my plan is to enable
+x2apic by default even if upstream rejects my patch, and I want to get
+this done as soon as possible to get more testing exposure.
+
+[1] A patch was submitted to change cpu.c to add x2apic to those CPU models
+    upstream, and can be seen at:
+    Message-Id: <1390228618-21663-1-git-send-email-ehabkost@redhat.com>
+    http://article.gmane.org/gmane.comp.emulators.qemu/251492
+
+    The upstream patch is a resend. A similar patch was sent in
+    September 2013, was ACKed by Gleb, but was ignored by all
+    maintainers.
+
+Changes v2:
+ * Use the new pc_compat_rhel*() functions
+ * Disable x2apic explicitly on Opteron_G{4,5} on pc_compat_rhel650()
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+---
+ hw/i386/pc_piix.c | 12 ++++++++++++
+ hw/i386/pc_q35.c  | 10 ++++++++++
+ 2 files changed, 22 insertions(+)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/pc_piix.c |   12 ++++++++++++
+ hw/i386/pc_q35.c  |   10 ++++++++++
+ 2 files changed, 22 insertions(+), 0 deletions(-)
+
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index 769571c..663c9d5 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -745,6 +745,16 @@ machine_init(pc_machine_init);
+ 
+ static void pc_compat_rhel700(QEMUMachineInitArgs *args)
+ {
++    x86_cpu_compat_set_features("Conroe", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    x86_cpu_compat_set_features("Penryn", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    x86_cpu_compat_set_features("Nehalem", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    x86_cpu_compat_set_features("Westmere", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    /* SandyBridge and Haswell already have x2apic enabled */
++    x86_cpu_compat_set_features("Opteron_G1", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    x86_cpu_compat_set_features("Opteron_G2", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    x86_cpu_compat_set_features("Opteron_G3", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    x86_cpu_compat_set_features("Opteron_G4", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    x86_cpu_compat_set_features("Opteron_G5", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+ }
+ 
+ static void pc_init_rhel700(QEMUMachineInitArgs *args)
+@@ -899,6 +909,8 @@ static void pc_compat_rhel650(QEMUMachineInitArgs *args)
+     x86_cpu_compat_set_features("Opteron_G1", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+     x86_cpu_compat_set_features("Opteron_G2", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+     x86_cpu_compat_set_features("Opteron_G3", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    x86_cpu_compat_set_features("Opteron_G4", FEAT_1_ECX, 0, CPUID_EXT_X2APIC);
++    x86_cpu_compat_set_features("Opteron_G5", FEAT_1_ECX, 0, CPUID_EXT_X2APIC);
+ 
+     x86_cpu_compat_set_features("phenom", FEAT_8000_0001_EDX,
+                                 0, CPUID_EXT2_RDTSCP);
+diff --git a/hw/i386/pc_q35.c b/hw/i386/pc_q35.c
+index 0280a95..232c62d 100644
+--- a/hw/i386/pc_q35.c
++++ b/hw/i386/pc_q35.c
+@@ -270,6 +270,16 @@ machine_init(pc_q35_machine_init);
+ 
+ static void pc_q35_compat_rhel700(QEMUMachineInitArgs *args)
+ {
++    x86_cpu_compat_set_features("Conroe", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    x86_cpu_compat_set_features("Penryn", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    x86_cpu_compat_set_features("Nehalem", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    x86_cpu_compat_set_features("Westmere", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    /* SandyBridge and Haswell already have x2apic enabled */
++    x86_cpu_compat_set_features("Opteron_G1", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    x86_cpu_compat_set_features("Opteron_G2", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    x86_cpu_compat_set_features("Opteron_G3", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    x86_cpu_compat_set_features("Opteron_G4", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    x86_cpu_compat_set_features("Opteron_G5", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+ }
+ 
+ static void pc_q35_init_rhel700(QEMUMachineInitArgs *args)
+-- 
+1.7.1
+

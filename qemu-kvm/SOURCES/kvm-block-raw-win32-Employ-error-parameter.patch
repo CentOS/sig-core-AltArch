@@ -1,0 +1,116 @@
+From 50ff46f7848a999267c7f15dac727fe690dabfd7 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 4 Nov 2013 22:32:17 +0100
+Subject: [PATCH 24/87] block/raw-win32: Employ error parameter
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383604354-12743-27-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55326
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 26/43] block/raw-win32: Employ error parameter
+Bugzilla: 1026524
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: 1026524
+
+Make use of the error parameter in the opening and creating functions in
+block/raw-win32.c.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit c6252b7cea0dfa893cf1f49de3a58f222e910783)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+---
+ block/raw-win32.c | 16 +++++++++++-----
+ 1 file changed, 11 insertions(+), 5 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/raw-win32.c |   16 +++++++++++-----
+ 1 files changed, 11 insertions(+), 5 deletions(-)
+
+diff --git a/block/raw-win32.c b/block/raw-win32.c
+index 9ebb083..5a60ca5 100644
+--- a/block/raw-win32.c
++++ b/block/raw-win32.c
+@@ -250,8 +250,7 @@ static int raw_open(BlockDriverState *bs, QDict *options, int flags,
+     opts = qemu_opts_create_nofail(&raw_runtime_opts);
+     qemu_opts_absorb_qdict(opts, options, &local_err);
+     if (error_is_set(&local_err)) {
+-        qerror_report_err(local_err);
+-        error_free(local_err);
++        error_propagate(errp, local_err);
+         ret = -EINVAL;
+         goto fail;
+     }
+@@ -263,6 +262,7 @@ static int raw_open(BlockDriverState *bs, QDict *options, int flags,
+     if ((flags & BDRV_O_NATIVE_AIO) && aio == NULL) {
+         aio = win32_aio_init();
+         if (aio == NULL) {
++            error_setg(errp, "Could not initialize AIO");
+             ret = -EINVAL;
+             goto fail;
+         }
+@@ -279,6 +279,7 @@ static int raw_open(BlockDriverState *bs, QDict *options, int flags,
+         } else {
+             ret = -EINVAL;
+         }
++        error_setg_errno(errp, -ret, "Could not open file");
+         goto fail;
+     }
+ 
+@@ -286,6 +287,7 @@ static int raw_open(BlockDriverState *bs, QDict *options, int flags,
+         ret = win32_aio_attach(aio, s->hfile);
+         if (ret < 0) {
+             CloseHandle(s->hfile);
++            error_setg_errno(errp, -ret, "Could not enable AIO");
+             goto fail;
+         }
+         s->aio = aio;
+@@ -437,8 +439,10 @@ static int raw_create(const char *filename, QEMUOptionParameter *options,
+ 
+     fd = qemu_open(filename, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY,
+                    0644);
+-    if (fd < 0)
++    if (fd < 0) {
++        error_setg_errno(errp, errno, "Could not create file");
+         return -EIO;
++    }
+     set_sparse(fd);
+     ftruncate(fd, total_size * 512);
+     qemu_close(fd);
+@@ -547,8 +551,7 @@ static int hdev_open(BlockDriverState *bs, QDict *options, int flags,
+     QemuOpts *opts = qemu_opts_create_nofail(&raw_runtime_opts);
+     qemu_opts_absorb_qdict(opts, options, &local_err);
+     if (error_is_set(&local_err)) {
+-        qerror_report_err(local_err);
+-        error_free(local_err);
++        error_propagate(errp, local_err);
+         ret = -EINVAL;
+         goto done;
+     }
+@@ -557,6 +560,7 @@ static int hdev_open(BlockDriverState *bs, QDict *options, int flags,
+ 
+     if (strstart(filename, "/dev/cdrom", NULL)) {
+         if (find_cdrom(device_name, sizeof(device_name)) < 0) {
++            error_setg(errp, "Could not open CD-ROM drive");
+             ret = -ENOENT;
+             goto done;
+         }
+@@ -583,8 +587,10 @@ static int hdev_open(BlockDriverState *bs, QDict *options, int flags,
+         int err = GetLastError();
+ 
+         if (err == ERROR_ACCESS_DENIED) {
++            error_setg_errno(errp, EACCES, "Could not open device");
+             ret = -EACCES;
+         } else {
++            error_setg(errp, "Could not open device");
+             ret = -1;
+         }
+         goto done;
+-- 
+1.7.1
+

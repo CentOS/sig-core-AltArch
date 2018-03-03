@@ -1,0 +1,129 @@
+From 9b3702c45245f7bbb51350c25e8cf304c490b96a Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Thu, 7 Nov 2013 07:19:42 +0100
+Subject: [PATCH 05/81] block: make bdrv_co_is_allocated static
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1382084091-16636-6-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 54988
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 05/26] block: make bdrv_co_is_allocated static
+Bugzilla: 989646
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+bdrv_is_allocated can detect coroutine context and go through a fast
+path, similar to other block layer functions.
+
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit bdad13b9deec47d5d9eaf7f43867d19a79471244)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c               |   24 +++++++++++++++---------
+ block/raw.c           |    2 +-
+ block/stream.c        |    4 ++--
+ include/block/block.h |    2 --
+ 4 files changed, 18 insertions(+), 14 deletions(-)
+
+diff --git a/block.c b/block.c
+index d5aeff7..0607cc6 100644
+--- a/block.c
++++ b/block.c
+@@ -2555,7 +2555,7 @@ static int coroutine_fn bdrv_co_do_readv(BlockDriverState *bs,
+     if (flags & BDRV_REQ_COPY_ON_READ) {
+         int pnum;
+ 
+-        ret = bdrv_co_is_allocated(bs, sector_num, nb_sectors, &pnum);
++        ret = bdrv_is_allocated(bs, sector_num, nb_sectors, &pnum);
+         if (ret < 0) {
+             goto out;
+         }
+@@ -3027,8 +3027,9 @@ typedef struct BdrvCoIsAllocatedData {
+  * 'nb_sectors' is the max value 'pnum' should be set to.  If nb_sectors goes
+  * beyond the end of the disk image it will be clamped.
+  */
+-int coroutine_fn bdrv_co_is_allocated(BlockDriverState *bs, int64_t sector_num,
+-                                      int nb_sectors, int *pnum)
++static int coroutine_fn bdrv_co_is_allocated(BlockDriverState *bs,
++                                             int64_t sector_num,
++                                             int nb_sectors, int *pnum)
+ {
+     int64_t n;
+ 
+@@ -3078,10 +3079,15 @@ int bdrv_is_allocated(BlockDriverState *bs, int64_t sector_num, int nb_sectors,
+         .done = false,
+     };
+ 
+-    co = qemu_coroutine_create(bdrv_is_allocated_co_entry);
+-    qemu_coroutine_enter(co, &data);
+-    while (!data.done) {
+-        qemu_aio_wait();
++    if (qemu_in_coroutine()) {
++        /* Fast-path if already in coroutine context */
++        bdrv_is_allocated_co_entry(&data);
++    } else {
++        co = qemu_coroutine_create(bdrv_is_allocated_co_entry);
++        qemu_coroutine_enter(co, &data);
++        while (!data.done) {
++            qemu_aio_wait();
++        }
+     }
+     return data.ret;
+ }
+@@ -3109,8 +3115,8 @@ int coroutine_fn bdrv_co_is_allocated_above(BlockDriverState *top,
+     intermediate = top;
+     while (intermediate && intermediate != base) {
+         int pnum_inter;
+-        ret = bdrv_co_is_allocated(intermediate, sector_num, nb_sectors,
+-                                   &pnum_inter);
++        ret = bdrv_is_allocated(intermediate, sector_num, nb_sectors,
++                                &pnum_inter);
+         if (ret < 0) {
+             return ret;
+         } else if (ret) {
+diff --git a/block/raw.c b/block/raw.c
+index 8c81de9..f78ff39 100644
+--- a/block/raw.c
++++ b/block/raw.c
+@@ -39,7 +39,7 @@ static int coroutine_fn raw_co_is_allocated(BlockDriverState *bs,
+                                             int64_t sector_num,
+                                             int nb_sectors, int *pnum)
+ {
+-    return bdrv_co_is_allocated(bs->file, sector_num, nb_sectors, pnum);
++    return bdrv_is_allocated(bs->file, sector_num, nb_sectors, pnum);
+ }
+ 
+ static int coroutine_fn raw_co_write_zeroes(BlockDriverState *bs,
+diff --git a/block/stream.c b/block/stream.c
+index d6df06f..f8efa8a 100644
+--- a/block/stream.c
++++ b/block/stream.c
+@@ -115,8 +115,8 @@ wait:
+             break;
+         }
+ 
+-        ret = bdrv_co_is_allocated(bs, sector_num,
+-                                   STREAM_BUFFER_SIZE / BDRV_SECTOR_SIZE, &n);
++        ret = bdrv_is_allocated(bs, sector_num,
++                                STREAM_BUFFER_SIZE / BDRV_SECTOR_SIZE, &n);
+         if (ret == 1) {
+             /* Allocated in the top, no need to copy.  */
+             copy = false;
+diff --git a/include/block/block.h b/include/block/block.h
+index 1a3ed22..1932e67 100644
+--- a/include/block/block.h
++++ b/include/block/block.h
+@@ -192,8 +192,6 @@ int coroutine_fn bdrv_co_writev(BlockDriverState *bs, int64_t sector_num,
+  */
+ int coroutine_fn bdrv_co_write_zeroes(BlockDriverState *bs, int64_t sector_num,
+     int nb_sectors);
+-int coroutine_fn bdrv_co_is_allocated(BlockDriverState *bs, int64_t sector_num,
+-    int nb_sectors, int *pnum);
+ int coroutine_fn bdrv_co_is_allocated_above(BlockDriverState *top,
+                                             BlockDriverState *base,
+                                             int64_t sector_num,
+-- 
+1.7.1
+

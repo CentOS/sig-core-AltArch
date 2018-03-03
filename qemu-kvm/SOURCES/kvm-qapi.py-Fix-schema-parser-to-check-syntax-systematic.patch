@@ -1,0 +1,267 @@
+From d7e41b169b7c97953ceda7b7e617ae3f3dc5ae49 Mon Sep 17 00:00:00 2001
+Message-Id: <d7e41b169b7c97953ceda7b7e617ae3f3dc5ae49.1387369730.git.minovotn@redhat.com>
+In-Reply-To: <091eecc4fa42754760dfff393dabcc2b444e9693.1387369730.git.minovotn@redhat.com>
+References: <091eecc4fa42754760dfff393dabcc2b444e9693.1387369730.git.minovotn@redhat.com>
+From: Markus Armbruster <armbru@redhat.com>
+Date: Tue, 10 Dec 2013 15:29:16 +0100
+Subject: [PATCH 16/21] qapi.py: Fix schema parser to check syntax
+ systematically
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1386689361-30281-14-git-send-email-armbru@redhat.com>
+Patchwork-id: 56134
+O-Subject: [PATCH 7.0 qemu-kvm 13/18] qapi.py: Fix schema parser to check syntax systematically
+Bugzilla: 997915
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+
+From: Markus Armbruster <armbru@redhat.com>
+
+Fixes at least the following parser bugs:
+
+* accepts any token in place of a colon
+
+* treats comma as optional
+
+* crashes when closing braces or brackets are missing
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Message-id: 1374939721-7876-7-git-send-email-armbru@redhat.com
+Signed-off-by: Anthony Liguori <aliguori@us.ibm.com>
+(cherry picked from commit 6974ccd542d11ae5fb1e56dd3d753f2de5cc097e)
+---
+ scripts/qapi.py                              | 40 +++++++++++++++++++++-------
+ tests/qapi-schema/missing-colon.err          |  1 +
+ tests/qapi-schema/missing-colon.exit         |  2 +-
+ tests/qapi-schema/missing-colon.out          |  3 ---
+ tests/qapi-schema/missing-comma-list.err     |  1 +
+ tests/qapi-schema/missing-comma-list.exit    |  2 +-
+ tests/qapi-schema/missing-comma-list.out     |  3 ---
+ tests/qapi-schema/missing-comma-object.err   |  1 +
+ tests/qapi-schema/missing-comma-object.exit  |  2 +-
+ tests/qapi-schema/missing-comma-object.out   |  3 ---
+ tests/qapi-schema/trailing-comma-list.err    |  1 +
+ tests/qapi-schema/trailing-comma-list.exit   |  2 +-
+ tests/qapi-schema/trailing-comma-list.out    |  3 ---
+ tests/qapi-schema/trailing-comma-object.err  |  1 +
+ tests/qapi-schema/trailing-comma-object.exit |  2 +-
+ tests/qapi-schema/trailing-comma-object.out  |  3 ---
+ tests/qapi-schema/unclosed-list.err          |  2 +-
+ tests/qapi-schema/unclosed-object.err        |  2 +-
+ 18 files changed, 42 insertions(+), 32 deletions(-)
+
+Signed-off-by: Michal Novotny <minovotn@redhat.com>
+---
+ scripts/qapi.py                              | 40 +++++++++++++++++++++-------
+ tests/qapi-schema/missing-colon.err          |  1 +
+ tests/qapi-schema/missing-colon.exit         |  2 +-
+ tests/qapi-schema/missing-colon.out          |  3 ---
+ tests/qapi-schema/missing-comma-list.err     |  1 +
+ tests/qapi-schema/missing-comma-list.exit    |  2 +-
+ tests/qapi-schema/missing-comma-list.out     |  3 ---
+ tests/qapi-schema/missing-comma-object.err   |  1 +
+ tests/qapi-schema/missing-comma-object.exit  |  2 +-
+ tests/qapi-schema/missing-comma-object.out   |  3 ---
+ tests/qapi-schema/trailing-comma-list.err    |  1 +
+ tests/qapi-schema/trailing-comma-list.exit   |  2 +-
+ tests/qapi-schema/trailing-comma-list.out    |  3 ---
+ tests/qapi-schema/trailing-comma-object.err  |  1 +
+ tests/qapi-schema/trailing-comma-object.exit |  2 +-
+ tests/qapi-schema/trailing-comma-object.out  |  3 ---
+ tests/qapi-schema/unclosed-list.err          |  2 +-
+ tests/qapi-schema/unclosed-object.err        |  2 +-
+ 18 files changed, 42 insertions(+), 32 deletions(-)
+
+diff --git a/scripts/qapi.py b/scripts/qapi.py
+index 0b48a1e..12fb29a 100644
+--- a/scripts/qapi.py
++++ b/scripts/qapi.py
+@@ -106,24 +106,42 @@ class QAPISchema:
+ 
+     def get_members(self):
+         expr = OrderedDict()
+-        while self.tok != '}':
++        if self.tok == '}':
++            self.accept()
++            return expr
++        if self.tok != "'":
++            raise QAPISchemaError(self, 'Expected string or "}"')
++        while True:
+             key = self.val
+             self.accept()
+-            self.accept()        # :
++            if self.tok != ':':
++                raise QAPISchemaError(self, 'Expected ":"')
++            self.accept()
+             expr[key] = self.get_expr()
+-            if self.tok == ',':
++            if self.tok == '}':
+                 self.accept()
+-        self.accept()
+-        return expr
++                return expr
++            if self.tok != ',':
++                raise QAPISchemaError(self, 'Expected "," or "}"')
++            self.accept()
++            if self.tok != "'":
++                raise QAPISchemaError(self, 'Expected string')
+ 
+     def get_values(self):
+         expr = []
+-        while self.tok != ']':
++        if self.tok == ']':
++            self.accept()
++            return expr
++        if not self.tok in [ '{', '[', "'" ]:
++            raise QAPISchemaError(self, 'Expected "{", "[", "]" or string')
++        while True:
+             expr.append(self.get_expr())
+-            if self.tok == ',':
++            if self.tok == ']':
+                 self.accept()
+-        self.accept()
+-        return expr
++                return expr
++            if self.tok != ',':
++                raise QAPISchemaError(self, 'Expected "," or "]"')
++            self.accept()
+ 
+     def get_expr(self):
+         if self.tok == '{':
+@@ -132,9 +150,11 @@ class QAPISchema:
+         elif self.tok == '[':
+             self.accept()
+             expr = self.get_values()
+-        else:
++        elif self.tok == "'":
+             expr = self.val
+             self.accept()
++        else:
++            raise QAPISchemaError(self, 'Expected "{", "[" or string')
+         return expr
+ 
+ def parse_schema(fp):
+diff --git a/tests/qapi-schema/missing-colon.err b/tests/qapi-schema/missing-colon.err
+index e69de29..9f2a355 100644
+--- a/tests/qapi-schema/missing-colon.err
++++ b/tests/qapi-schema/missing-colon.err
+@@ -0,0 +1 @@
++<stdin>:1:10: Expected ":"
+diff --git a/tests/qapi-schema/missing-colon.exit b/tests/qapi-schema/missing-colon.exit
+index 573541a..d00491f 100644
+--- a/tests/qapi-schema/missing-colon.exit
++++ b/tests/qapi-schema/missing-colon.exit
+@@ -1 +1 @@
+-0
++1
+diff --git a/tests/qapi-schema/missing-colon.out b/tests/qapi-schema/missing-colon.out
+index e67068c..e69de29 100644
+--- a/tests/qapi-schema/missing-colon.out
++++ b/tests/qapi-schema/missing-colon.out
+@@ -1,3 +0,0 @@
+-[OrderedDict([('enum', None), ('data', ['good', 'bad', 'ugly'])])]
+-[None]
+-[]
+diff --git a/tests/qapi-schema/missing-comma-list.err b/tests/qapi-schema/missing-comma-list.err
+index e69de29..4fe0700 100644
+--- a/tests/qapi-schema/missing-comma-list.err
++++ b/tests/qapi-schema/missing-comma-list.err
+@@ -0,0 +1 @@
++<stdin>:2:20: Expected "," or "]"
+diff --git a/tests/qapi-schema/missing-comma-list.exit b/tests/qapi-schema/missing-comma-list.exit
+index 573541a..d00491f 100644
+--- a/tests/qapi-schema/missing-comma-list.exit
++++ b/tests/qapi-schema/missing-comma-list.exit
+@@ -1 +1 @@
+-0
++1
+diff --git a/tests/qapi-schema/missing-comma-list.out b/tests/qapi-schema/missing-comma-list.out
+index e3bd904..e69de29 100644
+--- a/tests/qapi-schema/missing-comma-list.out
++++ b/tests/qapi-schema/missing-comma-list.out
+@@ -1,3 +0,0 @@
+-[OrderedDict([('enum', 'Status'), ('data', ['good', 'bad', 'ugly'])])]
+-['Status']
+-[]
+diff --git a/tests/qapi-schema/missing-comma-object.err b/tests/qapi-schema/missing-comma-object.err
+index e69de29..b0121b5 100644
+--- a/tests/qapi-schema/missing-comma-object.err
++++ b/tests/qapi-schema/missing-comma-object.err
+@@ -0,0 +1 @@
++<stdin>:2:3: Expected "," or "}"
+diff --git a/tests/qapi-schema/missing-comma-object.exit b/tests/qapi-schema/missing-comma-object.exit
+index 573541a..d00491f 100644
+--- a/tests/qapi-schema/missing-comma-object.exit
++++ b/tests/qapi-schema/missing-comma-object.exit
+@@ -1 +1 @@
+-0
++1
+diff --git a/tests/qapi-schema/missing-comma-object.out b/tests/qapi-schema/missing-comma-object.out
+index e3bd904..e69de29 100644
+--- a/tests/qapi-schema/missing-comma-object.out
++++ b/tests/qapi-schema/missing-comma-object.out
+@@ -1,3 +0,0 @@
+-[OrderedDict([('enum', 'Status'), ('data', ['good', 'bad', 'ugly'])])]
+-['Status']
+-[]
+diff --git a/tests/qapi-schema/trailing-comma-list.err b/tests/qapi-schema/trailing-comma-list.err
+index e69de29..ff839a3 100644
+--- a/tests/qapi-schema/trailing-comma-list.err
++++ b/tests/qapi-schema/trailing-comma-list.err
+@@ -0,0 +1 @@
++<stdin>:2:36: Expected "{", "[" or string
+diff --git a/tests/qapi-schema/trailing-comma-list.exit b/tests/qapi-schema/trailing-comma-list.exit
+index 573541a..d00491f 100644
+--- a/tests/qapi-schema/trailing-comma-list.exit
++++ b/tests/qapi-schema/trailing-comma-list.exit
+@@ -1 +1 @@
+-0
++1
+diff --git a/tests/qapi-schema/trailing-comma-list.out b/tests/qapi-schema/trailing-comma-list.out
+index e3bd904..e69de29 100644
+--- a/tests/qapi-schema/trailing-comma-list.out
++++ b/tests/qapi-schema/trailing-comma-list.out
+@@ -1,3 +0,0 @@
+-[OrderedDict([('enum', 'Status'), ('data', ['good', 'bad', 'ugly'])])]
+-['Status']
+-[]
+diff --git a/tests/qapi-schema/trailing-comma-object.err b/tests/qapi-schema/trailing-comma-object.err
+index e69de29..f540962 100644
+--- a/tests/qapi-schema/trailing-comma-object.err
++++ b/tests/qapi-schema/trailing-comma-object.err
+@@ -0,0 +1 @@
++<stdin>:2:38: Expected string
+diff --git a/tests/qapi-schema/trailing-comma-object.exit b/tests/qapi-schema/trailing-comma-object.exit
+index 573541a..d00491f 100644
+--- a/tests/qapi-schema/trailing-comma-object.exit
++++ b/tests/qapi-schema/trailing-comma-object.exit
+@@ -1 +1 @@
+-0
++1
+diff --git a/tests/qapi-schema/trailing-comma-object.out b/tests/qapi-schema/trailing-comma-object.out
+index e3bd904..e69de29 100644
+--- a/tests/qapi-schema/trailing-comma-object.out
++++ b/tests/qapi-schema/trailing-comma-object.out
+@@ -1,3 +0,0 @@
+-[OrderedDict([('enum', 'Status'), ('data', ['good', 'bad', 'ugly'])])]
+-['Status']
+-[]
+diff --git a/tests/qapi-schema/unclosed-list.err b/tests/qapi-schema/unclosed-list.err
+index f9a9c2a..0e837a7 100644
+--- a/tests/qapi-schema/unclosed-list.err
++++ b/tests/qapi-schema/unclosed-list.err
+@@ -1 +1 @@
+-Crashed: <type 'exceptions.IndexError'>
++<stdin>:1:20: Expected "," or "]"
+diff --git a/tests/qapi-schema/unclosed-object.err b/tests/qapi-schema/unclosed-object.err
+index f9a9c2a..e6dc950 100644
+--- a/tests/qapi-schema/unclosed-object.err
++++ b/tests/qapi-schema/unclosed-object.err
+@@ -1 +1 @@
+-Crashed: <type 'exceptions.IndexError'>
++<stdin>:1:21: Expected "," or "}"
+-- 
+1.7.11.7
+

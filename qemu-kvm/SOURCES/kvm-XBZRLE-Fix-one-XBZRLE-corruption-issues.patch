@@ -1,0 +1,106 @@
+From c66cd34696f1f7f04b367a5f8b4d79802cddafb4 Mon Sep 17 00:00:00 2001
+From: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+Date: Thu, 8 May 2014 10:58:42 +0200
+Subject: [PATCH 07/31] XBZRLE: Fix one XBZRLE corruption issues
+
+RH-Author: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+Message-id: <1399546722-6350-5-git-send-email-dgilbert@redhat.com>
+Patchwork-id: 58744
+O-Subject: [RHEL7.1/RHEL7.0.z qemu-kvm PATCH 4/4] XBZRLE: Fix one XBZRLE corruption issues
+Bugzilla: 1066338
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Amit Shah <amit.shah@redhat.com>
+
+From: ChenLiang <chenliang88@huawei.com>
+
+The page may not be inserted into cache after executing save_xbzrle_page.
+In case of failure to insert, the original page should be sent rather
+than the page in the cache.
+
+Signed-off-by: ChenLiang <chenliang88@huawei.com>
+Signed-off-by: Gonglei <arei.gonglei@huawei.com>
+Reviewed-by: Juan Quintela <quintela@redhat.com>
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+(cherry picked from commit 1534ee93cc6be992c05577886b24bd44c37ecff6)
+---
+ arch_init.c | 25 +++++++++++++------------
+ 1 file changed, 13 insertions(+), 12 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ arch_init.c |   25 +++++++++++++------------
+ 1 files changed, 13 insertions(+), 12 deletions(-)
+
+diff --git a/arch_init.c b/arch_init.c
+index 80e48f2..22f7def 100644
+--- a/arch_init.c
++++ b/arch_init.c
+@@ -341,7 +341,7 @@ static void xbzrle_cache_zero_page(ram_addr_t current_addr)
+ 
+ #define ENCODING_FLAG_XBZRLE 0x1
+ 
+-static int save_xbzrle_page(QEMUFile *f, uint8_t *current_data,
++static int save_xbzrle_page(QEMUFile *f, uint8_t **current_data,
+                             ram_addr_t current_addr, RAMBlock *block,
+                             ram_addr_t offset, int cont, bool last_stage)
+ {
+@@ -349,19 +349,23 @@ static int save_xbzrle_page(QEMUFile *f, uint8_t *current_data,
+     uint8_t *prev_cached_page;
+ 
+     if (!cache_is_cached(XBZRLE.cache, current_addr)) {
++        acct_info.xbzrle_cache_miss++;
+         if (!last_stage) {
+-            if (cache_insert(XBZRLE.cache, current_addr, current_data) == -1) {
++            if (cache_insert(XBZRLE.cache, current_addr, *current_data) == -1) {
+                 return -1;
++            } else {
++                /* update *current_data when the page has been
++                   inserted into cache */
++                *current_data = get_cached_data(XBZRLE.cache, current_addr);
+             }
+         }
+-        acct_info.xbzrle_cache_miss++;
+         return -1;
+     }
+ 
+     prev_cached_page = get_cached_data(XBZRLE.cache, current_addr);
+ 
+     /* save current buffer into memory */
+-    memcpy(XBZRLE.current_buf, current_data, TARGET_PAGE_SIZE);
++    memcpy(XBZRLE.current_buf, *current_data, TARGET_PAGE_SIZE);
+ 
+     /* XBZRLE encoding (if there is no overflow) */
+     encoded_len = xbzrle_encode_buffer(prev_cached_page, XBZRLE.current_buf,
+@@ -374,7 +378,10 @@ static int save_xbzrle_page(QEMUFile *f, uint8_t *current_data,
+         DPRINTF("Overflow\n");
+         acct_info.xbzrle_overflows++;
+         /* update data in the cache */
+-        memcpy(prev_cached_page, current_data, TARGET_PAGE_SIZE);
++        if (!last_stage) {
++            memcpy(prev_cached_page, *current_data, TARGET_PAGE_SIZE);
++            *current_data = prev_cached_page;
++        }
+         return -1;
+     }
+ 
+@@ -599,15 +606,9 @@ static int ram_save_block(QEMUFile *f, bool last_stage)
+                  */
+                 xbzrle_cache_zero_page(current_addr);
+             } else if (!ram_bulk_stage && migrate_use_xbzrle()) {
+-                bytes_sent = save_xbzrle_page(f, p, current_addr, block,
++                bytes_sent = save_xbzrle_page(f, &p, current_addr, block,
+                                               offset, cont, last_stage);
+                 if (!last_stage) {
+-                    /* We must send exactly what's in the xbzrle cache
+-                     * even if the page wasn't xbzrle compressed, so that
+-                     * it's right next time.
+-                     */
+-                    p = get_cached_data(XBZRLE.cache, current_addr);
+-
+                     /* Can't send this cached data async, since the cache page
+                      * might get updated before it gets to the wire
+                      */
+-- 
+1.7.1
+

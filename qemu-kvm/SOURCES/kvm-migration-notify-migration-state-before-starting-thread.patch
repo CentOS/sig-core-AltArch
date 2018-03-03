@@ -1,0 +1,48 @@
+From cfa096accd51fe9b1dfa9693ce6f4628a4e83fe6 Mon Sep 17 00:00:00 2001
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Tue, 13 Aug 2013 09:06:35 +0200
+Subject: migration: notify migration state before starting thread
+
+RH-Author: Stefan Hajnoczi <stefanha@redhat.com>
+Message-id: <1376384797-4701-5-git-send-email-stefanha@redhat.com>
+Patchwork-id: 53209
+O-Subject: [PATCH v2 4/6] migration: notify migration state before starting thread
+Bugzilla: 995030
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+
+The migration thread runs outside the QEMU global mutex when possible.
+Therefore we must notify migration state change *before* starting the
+migration thread.
+
+This allows registered listeners to act before live migration iterations
+begin.  Therefore they can get into a state that allows for live
+migration.  When the migration thread starts everything will be ready.
+
+Without this patch there is a race condition during migration setup,
+depending on whether the migration thread has already transitioned from
+SETUP to ACTIVE state.
+
+Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Kevin Wolf <kwolf@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 9287ac271d83166f99e050a0e0a4ebd462f7eb2b)
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+diff --git a/migration.c b/migration.c
+index 6e29f72..177fc22 100644
+--- a/migration.c
++++ b/migration.c
+@@ -601,7 +601,9 @@ void migrate_fd_connect(MigrationState *s)
+     qemu_file_set_rate_limit(s->file,
+                              s->bandwidth_limit / XFER_LIMIT_RATIO);
+ 
++    /* Notify before starting migration thread */
++    notifier_list_notify(&migration_state_notifiers, s);
++
+     qemu_thread_create(&s->thread, migration_thread, s,
+                        QEMU_THREAD_JOINABLE);
+-    notifier_list_notify(&migration_state_notifiers, s);
+ }

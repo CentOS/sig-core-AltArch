@@ -1,0 +1,55 @@
+From 1c16f135463077e596b9156439d2482a1a8aa9b8 Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Fri, 18 Oct 2013 08:14:29 +0200
+Subject: [PATCH 04/81] block: keep bs->total_sectors up to date even for growable block devices
+
+RH-Author: Paolo Bonzini <pbonzini@redhat.com>
+Message-id: <1382084091-16636-5-git-send-email-pbonzini@redhat.com>
+Patchwork-id: 54986
+O-Subject: [RHEL 7.0 qemu-kvm PATCH 04/26] block: keep bs->total_sectors up to date even for growable block devices
+Bugzilla: 989646
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+If a BlockDriverState is growable, after every write we need to
+check if bs->total_sectors might have changed.  With this change,
+bdrv_getlength does not need anymore a system call.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit df2a6f29a5019707d69f6eeb30cf792841cae5aa)
+---
+ block.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c |    5 ++++-
+ 1 files changed, 4 insertions(+), 1 deletions(-)
+
+diff --git a/block.c b/block.c
+index 2ba9a0a..d5aeff7 100644
+--- a/block.c
++++ b/block.c
+@@ -2703,6 +2703,9 @@ static int coroutine_fn bdrv_co_do_writev(BlockDriverState *bs,
+     if (bs->wr_highest_sector < sector_num + nb_sectors - 1) {
+         bs->wr_highest_sector = sector_num + nb_sectors - 1;
+     }
++    if (bs->growable && ret >= 0) {
++        bs->total_sectors = MAX(bs->total_sectors, sector_num + nb_sectors);
++    }
+ 
+     tracked_request_end(&req);
+ 
+@@ -2777,7 +2780,7 @@ int64_t bdrv_getlength(BlockDriverState *bs)
+     if (!drv)
+         return -ENOMEDIUM;
+ 
+-    if (bs->growable || bdrv_dev_has_removable_media(bs)) {
++    if (bdrv_dev_has_removable_media(bs)) {
+         if (drv->bdrv_getlength) {
+             return drv->bdrv_getlength(bs);
+         }
+-- 
+1.7.1
+

@@ -1,0 +1,179 @@
+From 43d3585ba869c97c46cffc3c9fd7e46885d539c0 Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Thu, 9 Mar 2017 06:12:05 +0100
+Subject: [PATCH 17/17] spice: replace use of deprecated API
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Miroslav Rezanina <mrezanin@redhat.com>
+Message-id: <4696b589a948f544ea081abeb496cb383a466020.1489039263.git.mrezanin@redhat.com>
+Patchwork-id: 74259
+O-Subject: [RHEL-7.4 qemu-kvm PATCH 2/2] spice: replace use of deprecated API
+Bugzilla: 1430606
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Marc-André Lureau <mlureau@redhat.com>
+RH-Acked-by: David Hildenbrand <david@redhat.com>
+
+From: Marc-André Lureau <marcandre.lureau@gmail.com>
+
+hose API are deprecated since 0.11, and qemu depends on 0.12 already.
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 26defe81f6a878f33e0aaeb1df4d0d7022c929ca)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/display/qxl.c   | 16 ++++++++--------
+ ui/spice-core.c    | 15 +++++++--------
+ ui/spice-display.c | 10 +++++-----
+ 3 files changed, 20 insertions(+), 21 deletions(-)
+
+diff --git a/hw/display/qxl.c b/hw/display/qxl.c
+index c76c237..0a755df 100644
+--- a/hw/display/qxl.c
++++ b/hw/display/qxl.c
+@@ -162,7 +162,7 @@ void qxl_spice_update_area(PCIQXLDevice *qxl, uint32_t surface_id,
+     trace_qxl_spice_update_area_rest(qxl->id, num_dirty_rects,
+                                      clear_dirty_region);
+     if (async == QXL_SYNC) {
+-        qxl->ssd.worker->update_area(qxl->ssd.worker, surface_id, area,
++        spice_qxl_update_area(&qxl->ssd.qxl, surface_id, area,
+                         dirty_rects, num_dirty_rects, clear_dirty_region);
+     } else {
+         assert(cookie != NULL);
+@@ -193,7 +193,7 @@ static void qxl_spice_destroy_surface_wait(PCIQXLDevice *qxl, uint32_t id,
+         cookie->u.surface_id = id;
+         spice_qxl_destroy_surface_async(&qxl->ssd.qxl, id, (uintptr_t)cookie);
+     } else {
+-        qxl->ssd.worker->destroy_surface_wait(qxl->ssd.worker, id);
++        spice_qxl_destroy_surface_wait(&qxl->ssd.qxl, id);
+         qxl_spice_destroy_surface_wait_complete(qxl, id);
+     }
+ }
+@@ -211,19 +211,19 @@ void qxl_spice_loadvm_commands(PCIQXLDevice *qxl, struct QXLCommandExt *ext,
+                                uint32_t count)
+ {
+     trace_qxl_spice_loadvm_commands(qxl->id, ext, count);
+-    qxl->ssd.worker->loadvm_commands(qxl->ssd.worker, ext, count);
++    spice_qxl_loadvm_commands(&qxl->ssd.qxl, ext, count);
+ }
+ 
+ void qxl_spice_oom(PCIQXLDevice *qxl)
+ {
+     trace_qxl_spice_oom(qxl->id);
+-    qxl->ssd.worker->oom(qxl->ssd.worker);
++    spice_qxl_oom(&qxl->ssd.qxl);
+ }
+ 
+ void qxl_spice_reset_memslots(PCIQXLDevice *qxl)
+ {
+     trace_qxl_spice_reset_memslots(qxl->id);
+-    qxl->ssd.worker->reset_memslots(qxl->ssd.worker);
++    spice_qxl_reset_memslots(&qxl->ssd.qxl);
+ }
+ 
+ static void qxl_spice_destroy_surfaces_complete(PCIQXLDevice *qxl)
+@@ -244,7 +244,7 @@ static void qxl_spice_destroy_surfaces(PCIQXLDevice *qxl, qxl_async_io async)
+                 (uintptr_t)qxl_cookie_new(QXL_COOKIE_TYPE_IO,
+                                           QXL_IO_DESTROY_ALL_SURFACES_ASYNC));
+     } else {
+-        qxl->ssd.worker->destroy_surfaces(qxl->ssd.worker);
++        spice_qxl_destroy_surfaces(&qxl->ssd.qxl);
+         qxl_spice_destroy_surfaces_complete(qxl);
+     }
+ }
+@@ -283,13 +283,13 @@ static void qxl_spice_monitors_config_async(PCIQXLDevice *qxl, int replay)
+ void qxl_spice_reset_image_cache(PCIQXLDevice *qxl)
+ {
+     trace_qxl_spice_reset_image_cache(qxl->id);
+-    qxl->ssd.worker->reset_image_cache(qxl->ssd.worker);
++    spice_qxl_reset_image_cache(&qxl->ssd.qxl);
+ }
+ 
+ void qxl_spice_reset_cursor(PCIQXLDevice *qxl)
+ {
+     trace_qxl_spice_reset_cursor(qxl->id);
+-    qxl->ssd.worker->reset_cursor(qxl->ssd.worker);
++    spice_qxl_reset_cursor(&qxl->ssd.qxl);
+     qemu_mutex_lock(&qxl->track_lock);
+     qxl->guest_cursor = 0;
+     qemu_mutex_unlock(&qxl->track_lock);
+diff --git a/ui/spice-core.c b/ui/spice-core.c
+index 0585267..0cd60f3 100644
+--- a/ui/spice-core.c
++++ b/ui/spice-core.c
+@@ -383,17 +383,16 @@ static SpiceChannelList *qmp_query_spice_channels(void)
+         struct sockaddr *paddr;
+         socklen_t plen;
+ 
++        if (!(item->info->flags & SPICE_CHANNEL_EVENT_FLAG_ADDR_EXT)) {
++            error_report("invalid channel event");
++            return NULL;
++        }
++
+         chan = g_malloc0(sizeof(*chan));
+         chan->value = g_malloc0(sizeof(*chan->value));
+ 
+-        if (item->info->flags & SPICE_CHANNEL_EVENT_FLAG_ADDR_EXT) {
+-            paddr = (struct sockaddr *)&item->info->paddr_ext;
+-            plen = item->info->plen_ext;
+-        } else {
+-            paddr = &item->info->paddr;
+-            plen = item->info->plen;
+-        }
+-
++        paddr = (struct sockaddr *)&item->info->paddr_ext;
++        plen = item->info->plen_ext;
+         getnameinfo(paddr, plen,
+                     host, sizeof(host), port, sizeof(port),
+                     NI_NUMERICHOST | NI_NUMERICSERV);
+diff --git a/ui/spice-display.c b/ui/spice-display.c
+index d29d2ab..e2c24a9 100644
+--- a/ui/spice-display.c
++++ b/ui/spice-display.c
+@@ -83,14 +83,14 @@ void qemu_spice_add_memslot(SimpleSpiceDisplay *ssd, QXLDevMemSlot *memslot,
+                 (uintptr_t)qxl_cookie_new(QXL_COOKIE_TYPE_IO,
+                                           QXL_IO_MEMSLOT_ADD_ASYNC));
+     } else {
+-        ssd->worker->add_memslot(ssd->worker, memslot);
++        spice_qxl_add_memslot(&ssd->qxl, memslot);
+     }
+ }
+ 
+ void qemu_spice_del_memslot(SimpleSpiceDisplay *ssd, uint32_t gid, uint32_t sid)
+ {
+     trace_qemu_spice_del_memslot(ssd->qxl.id, gid, sid);
+-    ssd->worker->del_memslot(ssd->worker, gid, sid);
++    spice_qxl_del_memslot(&ssd->qxl, gid, sid);
+ }
+ 
+ void qemu_spice_create_primary_surface(SimpleSpiceDisplay *ssd, uint32_t id,
+@@ -103,7 +103,7 @@ void qemu_spice_create_primary_surface(SimpleSpiceDisplay *ssd, uint32_t id,
+                 (uintptr_t)qxl_cookie_new(QXL_COOKIE_TYPE_IO,
+                                           QXL_IO_CREATE_PRIMARY_ASYNC));
+     } else {
+-        ssd->worker->create_primary_surface(ssd->worker, id, surface);
++        spice_qxl_create_primary_surface(&ssd->qxl, id, surface);
+     }
+ }
+ 
+@@ -116,14 +116,14 @@ void qemu_spice_destroy_primary_surface(SimpleSpiceDisplay *ssd,
+                 (uintptr_t)qxl_cookie_new(QXL_COOKIE_TYPE_IO,
+                                           QXL_IO_DESTROY_PRIMARY_ASYNC));
+     } else {
+-        ssd->worker->destroy_primary_surface(ssd->worker, id);
++        spice_qxl_destroy_primary_surface(&ssd->qxl, id);
+     }
+ }
+ 
+ void qemu_spice_wakeup(SimpleSpiceDisplay *ssd)
+ {
+     trace_qemu_spice_wakeup(ssd->qxl.id);
+-    ssd->worker->wakeup(ssd->worker);
++    spice_qxl_wakeup(&ssd->qxl);
+ }
+ 
+ static void qemu_spice_create_one_update(SimpleSpiceDisplay *ssd,
+-- 
+1.8.3.1
+

@@ -1,0 +1,66 @@
+From 0a833a763d5ab1da11f11303e96b0c56100ce2b9 Mon Sep 17 00:00:00 2001
+From: Juan Quintela <quintela@redhat.com>
+Date: Tue, 14 Jan 2014 15:07:34 +0100
+Subject: [PATCH 23/40] memory: cpu_physical_memory_get_dirty() is used as returning a bool
+
+RH-Author: Juan Quintela <quintela@redhat.com>
+Message-id: <1389712071-23303-24-git-send-email-quintela@redhat.com>
+Patchwork-id: 56676
+O-Subject: [RHEL7 qemu-kvm PATCH 23/40] memory: cpu_physical_memory_get_dirty() is used as returning a bool
+Bugzilla: 997559
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Orit Wasserman <owasserm@redhat.com>
+RH-Acked-by: Dr. David Alan Gilbert (git) <dgilbert@redhat.com>
+
+Signed-off-by: Juan Quintela <quintela@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Orit Wasserman <owasserm@redhat.com>
+(cherry picked from commit 94833c896d2d339571a66542f2715b1897d70fa7)
+Signed-off-by: Juan Quintela <quintela@trasno.org>
+---
+ include/exec/memory-internal.h | 15 ++++++++-------
+ 1 file changed, 8 insertions(+), 7 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ include/exec/memory-internal.h |   15 ++++++++-------
+ 1 files changed, 8 insertions(+), 7 deletions(-)
+
+diff --git a/include/exec/memory-internal.h b/include/exec/memory-internal.h
+index 9099561..f27b830 100644
+--- a/include/exec/memory-internal.h
++++ b/include/exec/memory-internal.h
+@@ -49,11 +49,10 @@ ram_addr_t qemu_ram_alloc(ram_addr_t size, MemoryRegion *mr);
+ void qemu_ram_free(ram_addr_t addr);
+ void qemu_ram_free_from_ptr(ram_addr_t addr);
+ 
+-static inline int cpu_physical_memory_get_dirty(ram_addr_t start,
+-                                                ram_addr_t length,
+-                                                unsigned client)
++static inline bool cpu_physical_memory_get_dirty(ram_addr_t start,
++                                                 ram_addr_t length,
++                                                 unsigned client)
+ {
+-    int ret = 0;
+     ram_addr_t addr, end;
+ 
+     assert(client < DIRTY_MEMORY_NUM);
+@@ -61,10 +60,12 @@ static inline int cpu_physical_memory_get_dirty(ram_addr_t start,
+     end = TARGET_PAGE_ALIGN(start + length);
+     start &= TARGET_PAGE_MASK;
+     for (addr = start; addr < end; addr += TARGET_PAGE_SIZE) {
+-        ret |= test_bit(addr >> TARGET_PAGE_BITS,
+-                        ram_list.dirty_memory[client]);
++        if (test_bit(addr >> TARGET_PAGE_BITS,
++                     ram_list.dirty_memory[client])) {
++            return true;
++        }
+     }
+-    return ret;
++    return false;
+ }
+ 
+ static inline bool cpu_physical_memory_get_dirty_flag(ram_addr_t addr,
+-- 
+1.7.1
+

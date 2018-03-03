@@ -1,0 +1,88 @@
+From 54e639827c618c74ecb47690754f0299c2e35750 Mon Sep 17 00:00:00 2001
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Tue, 25 Mar 2014 14:23:13 +0100
+Subject: [PATCH 06/49] block/cloop: refuse images with huge offsets arrays (CVE-2014-0144)
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1395753835-7591-7-git-send-email-kwolf@redhat.com>
+Patchwork-id: n/a
+O-Subject: [virt-devel] [EMBARGOED RHEL-7.0 qemu-kvm PATCH 06/48] block/cloop: refuse images with huge offsets arrays (CVE-2014-0144)
+Bugzilla: 1079455
+RH-Acked-by: Jeff Cody <jcody@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+From: Stefan Hajnoczi <stefanha@redhat.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1079455
+Upstream status: Embargoed
+
+Limit offsets_size to 512 MB so that:
+
+1. g_malloc() does not abort due to an unreasonable size argument.
+
+2. offsets_size does not overflow the bdrv_pread() int size argument.
+
+This limit imposes a maximum image size of 16 TB at 256 KB block size.
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block/cloop.c              |    9 +++++++++
+ tests/qemu-iotests/075     |    6 ++++++
+ tests/qemu-iotests/075.out |    4 ++++
+ 3 files changed, 19 insertions(+), 0 deletions(-)
+
+diff --git a/block/cloop.c b/block/cloop.c
+index 563e916..844665e 100644
+--- a/block/cloop.c
++++ b/block/cloop.c
+@@ -107,6 +107,15 @@ static int cloop_open(BlockDriverState *bs, QDict *options, int flags,
+         return -EINVAL;
+     }
+     offsets_size = s->n_blocks * sizeof(uint64_t);
++    if (offsets_size > 512 * 1024 * 1024) {
++        /* Prevent ridiculous offsets_size which causes memory allocation to
++         * fail or overflows bdrv_pread() size.  In practice the 512 MB
++         * offsets[] limit supports 16 TB images at 256 KB block size.
++         */
++        error_setg(errp, "image requires too many offsets, "
++                   "try increasing block size");
++        return -EINVAL;
++    }
+     s->offsets = g_malloc(offsets_size);
+ 
+     ret = bdrv_pread(bs->file, 128 + 4 + 4, s->offsets, offsets_size);
+diff --git a/tests/qemu-iotests/075 b/tests/qemu-iotests/075
+index 9ce6b1f..9c00fa8 100755
+--- a/tests/qemu-iotests/075
++++ b/tests/qemu-iotests/075
+@@ -74,6 +74,12 @@ _use_sample_img simple-pattern.cloop.bz2
+ poke_file "$TEST_IMG" "$n_blocks_offset" "\xff\xff\xff\xff"
+ $QEMU_IO -c "read 0 512" $TEST_IMG 2>&1 | _filter_qemu_io | _filter_testdir
+ 
++echo
++echo "== refuse images that require too many offsets ==="
++_use_sample_img simple-pattern.cloop.bz2
++poke_file "$TEST_IMG" "$n_blocks_offset" "\x04\x00\x00\x01"
++$QEMU_IO -c "read 0 512" $TEST_IMG 2>&1 | _filter_qemu_io | _filter_testdir
++
+ # success, all done
+ echo "*** done"
+ rm -f $seq.full
+diff --git a/tests/qemu-iotests/075.out b/tests/qemu-iotests/075.out
+index a771789..7cdaee1 100644
+--- a/tests/qemu-iotests/075.out
++++ b/tests/qemu-iotests/075.out
+@@ -19,4 +19,8 @@ no file open, try 'help open'
+ == offsets_size overflow ===
+ qemu-io: can't open device TEST_DIR/simple-pattern.cloop: n_blocks 4294967295 must be 536870911 or less
+ no file open, try 'help open'
++
++== refuse images that require too many offsets ===
++qemu-io: can't open device TEST_DIR/simple-pattern.cloop: image requires too many offsets, try increasing block size
++no file open, try 'help open'
+ *** done
+-- 
+1.7.1
+

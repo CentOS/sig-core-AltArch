@@ -1,0 +1,208 @@
+From fce3651ee99dd18501b9302d72cd8c0af098a235 Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Wed, 31 Jul 2013 08:05:58 +0200
+Subject: pc: Add machine type "rhel6.4.0"
+
+Message-id: <1375201922-6794-14-git-send-email-armbru@redhat.com>
+Patchwork-id: 52820
+O-Subject: [RHEL-7 PATCH v3 13/15] pc: Add machine type "rhel6.4.0"
+Bugzilla: 983991
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Match RHEL-6's set_cpu_model_level() by equivalent compat_props model
+and level.
+
+Match RHEL-6's compat_props qxl.revision, qxl-vga.revision,
+virtio-scsi-pci.hotplug, virtio-scsi-pci.param_change.
+
+RHEL-6's non-upstream USB.create_unique_serial will be covered
+separately (either bug 953304 or a new one).
+
+RHEL-6's non-upstream isa-fdc.migrate_dir isn't needed.  RHEL-6 has it
+to enable migration back to RHEL-6.3 (see qemu-kvm-rhel6 commit
+a214015), which isn't relevant in RHEL-7.
+
+Match RHEL-6's non-upstream e1000.x-__com_redhat_rhel630_compat by
+upstream's e1000.autonegotiation, as follows.
+
+Upstream commit 2af234e disables auto-negotiation for older machine
+types, by defining property e1000.autonegotiation and putting it into
+suitable compat_props.  The corresponding RHEL-6 commit da4452c does
+not add this property.  Instead, it reuses
+e1000.x-__com_redhat_rhel630_compat, with the sense reverted.  This
+turns autonegotiation off for rhel6.3.0 and older.
+
+RHEL-7 inherits the upstream solution.  We need to set
+e1000.autonegotiation for exactly the machine types where
+e1000.x-__com_redhat_rhel630_compat is on in RHEL-6, namely rhel6.3.0
+and older.
+
+Match RHEL-6's disable_kvm_pv_eoi().
+
+Match RHEL-6's compat_contiguous_apic_ids by upstream's
+enable_compat_apic_id_mode().
+
+RHEL-6's set_pmu_passthrough() and disable_tsc_deadline() will be
+covered separately (bug 918907).
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index dff2543..a922645 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -777,32 +777,8 @@ static QEMUMachine pc_machine_rhel700 = {
+     DEFAULT_MACHINE_OPTIONS,
+ };
+ 
+-#define PC_RHEL6_3_COMPAT \
++#define PC_RHEL6_4_COMPAT \
+     {\
+-        .driver   = "Conroe-" TYPE_X86_CPU,\
+-        .property = "model",\
+-        .value    = stringify(2),\
+-    },{\
+-        .driver   = "Conroe-" TYPE_X86_CPU,\
+-        .property = "level",\
+-        .value    = stringify(2),\
+-    },{\
+-        .driver   = "Penryn-" TYPE_X86_CPU,\
+-        .property = "model",\
+-        .value    = stringify(2),\
+-    },{\
+-        .driver   = "Penryn-" TYPE_X86_CPU,\
+-        .property = "level",\
+-        .value    = stringify(2),\
+-    },{\
+-        .driver   = "Nehalem-" TYPE_X86_CPU,\
+-        .property = "model",\
+-        .value    = stringify(2),\
+-    },{\
+-        .driver   = "Nehalem-" TYPE_X86_CPU,\
+-        .property = "level",\
+-        .value    = stringify(2),\
+-    },{\
+         .driver   = "scsi-hd",\
+         .property = "discard_granularity",\
+         .value    = stringify(0),\
+@@ -864,30 +840,10 @@ static QEMUMachine pc_machine_rhel700 = {
+         .property = "mq",\
+         .value    = "off",\
+     },{\
+-        .driver   = "e1000",\
+-        .property = "autonegotiation",\
+-        .value    = "off",\
+-    },{\
+-        .driver   = "qxl",\
+-        .property = "revision",\
+-        .value    = stringify(3),\
+-    },{\
+-        .driver   = "qxl-vga",\
+-        .property = "revision",\
+-        .value    = stringify(3),\
+-    },{\
+         .driver   = "VGA",\
+         .property = "mmio",\
+         .value    = "off",\
+     },{\
+-        .driver   = "virtio-scsi-pci",\
+-        .property = "hotplug",\
+-        .value    = "off",\
+-    },{\
+-        .driver   = "virtio-scsi-pci",\
+-        .property = "param_change",\
+-        .value    = "off",\
+-    },{\
+         .driver   = "virtio-blk-pci",\
+         .property = "config-wce",\
+         .value    = "off",\
+@@ -909,12 +865,77 @@ static QEMUMachine pc_machine_rhel700 = {
+         .value    = stringify(1),\
+     }
+ 
+-static void pc_init_rhel630(QEMUMachineInitArgs *args)
++static void pc_init_rhel640(QEMUMachineInitArgs *args)
+ {
+     has_pvpanic = false;
++    pc_init_rhel700(args);
++}
++
++static QEMUMachine pc_machine_rhel640 = {
++    .name = "rhel6.4.0",
++    .desc = "RHEL 6.4.0 PC",
++    .init = pc_init_rhel640,
++    .max_cpus = 255,
++    .compat_props = (GlobalProperty[]) {
++        PC_RHEL6_4_COMPAT,
++        { /* end of list */ }
++    },
++    DEFAULT_MACHINE_OPTIONS,
++};
++
++#define PC_RHEL6_3_COMPAT \
++    PC_RHEL6_4_COMPAT,\
++    {\
++        .driver   = "Conroe-" TYPE_X86_CPU,\
++        .property = "model",\
++        .value    = stringify(2),\
++    },{\
++        .driver   = "Conroe-" TYPE_X86_CPU,\
++        .property = "level",\
++        .value    = stringify(2),\
++    },{\
++        .driver   = "Penryn-" TYPE_X86_CPU,\
++        .property = "model",\
++        .value    = stringify(2),\
++    },{\
++        .driver   = "Penryn-" TYPE_X86_CPU,\
++        .property = "level",\
++        .value    = stringify(2),\
++    },{\
++        .driver   = "Nehalem-" TYPE_X86_CPU,\
++        .property = "model",\
++        .value    = stringify(2),\
++    },{\
++        .driver   = "Nehalem-" TYPE_X86_CPU,\
++        .property = "level",\
++        .value    = stringify(2),\
++    },{\
++        .driver   = "e1000",\
++        .property = "autonegotiation",\
++        .value    = "off",\
++    },{\
++        .driver   = "qxl",\
++        .property = "revision",\
++        .value    = stringify(3),\
++    },{\
++        .driver   = "qxl-vga",\
++        .property = "revision",\
++        .value    = stringify(3),\
++    },{\
++        .driver   = "virtio-scsi-pci",\
++        .property = "hotplug",\
++        .value    = "off",\
++    },{\
++        .driver   = "virtio-scsi-pci",\
++        .property = "param_change",\
++        .value    = "off",\
++    }
++
++static void pc_init_rhel630(QEMUMachineInitArgs *args)
++{
+     disable_kvm_pv_eoi();
+     enable_compat_apic_id_mode();
+-    pc_init_rhel700(args);
++    pc_init_rhel640(args);
+ }
+ 
+ static QEMUMachine pc_machine_rhel630 = {
+@@ -1030,6 +1051,7 @@ static QEMUMachine pc_machine_rhel600 = {
+ static void rhel_machine_init(void)
+ {
+     qemu_register_machine(&pc_machine_rhel700);
++    qemu_register_machine(&pc_machine_rhel640);
+     qemu_register_machine(&pc_machine_rhel630);
+     qemu_register_machine(&pc_machine_rhel620);
+     qemu_register_machine(&pc_machine_rhel610);

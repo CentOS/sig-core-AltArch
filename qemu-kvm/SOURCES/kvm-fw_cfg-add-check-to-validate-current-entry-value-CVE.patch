@@ -1,0 +1,98 @@
+From ba24567fd90702ea40ff320a79bc921b38510f22 Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Thu, 21 Jan 2016 07:17:43 +0100
+Subject: [PATCH 2/2] fw_cfg: add check to validate current entry value
+ (CVE-2016-1714)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Miroslav Rezanina <mrezanin@redhat.com>
+Message-id: <1453360663-5066-1-git-send-email-mrezanin@redhat.com>
+Patchwork-id: 68834
+O-Subject: [RHEL-7.2.z/RHEL-7.3 qemu-kvm PATCH] fw_cfg: add check to validate current entry value (CVE-2016-1714)
+Bugzilla: 1298048
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+
+From: Prasad J Pandit <pjp@fedoraproject.org>
+
+When processing firmware configurations, an OOB r/w access occurs
+if 's->cur_entry' is set to be invalid(FW_CFG_INVALID=0xffff).
+Add a check to validate 's->cur_entry' to avoid such access.
+
+This patch is based on upstream commit 66f8fd9dda312191b78d2a2ba2848bcee76127a2
+  Author: Gabriel L. Somlo <somlo@cmu.edu>
+  Date:   Thu Nov 5 09:32:50 2015 -0500
+
+    fw_cfg: avoid calculating invalid current entry pointer
+
+    When calculating a pointer to the currently selected fw_cfg item, the
+    following is used:
+
+      FWCfgEntry *e = &s->entries[arch][s->cur_entry & FW_CFG_ENTRY_MASK];
+
+    When s->cur_entry is FW_CFG_INVALID, we are calculating the address of
+    a non-existent element in s->entries[arch][...], which is undefined.
+
+    This patch ensures the resulting entry pointer is set to NULL whenever
+    s->cur_entry is FW_CFG_INVALID.
+
+    Reported-by: Laszlo Ersek <lersek@redhat.com>
+    Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+    Signed-off-by: Gabriel Somlo <somlo@cmu.edu>
+    Message-id: 1446733972-1602-5-git-send-email-somlo@cmu.edu
+    Cc: Marc Marí <markmb@redhat.com>
+    Signed-off-by: Gabriel Somlo <somlo@cmu.edu>
+    Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+    Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+
+with added chunk for fw_cfg_write() that was removed in commit
+023e3148567ac898c7258138f8e86c3c2bb40d07
+and missing chunk for fw_cfg_dma_transfer that was added in commit
+a4c0d1deb785611c96a455f65ec032976b00b36f.
+
+Reported-by: Donghai Zdh <donghai.zdh@alibaba-inc.com>
+Signed-off-by: Prasad J Pandit <pjp@fedoraproject.org>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/nvram/fw_cfg.c | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/hw/nvram/fw_cfg.c b/hw/nvram/fw_cfg.c
+index b865c09..fcb3146 100644
+--- a/hw/nvram/fw_cfg.c
++++ b/hw/nvram/fw_cfg.c
+@@ -207,12 +207,15 @@ static void fw_cfg_reboot(FWCfgState *s)
+ static void fw_cfg_write(FWCfgState *s, uint8_t value)
+ {
+     int arch = !!(s->cur_entry & FW_CFG_ARCH_LOCAL);
+-    FWCfgEntry *e = &s->entries[arch][s->cur_entry & FW_CFG_ENTRY_MASK];
++    FWCfgEntry *e = (s->cur_entry == FW_CFG_INVALID) ? NULL :
++                     &s->entries[arch][s->cur_entry & FW_CFG_ENTRY_MASK];
+ 
+     trace_fw_cfg_write(s, value);
+ 
+-    if (s->cur_entry & FW_CFG_WRITE_CHANNEL && e->callback &&
+-        s->cur_offset < e->len) {
++    if (s->cur_entry & FW_CFG_WRITE_CHANNEL
++        && e != NULL
++        && e->callback
++        && s->cur_offset < e->len) {
+         e->data[s->cur_offset++] = value;
+         if (s->cur_offset == e->len) {
+             e->callback(e->callback_opaque, e->data);
+@@ -241,7 +244,8 @@ static int fw_cfg_select(FWCfgState *s, uint16_t key)
+ static uint8_t fw_cfg_read(FWCfgState *s)
+ {
+     int arch = !!(s->cur_entry & FW_CFG_ARCH_LOCAL);
+-    FWCfgEntry *e = &s->entries[arch][s->cur_entry & FW_CFG_ENTRY_MASK];
++    FWCfgEntry *e = (s->cur_entry == FW_CFG_INVALID) ? NULL :
++                     &s->entries[arch][s->cur_entry & FW_CFG_ENTRY_MASK];
+     uint8_t ret;
+ 
+     if (s->cur_entry == FW_CFG_INVALID || !e->data || s->cur_offset >= e->len)
+-- 
+1.8.3.1
+

@@ -1,0 +1,98 @@
+From 9bf536ecc296516cb5d82d5e9630663aaac56629 Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 13 Mar 2017 17:46:24 +0100
+Subject: [PATCH 13/24] qemu-io: Add sigraise command
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <20170313174629.28735-2-mreitz@redhat.com>
+Patchwork-id: 74275
+O-Subject: [RHEL-7.4 qemu-kvm PATCH 4/9] qemu-io: Add sigraise command
+Bugzilla: 1427176
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+abort() has the sometimes undesirable side-effect of generating a core
+dump. If that is not needed, SIGKILL has the same effect of abruptly
+crash qemu; without a core dump.
+
+Thus, -c abort is not always useful to simulate a qemu-io crash;
+therefore, this patch adds a new sigraise command which allows raising
+a signal.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Message-id: 1418032092-16813-2-git-send-email-mreitz@redhat.com
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 0e82dc7bbd96f9b0fb76e5fe263ba04b15e68127)
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ qemu-io-cmds.c | 46 ++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 46 insertions(+)
+
+diff --git a/qemu-io-cmds.c b/qemu-io-cmds.c
+index b41d6ee..010f05f 100644
+--- a/qemu-io-cmds.c
++++ b/qemu-io-cmds.c
+@@ -2050,6 +2050,51 @@ static const cmdinfo_t abort_cmd = {
+        .oneline        = "simulate a program crash using abort(3)",
+ };
+ 
++static void sigraise_help(void)
++{
++    printf(
++"\n"
++" raises the given signal\n"
++"\n"
++" Example:\n"
++" 'sigraise %i' - raises SIGTERM\n"
++"\n"
++" Invokes raise(signal), where \"signal\" is the mandatory integer argument\n"
++" given to sigraise.\n"
++"\n", SIGTERM);
++}
++
++static int sigraise_f(BlockDriverState *bs, int argc, char **argv);
++
++static const cmdinfo_t sigraise_cmd = {
++    .name       = "sigraise",
++    .cfunc      = sigraise_f,
++    .argmin     = 1,
++    .argmax     = 1,
++    .flags      = CMD_NOFILE_OK,
++    .args       = "signal",
++    .oneline    = "raises a signal",
++    .help       = sigraise_help,
++};
++
++static int sigraise_f(BlockDriverState *bs, int argc, char **argv)
++{
++    int sig = cvtnum(argv[1]);
++    if (sig < 0) {
++        printf("non-numeric signal number argument -- %s\n", argv[1]);
++        return 0;
++    }
++
++    /* Using raise() to kill this process does not necessarily flush all open
++     * streams. At least stdout and stderr (although the latter should be
++     * non-buffered anyway) should be flushed, though. */
++    fflush(stdout);
++    fflush(stderr);
++
++    raise(sig);
++    return 0;
++}
++
+ static void sleep_cb(void *opaque)
+ {
+     bool *expired = opaque;
+@@ -2203,4 +2248,5 @@ static void __attribute((constructor)) init_qemuio_commands(void)
+     qemuio_add_command(&wait_break_cmd);
+     qemuio_add_command(&abort_cmd);
+     qemuio_add_command(&sleep_cmd);
++    qemuio_add_command(&sigraise_cmd);
+ }
+-- 
+1.8.3.1
+

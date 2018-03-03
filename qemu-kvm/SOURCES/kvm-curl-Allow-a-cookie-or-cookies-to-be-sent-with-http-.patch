@@ -1,0 +1,126 @@
+From 1eeb050a2cc6c582c390614080fbeaea019b2dac Mon Sep 17 00:00:00 2001
+From: Richard Jones <rjones@redhat.com>
+Date: Thu, 11 Jun 2015 11:40:26 +0200
+Subject: [PATCH 26/30] curl: Allow a cookie or cookies to be sent with
+ http/https requests.
+
+Message-id: <1434022828-13037-20-git-send-email-rjones@redhat.com>
+Patchwork-id: 65854
+O-Subject: [RHEL-7.2 qemu-kvm v3 PATCH 19/21] curl: Allow a cookie or cookies to be sent with http/https requests.
+Bugzilla: 1226684
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: "Richard W.M. Jones" <rjones@redhat.com>
+
+In order to access VMware ESX efficiently, we need to send a session
+cookie.  This patch is very simple and just allows you to send that
+session cookie.  It punts on the question of how you get the session
+cookie in the first place, but in practice you can just run a `curl'
+command against the server and extract the cookie that way.
+
+To use it, add file.cookie to the curl URL.  For example:
+
+$ qemu-img info 'json: {
+    "file.driver":"https",
+    "file.url":"https://vcenter/folder/Windows%202003/Windows%202003-flat.vmdk?dcPath=Datacenter&dsName=datastore1",
+    "file.sslverify":"off",
+    "file.cookie":"vmware_soap_session=\"52a01262-bf93-ccce-d379-8dabb3e55560\""}'
+image: [...]
+file format: raw
+virtual size: 8.0G (8589934592 bytes)
+disk size: unavailable
+
+Signed-off-by: Richard W.M. Jones <rjones@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Upstream-status: a94f83d94fdf907680f068f1be7ad13d1f697067
+
+Note this intentionally omits the documentation changes in
+'qemu-options.hx' from the upstream patch.
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/curl.c | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/block/curl.c b/block/curl.c
+index 1f1df4f..ca881ee 100644
+--- a/block/curl.c
++++ b/block/curl.c
+@@ -73,6 +73,7 @@ static CURLMcode __curl_multi_socket_action(CURLM *multi_handle,
+ #define CURL_BLOCK_OPT_READAHEAD "readahead"
+ #define CURL_BLOCK_OPT_SSLVERIFY "sslverify"
+ #define CURL_BLOCK_OPT_TIMEOUT "timeout"
++#define CURL_BLOCK_OPT_COOKIE    "cookie"
+ 
+ struct BDRVCURLState;
+ 
+@@ -112,6 +113,7 @@ typedef struct BDRVCURLState {
+     size_t readahead_size;
+     bool sslverify;
+     int timeout;
++    char *cookie;
+     bool accept_range;
+ } BDRVCURLState;
+ 
+@@ -382,6 +384,9 @@ static CURLState *curl_init_state(BDRVCURLState *s)
+         curl_easy_setopt(state->curl, CURLOPT_URL, s->url);
+         curl_easy_setopt(state->curl, CURLOPT_SSL_VERIFYPEER,
+                          (long) s->sslverify);
++        if (s->cookie) {
++            curl_easy_setopt(state->curl, CURLOPT_COOKIE, s->cookie);
++        }
+         curl_easy_setopt(state->curl, CURLOPT_TIMEOUT, s->timeout);
+         curl_easy_setopt(state->curl, CURLOPT_WRITEFUNCTION,
+                          (void *)curl_read_cb);
+@@ -451,6 +456,11 @@ static QemuOptsList runtime_opts = {
+             .type = QEMU_OPT_NUMBER,
+             .help = "Curl timeout"
+         },
++        {
++            .name = CURL_BLOCK_OPT_COOKIE,
++            .type = QEMU_OPT_STRING,
++            .help = "Pass the cookie or list of cookies with each request"
++        },
+         { /* end of list */ }
+     },
+ };
+@@ -463,6 +473,7 @@ static int curl_open(BlockDriverState *bs, QDict *options, int flags,
+     QemuOpts *opts;
+     Error *local_err = NULL;
+     const char *file;
++    const char *cookie;
+     double d;
+ 
+     static int inited = 0;
+@@ -488,6 +499,9 @@ static int curl_open(BlockDriverState *bs, QDict *options, int flags,
+ 
+     s->sslverify = qemu_opt_get_bool(opts, CURL_BLOCK_OPT_SSLVERIFY, true);
+ 
++    cookie = qemu_opt_get(opts, CURL_BLOCK_OPT_COOKIE);
++    s->cookie = g_strdup(cookie);
++
+     file = qemu_opt_get(opts, CURL_BLOCK_OPT_URL);
+     if (file == NULL) {
+         qerror_report(ERROR_CLASS_GENERIC_ERROR, "curl block driver requires "
+@@ -556,6 +570,7 @@ out:
+     curl_easy_cleanup(state->curl);
+     state->curl = NULL;
+ out_noclean:
++    g_free(s->cookie);
+     g_free(s->url);
+     qemu_opts_del(opts);
+     return -EINVAL;
+@@ -696,6 +711,7 @@ static void curl_close(BlockDriverState *bs)
+     qemu_del_timer(s->timer);
+     qemu_free_timer(s->timer);
+ 
++    g_free(s->cookie);
+     g_free(s->url);
+ }
+ 
+-- 
+1.8.3.1
+

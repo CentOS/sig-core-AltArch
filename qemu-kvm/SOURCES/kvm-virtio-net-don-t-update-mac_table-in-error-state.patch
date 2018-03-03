@@ -1,0 +1,130 @@
+From 4b542df026dfcc30802d300e56a99799f410ef50 Mon Sep 17 00:00:00 2001
+From: Amos Kong <akong@redhat.com>
+Date: Mon, 6 Jan 2014 05:29:20 +0100
+Subject: [PATCH 7/8] virtio-net: don't update mac_table in error state
+
+RH-Author: Amos Kong <akong@redhat.com>
+Message-id: <1388986160-19461-1-git-send-email-akong@redhat.com>
+Patchwork-id: 56495
+O-Subject: [RHEL-7.0 qemu-kvm PATCH] virtio-net: don't update mac_table in error state
+Bugzilla: 1048671
+RH-Acked-by: Xiao Wang <jasowang@redhat.com>
+RH-Acked-by: Vlad Yasevich <vyasevic@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+Bugzilla: 1048671
+Brew: https://brewweb.devel.redhat.com/taskinfo?taskID=6805382
+
+mac_table was always cleaned up first in handling
+VIRTIO_NET_CTRL_MAC_TABLE_SET command, and we din't recover
+mac_table content in error state, it's not correct.
+
+This patch makes all the changes in temporal variables,
+only update the real mac_table if everything is ok.
+We won't change mac_table in error state, so rxfilter
+notification isn't needed.
+
+This patch also fixed same problame in
+ http://lists.nongnu.org/archive/html/qemu-devel/2013-11/msg01188.html
+ (not merge)
+
+I will send patch for virtio spec to clarifying this change.
+
+Signed-off-by: Amos Kong <akong@redhat.com>
+Reviewed-by: Vlad Yasevich <vyasevic@redhat.com>
+Acked-by: Jason Wang <jasowang@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit cae2e5562cdaf3aafa1c4ec2d5f2b19af6c886dd)
+---
+ hw/net/virtio-net.c |   35 ++++++++++++++++++++---------------
+ 1 files changed, 20 insertions(+), 15 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/net/virtio-net.c |   35 ++++++++++++++++++++---------------
+ 1 files changed, 20 insertions(+), 15 deletions(-)
+
+diff --git a/hw/net/virtio-net.c b/hw/net/virtio-net.c
+index 915aa70..21b126f 100644
+--- a/hw/net/virtio-net.c
++++ b/hw/net/virtio-net.c
+@@ -548,11 +548,11 @@ static int virtio_net_handle_mac(VirtIONet *n, uint8_t cmd,
+         return VIRTIO_NET_ERR;
+     }
+ 
+-    n->mac_table.in_use = 0;
+-    n->mac_table.first_multi = 0;
+-    n->mac_table.uni_overflow = 0;
+-    n->mac_table.multi_overflow = 0;
+-    memset(n->mac_table.macs, 0, MAC_TABLE_ENTRIES * ETH_ALEN);
++    int in_use = 0;
++    int first_multi = 0;
++    uint8_t uni_overflow = 0;
++    uint8_t multi_overflow = 0;
++    uint8_t *macs = g_malloc0(MAC_TABLE_ENTRIES * ETH_ALEN);
+ 
+     s = iov_to_buf(iov, iov_cnt, 0, &mac_data.entries,
+                    sizeof(mac_data.entries));
+@@ -567,19 +567,19 @@ static int virtio_net_handle_mac(VirtIONet *n, uint8_t cmd,
+     }
+ 
+     if (mac_data.entries <= MAC_TABLE_ENTRIES) {
+-        s = iov_to_buf(iov, iov_cnt, 0, n->mac_table.macs,
++        s = iov_to_buf(iov, iov_cnt, 0, macs,
+                        mac_data.entries * ETH_ALEN);
+         if (s != mac_data.entries * ETH_ALEN) {
+             goto error;
+         }
+-        n->mac_table.in_use += mac_data.entries;
++        in_use += mac_data.entries;
+     } else {
+-        n->mac_table.uni_overflow = 1;
++        uni_overflow = 1;
+     }
+ 
+     iov_discard_front(&iov, &iov_cnt, mac_data.entries * ETH_ALEN);
+ 
+-    n->mac_table.first_multi = n->mac_table.in_use;
++    first_multi = in_use;
+ 
+     s = iov_to_buf(iov, iov_cnt, 0, &mac_data.entries,
+                    sizeof(mac_data.entries));
+@@ -594,24 +594,29 @@ static int virtio_net_handle_mac(VirtIONet *n, uint8_t cmd,
+         goto error;
+     }
+ 
+-    if (n->mac_table.in_use + mac_data.entries <= MAC_TABLE_ENTRIES) {
+-        s = iov_to_buf(iov, iov_cnt, 0,
+-                       &n->mac_table.macs[n->mac_table.in_use * ETH_ALEN],
++    if (in_use + mac_data.entries <= MAC_TABLE_ENTRIES) {
++        s = iov_to_buf(iov, iov_cnt, 0, &macs[in_use * ETH_ALEN],
+                        mac_data.entries * ETH_ALEN);
+         if (s != mac_data.entries * ETH_ALEN) {
+             goto error;
+         }
+-        n->mac_table.in_use += mac_data.entries;
++        in_use += mac_data.entries;
+     } else {
+-        n->mac_table.multi_overflow = 1;
++        multi_overflow = 1;
+     }
+ 
++    n->mac_table.in_use = in_use;
++    n->mac_table.first_multi = first_multi;
++    n->mac_table.uni_overflow = uni_overflow;
++    n->mac_table.multi_overflow = multi_overflow;
++    memcpy(n->mac_table.macs, macs, MAC_TABLE_ENTRIES * ETH_ALEN);
++    g_free(macs);
+     rxfilter_notify(nc);
+ 
+     return VIRTIO_NET_OK;
+ 
+ error:
+-    rxfilter_notify(nc);
++    g_free(macs);
+     return VIRTIO_NET_ERR;
+ }
+ 
+-- 
+1.7.1
+

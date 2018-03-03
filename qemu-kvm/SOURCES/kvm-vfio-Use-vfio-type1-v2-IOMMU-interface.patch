@@ -1,0 +1,73 @@
+From d9bcfe28139d190ed9847217dd309296580c2b7e Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Fri, 10 Apr 2015 16:34:13 +0200
+Subject: [PATCH 07/14] vfio: Use vfio type1 v2 IOMMU interface
+
+Message-id: <20150410163413.15324.90697.stgit@gimli.home>
+Patchwork-id: 64787
+O-Subject: [RHEL7.2 qemu-kvm PATCH 7/8] vfio: Use vfio type1 v2 IOMMU interface
+Bugzilla: 1210508
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+
+Upstream: 2e6e697e166568fdd09ceaa8c7c8c8c53a5e345b
+
+The difference between v1 and v2 is fairly subtle, simply more
+deterministic behavior for unmaps.  The v1 interface allows the user
+to attempt to unmap sub-regions of previous mappings, returning
+success with zero size if unable to comply.  This was a reflection of
+the underlying IOMMU API.  The v2 interface requires that the user
+may only unmap fully contained mappings, ie. an unmap cannot intersect
+or bisect a previous mapping, but may cover multiple mappings.  QEMU
+never made use of the sub-region v1 support anyway, so we can support
+either v1 or v2.  We'll favor v2 since it's newer.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c             | 8 ++++++--
+ linux-headers/linux/vfio.h | 1 +
+ 2 files changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index 607dbf4..d06b485 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -3312,7 +3312,10 @@ static int vfio_connect_container(VFIOGroup *group)
+     container = g_malloc0(sizeof(*container));
+     container->fd = fd;
+ 
+-    if (ioctl(fd, VFIO_CHECK_EXTENSION, VFIO_TYPE1_IOMMU)) {
++    if (ioctl(fd, VFIO_CHECK_EXTENSION, VFIO_TYPE1_IOMMU) ||
++        ioctl(fd, VFIO_CHECK_EXTENSION, VFIO_TYPE1v2_IOMMU)) {
++        bool v2 = !!ioctl(fd, VFIO_CHECK_EXTENSION, VFIO_TYPE1v2_IOMMU);
++
+         ret = ioctl(group->fd, VFIO_GROUP_SET_CONTAINER, &fd);
+         if (ret) {
+             error_report("vfio: failed to set group container: %m");
+@@ -3321,7 +3324,8 @@ static int vfio_connect_container(VFIOGroup *group)
+             return -errno;
+         }
+ 
+-        ret = ioctl(fd, VFIO_SET_IOMMU, VFIO_TYPE1_IOMMU);
++        ret = ioctl(fd, VFIO_SET_IOMMU,
++                    v2 ? VFIO_TYPE1v2_IOMMU : VFIO_TYPE1_IOMMU);
+         if (ret) {
+             error_report("vfio: failed to set iommu for container: %m");
+             g_free(container);
+diff --git a/linux-headers/linux/vfio.h b/linux-headers/linux/vfio.h
+index d341312..7919c76 100644
+--- a/linux-headers/linux/vfio.h
++++ b/linux-headers/linux/vfio.h
+@@ -22,6 +22,7 @@
+ /* Extensions */
+ 
+ #define VFIO_TYPE1_IOMMU		1
++#define VFIO_TYPE1v2_IOMMU		3
+ 
+ /*
+  * The IOCTL interface is designed for extensibility by embedding the
+-- 
+1.8.3.1
+

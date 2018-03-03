@@ -1,0 +1,222 @@
+From 95aeff93da762bf7f69317eb674d3eccce672038 Mon Sep 17 00:00:00 2001
+From: Markus Armbruster <armbru@redhat.com>
+Date: Wed, 27 Jul 2016 07:35:04 +0200
+Subject: [PATCH 06/16] qjson: Give each of the six structural chars its own
+ token type
+
+RH-Author: Markus Armbruster <armbru@redhat.com>
+Message-id: <1469604913-12442-8-git-send-email-armbru@redhat.com>
+Patchwork-id: 71482
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 06/15] qjson: Give each of the six structural chars its own token type
+Bugzilla: 1276036
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+
+Simplifies things, because we always check for a specific one.
+
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Message-Id: <1448486613-17634-6-git-send-email-armbru@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit c54616608af442edf4cfb7397a1909c2653efba0)
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ include/qapi/qmp/json-lexer.h |  7 ++++++-
+ qobject/json-lexer.c          | 19 ++++++++++++-------
+ qobject/json-parser.c         | 31 +++++++++----------------------
+ qobject/json-streamer.c       | 32 +++++++++++++++-----------------
+ 4 files changed, 42 insertions(+), 47 deletions(-)
+
+diff --git a/include/qapi/qmp/json-lexer.h b/include/qapi/qmp/json-lexer.h
+index 61a143f..f3e8dc7 100644
+--- a/include/qapi/qmp/json-lexer.h
++++ b/include/qapi/qmp/json-lexer.h
+@@ -19,7 +19,12 @@
+ 
+ typedef enum json_token_type {
+     JSON_MIN = 100,
+-    JSON_OPERATOR = JSON_MIN,
++    JSON_LCURLY = JSON_MIN,
++    JSON_RCURLY,
++    JSON_LSQUARE,
++    JSON_RSQUARE,
++    JSON_COLON,
++    JSON_COMMA,
+     JSON_INTEGER,
+     JSON_FLOAT,
+     JSON_KEYWORD,
+diff --git a/qobject/json-lexer.c b/qobject/json-lexer.c
+index f106ffb..1bfff02 100644
+--- a/qobject/json-lexer.c
++++ b/qobject/json-lexer.c
+@@ -257,12 +257,12 @@ static const uint8_t json_lexer[][256] =  {
+         ['0'] = IN_ZERO,
+         ['1' ... '9'] = IN_NONZERO_NUMBER,
+         ['-'] = IN_NEG_NONZERO_NUMBER,
+-        ['{'] = JSON_OPERATOR,
+-        ['}'] = JSON_OPERATOR,
+-        ['['] = JSON_OPERATOR,
+-        [']'] = JSON_OPERATOR,
+-        [','] = JSON_OPERATOR,
+-        [':'] = JSON_OPERATOR,
++        ['{'] = JSON_LCURLY,
++        ['}'] = JSON_RCURLY,
++        ['['] = JSON_LSQUARE,
++        [']'] = JSON_RSQUARE,
++        [','] = JSON_COMMA,
++        [':'] = JSON_COLON,
+         ['a' ... 'z'] = IN_KEYWORD,
+         ['%'] = IN_ESCAPE,
+         [' '] = IN_WHITESPACE,
+@@ -299,7 +299,12 @@ static int json_lexer_feed_char(JSONLexer *lexer, char ch, bool flush)
+         }
+ 
+         switch (new_state) {
+-        case JSON_OPERATOR:
++        case JSON_LCURLY:
++        case JSON_RCURLY:
++        case JSON_LSQUARE:
++        case JSON_RSQUARE:
++        case JSON_COLON:
++        case JSON_COMMA:
+         case JSON_ESCAPE:
+         case JSON_INTEGER:
+         case JSON_FLOAT:
+diff --git a/qobject/json-parser.c b/qobject/json-parser.c
+index fa09769..50bf30c 100644
+--- a/qobject/json-parser.c
++++ b/qobject/json-parser.c
+@@ -64,19 +64,6 @@ static JSONTokenType token_get_type(QObject *obj)
+     return qdict_get_int(qobject_to_qdict(obj), "type");
+ }
+ 
+-static int token_is_operator(QObject *obj, char op)
+-{
+-    const char *val;
+-
+-    if (token_get_type(obj) != JSON_OPERATOR) {
+-        return 0;
+-    }
+-
+-    val = token_get_value(obj);
+-
+-    return (val[0] == op) && (val[1] == 0);
+-}
+-
+ static int token_is_keyword(QObject *obj, const char *value)
+ {
+     if (token_get_type(obj) != JSON_KEYWORD) {
+@@ -385,7 +372,7 @@ static int parse_pair(JSONParserContext *ctxt, QDict *dict, va_list *ap)
+         goto out;
+     }
+ 
+-    if (!token_is_operator(token, ':')) {
++    if (token_get_type(token) != JSON_COLON) {
+         parse_error(ctxt, token, "missing : in object pair");
+         goto out;
+     }
+@@ -420,7 +407,7 @@ static QObject *parse_object(JSONParserContext *ctxt, va_list *ap)
+         goto out;
+     }
+ 
+-    if (!token_is_operator(token, '{')) {
++    if (token_get_type(token) != JSON_LCURLY) {
+         goto out;
+     }
+ 
+@@ -432,7 +419,7 @@ static QObject *parse_object(JSONParserContext *ctxt, va_list *ap)
+         goto out;
+     }
+ 
+-    if (!token_is_operator(peek, '}')) {
++    if (token_get_type(peek) != JSON_RCURLY) {
+         if (parse_pair(ctxt, dict, ap) == -1) {
+             goto out;
+         }
+@@ -443,8 +430,8 @@ static QObject *parse_object(JSONParserContext *ctxt, va_list *ap)
+             goto out;
+         }
+ 
+-        while (!token_is_operator(token, '}')) {
+-            if (!token_is_operator(token, ',')) {
++        while (token_get_type(token) != JSON_RCURLY) {
++            if (token_get_type(token) != JSON_COMMA) {
+                 parse_error(ctxt, token, "expected separator in dict");
+                 goto out;
+             }
+@@ -482,7 +469,7 @@ static QObject *parse_array(JSONParserContext *ctxt, va_list *ap)
+         goto out;
+     }
+ 
+-    if (!token_is_operator(token, '[')) {
++    if (token_get_type(token) != JSON_LSQUARE) {
+         goto out;
+     }
+ 
+@@ -494,7 +481,7 @@ static QObject *parse_array(JSONParserContext *ctxt, va_list *ap)
+         goto out;
+     }
+ 
+-    if (!token_is_operator(peek, ']')) {
++    if (token_get_type(peek) != JSON_RSQUARE) {
+         QObject *obj;
+ 
+         obj = parse_value(ctxt, ap);
+@@ -511,8 +498,8 @@ static QObject *parse_array(JSONParserContext *ctxt, va_list *ap)
+             goto out;
+         }
+ 
+-        while (!token_is_operator(token, ']')) {
+-            if (!token_is_operator(token, ',')) {
++        while (token_get_type(token) != JSON_RSQUARE) {
++            if (token_get_type(token) != JSON_COMMA) {
+                 parse_error(ctxt, token, "expected separator in list");
+                 goto out;
+             }
+diff --git a/qobject/json-streamer.c b/qobject/json-streamer.c
+index 2bd22a7..4a161a1 100644
+--- a/qobject/json-streamer.c
++++ b/qobject/json-streamer.c
+@@ -26,23 +26,21 @@ static void json_message_process_token(JSONLexer *lexer, QString *token, JSONTok
+     JSONMessageParser *parser = container_of(lexer, JSONMessageParser, lexer);
+     QDict *dict;
+ 
+-    if (type == JSON_OPERATOR) {
+-        switch (qstring_get_str(token)[0]) {
+-        case '{':
+-            parser->brace_count++;
+-            break;
+-        case '}':
+-            parser->brace_count--;
+-            break;
+-        case '[':
+-            parser->bracket_count++;
+-            break;
+-        case ']':
+-            parser->bracket_count--;
+-            break;
+-        default:
+-            break;
+-        }
++    switch (type) {
++    case JSON_LCURLY:
++        parser->brace_count++;
++        break;
++    case JSON_RCURLY:
++        parser->brace_count--;
++        break;
++    case JSON_LSQUARE:
++        parser->bracket_count++;
++        break;
++    case JSON_RSQUARE:
++        parser->bracket_count--;
++        break;
++    default:
++        break;
+     }
+ 
+     dict = qdict_new();
+-- 
+1.8.3.1
+

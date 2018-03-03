@@ -1,0 +1,245 @@
+From b434963222bd7ce4b4a7ff493217f3ab00ac734c Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 5 Nov 2013 14:09:06 +0100
+Subject: [PATCH 53/87] blockdev: Moving parsing of geometry options to drive_init
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383660558-32096-13-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55391
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 12/24] blockdev: Moving parsing of geometry options to drive_init
+Bugzilla: 978402
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+This moves all of the geometry options (cyls/heads/secs/trans) to
+drive_init so that they can only be accessed using legacy functions, but
+never with anything blockdev-add related.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit b41a7338cfdeeb913ee4846d79a3f7e221350aed)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ blockdev.c | 136 +++++++++++++++++++++++++++++++------------------------------
+ 1 file changed, 69 insertions(+), 67 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev.c |  136 ++++++++++++++++++++++++++++++-----------------------------
+ 1 files changed, 69 insertions(+), 67 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index 9bc3417..d69c4a8 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -336,7 +336,6 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+     const char *serial;
+     const char *mediastr = "";
+     int bus_id, unit_id;
+-    int cyls, heads, secs, translation;
+     int max_devs;
+     int index;
+     int ro = 0;
+@@ -354,8 +353,6 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+     bool has_driver_specific_opts;
+     BlockDriver *drv = NULL;
+ 
+-    translation = BIOS_ATA_TRANSLATION_AUTO;
+-
+     /* Check common options by copying from bs_opts to opts, all other options
+      * stay in bs_opts for processing by bdrv_open(). */
+     id = qdict_get_try_str(bs_opts, "id");
+@@ -384,10 +381,6 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+     unit_id = qemu_opt_get_number(opts, "unit", -1);
+     index   = qemu_opt_get_number(opts, "index", -1);
+ 
+-    cyls  = qemu_opt_get_number(opts, "cyls", 0);
+-    heads = qemu_opt_get_number(opts, "heads", 0);
+-    secs  = qemu_opt_get_number(opts, "secs", 0);
+-
+     snapshot = qemu_opt_get_bool(opts, "snapshot", 0);
+     ro = qemu_opt_get_bool(opts, "read-only", 0);
+     copy_on_read = qemu_opt_get_bool(opts, "copy-on-read", false);
+@@ -397,46 +390,6 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+ 
+     max_devs = if_max_devs[type];
+ 
+-    if (cyls || heads || secs) {
+-        if (cyls < 1) {
+-            error_report("invalid physical cyls number");
+-	    return NULL;
+-	}
+-        if (heads < 1) {
+-            error_report("invalid physical heads number");
+-	    return NULL;
+-	}
+-        if (secs < 1) {
+-            error_report("invalid physical secs number");
+-	    return NULL;
+-	}
+-    }
+-
+-    if ((buf = qemu_opt_get(opts, "trans")) != NULL) {
+-        if (!cyls) {
+-            error_report("'%s' trans must be used with cyls, heads and secs",
+-                         buf);
+-            return NULL;
+-        }
+-        if (!strcmp(buf, "none"))
+-            translation = BIOS_ATA_TRANSLATION_NONE;
+-        else if (!strcmp(buf, "lba"))
+-            translation = BIOS_ATA_TRANSLATION_LBA;
+-        else if (!strcmp(buf, "auto"))
+-            translation = BIOS_ATA_TRANSLATION_AUTO;
+-	else {
+-            error_report("'%s' invalid translation type", buf);
+-	    return NULL;
+-	}
+-    }
+-
+-    if (media == MEDIA_CDROM) {
+-        if (cyls || secs || heads) {
+-            error_report("CHS can't be set with media=cdrom");
+-            return NULL;
+-        }
+-    }
+-
+     if ((buf = qemu_opt_get(opts, "discard")) != NULL) {
+         if (bdrv_parse_discard_flags(buf, &bdrv_flags) != 0) {
+             error_report("invalid discard option");
+@@ -612,10 +565,6 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+     dinfo->type = type;
+     dinfo->bus = bus_id;
+     dinfo->unit = unit_id;
+-    dinfo->cyls = cyls;
+-    dinfo->heads = heads;
+-    dinfo->secs = secs;
+-    dinfo->trans = translation;
+     dinfo->refcount = 1;
+     if (serial != NULL) {
+         dinfo->serial = g_strdup(serial);
+@@ -745,6 +694,22 @@ QemuOptsList qemu_legacy_drive_opts = {
+             .name = "if",
+             .type = QEMU_OPT_STRING,
+             .help = "interface (ide, scsi, sd, mtd, floppy, pflash, virtio)",
++        },{
++            .name = "cyls",
++            .type = QEMU_OPT_NUMBER,
++            .help = "number of cylinders (ide disk geometry)",
++        },{
++            .name = "heads",
++            .type = QEMU_OPT_NUMBER,
++            .help = "number of heads (ide disk geometry)",
++        },{
++            .name = "secs",
++            .type = QEMU_OPT_NUMBER,
++            .help = "number of sectors (ide disk geometry)",
++        },{
++            .name = "trans",
++            .type = QEMU_OPT_STRING,
++            .help = "chs translation (auto, lba, none)",
+         },
+         { /* end of list */ }
+     },
+@@ -758,6 +723,7 @@ DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
+     QemuOpts *legacy_opts;
+     DriveMediaType media = MEDIA_DISK;
+     BlockInterfaceType type;
++    int cyls, heads, secs, translation;
+     Error *local_err = NULL;
+ 
+     /* Change legacy command line options into QMP ones */
+@@ -836,6 +802,53 @@ DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
+         type = block_default_type;
+     }
+ 
++    /* Geometry */
++    cyls  = qemu_opt_get_number(legacy_opts, "cyls", 0);
++    heads = qemu_opt_get_number(legacy_opts, "heads", 0);
++    secs  = qemu_opt_get_number(legacy_opts, "secs", 0);
++
++    if (cyls || heads || secs) {
++        if (cyls < 1) {
++            error_report("invalid physical cyls number");
++            goto fail;
++        }
++        if (heads < 1) {
++            error_report("invalid physical heads number");
++            goto fail;
++        }
++        if (secs < 1) {
++            error_report("invalid physical secs number");
++            goto fail;
++        }
++    }
++
++    translation = BIOS_ATA_TRANSLATION_AUTO;
++    value = qemu_opt_get(legacy_opts, "trans");
++    if (value != NULL) {
++        if (!cyls) {
++            error_report("'%s' trans must be used with cyls, heads and secs",
++                         value);
++            goto fail;
++        }
++        if (!strcmp(value, "none")) {
++            translation = BIOS_ATA_TRANSLATION_NONE;
++        } else if (!strcmp(value, "lba")) {
++            translation = BIOS_ATA_TRANSLATION_LBA;
++        } else if (!strcmp(value, "auto")) {
++            translation = BIOS_ATA_TRANSLATION_AUTO;
++        } else {
++            error_report("'%s' invalid translation type", value);
++            goto fail;
++        }
++    }
++
++    if (media == MEDIA_CDROM) {
++        if (cyls || secs || heads) {
++            error_report("CHS can't be set with media=cdrom");
++            goto fail;
++        }
++    }
++
+     /* Actual block device init: Functionality shared with blockdev-add */
+     dinfo = blockdev_init(bs_opts, type, media);
+     if (dinfo == NULL) {
+@@ -846,6 +859,11 @@ DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
+     dinfo->enable_auto_del = true;
+     dinfo->opts = all_opts;
+ 
++    dinfo->cyls = cyls;
++    dinfo->heads = heads;
++    dinfo->secs = secs;
++    dinfo->trans = translation;
++
+ fail:
+     qemu_opts_del(legacy_opts);
+     return dinfo;
+@@ -1793,22 +1811,6 @@ QemuOptsList qemu_common_drive_opts = {
+             .type = QEMU_OPT_NUMBER,
+             .help = "index number",
+         },{
+-            .name = "cyls",
+-            .type = QEMU_OPT_NUMBER,
+-            .help = "number of cylinders (ide disk geometry)",
+-        },{
+-            .name = "heads",
+-            .type = QEMU_OPT_NUMBER,
+-            .help = "number of heads (ide disk geometry)",
+-        },{
+-            .name = "secs",
+-            .type = QEMU_OPT_NUMBER,
+-            .help = "number of sectors (ide disk geometry)",
+-        },{
+-            .name = "trans",
+-            .type = QEMU_OPT_STRING,
+-            .help = "chs translation (auto, lba. none)",
+-        },{
+             .name = "snapshot",
+             .type = QEMU_OPT_BOOL,
+             .help = "enable/disable snapshot mode",
+-- 
+1.7.1
+

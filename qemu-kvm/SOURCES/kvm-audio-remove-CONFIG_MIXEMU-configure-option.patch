@@ -1,0 +1,181 @@
+From 2254d0ce9d463c8a72ec9b1e21a9310231764c3a Mon Sep 17 00:00:00 2001
+From: Bandan Das <bsd@redhat.com>
+Date: Tue, 15 Oct 2013 17:11:00 +0200
+Subject: [PATCH 23/25] audio: remove CONFIG_MIXEMU configure option
+
+RH-Author: Bandan Das <bsd@redhat.com>
+Message-id: <1381857067-9399-4-git-send-email-bsd@redhat.com>
+Patchwork-id: 54951
+O-Subject: [PATCH RHEL-7 qemu-kvm v3 3/5] audio: remove CONFIG_MIXEMU configure option
+Bugzilla: 954195
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+
+Signed-off-by: Bandan Das <bsd@redhat.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 19b0dfc19c0d911c322a03899806c59bc2f593c9)
+
+Conflicts:
+	configure
+---
+ audio/mixeng.c       |  6 ------
+ configure            |  8 --------
+ hw/audio/hda-codec.c | 30 ------------------------------
+ 3 files changed, 44 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ audio/mixeng.c       |    6 ------
+ configure            |    8 --------
+ hw/audio/hda-codec.c |   30 ------------------------------
+ 3 files changed, 0 insertions(+), 44 deletions(-)
+
+diff --git a/audio/mixeng.c b/audio/mixeng.c
+index 02a9d9f..0e4976f 100644
+--- a/audio/mixeng.c
++++ b/audio/mixeng.c
+@@ -348,7 +348,6 @@ void mixeng_clear (struct st_sample *buf, int len)
+ 
+ void mixeng_volume (struct st_sample *buf, int len, struct mixeng_volume *vol)
+ {
+-#ifdef CONFIG_MIXEMU
+     if (vol->mute) {
+         mixeng_clear (buf, len);
+         return;
+@@ -364,9 +363,4 @@ void mixeng_volume (struct st_sample *buf, int len, struct mixeng_volume *vol)
+ #endif
+         buf += 1;
+     }
+-#else
+-    (void) buf;
+-    (void) len;
+-    (void) vol;
+-#endif
+ }
+diff --git a/configure b/configure
+index 02e483d..4d1bc44 100755
+--- a/configure
++++ b/configure
+@@ -215,7 +215,6 @@ linux_user="no"
+ bsd_user="no"
+ guest_base="yes"
+ uname_release=""
+-mixemu="no"
+ aix="no"
+ blobs="yes"
+ pkgversion=""
+@@ -851,8 +850,6 @@ for opt do
+   ;;
+   --enable-nptl) nptl="yes"
+   ;;
+-  --enable-mixemu) mixemu="yes"
+-  ;;
+   --disable-linux-aio) linux_aio="no"
+   ;;
+   --enable-linux-aio) linux_aio="yes"
+@@ -1115,7 +1112,6 @@ echo "                           (affects only QEMU, not qemu-img)"
+ echo "  --block-drv-ro-whitelist=L"
+ echo "                           set block driver read-only whitelist"
+ echo "                           (affects only QEMU, not qemu-img)"
+-echo "  --enable-mixemu          enable mixer emulation"
+ echo "  --disable-xen            disable xen backend driver support"
+ echo "  --enable-xen             enable xen backend driver support"
+ echo "  --disable-xen-pci-passthrough"
+@@ -3537,7 +3533,6 @@ echo "mingw32 support   $mingw32"
+ echo "Audio drivers     $audio_drv_list"
+ echo "Block whitelist (rw) $block_drv_rw_whitelist"
+ echo "Block whitelist (ro) $block_drv_ro_whitelist"
+-echo "Mixer emulation   $mixemu"
+ echo "VirtFS support    $virtfs"
+ echo "VNC support       $vnc"
+ if test "$vnc" = "yes" ; then
+@@ -3719,9 +3714,6 @@ if test "$audio_win_int" = "yes" ; then
+ fi
+ echo "CONFIG_BDRV_RW_WHITELIST=$block_drv_rw_whitelist" >> $config_host_mak
+ echo "CONFIG_BDRV_RO_WHITELIST=$block_drv_ro_whitelist" >> $config_host_mak
+-if test "$mixemu" = "yes" ; then
+-  echo "CONFIG_MIXEMU=y" >> $config_host_mak
+-fi
+ if test "$vnc" = "yes" ; then
+   echo "CONFIG_VNC=y" >> $config_host_mak
+ fi
+diff --git a/hw/audio/hda-codec.c b/hw/audio/hda-codec.c
+index 3217d90..94c472c 100644
+--- a/hw/audio/hda-codec.c
++++ b/hw/audio/hda-codec.c
+@@ -118,11 +118,9 @@ static void hda_codec_parse_fmt(uint32_t format, struct audsettings *as)
+ #define QEMU_HDA_AMP_NONE    (0)
+ #define QEMU_HDA_AMP_STEPS   0x4a
+ 
+-#ifdef CONFIG_MIXEMU
+ #define   PARAM mixemu
+ #define   HDA_MIXER
+ #include "hda-codec-common.h"
+-#endif
+ 
+ #define   PARAM nomixemu
+ #include  "hda-codec-common.h"
+@@ -594,11 +592,7 @@ static const VMStateDescription vmstate_hda_audio = {
+ 
+ static Property hda_audio_properties[] = {
+     DEFINE_PROP_UINT32("debug", HDAAudioState, debug,   0),
+-#ifdef CONFIG_MIXEMU
+     DEFINE_PROP_BOOL("mixer", HDAAudioState, mixer,  true),
+-#else
+-    DEFINE_PROP_BOOL("mixer", HDAAudioState, mixer, false),
+-#endif
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
+@@ -609,15 +603,7 @@ static int hda_audio_init_output(HDACodecDevice *hda)
+     if (!a->mixer) {
+         return hda_audio_init(hda, &output_nomixemu);
+     } else {
+-
+-#ifdef CONFIG_MIXEMU
+         return hda_audio_init(hda, &output_mixemu);
+-#else
+-        fprintf(stderr, "ERROR: "
+-                "hda-codec : Mixer emulation has not been compiled in!\n");
+-        return -1;
+-#endif
+-
+     }
+ }
+ 
+@@ -628,15 +614,7 @@ static int hda_audio_init_duplex(HDACodecDevice *hda)
+     if (!a->mixer) {
+         return hda_audio_init(hda, &duplex_nomixemu);
+     } else {
+-
+-#ifdef CONFIG_MIXEMU
+         return hda_audio_init(hda, &duplex_mixemu);
+-#else
+-        fprintf(stderr, "ERROR: "
+-                "hda-codec : Mixer emulation has not been compiled in!\n");
+-        return -1;
+-#endif
+-
+     }
+ }
+ 
+@@ -647,15 +625,7 @@ static int hda_audio_init_micro(HDACodecDevice *hda)
+     if (!a->mixer) {
+         return hda_audio_init(hda, &micro_nomixemu);
+     } else {
+-
+-#ifdef CONFIG_MIXEMU
+         return hda_audio_init(hda, &micro_mixemu);
+-#else
+-        fprintf(stderr, "ERROR: "
+-                "hda-codec : Mixer emulation has not been compiled in!\n");
+-        return -1;
+-#endif
+-
+     }
+ }
+ 
+-- 
+1.7.1
+

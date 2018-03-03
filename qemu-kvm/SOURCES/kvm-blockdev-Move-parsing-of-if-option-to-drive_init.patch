@@ -1,0 +1,127 @@
+From d3346d7e6dea698bc00eb18be4e174e9036ebeee Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 5 Nov 2013 14:09:05 +0100
+Subject: [PATCH 52/87] blockdev: Move parsing of 'if' option to drive_init
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1383660558-32096-12-git-send-email-kwolf@redhat.com>
+Patchwork-id: 55390
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 11/24] blockdev: Move parsing of 'if' option to drive_init
+Bugzilla: 978402
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+It's always IF_NONE for blockdev-add.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit 593d464bd43900c2a0c8800b76212f6a93e99a0d)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ blockdev.c | 40 ++++++++++++++++++++++------------------
+ 1 file changed, 22 insertions(+), 18 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ blockdev.c |   40 ++++++++++++++++++++++------------------
+ 1 files changed, 22 insertions(+), 18 deletions(-)
+
+diff --git a/blockdev.c b/blockdev.c
+index e6d3c15..9bc3417 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -328,14 +328,13 @@ typedef enum { MEDIA_DISK, MEDIA_CDROM } DriveMediaType;
+ 
+ /* Takes the ownership of bs_opts */
+ static DriveInfo *blockdev_init(QDict *bs_opts,
+-                                BlockInterfaceType block_default_type,
++                                BlockInterfaceType type,
+                                 DriveMediaType media)
+ {
+     const char *buf;
+     const char *file = NULL;
+     const char *serial;
+     const char *mediastr = "";
+-    BlockInterfaceType type;
+     int bus_id, unit_id;
+     int cyls, heads, secs, translation;
+     int max_devs;
+@@ -396,17 +395,6 @@ static DriveInfo *blockdev_init(QDict *bs_opts,
+     file = qemu_opt_get(opts, "file");
+     serial = qemu_opt_get(opts, "serial");
+ 
+-    if ((buf = qemu_opt_get(opts, "if")) != NULL) {
+-        for (type = 0; type < IF_COUNT && strcmp(buf, if_name[type]); type++)
+-            ;
+-        if (type == IF_COUNT) {
+-            error_report("unsupported bus type '%s'", buf);
+-            return NULL;
+-	}
+-    } else {
+-        type = block_default_type;
+-    }
+-
+     max_devs = if_max_devs[type];
+ 
+     if (cyls || heads || secs) {
+@@ -753,6 +741,10 @@ QemuOptsList qemu_legacy_drive_opts = {
+             .name = "media",
+             .type = QEMU_OPT_STRING,
+             .help = "media type (disk, cdrom)",
++        },{
++            .name = "if",
++            .type = QEMU_OPT_STRING,
++            .help = "interface (ide, scsi, sd, mtd, floppy, pflash, virtio)",
+         },
+         { /* end of list */ }
+     },
+@@ -765,6 +757,7 @@ DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
+     QDict *bs_opts;
+     QemuOpts *legacy_opts;
+     DriveMediaType media = MEDIA_DISK;
++    BlockInterfaceType type;
+     Error *local_err = NULL;
+ 
+     /* Change legacy command line options into QMP ones */
+@@ -828,8 +821,23 @@ DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
+         }
+     }
+ 
++    /* Controller type */
++    value = qemu_opt_get(legacy_opts, "if");
++    if (value) {
++        for (type = 0;
++             type < IF_COUNT && strcmp(value, if_name[type]);
++             type++) {
++        }
++        if (type == IF_COUNT) {
++            error_report("unsupported bus type '%s'", value);
++            goto fail;
++        }
++    } else {
++        type = block_default_type;
++    }
++
+     /* Actual block device init: Functionality shared with blockdev-add */
+-    dinfo = blockdev_init(bs_opts, block_default_type, media);
++    dinfo = blockdev_init(bs_opts, type, media);
+     if (dinfo == NULL) {
+         goto fail;
+     }
+@@ -1781,10 +1789,6 @@ QemuOptsList qemu_common_drive_opts = {
+             .type = QEMU_OPT_NUMBER,
+             .help = "unit number (i.e. lun for scsi)",
+         },{
+-            .name = "if",
+-            .type = QEMU_OPT_STRING,
+-            .help = "interface (ide, scsi, sd, mtd, floppy, pflash, virtio)",
+-        },{
+             .name = "index",
+             .type = QEMU_OPT_NUMBER,
+             .help = "index number",
+-- 
+1.7.1
+

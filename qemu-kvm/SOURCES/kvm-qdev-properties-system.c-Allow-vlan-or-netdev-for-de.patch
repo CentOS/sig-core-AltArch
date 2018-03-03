@@ -1,0 +1,66 @@
+From f54c8f7db9bca89e9989cbfe1af652f5b4552c92 Mon Sep 17 00:00:00 2001
+From: Vlad Yasevich <vyasevic@redhat.com>
+Date: Thu, 4 Sep 2014 20:31:00 +0200
+Subject: [PATCH 5/6] qdev-properties-system.c: Allow vlan or netdev for -device, not both
+
+Message-id: <1409862660-30181-1-git-send-email-vyasevic@redhat.com>
+Patchwork-id: 60839
+O-Subject: [RHEL7.1 qemu-kvm PATCH] qdev-properties-system.c: Allow vlan or netdev for -device, not both
+Bugzilla: 996011
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Xiao Wang <jasowang@redhat.com>
+
+From: Vlad Yasevich <vyasevic@redhat.com>
+
+It is currently possible to specify things like:
+	-device e1000,netdev=foo,vlan=1
+With this usage, whichever argument was specified last (vlan or netdev)
+overwrites what was previousely set and results in a non-working
+configuration.  Even worse, when used with multiqueue devices,
+it causes a segmentation fault on exit in qemu_free_net_client.
+
+That patch treates the above command line options as invalid and
+generates an error at start-up.
+
+Signed-off-by: Vlad Yasevich <vyasevic@redhat.com>
+Acked-by: Jason Wang <jasowang@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 30c367ed446b6ea53245589a5cf373578ac075d7)
+
+Signed-off-by: Vladislav Yasevich <vyasevic@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/core/qdev-properties-system.c |    9 +++++++++
+ 1 files changed, 9 insertions(+), 0 deletions(-)
+
+diff --git a/hw/core/qdev-properties-system.c b/hw/core/qdev-properties-system.c
+index 0eada32..729efa8 100644
+--- a/hw/core/qdev-properties-system.c
++++ b/hw/core/qdev-properties-system.c
+@@ -205,6 +205,11 @@ static int parse_netdev(DeviceState *dev, const char *str, void **ptr)
+             goto err;
+         }
+ 
++        if (ncs[i]) {
++            ret = -EINVAL;
++            goto err;
++        }
++
+         ncs[i] = peers[i];
+         ncs[i]->queue_index = i;
+     }
+@@ -301,6 +306,10 @@ static void set_vlan(Object *obj, Visitor *v, void *opaque,
+         *ptr = NULL;
+         return;
+     }
++    if (*ptr) {
++        error_set_from_qdev_prop_error(errp, -EINVAL, dev, prop, name);
++        return;
++    }
+ 
+     hubport = net_hub_port_find(id);
+     if (!hubport) {
+-- 
+1.7.1
+

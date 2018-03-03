@@ -1,0 +1,163 @@
+From e0f594c3eac9fb0a89c76de3b77bce03c235b36e Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Tue, 3 Dec 2013 15:31:25 +0100
+Subject: [PATCH 16/37] block: Switch BdrvTrackedRequest to byte granularity
+
+Message-id: <1392117622-28812-17-git-send-email-kwolf@redhat.com>
+Patchwork-id: 57181
+O-Subject: [RHEL-7.0 qemu-kvm PATCH v2 16/37] block: Switch BdrvTrackedRequest to byte granularity
+Bugzilla: 748906
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Reviewed-by: Benoit Canet <benoit@irqsave.net>
+(cherry picked from commit 793ed47a7a2b09b67cb2a8863dff531436532b5c)
+
+Conflicts:
+	block/backup.c
+	include/block/block_int.h
+
+Conflicts because in RHEL 7...
+- ...block-backup doesn't exist
+- ...BdrvTrackedRequest is in block.c rather than block_int.h
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c | 56 ++++++++++++++++++++++++++++++++++++--------------------
+ 1 file changed, 36 insertions(+), 20 deletions(-)
+---
+ block.c |   56 ++++++++++++++++++++++++++++++++++++--------------------
+ 1 files changed, 36 insertions(+), 20 deletions(-)
+
+diff --git a/block.c b/block.c
+index 7b8131c..09bb127 100644
+--- a/block.c
++++ b/block.c
+@@ -2036,8 +2036,8 @@ int bdrv_commit_all(void)
+ 
+ struct BdrvTrackedRequest {
+     BlockDriverState *bs;
+-    int64_t sector_num;
+-    int nb_sectors;
++    int64_t offset;
++    unsigned int bytes;
+     bool is_write;
+     QLIST_ENTRY(BdrvTrackedRequest) list;
+     Coroutine *co; /* owner, used for deadlock detection */
+@@ -2060,13 +2060,13 @@ static void tracked_request_end(BdrvTrackedRequest *req)
+  */
+ static void tracked_request_begin(BdrvTrackedRequest *req,
+                                   BlockDriverState *bs,
+-                                  int64_t sector_num,
+-                                  int nb_sectors, bool is_write)
++                                  int64_t offset,
++                                  unsigned int bytes, bool is_write)
+ {
+     *req = (BdrvTrackedRequest){
+         .bs = bs,
+-        .sector_num = sector_num,
+-        .nb_sectors = nb_sectors,
++        .offset = offset,
++        .bytes = bytes,
+         .is_write = is_write,
+         .co = qemu_coroutine_self(),
+     };
+@@ -2097,25 +2097,43 @@ void bdrv_round_to_clusters(BlockDriverState *bs,
+     }
+ }
+ 
++static void round_bytes_to_clusters(BlockDriverState *bs,
++                                    int64_t offset, unsigned int bytes,
++                                    int64_t *cluster_offset,
++                                    unsigned int *cluster_bytes)
++{
++    BlockDriverInfo bdi;
++
++    if (bdrv_get_info(bs, &bdi) < 0 || bdi.cluster_size == 0) {
++        *cluster_offset = offset;
++        *cluster_bytes = bytes;
++    } else {
++        *cluster_offset = QEMU_ALIGN_DOWN(offset, bdi.cluster_size);
++        *cluster_bytes = QEMU_ALIGN_UP(offset - *cluster_offset + bytes,
++                                       bdi.cluster_size);
++    }
++}
++
+ static bool tracked_request_overlaps(BdrvTrackedRequest *req,
+-                                     int64_t sector_num, int nb_sectors) {
++                                     int64_t offset, unsigned int bytes)
++{
+     /*        aaaa   bbbb */
+-    if (sector_num >= req->sector_num + req->nb_sectors) {
++    if (offset >= req->offset + req->bytes) {
+         return false;
+     }
+     /* bbbb   aaaa        */
+-    if (req->sector_num >= sector_num + nb_sectors) {
++    if (req->offset >= offset + bytes) {
+         return false;
+     }
+     return true;
+ }
+ 
+ static void coroutine_fn wait_for_overlapping_requests(BlockDriverState *bs,
+-        int64_t sector_num, int nb_sectors)
++        int64_t offset, unsigned int bytes)
+ {
+     BdrvTrackedRequest *req;
+-    int64_t cluster_sector_num;
+-    int cluster_nb_sectors;
++    int64_t cluster_offset;
++    unsigned int cluster_bytes;
+     bool retry;
+ 
+     /* If we touch the same cluster it counts as an overlap.  This guarantees
+@@ -2124,14 +2142,12 @@ static void coroutine_fn wait_for_overlapping_requests(BlockDriverState *bs,
+      * CoR read and write operations are atomic and guest writes cannot
+      * interleave between them.
+      */
+-    bdrv_round_to_clusters(bs, sector_num, nb_sectors,
+-                           &cluster_sector_num, &cluster_nb_sectors);
++    round_bytes_to_clusters(bs, offset, bytes, &cluster_offset, &cluster_bytes);
+ 
+     do {
+         retry = false;
+         QLIST_FOREACH(req, &bs->tracked_requests, list) {
+-            if (tracked_request_overlaps(req, cluster_sector_num,
+-                                         cluster_nb_sectors)) {
++            if (tracked_request_overlaps(req, cluster_offset, cluster_bytes)) {
+                 /* Hitting this means there was a reentrant request, for
+                  * example, a block driver issuing nested requests.  This must
+                  * never happen since it means deadlock.
+@@ -2746,10 +2762,10 @@ static int coroutine_fn bdrv_aligned_preadv(BlockDriverState *bs,
+     }
+ 
+     if (bs->copy_on_read_in_flight) {
+-        wait_for_overlapping_requests(bs, sector_num, nb_sectors);
++        wait_for_overlapping_requests(bs, offset, bytes);
+     }
+ 
+-    tracked_request_begin(&req, bs, sector_num, nb_sectors, false);
++    tracked_request_begin(&req, bs, offset, bytes, false);
+ 
+     if (flags & BDRV_REQ_COPY_ON_READ) {
+         int pnum;
+@@ -2998,10 +3014,10 @@ static int coroutine_fn bdrv_aligned_pwritev(BlockDriverState *bs,
+     assert((bytes & (BDRV_SECTOR_SIZE - 1)) == 0);
+ 
+     if (bs->copy_on_read_in_flight) {
+-        wait_for_overlapping_requests(bs, sector_num, nb_sectors);
++        wait_for_overlapping_requests(bs, offset, bytes);
+     }
+ 
+-    tracked_request_begin(&req, bs, sector_num, nb_sectors, true);
++    tracked_request_begin(&req, bs, offset, bytes, true);
+ 
+     if (flags & BDRV_REQ_ZERO_WRITE) {
+         ret = bdrv_co_do_write_zeroes(bs, sector_num, nb_sectors, flags);
+-- 
+1.7.1
+

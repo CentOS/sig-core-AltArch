@@ -1,0 +1,135 @@
+From f57ff93bf55cfdf09995c441cbbf8ad886f1afcb Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Sat, 11 Jan 2014 18:00:05 +0100
+Subject: [PATCH 15/22] i440fx-test: give each GTest case its own qtest
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1389463208-6278-16-git-send-email-lersek@redhat.com>
+Patchwork-id: 56628
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 15/18] i440fx-test: give each GTest case its own qtest
+Bugzilla: 1032346
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Amos Kong <akong@redhat.com>
+RH-Acked-by: Andrew Jones <drjones@redhat.com>
+
+The current two GTest cases, /i440fx/defaults and /i440fx/pam can share a
+qemu process, but the next two cases will need dedicated instances. It is
+messy (and order-dependent) to dynamically configure GTest cases one by
+one to start, stop, or keep the current qtest (*); let's just have each
+GTest work with its own qtest. The performance difference should be
+negligible.
+
+(*) As g_test_run() can be invoked at most once per process startup, and
+it runs GTest cases in sequence, we'd need clumsy data structures to
+control each GTest case to start/stop/keep the qemu instance. Or, we'd
+have to code the same information into the test methods themselves, which
+would make them even more order-dependent.
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+(cherry picked from commit c37805b6724e5d4c3ad41653630b72b43619474e)
+---
+ tests/i440fx-test.c | 32 +++++++++++++++++++-------------
+ 1 file changed, 19 insertions(+), 13 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/i440fx-test.c |   32 +++++++++++++++++++-------------
+ 1 files changed, 19 insertions(+), 13 deletions(-)
+
+diff --git a/tests/i440fx-test.c b/tests/i440fx-test.c
+index 6ac46bf..3962bca 100644
+--- a/tests/i440fx-test.c
++++ b/tests/i440fx-test.c
+@@ -28,16 +28,27 @@
+ typedef struct TestData
+ {
+     int num_cpus;
+-    QPCIBus *bus;
+ } TestData;
+ 
++static QPCIBus *test_start_get_bus(const TestData *s)
++{
++    char *cmdline;
++
++    cmdline = g_strdup_printf("-smp %d", s->num_cpus);
++    qtest_start(cmdline);
++    g_free(cmdline);
++    return qpci_init_pc();
++}
++
+ static void test_i440fx_defaults(gconstpointer opaque)
+ {
+     const TestData *s = opaque;
++    QPCIBus *bus;
+     QPCIDevice *dev;
+     uint32_t value;
+ 
+-    dev = qpci_device_find(s->bus, QPCI_DEVFN(0, 0));
++    bus = test_start_get_bus(s);
++    dev = qpci_device_find(bus, QPCI_DEVFN(0, 0));
+     g_assert(dev != NULL);
+ 
+     /* 3.2.2 */
+@@ -121,6 +132,8 @@ static void test_i440fx_defaults(gconstpointer opaque)
+     g_assert_cmpint(qpci_config_readb(dev, 0x91), ==, 0x00); /* ERRSTS */
+     /* 3.2.26 */
+     g_assert_cmpint(qpci_config_readb(dev, 0x93), ==, 0x00); /* TRC */
++
++    qtest_end();
+ }
+ 
+ #define PAM_RE 1
+@@ -179,6 +192,7 @@ static void write_area(uint32_t start, uint32_t end, uint8_t value)
+ static void test_i440fx_pam(gconstpointer opaque)
+ {
+     const TestData *s = opaque;
++    QPCIBus *bus;
+     QPCIDevice *dev;
+     int i;
+     static struct {
+@@ -201,7 +215,8 @@ static void test_i440fx_pam(gconstpointer opaque)
+         { 0xEC000, 0xEFFFF }, /* BIOS Extension */
+     };
+ 
+-    dev = qpci_device_find(s->bus, QPCI_DEVFN(0, 0));
++    bus = test_start_get_bus(s);
++    dev = qpci_device_find(bus, QPCI_DEVFN(0, 0));
+     g_assert(dev != NULL);
+ 
+     for (i = 0; i < ARRAY_SIZE(pam_area); i++) {
+@@ -254,30 +269,21 @@ static void test_i440fx_pam(gconstpointer opaque)
+         /* Verify the area is not our new mask */
+         g_assert(!verify_area(pam_area[i].start, pam_area[i].end, 0x82));
+     }
++    qtest_end();
+ }
+ 
+ int main(int argc, char **argv)
+ {
+     TestData data;
+-    char *cmdline;
+     int ret;
+ 
+     g_test_init(&argc, &argv, NULL);
+ 
+     data.num_cpus = 1;
+ 
+-    cmdline = g_strdup_printf("-smp %d", data.num_cpus);
+-    qtest_start(cmdline);
+-    g_free(cmdline);
+-
+-    data.bus = qpci_init_pc();
+-
+     g_test_add_data_func("/i440fx/defaults", &data, test_i440fx_defaults);
+     g_test_add_data_func("/i440fx/pam", &data, test_i440fx_pam);
+ 
+     ret = g_test_run();
+-
+-    qtest_end();
+-
+     return ret;
+ }
+-- 
+1.7.1
+

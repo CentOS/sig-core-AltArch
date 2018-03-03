@@ -1,0 +1,141 @@
+From c9489944db197e5c1b4086dc92a41f6c364976b0 Mon Sep 17 00:00:00 2001
+From: Kevin Wolf <kwolf@redhat.com>
+Date: Mon, 9 Sep 2013 14:28:17 +0200
+Subject: [PATCH 26/38] block: Allow "driver" option on the top level
+
+RH-Author: Kevin Wolf <kwolf@redhat.com>
+Message-id: <1378736903-18489-27-git-send-email-kwolf@redhat.com>
+Patchwork-id: 54213
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 26/32] block: Allow "driver" option on the top level
+Bugzilla: 1005818
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Bugzilla: 1005818
+
+This is traditionally -drive format=..., which is now translated into
+the new driver option. This gives us a more consistent way to select the
+driver of BlockDriverStates that can be used in QMP context, too.
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+(cherry picked from commit 74fe54f2a1b5c4f4498a8fe521e1dfc936656cd4)
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+---
+ block.c    |  7 +++++++
+ blockdev.c | 20 ++++++++++----------
+ 2 files changed, 17 insertions(+), 10 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block.c    |    7 +++++++
+ blockdev.c |   20 ++++++++++----------
+ 2 files changed, 17 insertions(+), 10 deletions(-)
+
+diff --git a/block.c b/block.c
+index 20820fa..f4a89b9 100644
+--- a/block.c
++++ b/block.c
+@@ -972,6 +972,7 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+     char tmp_filename[PATH_MAX + 1];
+     BlockDriverState *file = NULL;
+     QDict *file_options = NULL;
++    const char *drvname;
+ 
+     /* NULL means an empty set of options */
+     if (options == NULL) {
+@@ -1061,6 +1062,12 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+     }
+ 
+     /* Find the right image format driver */
++    drvname = qdict_get_try_str(options, "driver");
++    if (drvname) {
++        drv = bdrv_find_whitelisted_format(drvname, !(flags & BDRV_O_RDWR));
++        qdict_del(options, "driver");
++    }
++
+     if (!drv) {
+         ret = find_image_format(file, filename, &drv);
+     }
+diff --git a/blockdev.c b/blockdev.c
+index bd33c17..1c9ca4d 100644
+--- a/blockdev.c
++++ b/blockdev.c
+@@ -322,7 +322,6 @@ DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
+     enum { MEDIA_DISK, MEDIA_CDROM } media;
+     int bus_id, unit_id;
+     int cyls, heads, secs, translation;
+-    BlockDriver *drv = NULL;
+     int max_devs;
+     int index;
+     int ro = 0;
+@@ -338,6 +337,7 @@ DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
+     QemuOpts *opts;
+     QDict *bs_opts;
+     const char *id;
++    bool has_driver_specific_opts;
+ 
+     translation = BIOS_ATA_TRANSLATION_AUTO;
+     media = MEDIA_DISK;
+@@ -365,6 +365,8 @@ DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
+         qdict_del(bs_opts, "id");
+     }
+ 
++    has_driver_specific_opts = !!qdict_size(bs_opts);
++
+     /* extract parameters */
+     bus_id  = qemu_opt_get_number(opts, "bus", 0);
+     unit_id = qemu_opt_get_number(opts, "unit", -1);
+@@ -477,11 +479,8 @@ DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
+             error_printf("\n");
+             return NULL;
+         }
+-        drv = bdrv_find_whitelisted_format(buf, ro);
+-        if (!drv) {
+-            error_report("'%s' invalid format", buf);
+-            return NULL;
+-        }
++
++        qdict_put(bs_opts, "driver", qstring_from_str(buf));
+     }
+ 
+     /* disk I/O throttling */
+@@ -658,7 +657,7 @@ DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
+         abort();
+     }
+     if (!file || !*file) {
+-        if (qdict_size(bs_opts)) {
++        if (has_driver_specific_opts) {
+             file = NULL;
+         } else {
+             return dinfo;
+@@ -695,13 +694,13 @@ DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
+         error_report("warning: disabling copy_on_read on readonly drive");
+     }
+ 
+-    ret = bdrv_open(dinfo->bdrv, file, bs_opts, bdrv_flags, drv);
+-    bs_opts = NULL;
++    QINCREF(bs_opts);
++    ret = bdrv_open(dinfo->bdrv, file, bs_opts, bdrv_flags, NULL);
+ 
+     if (ret < 0) {
+         if (ret == -EMEDIUMTYPE) {
+             error_report("could not open disk image %s: not in %s format",
+-                         file ?: dinfo->id, drv->format_name);
++                         file ?: dinfo->id, qdict_get_str(bs_opts, "driver"));
+         } else {
+             error_report("could not open disk image %s: %s",
+                          file ?: dinfo->id, strerror(-ret));
+@@ -712,6 +711,7 @@ DriveInfo *drive_init(QemuOpts *all_opts, BlockInterfaceType block_default_type)
+     if (bdrv_key_required(dinfo->bdrv))
+         autostart = 0;
+ 
++    QDECREF(bs_opts);
+     qemu_opts_del(opts);
+ 
+     return dinfo;
+-- 
+1.7.1
+

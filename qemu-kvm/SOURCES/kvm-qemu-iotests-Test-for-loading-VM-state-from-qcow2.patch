@@ -1,0 +1,147 @@
+From 50513a8391e05285c27241e1cf781ff1370972bf Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Fri, 1 Nov 2013 14:23:17 +0100
+Subject: [PATCH 29/81] qemu-iotests: Test for loading VM state from qcow2
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <1383315797-30938-4-git-send-email-mreitz@redhat.com>
+Patchwork-id: 55218
+O-Subject: [RHEL-7.0 qemu-kvm PATCH 3/3] qemu-iotests: Test for loading VM state from qcow2
+Bugzilla: 1025740
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+
+BZ: 1025740
+
+Add a test for saving a VM state from a qcow2 image and loading it back
+(with having restarted qemu in between); this should work without any
+problems.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit ab6f2bbb2871db8a7ed2457328e864cdf2e2fc82)
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+
+Conflicts:
+	tests/qemu-iotests/group
+
+Conflicts because upstream contains more test in the group file.
+---
+ tests/qemu-iotests/068     | 65 ++++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/068.out | 11 ++++++++
+ tests/qemu-iotests/group   |  1 +
+ 3 files changed, 77 insertions(+)
+ create mode 100755 tests/qemu-iotests/068
+ create mode 100644 tests/qemu-iotests/068.out
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/068     |   65 ++++++++++++++++++++++++++++++++++++++++++++
+ tests/qemu-iotests/068.out |   11 +++++++
+ tests/qemu-iotests/group   |    1 +
+ 3 files changed, 77 insertions(+), 0 deletions(-)
+ create mode 100755 tests/qemu-iotests/068
+ create mode 100644 tests/qemu-iotests/068.out
+
+diff --git a/tests/qemu-iotests/068 b/tests/qemu-iotests/068
+new file mode 100755
+index 0000000..b72e555
+--- /dev/null
++++ b/tests/qemu-iotests/068
+@@ -0,0 +1,65 @@
++#!/bin/bash
++#
++# Test case for loading a saved VM state from a qcow2 image
++#
++# Copyright (C) 2013 Red Hat, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++
++# creator
++owner=mreitz@redhat.com
++
++seq="$(basename $0)"
++echo "QA output created by $seq"
++
++here="$PWD"
++tmp=/tmp/$$
++status=1	# failure is the default!
++
++_cleanup()
++{
++	_cleanup_test_img
++}
++trap "_cleanup; exit \$status" 0 1 2 3 15
++
++# get standard environment, filters and checks
++. ./common.rc
++. ./common.filter
++
++# This tests qocw2-specific low-level functionality
++_supported_fmt qcow2
++_supported_proto generic
++_supported_os Linux
++
++IMGOPTS="compat=1.1"
++IMG_SIZE=128K
++
++echo
++echo "=== Saving and reloading a VM state to/from a qcow2 image ==="
++echo
++_make_test_img $IMG_SIZE
++# Give qemu some time to boot before saving the VM state
++bash -c 'sleep 1; echo -e "savevm 0\nquit"' |\
++    $QEMU -nographic -monitor stdio -serial none -hda "$TEST_IMG" |\
++    _filter_qemu
++# Now try to continue from that VM state (this should just work)
++echo quit |\
++    $QEMU -nographic -monitor stdio -serial none -hda "$TEST_IMG" -loadvm 0 |\
++    _filter_qemu
++
++# success, all done
++echo "*** done"
++rm -f $seq.full
++status=0
+diff --git a/tests/qemu-iotests/068.out b/tests/qemu-iotests/068.out
+new file mode 100644
+index 0000000..abe35a9
+--- /dev/null
++++ b/tests/qemu-iotests/068.out
+@@ -0,0 +1,11 @@
++QA output created by 068
++
++=== Saving and reloading a VM state to/from a qcow2 image ===
++
++Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=131072 
++QEMU X.Y.Z monitor - type 'help' for more information
++(qemu) s[K[Dsa[K[D[Dsav[K[D[D[Dsave[K[D[D[D[Dsavev[K[D[D[D[D[Dsavevm[K[D[D[D[D[D[Dsavevm [K[D[D[D[D[D[D[Dsavevm 0[K
++(qemu) q[K[Dqu[K[D[Dqui[K[D[D[Dquit[K
++QEMU X.Y.Z monitor - type 'help' for more information
++(qemu) q[K[Dqu[K[D[Dqui[K[D[D[Dquit[K
++*** done
+diff --git a/tests/qemu-iotests/group b/tests/qemu-iotests/group
+index 3b1d042..1017a19 100644
+--- a/tests/qemu-iotests/group
++++ b/tests/qemu-iotests/group
+@@ -61,3 +61,4 @@
+ 052 rw auto backing
+ 053 rw auto
+ 059 rw auto
++068 rw auto
+-- 
+1.7.1
+

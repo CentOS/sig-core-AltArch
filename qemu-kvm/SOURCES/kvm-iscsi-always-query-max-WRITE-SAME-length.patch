@@ -1,0 +1,70 @@
+From 5ef7ecc30ffede5d4970165f471ae5d066488fcd Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Fri, 4 Apr 2014 05:56:02 +0200
+Subject: [PATCH 07/12] iscsi: always query max WRITE SAME length
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1396590962-25815-8-git-send-email-famz@redhat.com>
+Patchwork-id: 58344
+O-Subject: [RHEL-7 0day qemu-kvm PATCH 7/7] iscsi: always query max WRITE SAME length
+Bugzilla: 1083413
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+Max WRITE SAME length is also used when the UNMAP bit is zero, so it
+should be queried even if LBPWS=0.  Same for the optimal transfer
+length.
+
+However, the write_zeroes_alignment only matters for UNMAP=1 so we
+still restrict it to LBPWS=1.
+
+Reviewed-by: Peter Lieven <pl@kamp.de>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit c97ca29db0a68deb281a901f535cec5ea4862244)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+---
+ block/iscsi.c | 12 +++++++-----
+ 1 file changed, 7 insertions(+), 5 deletions(-)
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ block/iscsi.c |   12 +++++++-----
+ 1 files changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/block/iscsi.c b/block/iscsi.c
+index b80ebd3..78ab91e 100644
+--- a/block/iscsi.c
++++ b/block/iscsi.c
+@@ -1510,18 +1510,20 @@ static int iscsi_refresh_limits(BlockDriverState *bs)
+ 
+     /* We don't actually refresh here, but just return data queried in
+      * iscsi_open(): iscsi targets don't change their limits. */
+-    if (iscsilun->lbp.lbpu || iscsilun->lbp.lbpws) {
++    if (iscsilun->lbp.lbpu) {
+         if (iscsilun->bl.max_unmap < 0xffffffff) {
+             bs->bl.max_discard = sector_lun2qemu(iscsilun->bl.max_unmap,
+                                                  iscsilun);
+         }
+         bs->bl.discard_alignment = sector_lun2qemu(iscsilun->bl.opt_unmap_gran,
+                                                    iscsilun);
++    }
+ 
+-        if (iscsilun->bl.max_ws_len < 0xffffffff) {
+-            bs->bl.max_write_zeroes = sector_lun2qemu(iscsilun->bl.max_ws_len,
+-                                                      iscsilun);
+-        }
++    if (iscsilun->bl.max_ws_len < 0xffffffff) {
++        bs->bl.max_write_zeroes = sector_lun2qemu(iscsilun->bl.max_ws_len,
++                                                  iscsilun);
++    }
++    if (iscsilun->lbp.lbpws) {
+         bs->bl.write_zeroes_alignment = sector_lun2qemu(iscsilun->bl.opt_unmap_gran,
+                                                         iscsilun);
+ 
+-- 
+1.7.1
+

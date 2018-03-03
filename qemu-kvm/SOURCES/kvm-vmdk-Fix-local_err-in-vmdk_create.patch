@@ -1,0 +1,74 @@
+From 9602ee8eaedf151648fd8e47ce4673799ea567c3 Mon Sep 17 00:00:00 2001
+Message-Id: <9602ee8eaedf151648fd8e47ce4673799ea567c3.1418766606.git.jen@redhat.com>
+In-Reply-To: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+References: <6f81b4847eb68ebdf54a8f1a771e19d112d74152.1418766606.git.jen@redhat.com>
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 4 Dec 2014 00:05:16 -0600
+Subject: [CHANGE 22/31] vmdk: Fix local_err in vmdk_create
+To: rhvirt-patches@redhat.com,
+    jen@redhat.com
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <1417651524-18041-23-git-send-email-famz@redhat.com>
+Patchwork-id: 62695
+O-Subject: [RHEL-7.1 qemu-kvm PATCH v5 22/30] vmdk: Fix local_err in vmdk_create
+Bugzilla: 1134283
+RH-Acked-by: Jeffrey Cody <jcody@redhat.com>
+RH-Acked-by: Markus Armbruster <armbru@redhat.com>
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+
+In vmdk_create and vmdk_create_extent, initialize local_err before using
+it, and don't leak it on error.
+
+Reported-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Reviewed-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+(cherry picked from commit c13959c745a7e4965c94d19e3153d2c44459906d)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Jeff E. Nelson <jen@redhat.com>
+---
+ block/vmdk.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 94e8782..a625e7a 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -1533,7 +1533,7 @@ static int vmdk_create_extent(const char *filename, int64_t filesize,
+     int ret, i;
+     BlockDriverState *bs = NULL;
+     VMDK4Header header;
+-    Error *local_err;
++    Error *local_err = NULL;
+     uint32_t tmp, magic, grains, gd_sectors, gt_size, gt_count;
+     uint32_t *gd_buf = NULL;
+     int gd_buf_size;
+@@ -1697,7 +1697,7 @@ static int vmdk_create(const char *filename, QEMUOptionParameter *options,
+ {
+     int idx = 0;
+     BlockDriverState *new_bs = NULL;
+-    Error *local_err;
++    Error *local_err = NULL;
+     char *desc = NULL;
+     int64_t total_size = 0, filesize;
+     const char *adapter_type = NULL;
+@@ -1878,13 +1878,13 @@ static int vmdk_create(const char *filename, QEMUOptionParameter *options,
+     } else {
+         ret = bdrv_create_file(filename, options, &local_err);
+         if (ret < 0) {
+-            error_setg_errno(errp, -ret, "Could not create image file");
++            error_propagate(errp, local_err);
+             goto exit;
+         }
+     }
+     ret = bdrv_file_open(&new_bs, filename, NULL, BDRV_O_RDWR, &local_err);
+     if (ret < 0) {
+-        error_setg_errno(errp, -ret, "Could not write description");
++        error_propagate(errp, local_err);
+         goto exit;
+     }
+     ret = bdrv_pwrite(new_bs, desc_offset, desc, desc_len);
+-- 
+2.1.0
+

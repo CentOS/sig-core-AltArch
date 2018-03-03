@@ -1,0 +1,92 @@
+From 39f2d80c57f648afd2eab27816e8f93cf48e718d Mon Sep 17 00:00:00 2001
+From: Laszlo Ersek <lersek@redhat.com>
+Date: Wed, 11 May 2016 12:33:46 +0200
+Subject: [PATCH 07/10] acpi: expose oem_id and oem_table_id in build_rsdt()
+
+RH-Author: Laszlo Ersek <lersek@redhat.com>
+Message-id: <1462970028-10959-6-git-send-email-lersek@redhat.com>
+Patchwork-id: 70382
+O-Subject: [RHEL-7.3 qemu-kvm PATCH v2 5/7] acpi: expose oem_id and oem_table_id in build_rsdt()
+Bugzilla: 1330969
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+
+Since build_rsdt() is implemented as common utility code (in
+"hw/acpi/aml-build.c"), it should expose -- and forward -- the oem_id and
+oem_table_id parameters between board code and the generic build_header()
+function.
+
+Cc: "Michael S. Tsirkin" <mst@redhat.com> (supporter:ACPI/SMBIOS)
+Cc: Igor Mammedov <imammedo@redhat.com> (supporter:ACPI/SMBIOS)
+Cc: Shannon Zhao <zhaoshenglong@huawei.com> (maintainer:ARM ACPI Subsystem)
+Cc: Paolo Bonzini <pbonzini@redhat.com> (maintainer:X86)
+Cc: Richard W.M. Jones <rjones@redhat.com>
+Cc: Aleksei Kovura <alex3kov@zoho.com>
+Cc: Michael Tokarev <mjt@tls.msk.ru>
+Cc: Steven Newbury <steve@snewbury.org.uk>
+RHBZ: https://bugzilla.redhat.com/show_bug.cgi?id=1248758
+LP: https://bugs.launchpad.net/qemu/+bug/1533848
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Reviewed-by: Shannon Zhao <shannon.zhao@linaro.org>
+(cherry picked from commit 5151355898699eb66fad0a710b8b6011690a0dfc)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	hw/acpi/aml-build.c
+	hw/arm/virt-acpi-build.c
+	hw/i386/acpi-build.c
+	include/hw/acpi/aml-build.h
+
+RHEL-7 backport note: this is actually a manual reimplementation of the
+upstream patch, which is mostly mechanic. A clean cherry-pick would depend
+on a lot of reorganizatorial upstream patches (e.g., 658c27181bf3
+("hw/i386/acpi-build: move generic acpi building helpers into dedictated
+file")), and many new features that overlap with ACPI generation (e.g.,
+the "virt" machtype of the arm/aarch64 targets).
+
+Signed-off-by: Laszlo Ersek <lersek@redhat.com>
+---
+ hw/i386/acpi-build.c | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+---
+ hw/i386/acpi-build.c | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/hw/i386/acpi-build.c b/hw/i386/acpi-build.c
+index 4839b0e..d9433e6 100644
+--- a/hw/i386/acpi-build.c
++++ b/hw/i386/acpi-build.c
+@@ -951,7 +951,8 @@ build_dsdt(GArray *table_data, GArray *linker, AcpiMiscInfo *misc)
+ 
+ /* Build final rsdt table */
+ static void
+-build_rsdt(GArray *table_data, GArray *linker, GArray *table_offsets)
++build_rsdt(GArray *table_data, GArray *linker, GArray *table_offsets,
++           const char *oem_id, const char *oem_table_id)
+ {
+     AcpiRsdtDescriptorRev1 *rsdt;
+     size_t rsdt_len;
+@@ -970,7 +971,7 @@ build_rsdt(GArray *table_data, GArray *linker, GArray *table_offsets)
+                                        sizeof(uint32_t));
+     }
+     build_header(linker, table_data,
+-                 (void *)rsdt, "RSDT", rsdt_len, 1, NULL, NULL);
++                 (void *)rsdt, "RSDT", rsdt_len, 1, oem_id, oem_table_id);
+ }
+ 
+ static GArray *
+@@ -1126,7 +1127,7 @@ void acpi_build(PcGuestInfo *guest_info, AcpiBuildTables *tables)
+ 
+     /* RSDT is pointed to by RSDP */
+     rsdt = tables->table_data->len;
+-    build_rsdt(tables->table_data, tables->linker, table_offsets);
++    build_rsdt(tables->table_data, tables->linker, table_offsets, NULL, NULL);
+ 
+     /* RSDP is in FSEG memory, so allocate it separately */
+     build_rsdp(tables->rsdp, tables->linker, rsdt);
+-- 
+1.8.3.1
+

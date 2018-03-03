@@ -1,0 +1,86 @@
+From 32dcdb3b1623e351d66bfe7cccbdcef3087f9b7b Mon Sep 17 00:00:00 2001
+From: Max Reitz <mreitz@redhat.com>
+Date: Mon, 13 Mar 2017 17:45:09 +0100
+Subject: [PATCH 11/24] qcow2: Don't rely on free_cluster_index in
+ alloc_refcount_block() (CVE-2014-0147)
+
+RH-Author: Max Reitz <mreitz@redhat.com>
+Message-id: <20170313174516.28044-3-mreitz@redhat.com>
+Patchwork-id: 74274
+O-Subject: [RHEL-7.4 qemu-kvm PATCH 2/9] qcow2: Don't rely on free_cluster_index in alloc_refcount_block() (CVE-2014-0147)
+Bugzilla: 1427176
+RH-Acked-by: Fam Zheng <famz@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+free_cluster_index is only correct if update_refcount() was called from
+an allocation function, and even there it's brittle because it's used to
+protect unfinished allocations which still have a refcount of 0 - if it
+moves in the wrong place, the unfinished allocation can be corrupted.
+
+So not using it any more seems to be a good idea. Instead, use the
+first requested cluster to do the calculations. Return -EAGAIN if
+unfinished allocations could become invalid and let the caller restart
+its search for some free clusters.
+
+The context of creating a snapsnot is one situation where
+update_refcount() is called outside of a cluster allocation. For this
+case, the change fixes a buffer overflow if a cluster is referenced in
+an L2 table that cannot be represented by an existing refcount block.
+(new_table[refcount_table_index] was out of bounds)
+
+[Bump the qemu-iotests 026 refblock_alloc.write leak count from 10 to
+11.
+--Stefan]
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit b106ad9185f35fc4ad669555ad0e79e276083bd7)
+
+This patch was committed downstream before upstream (commit ID
+a2b10eec76a72aa7fe63e797181b93f69de9600e), therefore the change to 026's
+reference output is missing, which is amended by this backport.
+
+Signed-off-by: Max Reitz <mreitz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ tests/qemu-iotests/026.out | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/tests/qemu-iotests/026.out b/tests/qemu-iotests/026.out
+index 0764389..5cedefc 100644
+--- a/tests/qemu-iotests/026.out
++++ b/tests/qemu-iotests/026.out
+@@ -491,7 +491,7 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=1073741824
+ Event: refblock_alloc.write_blocks; errno: 28; imm: off; once: off; write 
+ write failed: No space left on device
+ 
+-10 leaked clusters were found on the image.
++11 leaked clusters were found on the image.
+ This means waste of disk space, but no harm to data.
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=1073741824 
+ 
+@@ -515,7 +515,7 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=1073741824
+ Event: refblock_alloc.write_table; errno: 28; imm: off; once: off; write 
+ write failed: No space left on device
+ 
+-10 leaked clusters were found on the image.
++11 leaked clusters were found on the image.
+ This means waste of disk space, but no harm to data.
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=1073741824 
+ 
+@@ -539,7 +539,7 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=1073741824
+ Event: refblock_alloc.switch_table; errno: 28; imm: off; once: off; write 
+ write failed: No space left on device
+ 
+-10 leaked clusters were found on the image.
++11 leaked clusters were found on the image.
+ This means waste of disk space, but no harm to data.
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=1073741824 
+ 
+-- 
+1.8.3.1
+
