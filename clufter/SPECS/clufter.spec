@@ -42,7 +42,7 @@ Source3:        https://pagure.io/%{name}/raw/v%{version}/f/misc/pacemaker-borro
 
 # for pacemaker BuildRequires dependency
 %if 0%{?rhel} > 0
-ExclusiveArch: i686 x86_64 ppc64le s390x
+ExclusiveArch: i686 x86_64 ppc64le s390x %{arm}
 %endif
 
 %description
@@ -350,6 +350,9 @@ test -x '%{_bindir}/%{name}' && test -f "${bashcomp}" \
 %{_datarootdir}/%{name}/ext-plugins/lib-pcs
 
 %changelog
+* Tue Mar 06 2018 Fabian Arrotin <arrfab@centos.org> - 0.76.0-1
+- Added %{arm} to supported arches to allow building for c7 armhfp
+
 * Tue Jun 06 2017 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.76.0-1
 - factor "borrow validation schemas from pacemaker" out to a separate script
 - bump upstream package, see https://pagure.io/clufter/releases
