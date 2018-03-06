@@ -1,0 +1,134 @@
+From f047435a1087f438c645d729f68f6578e8cb861d Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Thu, 30 Mar 2017 13:13:03 +0100
+Subject: [PATCH] p2v: Run fewer 'scp' commands.
+
+Each scp command takes a considerable amount of time -- several
+seconds -- because it must set up, authenticate and tear down a new
+connection.  Avoid this by combining several copies into a single
+command.
+
+We still have to use two scp commands because we want to check that
+some files are copied and ignore failures in a second set of
+informational files.
+
+(cherry picked from commit d178deeeb814471b9d70431626b6cd515a21d0c1)
+---
+ p2v/conversion.c | 31 +++++++++++--------------------
+ p2v/p2v.h        |  2 +-
+ p2v/ssh.c        | 25 +++++++++++++++++++++----
+ 3 files changed, 33 insertions(+), 25 deletions(-)
+
+diff --git a/p2v/conversion.c b/p2v/conversion.c
+index beda2b89b..0da9a62e0 100644
+--- a/p2v/conversion.c
++++ b/p2v/conversion.c
+@@ -366,28 +366,19 @@ start_conversion (struct config *config,
+   }
+ 
+   /* Copy the static files to the remote dir. */
+-  if (scp_file (config, name_file, remote_dir) == -1) {
+-    set_conversion_error ("scp: %s to %s: %s",
+-                          name_file, remote_dir, get_ssh_error ());
++
++  /* These three files must not fail, so check for errors here. */
++  if (scp_file (config, remote_dir,
++                name_file, libvirt_xml_file, wrapper_script, NULL) == -1) {
++    set_conversion_error ("scp: %s: %s",
++                          remote_dir, get_ssh_error ());
+     goto out;
+   }
+-  if (scp_file (config, libvirt_xml_file, remote_dir) == -1) {
+-    set_conversion_error ("scp: %s to %s: %s",
+-                          libvirt_xml_file, remote_dir, get_ssh_error ());
+-    goto out;
+-  }
+-  if (scp_file (config, wrapper_script, remote_dir) == -1) {
+-    set_conversion_error ("scp: %s to %s: %s",
+-                          wrapper_script, remote_dir, get_ssh_error ());
+-    goto out;
+-  }
+-  /* It's not essential that these files are copied. */
+-  ignore_value (scp_file (config, dmesg_file, remote_dir));
+-  ignore_value (scp_file (config, lscpu_file, remote_dir));
+-  ignore_value (scp_file (config, lspci_file, remote_dir));
+-  ignore_value (scp_file (config, lsscsi_file, remote_dir));
+-  ignore_value (scp_file (config, lsusb_file, remote_dir));
+-  ignore_value (scp_file (config, p2v_version_file, remote_dir));
++
++  /* It's not essential that these files are copied, so ignore errors. */
++  ignore_value (scp_file (config, remote_dir,
++                          dmesg_file, lscpu_file, lspci_file, lsscsi_file,
++                          lsusb_file, p2v_version_file, NULL));
+ 
+   /* Do the conversion.  This runs until virt-v2v exits. */
+   if (notify_ui)
+diff --git a/p2v/p2v.h b/p2v/p2v.h
+index 5223aa216..b26648a01 100644
+--- a/p2v/p2v.h
++++ b/p2v/p2v.h
+@@ -128,7 +128,7 @@ extern int test_connection (struct config *);
+ extern mexp_h *open_data_connection (struct config *, const char *local_ipaddr, int local_port, int *remote_port);
+ extern mexp_h *start_remote_connection (struct config *, const char *remote_dir);
+ extern const char *get_ssh_error (void);
+-extern int scp_file (struct config *config, const char *localfile, const char *remotefile);
++extern int scp_file (struct config *config, const char *target, const char *local, ...) __attribute__((sentinel));
+ 
+ /* nbd.c */
+ extern void set_nbd_option (const char *opt);
+diff --git a/p2v/ssh.c b/p2v/ssh.c
+index 8beaf74bb..bfeb80661 100644
+--- a/p2v/ssh.c
++++ b/p2v/ssh.c
+@@ -572,14 +572,18 @@ start_ssh (unsigned spawn_flags, struct config *config,
+ #endif
+ 
+ /**
+- * Upload a file to remote using L<scp(1)>.
++ * Upload file(s) to remote using L<scp(1)>.
++ *
++ * Note that the target (directory or file) comes before the list of
++ * local files, because the list of local files is a varargs list.
+  *
+  * This is a simplified version of L</start_ssh> above.
+  */
+ int
+-scp_file (struct config *config, const char *localfile, const char *remotefile)
++scp_file (struct config *config, const char *target, const char *local, ...)
+ {
+   size_t i = 0;
++  va_list args;
+   const size_t MAX_ARGS = 64;
+   const char *argv[MAX_ARGS];
+   char port_str[64];
+@@ -618,12 +622,25 @@ scp_file (struct config *config, const char *localfile, const char *remotefile)
+     ADD_ARG (argv, i, "-i");
+     ADD_ARG (argv, i, config->identity_file);
+   }
+-  ADD_ARG (argv, i, localfile);
++
++  /* Source files or directories.
++   * Strictly speaking this could abort() if the list of files is
++   * too long, but that never happens in virt-p2v. XXX
++   */
++  va_start (args, local);
++  do ADD_ARG (argv, i, local);
++  while ((local = va_arg (args, const char *)) != NULL);
++  va_end (args);
++
++  /* The target file or directory.  We need to rewrite this as
++   * "username@server:target".
++   */
+   if (asprintf (&remote, "%s@%s:%s",
+                 config->username ? config->username : "root",
+-                config->server, remotefile) == -1)
++                config->server, target) == -1)
+     error (EXIT_FAILURE, errno, "asprintf");
+   ADD_ARG (argv, i, remote);
++
+   ADD_ARG (argv, i, NULL);
+ 
+ #if DEBUG_STDERR
+-- 
+2.13.4
+

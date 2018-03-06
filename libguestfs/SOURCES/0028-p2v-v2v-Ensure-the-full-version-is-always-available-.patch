@@ -1,0 +1,181 @@
+From a1385efa3499d7668128c90e26790e08e61897de Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Tue, 28 Mar 2017 23:03:31 +0100
+Subject: [PATCH] p2v, v2v: Ensure the full version is always available in
+ several places.
+
+Ensure the full version of virt-v2v and virt-p2v is available in the
+conversion log file, the only log file that we reliably get from users
+and customers.  "Full version" means the major, minor, release and
+extra fields.  The extra field is especially important as it contains
+the downstream package release in Fedora, RHEL etc.
+
+This change saves the virt-p2v version as a comment in the
+physical.xml file, which is included in full in the conversion log (by
+virt-v2v).
+
+It also ensures that the initial virt-v2v debug message contains the
+full version number including the 'extra' field.
+
+  $ cat virt-v2v-conversion-log.txt
+  virt-v2v: libguestfs 1.37.7local,libvirt (x86_64)
+  ...
+  <!-- virt-p2v 1.37.7local,libvirt -->
+
+It also adds 'p2v-version' and 'v2v-version' files in the virt-p2v
+debug directory.  These are strictly superfluous but could be useful
+for end users.
+
+  $ cat p2v-version
+  virt-p2v 1.37.7local,libvirt
+  $ cat v2v-version
+  virt-v2v 1.37.7local,libvirt
+
+(cherry picked from commit 7cae10f0c11ebde643ec575f7f779aa1e7103d6b)
+---
+ p2v/conversion.c | 40 ++++++++++++++++++++++++++++++++++++----
+ p2v/virt-p2v.pod |  8 ++++++++
+ v2v/v2v.ml       |  4 ++--
+ 3 files changed, 46 insertions(+), 6 deletions(-)
+
+diff --git a/p2v/conversion.c b/p2v/conversion.c
+index 0c17ef242..beda2b89b 100644
+--- a/p2v/conversion.c
++++ b/p2v/conversion.c
+@@ -95,6 +95,7 @@ static void generate_libvirt_xml (struct config *, struct data_conn *, const cha
+ static void generate_wrapper_script (struct config *, const char *remote_dir, const char *filename);
+ static void generate_system_data (const char *dmesg_file, const char *lscpu_file, const char *lspci_file, const char *lsscsi_file, const char *lsusb_file);
+ static const char *map_interface_to_network (struct config *, const char *interface);
++static void generate_p2v_version_file (const char *p2v_version_file);
+ static void print_quoted (FILE *fp, const char *s);
+ 
+ static char *conversion_error;
+@@ -206,6 +207,7 @@ start_conversion (struct config *config,
+   char lspci_file[]       = "/tmp/p2v.XXXXXX/lspci";
+   char lsscsi_file[]      = "/tmp/p2v.XXXXXX/lsscsi";
+   char lsusb_file[]       = "/tmp/p2v.XXXXXX/lsusb";
++  char p2v_version_file[] = "/tmp/p2v.XXXXXX/p2v-version";
+   int inhibit_fd = -1;
+ 
+ #if DEBUG_STDERR
+@@ -342,6 +344,7 @@ start_conversion (struct config *config,
+   memcpy (lspci_file, tmpdir, strlen (tmpdir));
+   memcpy (lsscsi_file, tmpdir, strlen (tmpdir));
+   memcpy (lsusb_file, tmpdir, strlen (tmpdir));
++  memcpy (p2v_version_file, tmpdir, strlen (tmpdir));
+ 
+   /* Generate the static files. */
+   generate_name (config, name_file);
+@@ -349,6 +352,7 @@ start_conversion (struct config *config,
+   generate_wrapper_script (config, remote_dir, wrapper_script);
+   generate_system_data (dmesg_file,
+                         lscpu_file, lspci_file, lsscsi_file, lsusb_file);
++  generate_p2v_version_file (p2v_version_file);
+ 
+   /* Open the control connection.  This also creates remote_dir. */
+   if (notify_ui)
+@@ -383,6 +387,7 @@ start_conversion (struct config *config,
+   ignore_value (scp_file (config, lspci_file, remote_dir));
+   ignore_value (scp_file (config, lsscsi_file, remote_dir));
+   ignore_value (scp_file (config, lsusb_file, remote_dir));
++  ignore_value (scp_file (config, p2v_version_file, remote_dir));
+ 
+   /* Do the conversion.  This runs until virt-v2v exits. */
+   if (notify_ui)
+@@ -546,10 +551,10 @@ cleanup_data_conns (struct data_conn *data_conns, size_t nr)
+   } while (0)
+ 
+ /* An XML comment. */
+-#define comment(str)						\
+-  do {                                                          \
+-    if (xmlTextWriterWriteComment (xo, BAD_CAST (str)) == -1)	\
+-      error (EXIT_FAILURE, errno, "xmlTextWriterWriteComment");	\
++#define comment(fs,...)                                                 \
++  do {                                                                  \
++    if (xmlTextWriterWriteFormatComment (xo, fs, ##__VA_ARGS__) == -1)	\
++      error (EXIT_FAILURE, errno, "xmlTextWriterWriteFormatComment");   \
+   } while (0)
+ 
+ /**
+@@ -579,6 +584,8 @@ generate_libvirt_xml (struct config *config, struct data_conn *data_conns,
+ 
+   memkb = config->memory / 1024;
+ 
++  comment (" %s %s ", getprogname (), PACKAGE_VERSION_FULL);
++
+   comment
+     (" NOTE!\n"
+      "\n"
+@@ -859,6 +866,13 @@ generate_wrapper_script (struct config *config, const char *remote_dir,
+   fprintf (fp, "\n");
+ 
+   fprintf (fp,
++           "# Log the version of virt-v2v (for information only).\n");
++  if (config->sudo)
++    fprintf (fp, "sudo -n ");
++  fprintf (fp, "virt-v2v --version > v2v-version\n");
++  fprintf (fp, "\n");
++
++  fprintf (fp,
+            "# Run virt-v2v.  Send stdout back to virt-p2v.  Send stdout\n"
+            "# and stderr (debugging info) to the log file.\n");
+   fprintf (fp, "v2v 2>> $log | tee -a $log\n");
+@@ -939,3 +953,21 @@ generate_system_data (const char *dmesg_file,
+ 
+   ignore_value (system (cmd));
+ }
++
++/**
++ * Generate a file containing the version of virt-p2v.
++ *
++ * The version of virt-v2v is contained in the conversion log.
++ */
++static void
++generate_p2v_version_file (const char *p2v_version_file)
++{
++  FILE *fp = fopen (p2v_version_file, "w");
++  if (fp == NULL) {
++    perror (p2v_version_file);
++    return;                     /* non-fatal */
++  }
++  fprintf (fp, "%s %s\n",
++           getprogname (), PACKAGE_VERSION_FULL);
++  fclose (fp);
++}
+diff --git a/p2v/virt-p2v.pod b/p2v/virt-p2v.pod
+index 4a5f58724..ee870fdd9 100644
+--- a/p2v/virt-p2v.pod
++++ b/p2v/virt-p2v.pod
+@@ -767,6 +767,14 @@ Note this is not "real" libvirt XML (and must B<never> be loaded into
+ libvirt, which would reject it anyhow).  Also it is not the same as
+ the libvirt XML which virt-v2v generates in certain output modes.
+ 
++=item F<p2v-version>
++
++=item F<v2v-version>
++
++I<(before conversion)>
++
++The versions of virt-p2v and virt-v2v respectively.
++
+ =item F<status>
+ 
+ I<(after conversion)>
+diff --git a/v2v/v2v.ml b/v2v/v2v.ml
+index 551524dc5..cc7b88966 100644
+--- a/v2v/v2v.ml
++++ b/v2v/v2v.ml
+@@ -42,8 +42,8 @@ let rec main () =
+ 
+   (* Print the version, easier than asking users to tell us. *)
+   debug "%s: %s %s (%s)"
+-        prog Guestfs_config.package_name
+-        Guestfs_config.package_version Guestfs_config.host_cpu;
++        prog Guestfs_config.package_name Guestfs_config.package_version_full
++        Guestfs_config.host_cpu;
+ 
+   (* Print the libvirt version if debugging.  Note that if
+    * we're configured --without-libvirt, then this will throw
+-- 
+2.13.4
+

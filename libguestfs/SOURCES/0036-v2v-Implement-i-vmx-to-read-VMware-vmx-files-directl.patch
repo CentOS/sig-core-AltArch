@@ -1,0 +1,1954 @@
+From 79c0796259820d1ee49bf442392bc3cc5d82322d Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Mon, 10 Apr 2017 15:24:26 +0100
+Subject: [PATCH] v2v: Implement -i vmx to read VMware vmx files directly
+ (RHBZ#1441197).
+
+This is a mostly complete implementation of a VMX parser and input
+class for virt-v2v.  It parses the name, memory size, CPU topology,
+firmware, video, sound, hard disks, removable disks and network
+interfaces from the VMX file.  It only omits support for floppies and
+SCSI CD-ROMs.
+
+The input class is split into two major parts: a generic VMX file
+parser (Parse_vmx), and the Input_vmx module which translates the VMX
+tree into the source device model.
+
+This also contains tests.  There are simple unit tests of the
+Parse_vmx module, and also some more complete parsing tests taken from
+real guests.
+
+(cherry picked from commit ca40078cdda9167d4658ddfe24c828c7ee76be37)
+---
+ v2v/Makefile.am               |  15 ++
+ v2v/cmdline.ml                |  12 +-
+ v2v/input_vmx.ml              | 349 ++++++++++++++++++++++++++++++++++++++
+ v2v/input_vmx.mli             |  22 +++
+ v2v/name_from_disk.ml         |   2 +-
+ v2v/parse_vmx.ml              | 381 ++++++++++++++++++++++++++++++++++++++++++
+ v2v/parse_vmx.mli             |  89 ++++++++++
+ v2v/test-v2v-i-vmx-1.expected |  42 +++++
+ v2v/test-v2v-i-vmx-1.vmx      | 172 +++++++++++++++++++
+ v2v/test-v2v-i-vmx-2.expected |  22 +++
+ v2v/test-v2v-i-vmx-2.vmx      |  84 ++++++++++
+ v2v/test-v2v-i-vmx-3.expected |  22 +++
+ v2v/test-v2v-i-vmx-3.vmx      |  91 ++++++++++
+ v2v/test-v2v-i-vmx-4.expected |  22 +++
+ v2v/test-v2v-i-vmx-4.vmx      |  88 ++++++++++
+ v2v/test-v2v-i-vmx.sh         |  48 ++++++
+ v2v/v2v_unit_tests.ml         | 143 ++++++++++++++++
+ v2v/virt-v2v.pod              |  72 +++++++-
+ 18 files changed, 1667 insertions(+), 9 deletions(-)
+ create mode 100644 v2v/input_vmx.ml
+ create mode 100644 v2v/input_vmx.mli
+ create mode 100644 v2v/parse_vmx.ml
+ create mode 100644 v2v/parse_vmx.mli
+ create mode 100644 v2v/test-v2v-i-vmx-1.expected
+ create mode 100644 v2v/test-v2v-i-vmx-1.vmx
+ create mode 100644 v2v/test-v2v-i-vmx-2.expected
+ create mode 100644 v2v/test-v2v-i-vmx-2.vmx
+ create mode 100644 v2v/test-v2v-i-vmx-3.expected
+ create mode 100644 v2v/test-v2v-i-vmx-3.vmx
+ create mode 100644 v2v/test-v2v-i-vmx-4.expected
+ create mode 100644 v2v/test-v2v-i-vmx-4.vmx
+ create mode 100755 v2v/test-v2v-i-vmx.sh
+
+diff --git a/v2v/Makefile.am b/v2v/Makefile.am
+index 297406496..0df759eca 100644
+--- a/v2v/Makefile.am
++++ b/v2v/Makefile.am
+@@ -38,6 +38,7 @@ SOURCES_MLI = \
+ 	input_libvirt_xen_ssh.mli \
+ 	input_libvirtxml.mli \
+ 	input_ova.mli \
++	input_vmx.mli \
+ 	inspect_source.mli \
+ 	libvirt_utils.mli \
+ 	linux.mli \
+@@ -55,6 +56,7 @@ SOURCES_MLI = \
+ 	OVF.mli \
+ 	parse_ovf_from_ova.mli \
+ 	parse_libvirt_xml.mli \
++	parse_vmx.mli \
+ 	qemu_command.mli \
+ 	target_bus_assignment.mli \
+ 	types.mli \
+@@ -80,6 +82,7 @@ SOURCES_ML = \
+ 	windows_virtio.ml \
+ 	modules_list.ml \
+ 	input_disk.ml \
++	parse_vmx.ml \
+ 	parse_libvirt_xml.ml \
+ 	create_libvirt_xml.ml \
+ 	qemu_command.ml \
+@@ -89,6 +92,7 @@ SOURCES_ML = \
+ 	input_libvirt_xen_ssh.ml \
+ 	input_libvirt.ml \
+ 	input_ova.ml \
++	input_vmx.ml \
+ 	linux_bootloaders.ml \
+ 	linux_kernels.ml \
+ 	convert_linux.ml \
+@@ -268,6 +272,7 @@ TESTS = \
+ 	test-v2v-i-ova-subfolders.sh \
+ 	test-v2v-i-ova-tar.sh \
+ 	test-v2v-i-ova-two-disks.sh \
++	test-v2v-i-vmx.sh \
+ 	test-v2v-bad-networks-and-bridges.sh
+ 
+ if HAVE_LIBVIRT
+@@ -411,6 +416,15 @@ EXTRA_DIST += \
+ 	test-v2v-i-ova.ovf \
+ 	test-v2v-i-ova.sh \
+ 	test-v2v-i-ova.xml \
++	test-v2v-i-vmx.sh \
++	test-v2v-i-vmx-1.expected \
++	test-v2v-i-vmx-2.expected \
++	test-v2v-i-vmx-3.expected \
++	test-v2v-i-vmx-4.expected \
++	test-v2v-i-vmx-1.vmx \
++	test-v2v-i-vmx-2.vmx \
++	test-v2v-i-vmx-3.vmx \
++	test-v2v-i-vmx-4.vmx \
+ 	test-v2v-machine-readable.sh \
+ 	test-v2v-networks-and-bridges-expected.xml \
+ 	test-v2v-networks-and-bridges.sh \
+@@ -450,6 +464,7 @@ v2v_unit_tests_BOBJECTS = \
+ 	windows.cmo \
+ 	windows_virtio.cmo \
+ 	linux.cmo \
++	parse_vmx.cmo \
+ 	v2v_unit_tests.cmo
+ v2v_unit_tests_XOBJECTS = $(v2v_unit_tests_BOBJECTS:.cmo=.cmx)
+ 
+diff --git a/v2v/cmdline.ml b/v2v/cmdline.ml
+index a2f132b6c..0850f9136 100644
+--- a/v2v/cmdline.ml
++++ b/v2v/cmdline.ml
+@@ -86,6 +86,7 @@ let parse_cmdline () =
+     | "libvirt" -> input_mode := `Libvirt
+     | "libvirtxml" -> input_mode := `LibvirtXML
+     | "ova" -> input_mode := `OVA
++    | "vmx" -> input_mode := `VMX
+     | s ->
+       error (f_"unknown -i option: %s") s
+   in
+@@ -331,7 +332,16 @@ read the man page virt-v2v(1).
+         | [filename] -> filename
+         | _ ->
+           error (f_"expecting an OVA file name on the command line") in
+-      Input_ova.input_ova filename in
++      Input_ova.input_ova filename
++
++    | `VMX ->
++      (* -i vmx: Expecting an vmx filename. *)
++      let filename =
++        match args with
++        | [filename] -> filename
++        | _ ->
++          error (f_"expecting a VMX file name on the command line") in
++      Input_vmx.input_vmx filename in
+ 
+   (* Prevent use of --in-place option in RHEL. *)
+   if in_place then
+diff --git a/v2v/input_vmx.ml b/v2v/input_vmx.ml
+new file mode 100644
+index 000000000..bb09f0bf8
+--- /dev/null
++++ b/v2v/input_vmx.ml
+@@ -0,0 +1,349 @@
++(* virt-v2v
++ * Copyright (C) 2017 Red Hat Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ *)
++
++open Printf
++open Scanf
++
++open Common_gettext.Gettext
++open Common_utils
++
++open Types
++open Utils
++open Name_from_disk
++
++external identity : 'a -> 'a = "%identity"
++
++let rec find_disks vmx vmx_filename =
++  find_scsi_disks vmx vmx_filename @ find_ide_disks vmx vmx_filename
++
++(* Find all SCSI hard disks.
++ *
++ * In the VMX file:
++ *   scsi0.virtualDev = "pvscsi"  # or may be "lsilogic" etc.
++ *   scsi0:0.deviceType = "scsi-hardDisk"
++ *   scsi0:0.fileName = "guest.vmdk"
++ *)
++and find_scsi_disks vmx vmx_filename =
++  let get_scsi_controller_target ns =
++    sscanf ns "scsi%d:%d" (fun c t -> c, t)
++  in
++  let is_scsi_controller_target ns =
++    try ignore (get_scsi_controller_target ns); true
++    with Scanf.Scan_failure _ | End_of_file | Failure _ -> false
++  in
++  let scsi_device_types = [ "scsi-harddisk" ] in
++  let scsi_controller = Source_SCSI in
++
++  find_hdds vmx vmx_filename
++            get_scsi_controller_target is_scsi_controller_target
++            scsi_device_types scsi_controller
++
++(* Find all IDE hard disks.
++ *
++ * In the VMX file:
++ *   ide0:0.deviceType = "ata-hardDisk"
++ *   ide0:0.fileName = "guest.vmdk"
++ *)
++and find_ide_disks vmx vmx_filename =
++  let get_ide_controller_target ns =
++    sscanf ns "ide%d:%d" (fun c t -> c, t)
++  in
++  let is_ide_controller_target ns =
++    try ignore (get_ide_controller_target ns); true
++    with Scanf.Scan_failure _ | End_of_file | Failure _ -> false
++  in
++  let ide_device_types = [ "ata-harddisk" ] in
++  let ide_controller = Source_IDE in
++
++  find_hdds vmx vmx_filename
++            get_ide_controller_target is_ide_controller_target
++            ide_device_types ide_controller
++
++and find_hdds vmx vmx_filename
++              get_controller_target is_controller_target
++              device_types controller =
++  (* Find namespaces matching '(ide|scsi)X:Y' with suitable deviceType. *)
++  let hdds =
++    Parse_vmx.select_namespaces (
++      function
++      | [ns] ->
++         (* Check the namespace is '(ide|scsi)X:Y' *)
++         if not (is_controller_target ns) then false
++         else (
++           (* Check the deviceType is one we are looking for. *)
++           match Parse_vmx.get_string vmx [ns; "deviceType"] with
++           | Some str ->
++              let str = String.lowercase_ascii str in
++              List.mem str device_types
++           | None -> false
++         )
++      | _ -> false
++    ) vmx in
++
++  (* Map the subset to a list of disks. *)
++  let hdds =
++    Parse_vmx.map (
++      fun path v ->
++        match path, v with
++        | [ns; "filename"], Some filename ->
++           let c, t = get_controller_target ns in
++           let s = { s_disk_id = (-1);
++                     s_qemu_uri = qemu_uri_of_filename vmx_filename filename;
++                     s_format = Some "vmdk";
++                     s_controller = Some controller } in
++           Some (c, t, s)
++        | _ -> None
++    ) hdds in
++  let hdds = filter_map identity hdds in
++
++  (* We don't have a way to return the controllers and targets, so
++   * just make sure the disks are sorted into order, since Parse_vmx
++   * won't return them in any particular order.
++   *)
++  let hdds = List.sort compare hdds in
++  let hdds = List.map (fun (_, _, source) -> source) hdds in
++
++  (* Set the s_disk_id field to an incrementing number. *)
++  let hdds = mapi (fun i source -> { source with s_disk_id = i }) hdds in
++
++  hdds
++
++(* The filename can be an absolute path, but is more often a
++ * path relative to the location of the vmx file.
++ *
++ * Note that we always end up with an absolute path, which is
++ * also useful because it means we won't have any paths that
++ * could be misinterpreted by qemu.
++ *)
++and qemu_uri_of_filename vmx_filename filename =
++  if not (Filename.is_relative filename) then
++    filename
++  else (
++    let dir = Filename.dirname (absolute_path vmx_filename) in
++    dir // filename
++  )
++
++(* Find all removable disks.
++ *
++ * In the VMX file:
++ *   ide1:0.deviceType = "cdrom-image"
++ *   ide1:0.fileName = "boot.iso"
++ *
++ * XXX This only supports IDE CD-ROMs, but we could support SCSI
++ * CD-ROMs and floppies in future.
++ *)
++and find_removables vmx =
++  let get_ide_controller_target ns =
++    sscanf ns "ide%d:%d" (fun c t -> c, t)
++  in
++  let is_ide_controller_target ns =
++    try ignore (get_ide_controller_target ns); true
++    with Scanf.Scan_failure _ | End_of_file | Failure _ -> false
++  in
++  let device_types = [ "atapi-cdrom";
++                       "cdrom-image"; "cdrom-raw" ] in
++
++  (* Find namespaces matching 'ideX:Y' with suitable deviceType. *)
++  let devs =
++    Parse_vmx.select_namespaces (
++      function
++      | [ns] ->
++         (* Check the namespace is 'ideX:Y' *)
++         if not (is_ide_controller_target ns) then false
++         else (
++           (* Check the deviceType is one we are looking for. *)
++           match Parse_vmx.get_string vmx [ns; "deviceType"] with
++           | Some str ->
++              let str = String.lowercase_ascii str in
++              List.mem str device_types
++           | None -> false
++         )
++      | _ -> false
++    ) vmx in
++
++  (* Map the subset to a list of CD-ROMs. *)
++  let devs =
++    Parse_vmx.map (
++      fun path v ->
++        match path, v with
++        | [ns], None ->
++           let c, t = get_ide_controller_target ns in
++           let s = { s_removable_type = CDROM;
++                     s_removable_controller = Some Source_IDE;
++                     s_removable_slot = Some (ide_slot c t) } in
++           Some s
++        | _ -> None
++    ) devs in
++  let devs = filter_map identity devs in
++
++  (* Sort by slot. *)
++  let devs =
++    List.sort
++      (fun { s_removable_slot = s1 } { s_removable_slot = s2 } ->
++        compare s1 s2)
++      devs in
++
++  devs
++
++and ide_slot c t =
++  (* Assuming the old master/slave arrangement. *)
++  c * 2 + t
++
++(* Find all ethernet cards.
++ *
++ * In the VMX file:
++ *   ethernet0.virtualDev = "vmxnet3"
++ *   ethernet0.networkName = "VM Network"
++ *   ethernet0.generatedAddress = "00:01:02:03:04:05"
++ *   ethernet0.connectionType = "bridged" # also: "custom", "nat" or not present
++ *)
++and find_nics vmx =
++  let get_ethernet_port ns =
++    sscanf ns "ethernet%d" (fun p -> p)
++  in
++  let is_ethernet_port ns =
++    try ignore (get_ethernet_port ns); true
++    with Scanf.Scan_failure _ | End_of_file | Failure _ -> false
++  in
++
++  (* Find namespaces matching 'ethernetX'. *)
++  let nics =
++    Parse_vmx.select_namespaces (
++      function
++      | [ns] -> is_ethernet_port ns
++      | _ -> false
++    ) vmx in
++
++  (* Map the subset to a list of NICs. *)
++  let nics =
++    Parse_vmx.map (
++      fun path v ->
++        match path, v with
++        | [ns], None ->
++           let port = get_ethernet_port ns in
++           let mac = Parse_vmx.get_string vmx [ns; "generatedAddress"] in
++           let model = Parse_vmx.get_string vmx [ns; "virtualDev"] in
++           let model =
++             match model with
++             | Some m when String.lowercase_ascii m = "e1000" ->
++                Some Source_e1000
++             | Some model ->
++                Some (Source_other_nic (String.lowercase_ascii model))
++             | None -> None in
++           let vnet = Parse_vmx.get_string vmx [ns; "networkName"] in
++           let vnet =
++             match vnet with
++             | Some vnet -> vnet
++             | None -> ns (* "ethernetX" *) in
++           let vnet_type =
++             match Parse_vmx.get_string vmx [ns; "connectionType"] with
++             | Some b when String.lowercase_ascii b = "bridged" ->
++                Bridge
++             | Some _ | None -> Network in
++           Some (port,
++                 { s_mac = mac; s_nic_model = model;
++                   s_vnet = vnet; s_vnet_orig = vnet;
++                   s_vnet_type = vnet_type })
++        | _ -> None
++    ) nics in
++  let nics = filter_map identity nics in
++
++  (* Sort by port. *)
++  let nics = List.sort compare nics in
++
++  let nics = List.map (fun (_, source) -> source) nics in
++  nics
++
++class input_vmx vmx_filename = object
++  inherit input
++
++  method as_options = "-i vmx " ^ vmx_filename
++
++  method source () =
++    (* Parse the VMX file. *)
++    let vmx = Parse_vmx.parse_file vmx_filename in
++
++    let name =
++      match Parse_vmx.get_string vmx ["displayName"] with
++      | None ->
++         warning (f_"no displayName key found in VMX file");
++         name_from_disk vmx_filename
++      | Some s -> s in
++
++    let memory_mb =
++      match Parse_vmx.get_int64 vmx ["memSize"] with
++      | None -> 32_L            (* default is really 32 MB! *)
++      | Some i -> i in
++    let memory = memory_mb *^ 1024L *^ 1024L in
++
++    let vcpu =
++      match Parse_vmx.get_int vmx ["numvcpus"] with
++      | None -> 1
++      | Some i -> i in
++
++    let firmware =
++      match Parse_vmx.get_string vmx ["firmware"] with
++      | None -> BIOS
++      | Some "efi" -> UEFI
++      (* Other values are not documented for this field ... *)
++      | Some fw ->
++         warning (f_"unknown firmware value '%s', assuming BIOS") fw;
++         BIOS in
++
++    let video =
++      if Parse_vmx.namespace_present vmx ["svga"] then
++        (* We could also parse svga.vramSize. *)
++        Some (Source_other_video "vmvga")
++      else
++        None in
++
++    let sound =
++      match Parse_vmx.get_string vmx ["sound"; "virtualDev"] with
++      | Some ("sb16") -> Some { s_sound_model = SB16 }
++      | Some ("es1371") -> Some { s_sound_model = ES1370 (* hmmm ... *) }
++      | Some "hdaudio" -> Some { s_sound_model = ICH6 (* intel-hda *) }
++      | Some model ->
++         warning (f_"unknown sound device '%s' ignored") model;
++         None
++      | None -> None in
++
++    let disks = find_disks vmx vmx_filename in
++    let removables = find_removables vmx in
++    let nics = find_nics vmx in
++
++    let source = {
++      s_hypervisor = VMware;
++      s_name = name;
++      s_orig_name = name;
++      s_memory = memory;
++      s_vcpu = vcpu;
++      s_features = [];
++      s_firmware = firmware;
++      s_display = None;
++      s_video = video;
++      s_sound = sound;
++      s_disks = disks;
++      s_removables = removables;
++      s_nics = nics;
++    } in
++
++    source
++end
++
++let input_vmx = new input_vmx
++let () = Modules_list.register_input_module "vmx"
+diff --git a/v2v/input_vmx.mli b/v2v/input_vmx.mli
+new file mode 100644
+index 000000000..f236f8716
+--- /dev/null
++++ b/v2v/input_vmx.mli
+@@ -0,0 +1,22 @@
++(* virt-v2v
++ * Copyright (C) 2017 Red Hat Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ *)
++
++(** [-i vmx] source. *)
++
++val input_vmx : string -> Types.input
++(** [input_vmx filename] sets up an input from vmware vmx file. *)
+diff --git a/v2v/name_from_disk.ml b/v2v/name_from_disk.ml
+index 82f09250a..452d9462c 100644
+--- a/v2v/name_from_disk.ml
++++ b/v2v/name_from_disk.ml
+@@ -24,7 +24,7 @@ let name_from_disk disk =
+   (* Remove the extension (or suffix), only if it's one usually
+    * used for disk images. *)
+   let suffixes = [
+-    ".img"; ".ova"; ".qcow2"; ".raw"; ".vmdk";
++    ".img"; ".ova"; ".qcow2"; ".raw"; ".vmdk"; ".vmx";
+     "-sda";
+   ] in
+   let rec loop = function
+diff --git a/v2v/parse_vmx.ml b/v2v/parse_vmx.ml
+new file mode 100644
+index 000000000..33ec17d3d
+--- /dev/null
++++ b/v2v/parse_vmx.ml
+@@ -0,0 +1,381 @@
++(* virt-v2v
++ * Copyright (C) 2017 Red Hat Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ *)
++
++open Printf
++
++open Common_utils
++open Common_gettext.Gettext
++
++(* As far as I can tell the VMX format is totally unspecified.
++ * However libvirt has a useful selection of .vmx files in the
++ * sources which explore some of the darker regions of this
++ * format.
++ *
++ * So here are some facts about VMX derived from libvirt and
++ * other places:
++ *
++ * - Keys are compared case insensitively.  We assume here
++ *   that keys are 7-bit ASCII.
++ *
++ * - Multiple keys with the same name are not allowed.
++ *
++ * - Escaping in the value string is possible using a very weird
++ *   escape format: "|22" means the character '\x22'.  To write
++ *   a pipe character you must use "|7C".
++ *
++ * - Boolean values are written "TRUE", "FALSE", "True", "true", etc.
++ *   Because of the quotes they cannot be distinguished from strings.
++ *
++ * - Comments (#...) and blank lines are ignored.  Some files start
++ *   with a hash-bang path, but we ignore those as comments.  This
++ *   parser also ignores any other line which it doesn't understand,
++ *   but will print a warning.
++ *
++ * - Multi-line values are not permitted.
++ *
++ * - Keys are namespaced using dots, eg. scsi0:0.deviceType has
++ *   the namespace "scsi0:0" and the key name "deviceType".
++ *
++ * - Using namespace.present = "FALSE" means that all other keys
++ *   in and under the namespace are ignored.
++ *
++ * - You cannot have a namespace and a key with the same name, eg.
++ *   this is not allowed:
++ *     namespace = "some value"
++ *     namespace.foo = "another value"
++ *
++ * - The Hashicorp packer VMX writer considers some special keys
++ *   as not requiring any quotes around their values, but I'm
++ *   ignoring that for now.
++ *)
++
++(* This VMX file:
++ *
++ *   foo.a = "abc"
++ *   foo.b = "def"
++ *   foo.bar.c = "abc"
++ *   foo.bar.d = "def"
++ *
++ * would be represented by this structure:
++ *
++ *   "foo" => Namespace (             # "foo" is a namespace
++ *              "a" => Key "abc";     # "foo.a" is a key with value "abc"
++ *              "b" => Key "def";
++ *              "bar" => Namespace (  # "foo.bar" is another namespace
++ *                         "c" => Key "abc";
++ *                         "d" => Key "def";
++ *                       )
++ *            )
++ *   ‘( => )’s represent the StringMap type.
++ *)
++type t = key StringMap.t
++
++and key =
++  | Key of string
++  | Namespace of t
++
++let empty = StringMap.empty
++
++(* Compare two trees for equality. *)
++let rec equal vmx1 vmx2 =
++  let cmp k1 k2 =
++    match k1, k2 with
++    | Key v1, Key v2 -> v1 = v2
++    | Key _, Namespace _ -> false
++    | Namespace _, Key _ -> false
++    | Namespace vmx1, Namespace vmx2 -> equal vmx1 vmx2
++  in
++  StringMap.equal cmp vmx1 vmx2
++
++(* Higher-order functions. *)
++let rec select_namespaces pred vmx =
++  _select_namespaces [] pred vmx
++
++and _select_namespaces path pred vmx =
++  StringMap.fold (
++    fun k v new_vmx ->
++      let path = path @ [k] in
++      match v with
++      | Key _ -> new_vmx
++      | Namespace _ when pred path ->
++         StringMap.add k v new_vmx
++      | Namespace t ->
++         let t = _select_namespaces path pred t in
++         if not (equal t empty) then
++           StringMap.add k (Namespace t) new_vmx
++         else
++           new_vmx
++  ) vmx empty
++
++let rec map f vmx =
++  _map [] f vmx
++
++and _map path f vmx =
++  StringMap.fold (
++    fun k v r ->
++      let path = path @ [k] in
++      match v with
++      | Key v -> r @ [ f path (Some v) ]
++      | Namespace t -> r @ [ f path None ] @ _map path f t
++  ) vmx []
++
++let rec namespace_present vmx = function
++  | [] -> false
++  | [ns] ->
++     let ns = String.lowercase_ascii ns in
++     (try
++        let v = StringMap.find ns vmx in
++        match v with
++        | Key _ -> false
++        | Namespace _ -> true
++      with
++        Not_found -> false
++     )
++  | ns :: path ->
++     let ns = String.lowercase_ascii ns in
++     (try
++        let v = StringMap.find ns vmx in
++        match v with
++        | Key _ -> false
++        | Namespace vmx -> namespace_present vmx path
++      with
++        Not_found -> false
++     )
++
++(* Dump the vmx structure to [chan].  Used for debugging. *)
++let rec print chan indent vmx =
++  StringMap.iter (print_key chan indent) vmx
++
++and print_key chan indent k = function
++  | Key v ->
++     output_spaces chan indent;
++     fprintf chan "%s = \"%s\"\n" k v
++  | Namespace vmx ->
++     output_spaces chan indent;
++     fprintf chan "namespace '%s':\n" k;
++     print chan (indent+4) vmx
++
++(* As above, but creates a string instead. *)
++let rec to_string indent vmx =
++  StringMap.fold (fun k v str -> str ^ to_string_key indent k v) vmx ""
++
++and to_string_key indent k = function
++  | Key v ->
++     String.spaces indent ^ sprintf "%s = \"%s\"\n" k v
++  | Namespace vmx ->
++     String.spaces indent ^ sprintf "namespace '%s':\n" k ^
++       to_string (indent+4) vmx
++
++(* Access keys in the tree. *)
++let rec get_string vmx = function
++  | [] -> None
++  | [k] ->
++     let k = String.lowercase_ascii k in
++     (try
++        let v = StringMap.find k vmx in
++        match v with
++        | Key v -> Some v
++        | Namespace _ -> None
++      with Not_found -> None
++     )
++  | ns :: path ->
++     let ns = String.lowercase_ascii ns in
++     (try
++        let v = StringMap.find ns vmx in
++        match v with
++        | Key v -> None
++        | Namespace vmx -> get_string vmx path
++      with
++        Not_found -> None
++     )
++
++let get_int64 vmx path =
++  match get_string vmx path with
++  | None -> None
++  | Some i -> Some (Int64.of_string i)
++
++let get_int vmx path =
++  match get_string vmx path with
++  | None -> None
++  | Some i -> Some (int_of_string i)
++
++let rec get_bool vmx path =
++  match get_string vmx path with
++  | None -> None
++  | Some t -> Some (vmx_bool_of_string t)
++
++and vmx_bool_of_string t =
++  if String.lowercase_ascii t = "true" then true
++  else if String.lowercase_ascii t = "false" then false
++  else failwith "bool_of_string"
++
++(* Regular expression used to match key = "value" in VMX file. *)
++let rex = Str.regexp "^\\([^ \t=]+\\)[ \t]*=[ \t]*\"\\(.*\\)\"$"
++
++(* Remove the weird escapes used in value strings.  See description above. *)
++let remove_vmx_escapes str =
++  let len = String.length str in
++  let out = Bytes.make len '\000' in
++  let j = ref 0 in
++
++  let rec loop i =
++    if i >= len then ()
++    else (
++      let c = String.unsafe_get str i in
++      if i <= len-3 && c = '|' then (
++        let c1 = str.[i+1] and c2 = str.[i+2] in
++        if Char.isxdigit c1 && Char.isxdigit c2 then (
++          let x = Char.hexdigit c1 * 0x10 + Char.hexdigit c2 in
++          Bytes.set out !j (Char.chr x);
++          incr j;
++          loop (i+3)
++        )
++        else (
++          Bytes.set out !j c;
++          incr j;
++          loop (i+1)
++        )
++      )
++      else (
++        Bytes.set out !j c;
++        incr j;
++        loop (i+1)
++      )
++    )
++  in
++  loop 0;
++
++  (* Truncate the output string to its real size and return it
++   * as an immutable string.
++   *)
++  Bytes.sub_string out 0 !j
++
++(* Parsing. *)
++let rec parse_file vmx_filename =
++  (* Read the whole file as a list of lines. *)
++  let str = read_whole_file vmx_filename in
++  if verbose () then eprintf "VMX file:\n%s\n" str;
++  parse_string str
++
++and parse_string str =
++  let lines = String.nsplit "\n" str in
++
++  (* I've never seen any VMX file with CR-LF endings, and VMware
++   * itself is Linux-based, but to be on the safe side ...
++   *)
++  let lines = List.map (String.trimr ~test:((=) '\r')) lines in
++
++  (* Ignore blank lines and comments. *)
++  let lines = List.filter (
++    fun line ->
++      let line = String.triml line in
++      let len = String.length line in
++      len > 0 && line.[0] != '#'
++  ) lines in
++
++  (* Parse the lines into key = "value". *)
++  let lines = filter_map (
++    fun line ->
++      if Str.string_match rex line 0 then (
++        let key = Str.matched_group 1 line in
++        let key = String.lowercase_ascii key in
++        let value = Str.matched_group 2 line in
++        let value = remove_vmx_escapes value in
++        Some (key, value)
++      )
++      else (
++        warning (f_"vmx parser: cannot parse this line, ignoring: %s") line;
++        None
++      )
++  ) lines in
++
++  (* Split the keys into namespace paths. *)
++  let lines =
++    List.map (fun (key, value) -> String.nsplit "." key, value) lines in
++
++  (* Build a tree from the flat list and return it.  This is horribly
++   * inefficient, at least O(n²), possibly even O(n².log n).  Hope
++   * there are no large VMX files!  (XXX)
++   *)
++  let vmx =
++    List.fold_left (
++      fun vmx (path, value) -> insert vmx value path
++    ) empty lines in
++
++  (* If we're verbose, dump the parsed VMX for debugging purposes. *)
++  if verbose () then (
++    eprintf "parsed VMX tree:\n";
++    print stderr 0 vmx
++  );
++
++  (* Drop all present = "FALSE" namespaces. *)
++  let vmx = drop_not_present vmx in
++
++  vmx
++
++and insert vmx value = function
++  | [] -> assert false
++  | [k] ->
++     if StringMap.mem k vmx then (
++       warning (f_"vmx parser: duplicate key '%s' ignored") k;
++       vmx
++     ) else
++       StringMap.add k (Key value) vmx
++  | ns :: path ->
++     let v =
++       try
++         (match StringMap.find ns vmx with
++          | Namespace vmx -> Some vmx
++          | Key _ -> None
++         )
++       with Not_found -> None in
++     let v =
++       match v with
++       | None ->
++          (* Completely new namespace. *)
++          insert empty value path
++       | Some v ->
++          (* Insert the subkey into the previously created namespace. *)
++          insert v value path in
++     StringMap.add ns (Namespace v) vmx
++
++(* Find any "present" keys.  If we find present = "FALSE", then
++ * drop the containing namespace and all subkeys and subnamespaces.
++ *)
++and drop_not_present vmx =
++  StringMap.fold (
++    fun k v new_vmx ->
++      match v with
++      | Key _ ->
++         StringMap.add k v new_vmx
++      | Namespace vmx when contains_key_present_false vmx ->
++         (* drop this namespace and all sub-spaces *)
++         new_vmx
++      | Namespace v ->
++         (* recurse into sub-namespace and do the same check *)
++         let v = drop_not_present v in
++         StringMap.add k (Namespace v) new_vmx
++  ) vmx empty
++
++and contains_key_present_false vmx =
++  try
++    match StringMap.find "present" vmx with
++    | Key v when vmx_bool_of_string v = false -> true
++    | Key _ | Namespace _ -> false
++  with
++    Failure _ | Not_found -> false
+diff --git a/v2v/parse_vmx.mli b/v2v/parse_vmx.mli
+new file mode 100644
+index 000000000..0e4f21f07
+--- /dev/null
++++ b/v2v/parse_vmx.mli
+@@ -0,0 +1,89 @@
++(* virt-v2v
++ * Copyright (C) 2017 Red Hat Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ *)
++
++(** A simple parser for VMware [.vmx] files. *)
++
++type t
++
++val parse_file : string -> t
++(** [parse_file filename] parses a VMX file. *)
++
++val parse_string : string -> t
++(** [parse_string s] parses VMX from a string. *)
++
++val get_string : t -> string list -> string option
++(** Find a key and return it as a string.  If not present, returns [None].
++
++    Note that if [namespace.present = "FALSE"] is found in the file
++    then all keys in [namespace] and below it are ignored.  This
++    applies to all [get_*] functions. *)
++
++val get_int64 : t -> string list -> int64 option
++(** Find a key and return it as an [int64].
++    If not present, returns [None].
++
++    Raises [Failure _] if the key is present but was not parseable
++    as an integer. *)
++
++val get_int : t -> string list -> int option
++(** Find a key and return it as an [int].
++    If not present, returns [None].
++
++    Raises [Failure _] if the key is present but was not parseable
++    as an integer. *)
++
++val get_bool : t -> string list -> bool option
++(** Find a key and return it as a boolean.
++
++    You cannot return [namespace.present = "FALSE"] booleans this way.
++    They are processed by the parser and the namespace and anything
++    below it are removed from the tree.
++
++    Raises [Failure _] if the key is present but was not parseable
++    as a boolean. *)
++
++val namespace_present : t -> string list -> bool
++(** Returns true iff the namespace ({b note:} not key) is present. *)
++
++val select_namespaces : (string list -> bool) -> t -> t
++(** Filter the VMX file, selecting exactly namespaces (and their
++    keys) matching the predicate.  The predicate is a function which
++    is called on each {i namespace} path ({b note:} not on
++    namespace + key paths).  If the predicate matches a
++    namespace, then all sub-namespaces under that namespace are
++    selected implicitly. *)
++
++val map : (string list -> string option -> 'a) -> t -> 'a list
++(** Map all the entries in the VMX file into a list using the
++    map function.  The map function takes two arguments.  The
++    first is the path to the namespace or key, and the second
++    is the key value (or [None] if the path refers to a namespace). *)
++
++val equal : t -> t -> bool
++(** Compare two VMX files for equality.  This is mainly used for
++    testing the parser. *)
++
++val empty : t
++(** An empty VMX file. *)
++
++val print : out_channel -> int -> t -> unit
++(** [print chan indent] prints the VMX file to the output channel.
++    [indent] is the indentation applied to each line of output. *)
++
++val to_string : int -> t -> string
++(** Same as {!print} but it creates a printable (multiline) string. *)
+diff --git a/v2v/test-v2v-i-vmx-1.expected b/v2v/test-v2v-i-vmx-1.expected
+new file mode 100644
+index 000000000..d32a29987
+--- /dev/null
++++ b/v2v/test-v2v-i-vmx-1.expected
+@@ -0,0 +1,42 @@
++[   0.0] Opening the source -i vmx test-v2v-i-vmx-1.vmx
++Source guest information (--print-source option):
++
++    source name: BZ1308535_21disks
++hypervisor type: vmware
++         memory: 2147483648 (bytes)
++       nr vCPUs: 1
++     CPU vendor: 
++      CPU model: 
++   CPU topology: sockets: - cores/socket: - threads/core: -
++   CPU features: 
++       firmware: bios
++        display: 
++          video: vmvga
++          sound: 
++disks:
++	/BZ1308535_21disks.vmdk (vmdk) [scsi]
++	/BZ1308535_21disks_1.vmdk (vmdk) [scsi]
++	/BZ1308535_21disks_2.vmdk (vmdk) [scsi]
++	/BZ1308535_21disks_3.vmdk (vmdk) [scsi]
++	/BZ1308535_21disks_4.vmdk (vmdk) [scsi]
++	/BZ1308535_21disks_5.vmdk (vmdk) [scsi]
++	/BZ1308535_21disks_6.vmdk (vmdk) [scsi]
++	/BZ1308535_21disks_7.vmdk (vmdk) [scsi]
++	/BZ1308535_21disks_8.vmdk (vmdk) [scsi]
++	/BZ1308535_21disks_9.vmdk (vmdk) [scsi]
++	/BZ1308535_21disks_10.vmdk (vmdk) [scsi]
++	/BZ1308535_21disks_11.vmdk (vmdk) [scsi]
++	/BZ1308535_21disks_12.vmdk (vmdk) [scsi]
++	/BZ1308535_21disks_13.vmdk (vmdk) [scsi]
++	/BZ1308535_21disks_14.vmdk (vmdk) [scsi]
++	/BZ1308535_21disks_15.vmdk (vmdk) [scsi]
++	/BZ1308535_21disks_16.vmdk (vmdk) [scsi]
++	/BZ1308535_21disks_17.vmdk (vmdk) [scsi]
++	/BZ1308535_21disks_18.vmdk (vmdk) [scsi]
++	/BZ1308535_21disks_19.vmdk (vmdk) [scsi]
++	/BZ1308535_21disks_20.vmdk (vmdk) [scsi]
++removable media:
++	CD-ROM [ide] in slot 2
++NICs:
++	Network "VM Network" mac: 00:0c:29:36:ef:31 [vmxnet3]
++
+diff --git a/v2v/test-v2v-i-vmx-1.vmx b/v2v/test-v2v-i-vmx-1.vmx
+new file mode 100644
+index 000000000..3f2f060a5
+--- /dev/null
++++ b/v2v/test-v2v-i-vmx-1.vmx
+@@ -0,0 +1,172 @@
++.encoding = "UTF-8"
++config.version = "8"
++virtualHW.version = "8"
++nvram = "BZ1308535_21disks.nvram"
++pciBridge0.present = "TRUE"
++svga.present = "TRUE"
++pciBridge4.present = "TRUE"
++pciBridge4.virtualDev = "pcieRootPort"
++pciBridge4.functions = "8"
++pciBridge5.present = "TRUE"
++pciBridge5.virtualDev = "pcieRootPort"
++pciBridge5.functions = "8"
++pciBridge6.present = "TRUE"
++pciBridge6.virtualDev = "pcieRootPort"
++pciBridge6.functions = "8"
++pciBridge7.present = "TRUE"
++pciBridge7.virtualDev = "pcieRootPort"
++pciBridge7.functions = "8"
++vmci0.present = "TRUE"
++hpet0.present = "TRUE"
++displayName = "BZ1308535_21disks"
++extendedConfigFile = "BZ1308535_21disks.vmxf"
++virtualHW.productCompatibility = "hosted"
++memSize = "2048"
++sched.cpu.units = "mhz"
++powerType.powerOff = "soft"
++powerType.suspend = "hard"
++powerType.reset = "soft"
++scsi0.virtualDev = "pvscsi"
++scsi0.present = "TRUE"
++scsi1.virtualDev = "pvscsi"
++scsi1.present = "TRUE"
++ide1:0.deviceType = "cdrom-image"
++ide1:0.fileName = "/vmfs/volumes/5458b680-34ec3500-9f36-001320f5f6ca/ISOs/RHEL-7.1-20150219.1-Server-x86_64-boot.iso"
++ide1:0.present = "TRUE"
++floppy0.startConnected = "FALSE"
++floppy0.clientDevice = "TRUE"
++floppy0.fileName = "vmware-null-remote-floppy"
++ethernet0.virtualDev = "vmxnet3"
++ethernet0.networkName = "VM Network"
++ethernet0.addressType = "generated"
++ethernet0.present = "TRUE"
++scsi0:0.deviceType = "scsi-hardDisk"
++scsi0:0.fileName = "BZ1308535_21disks.vmdk"
++scsi0:0.present = "TRUE"
++scsi0:1.deviceType = "scsi-hardDisk"
++scsi0:1.fileName = "BZ1308535_21disks_1.vmdk"
++scsi0:1.present = "TRUE"
++scsi0:2.deviceType = "scsi-hardDisk"
++scsi0:2.fileName = "BZ1308535_21disks_2.vmdk"
++scsi0:2.present = "TRUE"
++scsi0:3.deviceType = "scsi-hardDisk"
++scsi0:3.fileName = "BZ1308535_21disks_3.vmdk"
++scsi0:3.present = "TRUE"
++scsi0:4.deviceType = "scsi-hardDisk"
++scsi0:4.fileName = "BZ1308535_21disks_4.vmdk"
++scsi0:4.present = "TRUE"
++scsi0:5.deviceType = "scsi-hardDisk"
++scsi0:5.fileName = "BZ1308535_21disks_5.vmdk"
++scsi0:5.present = "TRUE"
++scsi0:6.deviceType = "scsi-hardDisk"
++scsi0:6.fileName = "BZ1308535_21disks_6.vmdk"
++scsi0:6.present = "TRUE"
++scsi0:8.deviceType = "scsi-hardDisk"
++scsi0:8.fileName = "BZ1308535_21disks_7.vmdk"
++scsi0:8.present = "TRUE"
++scsi0:9.deviceType = "scsi-hardDisk"
++scsi0:9.fileName = "BZ1308535_21disks_8.vmdk"
++scsi0:9.present = "TRUE"
++scsi0:10.deviceType = "scsi-hardDisk"
++scsi0:10.fileName = "BZ1308535_21disks_9.vmdk"
++scsi0:10.present = "TRUE"
++scsi0:11.deviceType = "scsi-hardDisk"
++scsi0:11.fileName = "BZ1308535_21disks_10.vmdk"
++scsi0:11.present = "TRUE"
++scsi0:12.deviceType = "scsi-hardDisk"
++scsi0:12.fileName = "BZ1308535_21disks_11.vmdk"
++scsi0:12.present = "TRUE"
++scsi0:13.deviceType = "scsi-hardDisk"
++scsi0:13.fileName = "BZ1308535_21disks_12.vmdk"
++scsi0:13.present = "TRUE"
++scsi0:14.deviceType = "scsi-hardDisk"
++scsi0:14.fileName = "BZ1308535_21disks_13.vmdk"
++scsi0:14.present = "TRUE"
++scsi0:15.deviceType = "scsi-hardDisk"
++scsi0:15.fileName = "BZ1308535_21disks_14.vmdk"
++scsi0:15.present = "TRUE"
++scsi1:0.deviceType = "scsi-hardDisk"
++scsi1:0.fileName = "BZ1308535_21disks_15.vmdk"
++scsi1:0.present = "TRUE"
++scsi1:1.deviceType = "scsi-hardDisk"
++scsi1:1.fileName = "BZ1308535_21disks_16.vmdk"
++scsi1:1.present = "TRUE"
++scsi1:2.deviceType = "scsi-hardDisk"
++scsi1:2.fileName = "BZ1308535_21disks_17.vmdk"
++scsi1:2.present = "TRUE"
++scsi1:3.deviceType = "scsi-hardDisk"
++scsi1:3.fileName = "BZ1308535_21disks_18.vmdk"
++scsi1:3.present = "TRUE"
++scsi1:4.deviceType = "scsi-hardDisk"
++scsi1:4.fileName = "BZ1308535_21disks_19.vmdk"
++scsi1:4.present = "TRUE"
++scsi1:5.deviceType = "scsi-hardDisk"
++scsi1:5.fileName = "BZ1308535_21disks_20.vmdk"
++scsi1:5.present = "TRUE"
++guestOS = "rhel6-64"
++toolScripts.afterPowerOn = "TRUE"
++toolScripts.afterResume = "TRUE"
++toolScripts.beforeSuspend = "TRUE"
++toolScripts.beforePowerOff = "TRUE"
++uuid.bios = "56 4d 96 af e6 46 bd 86-5c 4d 65 4e 77 36 ef 31"
++uuid.location = "56 4d 96 af e6 46 bd 86-5c 4d 65 4e 77 36 ef 31"
++vc.uuid = "52 31 cb fc c1 3f 96 32-83 c0 bb 70 6c 90 5c fd"
++chipset.onlineStandby = "FALSE"
++sched.cpu.min = "0"
++sched.cpu.shares = "normal"
++sched.mem.min = "0"
++sched.mem.minSize = "0"
++sched.mem.shares = "normal"
++svga.vramSize = "8388608"
++sched.swap.derivedName = "/vmfs/volumes/5458b680-34ec3500-9f36-001320f5f6ca/BZ1308535_21disks/BZ1308535_21disks-6a024f8a.vswp"
++replay.supported = "FALSE"
++replay.filename = ""
++scsi0:0.redo = ""
++scsi0:1.redo = ""
++scsi0:2.redo = ""
++scsi0:3.redo = ""
++scsi0:4.redo = ""
++scsi0:5.redo = ""
++scsi0:6.redo = ""
++scsi0:8.redo = ""
++scsi0:9.redo = ""
++scsi0:10.redo = ""
++scsi0:11.redo = ""
++scsi0:12.redo = ""
++scsi0:13.redo = ""
++scsi0:14.redo = ""
++scsi0:15.redo = ""
++scsi1:0.redo = ""
++scsi1:1.redo = ""
++scsi1:2.redo = ""
++scsi1:3.redo = ""
++scsi1:4.redo = ""
++scsi1:5.redo = ""
++pciBridge0.pciSlotNumber = "17"
++pciBridge4.pciSlotNumber = "21"
++pciBridge5.pciSlotNumber = "22"
++pciBridge6.pciSlotNumber = "23"
++pciBridge7.pciSlotNumber = "24"
++scsi0.pciSlotNumber = "160"
++scsi1.pciSlotNumber = "192"
++ethernet0.pciSlotNumber = "224"
++vmci0.pciSlotNumber = "32"
++scsi0.sasWWID = "50 05 05 6f e6 46 bd 80"
++scsi1.sasWWID = "50 05 05 6f e6 46 bc 80"
++ethernet0.generatedAddress = "00:0c:29:36:ef:31"
++ethernet0.generatedAddressOffset = "0"
++vmci0.id = "2000088881"
++hostCPUID.0 = "0000000d756e65476c65746e49656e69"
++hostCPUID.1 = "000206a700100800179ae3bfbfebfbff"
++hostCPUID.80000001 = "00000000000000000000000128100800"
++guestCPUID.0 = "0000000d756e65476c65746e49656e69"
++guestCPUID.1 = "000206a700010800969822030fabfbff"
++guestCPUID.80000001 = "00000000000000000000000128100800"
++userCPUID.0 = "0000000d756e65476c65746e49656e69"
++userCPUID.1 = "000206a700100800169822030fabfbff"
++userCPUID.80000001 = "00000000000000000000000128100800"
++evcCompatibilityMode = "FALSE"
++vmotion.checkpointFBSize = "8388608"
++cleanShutdown = "TRUE"
++softPowerOff = "TRUE"
++tools.remindInstall = "TRUE"
+diff --git a/v2v/test-v2v-i-vmx-2.expected b/v2v/test-v2v-i-vmx-2.expected
+new file mode 100644
+index 000000000..dc3eb60f2
+--- /dev/null
++++ b/v2v/test-v2v-i-vmx-2.expected
+@@ -0,0 +1,22 @@
++[   0.0] Opening the source -i vmx test-v2v-i-vmx-2.vmx
++Source guest information (--print-source option):
++
++    source name: Fedora 20
++hypervisor type: vmware
++         memory: 2147483648 (bytes)
++       nr vCPUs: 1
++     CPU vendor: 
++      CPU model: 
++   CPU topology: sockets: - cores/socket: - threads/core: -
++   CPU features: 
++       firmware: bios
++        display: 
++          video: vmvga
++          sound: 
++disks:
++	/Fedora 20.vmdk (vmdk) [scsi]
++removable media:
++
++NICs:
++	Network "VM Network" mac: 00:50:56:9b:5f:0d [vmxnet3]
++
+diff --git a/v2v/test-v2v-i-vmx-2.vmx b/v2v/test-v2v-i-vmx-2.vmx
+new file mode 100644
+index 000000000..d9dcf3a5c
+--- /dev/null
++++ b/v2v/test-v2v-i-vmx-2.vmx
+@@ -0,0 +1,84 @@
++.encoding = "UTF-8"
++config.version = "8"
++virtualHW.version = "10"
++nvram = "Fedora 20.nvram"
++pciBridge0.present = "TRUE"
++svga.present = "TRUE"
++pciBridge4.present = "TRUE"
++pciBridge4.virtualDev = "pcieRootPort"
++pciBridge4.functions = "8"
++pciBridge5.present = "TRUE"
++pciBridge5.virtualDev = "pcieRootPort"
++pciBridge5.functions = "8"
++pciBridge6.present = "TRUE"
++pciBridge6.virtualDev = "pcieRootPort"
++pciBridge6.functions = "8"
++pciBridge7.present = "TRUE"
++pciBridge7.virtualDev = "pcieRootPort"
++pciBridge7.functions = "8"
++vmci0.present = "TRUE"
++hpet0.present = "TRUE"
++displayName = "Fedora 20"
++extendedConfigFile = "Fedora 20.vmxf"
++virtualHW.productCompatibility = "hosted"
++svga.vramSize = "8388608"
++memSize = "2048"
++sched.cpu.units = "mhz"
++sched.cpu.affinity = "all"
++powerType.powerOff = "soft"
++powerType.suspend = "hard"
++powerType.reset = "soft"
++scsi0.virtualDev = "pvscsi"
++scsi0.present = "TRUE"
++sata0.present = "TRUE"
++scsi0:0.deviceType = "scsi-hardDisk"
++scsi0:0.fileName = "Fedora 20.vmdk"
++sched.scsi0:0.shares = "normal"
++sched.scsi0:0.throughputCap = "off"
++scsi0:0.present = "TRUE"
++ethernet0.virtualDev = "vmxnet3"
++ethernet0.networkName = "VM Network"
++ethernet0.addressType = "vpx"
++ethernet0.generatedAddress = "00:50:56:9b:5f:0d"
++ethernet0.present = "TRUE"
++sata0:0.startConnected = "FALSE"
++sata0:0.deviceType = "cdrom-image"
++sata0:0.fileName = "/vmfs/volumes/5458b680-34ec3500-9f36-001320f5f6ca/ISOs/Fedora-20-x86_64-netinst.iso"
++sata0:0.present = "TRUE"
++floppy0.startConnected = "FALSE"
++floppy0.clientDevice = "TRUE"
++floppy0.fileName = "vmware-null-remote-floppy"
++vmci.filter.enable = "TRUE"
++guestOS = "rhel7-64"
++toolScripts.afterPowerOn = "TRUE"
++toolScripts.afterResume = "TRUE"
++toolScripts.beforeSuspend = "TRUE"
++toolScripts.beforePowerOff = "TRUE"
++uuid.bios = "42 1b 4b 87 e6 b7 d8 81-07 a0 c9 d2 21 cd 3c 6b"
++vc.uuid = "50 1b 1f 1b 73 00 32 bf-93 a1 1c b2 b4 e6 17 d6"
++sched.cpu.min = "0"
++sched.cpu.shares = "normal"
++sched.mem.min = "0"
++sched.mem.minSize = "0"
++sched.mem.shares = "normal"
++sched.swap.derivedName = "/vmfs/volumes/5458b680-34ec3500-9f36-001320f5f6ca/Fedora 20/Fedora 20-c71e4118.vswp"
++uuid.location = "56 4d 0f 53 00 63 d5 55-41 01 4c f7 55 ce 03 0e"
++replay.supported = "TRUE"
++replay.filename = ""
++scsi0:0.redo = ""
++pciBridge0.pciSlotNumber = "17"
++pciBridge4.pciSlotNumber = "21"
++pciBridge5.pciSlotNumber = "22"
++pciBridge6.pciSlotNumber = "23"
++pciBridge7.pciSlotNumber = "24"
++scsi0.pciSlotNumber = "160"
++ethernet0.pciSlotNumber = "192"
++vmci0.pciSlotNumber = "32"
++sata0.pciSlotNumber = "33"
++scsi0.sasWWID = "50 05 05 67 e6 b7 d8 80"
++vmci0.id = "567098475"
++vmotion.checkpointFBSize = "8388608"
++cleanShutdown = "TRUE"
++softPowerOff = "TRUE"
++sata0:0.allowGuestConnectionControl = "TRUE"
++tools.syncTime = "FALSE"
+diff --git a/v2v/test-v2v-i-vmx-3.expected b/v2v/test-v2v-i-vmx-3.expected
+new file mode 100644
+index 000000000..9e643526f
+--- /dev/null
++++ b/v2v/test-v2v-i-vmx-3.expected
+@@ -0,0 +1,22 @@
++[   0.0] Opening the source -i vmx test-v2v-i-vmx-3.vmx
++Source guest information (--print-source option):
++
++    source name: RHEL 7.1 UEFI
++hypervisor type: vmware
++         memory: 2147483648 (bytes)
++       nr vCPUs: 1
++     CPU vendor: 
++      CPU model: 
++   CPU topology: sockets: - cores/socket: - threads/core: -
++   CPU features: 
++       firmware: uefi
++        display: 
++          video: vmvga
++          sound: 
++disks:
++	/RHEL 7.1 UEFI.vmdk (vmdk) [scsi]
++removable media:
++	CD-ROM [ide] in slot 2
++NICs:
++	Network "VM Network" mac: 00:0c:29:4b:2b:8c [vmxnet3]
++
+diff --git a/v2v/test-v2v-i-vmx-3.vmx b/v2v/test-v2v-i-vmx-3.vmx
+new file mode 100644
+index 000000000..c39215555
+--- /dev/null
++++ b/v2v/test-v2v-i-vmx-3.vmx
+@@ -0,0 +1,91 @@
++.encoding = "UTF-8"
++config.version = "8"
++virtualHW.version = "8"
++nvram = "RHEL 7.1 UEFI.nvram"
++pciBridge0.present = "TRUE"
++svga.present = "TRUE"
++pciBridge4.present = "TRUE"
++pciBridge4.virtualDev = "pcieRootPort"
++pciBridge4.functions = "8"
++pciBridge5.present = "TRUE"
++pciBridge5.virtualDev = "pcieRootPort"
++pciBridge5.functions = "8"
++pciBridge6.present = "TRUE"
++pciBridge6.virtualDev = "pcieRootPort"
++pciBridge6.functions = "8"
++pciBridge7.present = "TRUE"
++pciBridge7.virtualDev = "pcieRootPort"
++pciBridge7.functions = "8"
++vmci0.present = "TRUE"
++hpet0.present = "TRUE"
++displayName = "RHEL 7.1 UEFI"
++extendedConfigFile = "RHEL 7.1 UEFI.vmxf"
++virtualHW.productCompatibility = "hosted"
++memSize = "2048"
++firmware = "efi"
++sched.cpu.units = "mhz"
++powerType.powerOff = "soft"
++powerType.suspend = "hard"
++powerType.reset = "soft"
++scsi0.virtualDev = "pvscsi"
++scsi0.present = "TRUE"
++ide1:0.startConnected = "FALSE"
++ide1:0.deviceType = "cdrom-image"
++ide1:0.fileName = "/vmfs/volumes/5458b680-34ec3500-9f36-001320f5f6ca/ISOs/RHEL-7.1-20150219.1-Server-x86_64-boot.iso"
++ide1:0.present = "TRUE"
++floppy0.startConnected = "FALSE"
++floppy0.clientDevice = "TRUE"
++floppy0.fileName = "vmware-null-remote-floppy"
++ethernet0.virtualDev = "vmxnet3"
++ethernet0.networkName = "VM Network"
++ethernet0.addressType = "generated"
++ethernet0.present = "TRUE"
++scsi0:0.deviceType = "scsi-hardDisk"
++scsi0:0.fileName = "RHEL 7.1 UEFI.vmdk"
++scsi0:0.present = "TRUE"
++guestOS = "rhel6-64"
++toolScripts.afterPowerOn = "TRUE"
++toolScripts.afterResume = "TRUE"
++toolScripts.beforeSuspend = "TRUE"
++toolScripts.beforePowerOff = "TRUE"
++uuid.bios = "56 4d 99 89 a7 21 91 0d-cc 28 e2 db d5 4b 2b 8c"
++uuid.location = "56 4d 99 89 a7 21 91 0d-cc 28 e2 db d5 4b 2b 8c"
++vc.uuid = "52 3f 29 10 d3 81 16 43-fa b0 e3 af 3b ba 36 e5"
++chipset.onlineStandby = "FALSE"
++sched.cpu.min = "0"
++sched.cpu.shares = "normal"
++sched.mem.min = "0"
++sched.mem.minSize = "0"
++sched.mem.shares = "normal"
++svga.vramSize = "8388608"
++sched.swap.derivedName = "/vmfs/volumes/5458b680-34ec3500-9f36-001320f5f6ca/RHEL 7.1 UEFI/RHEL 7.1 UEFI-58ff6e6f.vswp"
++replay.supported = "FALSE"
++replay.filename = ""
++scsi0:0.redo = ""
++pciBridge0.pciSlotNumber = "17"
++pciBridge4.pciSlotNumber = "21"
++pciBridge5.pciSlotNumber = "22"
++pciBridge6.pciSlotNumber = "23"
++pciBridge7.pciSlotNumber = "24"
++scsi0.pciSlotNumber = "160"
++ethernet0.pciSlotNumber = "192"
++vmci0.pciSlotNumber = "32"
++scsi0.sasWWID = "50 05 05 69 a7 21 91 00"
++ethernet0.generatedAddress = "00:0c:29:4b:2b:8c"
++ethernet0.generatedAddressOffset = "0"
++vmci0.id = "-716493940"
++hostCPUID.0 = "0000000d756e65476c65746e49656e69"
++hostCPUID.1 = "000206a700100800179ae3bfbfebfbff"
++hostCPUID.80000001 = "00000000000000000000000128100800"
++guestCPUID.0 = "0000000d756e65476c65746e49656e69"
++guestCPUID.1 = "000206a700010800969822030fabfbff"
++guestCPUID.80000001 = "00000000000000000000000128100800"
++userCPUID.0 = "0000000d756e65476c65746e49656e69"
++userCPUID.1 = "000206a700100800169822030fabfbff"
++userCPUID.80000001 = "00000000000000000000000128100800"
++evcCompatibilityMode = "FALSE"
++vmotion.checkpointFBSize = "8388608"
++cleanShutdown = "TRUE"
++softPowerOff = "TRUE"
++ide1:0.allowGuestConnectionControl = "TRUE"
++tools.syncTime = "FALSE"
+diff --git a/v2v/test-v2v-i-vmx-4.expected b/v2v/test-v2v-i-vmx-4.expected
+new file mode 100644
+index 000000000..a70533d2e
+--- /dev/null
++++ b/v2v/test-v2v-i-vmx-4.expected
+@@ -0,0 +1,22 @@
++[   0.0] Opening the source -i vmx test-v2v-i-vmx-4.vmx
++Source guest information (--print-source option):
++
++    source name: Windows 7 x64
++hypervisor type: vmware
++         memory: 2147483648 (bytes)
++       nr vCPUs: 1
++     CPU vendor: 
++      CPU model: 
++   CPU topology: sockets: - cores/socket: - threads/core: -
++   CPU features: 
++       firmware: bios
++        display: 
++          video: vmvga
++          sound: 
++disks:
++	/Windows 7 x64.vmdk (vmdk) [scsi]
++removable media:
++	CD-ROM [ide] in slot 2
++NICs:
++	Network "VM Network" mac: 00:0c:29:94:89:23 [e1000]
++
+diff --git a/v2v/test-v2v-i-vmx-4.vmx b/v2v/test-v2v-i-vmx-4.vmx
+new file mode 100644
+index 000000000..7756cf248
+--- /dev/null
++++ b/v2v/test-v2v-i-vmx-4.vmx
+@@ -0,0 +1,88 @@
++.encoding = "UTF-8"
++config.version = "8"
++virtualHW.version = "8"
++nvram = "Windows 7 x64.nvram"
++pciBridge0.present = "TRUE"
++svga.present = "TRUE"
++pciBridge4.present = "TRUE"
++pciBridge4.virtualDev = "pcieRootPort"
++pciBridge4.functions = "8"
++pciBridge5.present = "TRUE"
++pciBridge5.virtualDev = "pcieRootPort"
++pciBridge5.functions = "8"
++pciBridge6.present = "TRUE"
++pciBridge6.virtualDev = "pcieRootPort"
++pciBridge6.functions = "8"
++pciBridge7.present = "TRUE"
++pciBridge7.virtualDev = "pcieRootPort"
++pciBridge7.functions = "8"
++vmci0.present = "TRUE"
++hpet0.present = "TRUE"
++displayName = "Windows 7 x64"
++extendedConfigFile = "Windows 7 x64.vmxf"
++virtualHW.productCompatibility = "hosted"
++memSize = "2048"
++sched.cpu.units = "mhz"
++powerType.powerOff = "soft"
++powerType.suspend = "hard"
++powerType.reset = "soft"
++scsi0.virtualDev = "lsisas1068"
++scsi0.present = "TRUE"
++ide1:0.deviceType = "cdrom-image"
++ide1:0.fileName = "/vmfs/volumes/5458b680-34ec3500-9f36-001320f5f6ca/ISOs/en_windows_7_ultimate_with_sp1_x64_dvd_u_677332.iso"
++ide1:0.present = "TRUE"
++floppy0.startConnected = "FALSE"
++floppy0.clientDevice = "TRUE"
++floppy0.fileName = "vmware-null-remote-floppy"
++ethernet0.virtualDev = "e1000"
++ethernet0.networkName = "VM Network"
++ethernet0.addressType = "generated"
++ethernet0.present = "TRUE"
++scsi0:0.deviceType = "scsi-hardDisk"
++scsi0:0.fileName = "Windows 7 x64.vmdk"
++scsi0:0.present = "TRUE"
++guestOS = "windows7-64"
++toolScripts.afterPowerOn = "TRUE"
++toolScripts.afterResume = "TRUE"
++toolScripts.beforeSuspend = "TRUE"
++toolScripts.beforePowerOff = "TRUE"
++uuid.bios = "56 4d 6f ca 63 a5 a8 3e-13 ec 73 89 1d 94 89 23"
++uuid.location = "56 4d 6f ca 63 a5 a8 3e-13 ec 73 89 1d 94 89 23"
++vc.uuid = "52 7a 63 e1 2c 2f 50 46-91 66 3a e8 fa f9 c4 65"
++chipset.onlineStandby = "FALSE"
++sched.cpu.min = "0"
++sched.cpu.shares = "normal"
++sched.mem.min = "0"
++sched.mem.minSize = "0"
++sched.mem.shares = "normal"
++svga.vramSize = "8388608"
++sched.swap.derivedName = "/vmfs/volumes/5458b680-34ec3500-9f36-001320f5f6ca/Windows 7 x64/Windows 7 x64-8e3b0929.vswp"
++replay.supported = "FALSE"
++replay.filename = ""
++scsi0:0.redo = ""
++pciBridge0.pciSlotNumber = "17"
++pciBridge4.pciSlotNumber = "21"
++pciBridge5.pciSlotNumber = "22"
++pciBridge6.pciSlotNumber = "23"
++pciBridge7.pciSlotNumber = "24"
++scsi0.pciSlotNumber = "160"
++ethernet0.pciSlotNumber = "32"
++vmci0.pciSlotNumber = "33"
++scsi0.sasWWID = "50 05 05 6a 63 a5 a8 30"
++ethernet0.generatedAddress = "00:0c:29:94:89:23"
++ethernet0.generatedAddressOffset = "0"
++vmci0.id = "496273699"
++hostCPUID.0 = "0000000b756e65476c65746e49656e69"
++hostCPUID.1 = "000206c220200800029ee3ffbfebfbff"
++hostCPUID.80000001 = "0000000000000000000000012c100800"
++guestCPUID.0 = "0000000b756e65476c65746e49656e69"
++guestCPUID.1 = "000206c200010800829822030fabfbff"
++guestCPUID.80000001 = "00000000000000000000000128100800"
++userCPUID.0 = "0000000b756e65476c65746e49656e69"
++userCPUID.1 = "000206c220200800029822030fabfbff"
++userCPUID.80000001 = "00000000000000000000000128100800"
++evcCompatibilityMode = "FALSE"
++vmotion.checkpointFBSize = "8388608"
++cleanShutdown = "TRUE"
++softPowerOff = "TRUE"
++tools.remindInstall = "TRUE"
+diff --git a/v2v/test-v2v-i-vmx.sh b/v2v/test-v2v-i-vmx.sh
+new file mode 100755
+index 000000000..5353e7e2a
+--- /dev/null
++++ b/v2v/test-v2v-i-vmx.sh
+@@ -0,0 +1,48 @@
++#!/bin/bash -
++# libguestfs virt-v2v test script
++# Copyright (C) 2017 Red Hat Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program; if not, write to the Free Software
++# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++
++# Test -i ova option.
++
++set -e
++
++$TEST_FUNCTIONS
++skip_if_skipped
++skip_if_backend uml
++
++export VIRT_TOOLS_DATA_DIR="$top_srcdir/test-data/fake-virt-tools"
++export VIRTIO_WIN="$top_srcdir/test-data/fake-virtio-win"
++
++rm -f test-v2v-i-vmx-*.actual
++
++for i in 1 2 3 4; do
++    $VG virt-v2v --debug-gc \
++        -i vmx test-v2v-i-vmx-$i.vmx \
++        --print-source > test-v2v-i-vmx-$i.actual
++
++    # Normalize the print-source output.
++    mv test-v2v-i-vmx-$i.actual test-v2v-i-vmx-$i.actual.old
++    sed \
++        -e "s,$(pwd),," \
++        < test-v2v-i-vmx-$i.actual.old > test-v2v-i-vmx-$i.actual
++    rm test-v2v-i-vmx-$i.actual.old
++
++    # Check the output.
++    diff -u test-v2v-i-vmx-$i.expected test-v2v-i-vmx-$i.actual
++done
++
++rm test-v2v-i-vmx-*.actual
+diff --git a/v2v/v2v_unit_tests.ml b/v2v/v2v_unit_tests.ml
+index bd65788b0..dd805a3ab 100644
+--- a/v2v/v2v_unit_tests.ml
++++ b/v2v/v2v_unit_tests.ml
+@@ -787,6 +787,148 @@ let test_qemu_img_supports ctx =
+    *)
+   ignore (Utils.qemu_img_supports_offset_and_size ())
+ 
++(* Test the VMX file parser in the Parse_vmx module. *)
++let test_vmx_parse_string ctx =
++  let cmp = Parse_vmx.equal in
++  let printer = Parse_vmx.to_string 0 in
++
++  (* This should be identical to the empty file. *)
++  let t = Parse_vmx.parse_string "\
++test.foo = \"a\"
++test.bar = \"b\"
++test.present = \"FALSE\"
++" in
++  assert_equal ~cmp ~printer Parse_vmx.empty t;
++
++  (* Test weird escapes. *)
++  let t1 = Parse_vmx.parse_string "\
++foo = \"a|20|21b\"
++" in
++  let t2 = Parse_vmx.parse_string "\
++foo = \"a !b\"
++" in
++  assert_equal ~cmp ~printer t1 t2;
++
++  (* Test case insensitivity. *)
++  let t1 = Parse_vmx.parse_string "\
++foo = \"abc\"
++" in
++  let t2 = Parse_vmx.parse_string "\
++fOO = \"abc\"
++" in
++  assert_equal ~cmp ~printer t1 t2;
++  let t = Parse_vmx.parse_string "\
++flag = \"true\"
++" in
++  assert_bool "parse_vmx: failed case insensitivity test for booleans #1"
++              (Parse_vmx.get_bool t ["FLAG"] = Some true);
++  let t = Parse_vmx.parse_string "\
++flag = \"TRUE\"
++" in
++  assert_bool "parse_vmx: failed case insensitivity test for booleans #2"
++              (Parse_vmx.get_bool t ["Flag"] = Some true);
++
++  (* Missing keys. *)
++  let t = Parse_vmx.parse_string "\
++foo = \"a\"
++" in
++  assert_bool "parse_vmx: failed missing key test"
++              (Parse_vmx.get_string t ["bar"] = None);
++
++  (* namespace_present function *)
++  let t = Parse_vmx.parse_string "\
++foo.bar.present = \"TRUE\"
++foo.baz.present = \"FALSE\"
++foo.a.b = \"abc\"
++foo.a.c = \"abc\"
++foo.b = \"abc\"
++foo.c.a = \"abc\"
++foo.c.b = \"abc\"
++" in
++ assert_bool "parse_vmx: namespace_present #1"
++             (Parse_vmx.namespace_present t ["foo"] = true);
++ assert_bool "parse_vmx: namespace_present #2"
++             (Parse_vmx.namespace_present t ["foo"; "bar"] = true);
++ assert_bool "parse_vmx: namespace_present #3"
++             (* this whole namespace should have been culled *)
++             (Parse_vmx.namespace_present t ["foo"; "baz"] = false);
++ assert_bool "parse_vmx: namespace_present #4"
++             (Parse_vmx.namespace_present t ["foo"; "a"] = true);
++ assert_bool "parse_vmx: namespace_present #5"
++             (* this is a key, not a namespace *)
++             (Parse_vmx.namespace_present t ["foo"; "a"; "b"] = false);
++ assert_bool "parse_vmx: namespace_present #6"
++             (Parse_vmx.namespace_present t ["foo"; "b"] = false);
++ assert_bool "parse_vmx: namespace_present #7"
++             (Parse_vmx.namespace_present t ["foo"; "c"] = true);
++ assert_bool "parse_vmx: namespace_present #8"
++             (Parse_vmx.namespace_present t ["foo"; "d"] = false);
++
++ (* map function *)
++  let t = Parse_vmx.parse_string "\
++foo.bar.present = \"TRUE\"
++foo.baz.present = \"FALSE\"
++foo.a.b = \"abc\"
++foo.a.c = \"abc\"
++foo.b = \"abc\"
++foo.c.a = \"abc\"
++foo.c.b = \"abc\"
++" in
++  let xs =
++    Parse_vmx.map (
++      fun path ->
++        let path = String.concat "." path in
++        function
++        | None -> sprintf "%s.present = \"true\"\n" path
++        | Some v -> sprintf "%s = \"%s\"\n" path v
++    ) t in
++  let xs = List.sort compare xs in
++  let s = String.concat "" xs in
++  assert_equal ~printer:identity "\
++foo.a.b = \"abc\"
++foo.a.c = \"abc\"
++foo.a.present = \"true\"
++foo.b = \"abc\"
++foo.bar.present = \"TRUE\"
++foo.bar.present = \"true\"
++foo.c.a = \"abc\"
++foo.c.b = \"abc\"
++foo.c.present = \"true\"
++foo.present = \"true\"
++" s;
++
++  (* select_namespaces function *)
++  let t1 = Parse_vmx.parse_string "\
++foo.bar.present = \"TRUE\"
++foo.a.b = \"abc\"
++foo.a.c = \"abc\"
++foo.b = \"abc\"
++foo.c.a = \"abc\"
++foo.c.b = \"abc\"
++" in
++  let t2 =
++    Parse_vmx.select_namespaces
++      (function ["foo"] -> true | _ -> false) t1 in
++  assert_equal ~cmp ~printer t1 t2;
++
++  let t1 = Parse_vmx.parse_string "\
++foo.bar.present = \"TRUE\"
++foo.a.b = \"abc\"
++foo.a.c = \"abc\"
++foo.b = \"abc\"
++foo.c.a = \"abc\"
++foo.c.b = \"abc\"
++foo.c.c.d.e.f = \"abc\"
++" in
++  let t1 =
++    Parse_vmx.select_namespaces
++      (function ["foo"; "a"] -> true | _ -> false) t1 in
++  let t2 = Parse_vmx.parse_string "\
++foo.a.b = \"abc\"
++foo.a.c = \"abc\"
++" in
++  assert_equal ~cmp ~printer t2 t1
++
+ (* Suites declaration. *)
+ let suite =
+   "virt-v2v" >:::
+@@ -798,6 +940,7 @@ let suite =
+         test_virtio_iso_path_matches_guest_os;
+       "Utils.shell_unquote" >:: test_shell_unquote;
+       "Utils.qemu_img_supports" >:: test_qemu_img_supports;
++      "Parse_vmx.parse_string" >::test_vmx_parse_string;
+     ]
+ 
+ let () =
+diff --git a/v2v/virt-v2v.pod b/v2v/virt-v2v.pod
+index 7ad674d43..31d1ce029 100644
+--- a/v2v/virt-v2v.pod
++++ b/v2v/virt-v2v.pod
+@@ -41,7 +41,8 @@ libguestfs E<ge> 1.28.
+  ... ───▶│  (default) │   │            │ ──┐ └────────────┘
+          └────────────┘   │            │ ─┐└──────▶ -o glance
+  -i libvirtxml ─────────▶ │            │ ┐└─────────▶ -o rhv
+-                          └────────────┘ └──────────▶ -o vdsm
++ -i vmx ────────────────▶ │            │ └──────────▶ -o vdsm
++                          └────────────┘
+ 
+ Virt-v2v has a number of possible input and output modes, selected
+ using the I<-i> and I<-o> options.  Only one input and output mode can
+@@ -60,6 +61,8 @@ method used by L<virt-p2v(1)> behind the scenes.
+ 
+ I<-i ova> is used for reading from a VMware ova source file.
+ 
++I<-i vmx> is used for reading from a VMware vmx file.
++
+ I<-o glance> is used for writing to OpenStack Glance.
+ 
+ I<-o libvirt> is used for writing to any libvirt target.  Libvirt can
+@@ -215,6 +218,14 @@ ova manifest file and check the vmdk volumes for validity (checksums)
+ as well as analyzing the ovf file, and then convert the guest.  See
+ L</INPUT FROM VMWARE OVA> below
+ 
++=item B<-i> B<vmx>
++
++Set the input method to I<vmx>.
++
++In this mode you can read a VMware vmx file directly.  This is useful
++when VMware VMs are stored on an NFS server which you can mount
++directly.  See L</INPUT FROM VMWARE VMX> below
++
+ =item B<-ic> libvirtURI
+ 
+ Specify a libvirt connection URI to use when reading the guest.  This
+@@ -843,9 +854,10 @@ I<--bridge> option instead.  For example:
+ 
+ Virt-v2v is able to import guests from VMware vCenter Server.
+ 
+-vCenter E<ge> 5.0 is required.  If you don't have vCenter, using OVA
+-is recommended instead (see L</INPUT FROM VMWARE OVA> below), or if
+-that is not possible then see L</INPUT FROM VMWARE ESXi HYPERVISOR>.
++vCenter E<ge> 5.0 is required.  If you don’t have vCenter, using OVA
++or VMX is recommended instead (see L</INPUT FROM VMWARE OVA> and/or
++L</INPUT FROM VMWARE VMX> below), or if that is not possible then see
++L</INPUT FROM VMWARE ESXi HYPERVISOR>.
+ 
+ Virt-v2v uses libvirt for access to vCenter, and therefore the input
+ mode should be I<-i libvirt>.  As this is the default, you don't need
+@@ -1116,12 +1128,58 @@ directory containing the files:
+ 
+  $ virt-v2v -i ova /path/to/files -o local -os /var/tmp
+ 
++=head1 INPUT FROM VMWARE VMX
++
++Virt-v2v is able to import guests from VMware’s vmx files.  This is
++useful where VMware virtual machines are stored on a separate NFS
++server and you are able to mount the NFS storage directly.
++
++If you find a folder of files called F<I<guest>.vmx>,
++F<I<guest>.vmxf>, F<I<guest>.nvram> and one or more F<.vmdk> disk
++images, then you can use this method.
++
++=head2 VMX: REMOVE VMWARE TOOLS FROM WINDOWS GUESTS
++
++For Windows guests, you should remove VMware tools before conversion.
++Although this is not strictly necessary, and the guest will still be
++able to run, if you don't do this then the converted guest will
++complain on every boot.  The tools cannot be removed after conversion
++because the uninstaller checks if it is running on VMware and refuses
++to start (which is also the reason that virt-v2v cannot remove them).
++
++This is not necessary for Linux guests, as virt-v2v is able to remove
++VMware tools.
++
++=head2 VMX: GUEST MUST BE SHUT DOWN
++
++B<The guest must be shut down before conversion starts>.  If you don't
++shut it down, you will end up with a corrupted VM disk on the target.
++With other methods, virt-v2v tries to prevent concurrent access, but
++because the I<-i vmx> method works directly against the storage,
++checking for concurrent access is not possible.
++
++=head2 VMX: MOUNT THE NFS STORAGE ON THE CONVERSION SERVER
++
++Virt-v2v must be able to access the F<.vmx> file and any local
++F<.vmdk> disks.  Normally this means you must mount the NFS storage
++containing these files.
++
++=head2 VMX: IMPORTING A GUEST
++
++To import a vmx file, do:
++
++ $ virt-v2v -i vmx guest.vmx -o local -os /var/tmp
++
++Virt-v2v processes the vmx file and uses it to find the location of
++any vmdk disks.
++
+ =head1 INPUT FROM VMWARE ESXi HYPERVISOR
+ 
+ Virt-v2v cannot access an ESXi hypervisor directly.  You should use
+-the OVA method above (see L</INPUT FROM VMWARE OVA>) if possible, as
+-it is much faster and requires much less disk space than the method
+-described in this section.
++the OVA or VMX methods above (see L</INPUT FROM VMWARE OVA> and/or
++L</INPUT FROM VMWARE VMX>) if possible, as it is much faster and
++requires much less disk space than the method described in this
++section.
+ 
+ You can use the L<virt-v2v-copy-to-local(1)> tool to copy the guest
+ off the hypervisor into a local file, and then convert it.
+-- 
+2.13.4
+

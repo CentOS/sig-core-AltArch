@@ -1,0 +1,39 @@
+From e7359e9feac4fa2163a7259d093e381273365c8e Mon Sep 17 00:00:00 2001
+From: Pavel Butsykin <pbutsykin@virtuozzo.com>
+Date: Mon, 3 Apr 2017 19:44:45 +0300
+Subject: [PATCH] v2v: windows convert: fix virtio block driver installation
+ for w10/w2k16
+
+This patch fixes the problem of the first boot after installation virtio block
+drivers on Windows 10 / Server 2016. The problem is related to the change in
+the behavior of Windows-Kernel-Pnp. To fix we need to add a field "Version" to
+HKLM/SYSTEM/DriverDatabase/DriverPackages/drv_inf_label then Windows-Kernel-Pnp
+will be able to correctly install the virtio block driver.
+
+Signed-off-by: Pavel Butsykin <pbutsykin@virtuozzo.com>
+(cherry picked from commit cc162b49e6c87bf3535168853dadf10f7610865f)
+---
+ v2v/windows_virtio.ml | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/v2v/windows_virtio.ml b/v2v/windows_virtio.ml
+index 2f5349d25..965d6ac8b 100644
+--- a/v2v/windows_virtio.ml
++++ b/v2v/windows_virtio.ml
+@@ -220,6 +220,13 @@ and ddb_regedits inspect drv_name drv_pciid =
+     [ "DriverDatabase"; "DeviceIds"; "PCI"; drv_pciid ],
+     [ drv_inf, REG_BINARY "\x01\xff\x00\x00" ];
+ 
++    [ "DriverDatabase"; "DriverPackages"; drv_inf_label ],
++    [ "Version", REG_BINARY ("\x00\xff\x09\x00\x00\x00\x00\x00" ^
++                             "\x7b\xe9\x36\x4d\x25\xe3\xce\x11" ^
++                             "\xbf\xc1\x08\x00\x2b\xe1\x03\x18" ^
++                             (String.make 24 '\x00')) ];
++    (* Version is necessary for Windows-Kernel-Pnp in w10/w2k16 *)
++
+     [ "DriverDatabase"; "DriverPackages"; drv_inf_label;
+       "Configurations"; drv_config ],
+     [ "ConfigFlags", REG_DWORD 0_l;
+-- 
+2.13.4
+

@@ -1,0 +1,53 @@
+From 30ffdce6bc603f1aaf0ee77270bd1d8ff09cbf0c Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Wed, 12 Apr 2017 23:09:32 +0100
+Subject: [PATCH] v2v: windows: Install both legacy and modern virtio keys in
+ the registry (RHBZ#1431579).
+
+Thanks: Kun Wei (for finding the bug)
+Thanks: Ladi Prosek (for diagnosing the problem and proposing the fix)
+(cherry picked from commit d8e1c4bb474203d71903261fb06fe267c3cce3c7)
+---
+ v2v/windows_virtio.ml | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/v2v/windows_virtio.ml b/v2v/windows_virtio.ml
+index 965d6ac8b..9e6088c28 100644
+--- a/v2v/windows_virtio.ml
++++ b/v2v/windows_virtio.ml
+@@ -34,8 +34,10 @@ let virtio_win =
+       Guestfs_config.datadir // "virtio-win"
+ 
+ let scsi_class_guid = "{4D36E97B-E325-11CE-BFC1-08002BE10318}"
+-let viostor_pciid = "VEN_1AF4&DEV_1001&SUBSYS_00021AF4&REV_00"
+-let vioscsi_pciid = "VEN_1AF4&DEV_1004&SUBSYS_00081AF4&REV_00"
++let viostor_legacy_pciid = "VEN_1AF4&DEV_1001&SUBSYS_00021AF4&REV_00"
++let viostor_modern_pciid = "VEN_1AF4&DEV_1042&SUBSYS_11001AF4&REV_01"
++let vioscsi_legacy_pciid = "VEN_1AF4&DEV_1004&SUBSYS_00081AF4&REV_00"
++let vioscsi_modern_pciid = "VEN_1AF4&DEV_1048&SUBSYS_11001AF4&REV_01"
+ 
+ let rec install_drivers ((g, _) as reg) inspect rcaps =
+   (* Copy the virtio drivers to the guest. *)
+@@ -102,7 +104,8 @@ let rec install_drivers ((g, _) as reg) inspect rcaps =
+                              inspect.i_windows_systemroot driver_name in
+         let target = g#case_sensitive_path target in
+         g#cp source target;
+-        add_guestor_to_registry reg inspect driver_name viostor_pciid;
++        add_guestor_to_registry reg inspect driver_name viostor_legacy_pciid;
++        add_guestor_to_registry reg inspect driver_name viostor_modern_pciid;
+         Virtio_blk
+ 
+       | Some Virtio_SCSI, _, true ->
+@@ -113,7 +116,8 @@ let rec install_drivers ((g, _) as reg) inspect rcaps =
+                              inspect.i_windows_systemroot in
+         let target = g#case_sensitive_path target in
+         g#cp source target;
+-        add_guestor_to_registry reg inspect "vioscsi" vioscsi_pciid;
++        add_guestor_to_registry reg inspect "vioscsi" vioscsi_legacy_pciid;
++        add_guestor_to_registry reg inspect "vioscsi" vioscsi_modern_pciid;
+         Virtio_SCSI
+ 
+       | Some IDE, _, _ ->
+-- 
+2.13.4
+

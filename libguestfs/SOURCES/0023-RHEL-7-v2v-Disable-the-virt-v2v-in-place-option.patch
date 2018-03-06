@@ -1,0 +1,273 @@
+From c299f3e835dd3480960df3ea941099a43f399b96 Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Thu, 14 Jan 2016 11:53:42 -0500
+Subject: [PATCH] RHEL 7: v2v: Disable the virt-v2v --in-place option.
+
+This disables the virt-v2v --in-place option which we do not
+wish to support in RHEL.
+(See commit d0069559a939e47e5f29973ed9a69a13f0b58301).
+---
+ v2v/Makefile.am          |   2 -
+ v2v/cmdline.ml           |   6 ++-
+ v2v/test-v2v-docs.sh     |   2 +-
+ v2v/test-v2v-in-place.sh | 108 -----------------------------------------------
+ v2v/virt-v2v.pod         |  46 +-------------------
+ 5 files changed, 7 insertions(+), 157 deletions(-)
+ delete mode 100755 v2v/test-v2v-in-place.sh
+
+diff --git a/v2v/Makefile.am b/v2v/Makefile.am
+index 133a411bc..297406496 100644
+--- a/v2v/Makefile.am
++++ b/v2v/Makefile.am
+@@ -291,7 +291,6 @@ if HAVE_LIBVIRT
+ TESTS += \
+ 	test-v2v-cdrom.sh \
+ 	test-v2v-floppy.sh \
+-	test-v2v-in-place.sh \
+ 	test-v2v-networks-and-bridges.sh \
+ 	test-v2v-no-copy.sh \
+ 	test-v2v-o-glance.sh \
+@@ -412,7 +411,6 @@ EXTRA_DIST += \
+ 	test-v2v-i-ova.ovf \
+ 	test-v2v-i-ova.sh \
+ 	test-v2v-i-ova.xml \
+-	test-v2v-in-place.sh \
+ 	test-v2v-machine-readable.sh \
+ 	test-v2v-networks-and-bridges-expected.xml \
+ 	test-v2v-networks-and-bridges.sh \
+diff --git a/v2v/cmdline.ml b/v2v/cmdline.ml
+index 9f02098c0..9aecb5cd6 100644
+--- a/v2v/cmdline.ml
++++ b/v2v/cmdline.ml
+@@ -179,7 +179,7 @@ let parse_cmdline () =
+                                             s_"Libvirt URI";
+     [ M"if" ],       Getopt.String ("format", set_string_option_once "-if" input_format),
+                                             s_"Input format (for -i disk)";
+-    [ L"in-place" ], Getopt.Set in_place,         s_"Only tune the guest in the input VM";
++    [ L"in-place" ], Getopt.Set in_place,         "";
+     [ L"machine-readable" ], Getopt.Set machine_readable, s_"Make output machine readable";
+     [ S 'n'; L"network" ],        Getopt.String ("in:out", add_network),    s_"Map network 'in' to 'out'";
+     [ L"no-copy" ], Getopt.Clear do_copy,         s_"Just write the metadata";
+@@ -333,6 +333,10 @@ read the man page virt-v2v(1).
+           error (f_"expecting an OVA file name on the command line") in
+       Input_ova.input_ova filename in
+ 
++  (* Prevent use of --in-place option in RHEL. *)
++  if in_place then
++    error (f_"--in-place cannot be used in RHEL 7");
++
+   (* Common error message. *)
+   let error_option_cannot_be_used_in_output_mode mode opt =
+     error (f_"-o %s: %s option cannot be used in this output mode") mode opt
+diff --git a/v2v/test-v2v-docs.sh b/v2v/test-v2v-docs.sh
+index d341852b7..c5d98de7f 100755
+--- a/v2v/test-v2v-docs.sh
++++ b/v2v/test-v2v-docs.sh
+@@ -22,4 +22,4 @@ $TEST_FUNCTIONS
+ skip_if_skipped
+ 
+ $top_srcdir/podcheck.pl virt-v2v.pod virt-v2v \
+-  --ignore=--dcPath,--debug-overlay,--ic,--if,--no-trim,--oa,--oc,--of,--on,--os,--vmtype
++  --ignore=--dcPath,--debug-overlay,--ic,--if,--in-place,--no-trim,--oa,--oc,--of,--on,--os,--vmtype
+diff --git a/v2v/test-v2v-in-place.sh b/v2v/test-v2v-in-place.sh
+deleted file mode 100755
+index 6f7d78f39..000000000
+--- a/v2v/test-v2v-in-place.sh
++++ /dev/null
+@@ -1,108 +0,0 @@
+-#!/bin/bash -
+-# libguestfs virt-v2v test script
+-# Copyright (C) 2014 Red Hat Inc.
+-# Copyright (C) 2015 Parallels IP Holdings GmbH.
+-#
+-# This program is free software; you can redistribute it and/or modify
+-# it under the terms of the GNU General Public License as published by
+-# the Free Software Foundation; either version 2 of the License, or
+-# (at your option) any later version.
+-#
+-# This program is distributed in the hope that it will be useful,
+-# but WITHOUT ANY WARRANTY; without even the implied warranty of
+-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-# GNU General Public License for more details.
+-#
+-# You should have received a copy of the GNU General Public License
+-# along with this program; if not, write to the Free Software
+-# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+-
+-# Test --in-place.
+-
+-unset CDPATH
+-export LANG=C
+-set -e
+-
+-$TEST_FUNCTIONS
+-skip_if_skipped
+-skip_if_backend uml
+-skip_unless_phony_guest windows.img
+-
+-img_base="$abs_top_builddir/test-data/phony-guests/windows.img"
+-
+-export VIRT_TOOLS_DATA_DIR="$top_srcdir/test-data/fake-virt-tools"
+-export VIRTIO_WIN="$top_srcdir/test-data/fake-virtio-win"
+-
+-d=$PWD/test-v2v-in-place.d
+-rm -rf $d
+-mkdir $d
+-
+-img="$d/test.qcow2"
+-rm -f $img
+-qemu-img create -f qcow2 -b $img_base -o compat=1.1,backing_fmt=raw $img
+-md5="$(do_md5 $img_base)"
+-
+-libvirt_xml="$d/test.xml"
+-rm -f $libvirt_xml
+-n=windows-overlay
+-cat > $libvirt_xml <<EOF
+-<node>
+-  <domain type='test'>
+-    <name>$n</name>
+-    <memory>1048576</memory>
+-    <os>
+-      <type>hvm</type>
+-      <boot dev='hd'/>
+-    </os>
+-    <devices>
+-      <disk type='file' device='disk'>
+-        <driver name='qemu' type='qcow2'/>
+-        <source file='$img'/>
+-        <target dev='vda' bus='virtio'/>
+-      </disk>
+-    </devices>
+-  </domain>
+-</node>
+-EOF
+-
+-$VG virt-v2v --debug-gc -i libvirt -ic "test://$libvirt_xml" $n --in-place
+-
+-# Test that the drivers have been copied over into the guest
+-script="$d/test.fish"
+-expected="$d/expected"
+-response="$d/response"
+-
+-mktest ()
+-{
+-    local cmd="$1" exp="$2"
+-
+-    echo "echo '$cmd'" >> "$script"
+-    echo "$cmd" >> "$expected"
+-
+-    echo "$cmd" >> "$script"
+-    echo "$exp" >> "$expected"
+-}
+-
+-:> "$script"
+-:> "$expected"
+-
+-firstboot_dir="/Program Files/Guestfs/Firstboot"
+-mktest "is-dir \"$firstboot_dir\"" true
+-mktest "is-file \"$firstboot_dir/firstboot.bat\"" true
+-mktest "is-dir \"$firstboot_dir/scripts\"" true
+-virtio_dir="/Windows/Drivers/VirtIO"
+-mktest "is-dir \"$virtio_dir\"" true
+-for drv in netkvm qxl vioscsi viostor; do
+-    for sfx in cat inf sys; do
+-        mktest "is-file \"$virtio_dir/$drv.$sfx\"" true
+-    done
+-done
+-
+-guestfish --ro -a "$img" -i < "$script" > "$response"
+-diff -u "$expected" "$response"
+-
+-# Test the base image remained untouched
+-test "$md5" = "$(do_md5 $img_base)"
+-
+-# Clean up.
+-rm -r $d
+diff --git a/v2v/virt-v2v.pod b/v2v/virt-v2v.pod
+index fca0a2a93..c45828b58 100644
+--- a/v2v/virt-v2v.pod
++++ b/v2v/virt-v2v.pod
+@@ -15,8 +15,6 @@ virt-v2v - Convert a guest to use KVM
+ 
+  virt-v2v -i disk disk.img -o glance
+ 
+- virt-v2v -ic qemu:///system qemu_guest --in-place
+-
+ =head1 DESCRIPTION
+ 
+ Virt-v2v converts guests from a foreign hypervisor to run on KVM.  It
+@@ -77,9 +75,6 @@ booting the guest directly in qemu (mainly for testing).
+ I<-o rhv> is used to write to a RHV / oVirt target.  I<-o vdsm>
+ is only used when virt-v2v runs under VDSM control.
+ 
+-I<--in-place> instructs virt-v2v to customize the guest OS in the input
+-virtual machine, instead of creating a new VM in the target hypervisor.
+-
+ =head1 EXAMPLES
+ 
+ =head2 Convert from VMware vCenter server to local libvirt
+@@ -251,20 +246,6 @@ For I<-i disk> only, this specifies the format of the input disk
+ image.  For other input methods you should specify the input
+ format in the metadata.
+ 
+-=item B<--in-place>
+-
+-Do not create an output virtual machine in the target hypervisor.
+-Instead, adjust the guest OS in the source VM to run in the input
+-hypervisor.
+-
+-This mode is meant for integration with other toolsets, which take the
+-responsibility of converting the VM configuration, providing for
+-rollback in case of errors, transforming the storage, etc.
+-
+-See L</IN PLACE CONVERSION> below.
+-
+-Conflicts with all I<-o *> options.
+-
+ =item B<--machine-readable>
+ 
+ This option is used to make the output more machine friendly
+@@ -1632,7 +1613,7 @@ Minimum free space: 10 MB
+ =head2 Minimum free space check in the host
+ 
+ You must have sufficient free space in the host directory used to
+-store temporary overlays (except in I<--in-place> mode).  To find out
++store temporary overlays.  To find out
+ which directory this is, use:
+ 
+  $ df -h "`guestfish get-cachedir`"
+@@ -1750,31 +1731,6 @@ that instead.
+    </devices>
+  </domain>
+ 
+-=head1 IN PLACE CONVERSION
+-
+-It is also possible to use virt-v2v in scenarios where a foreign VM
+-has already been imported into a KVM-based hypervisor, but still needs
+-adjustments in the guest to make it run in the new virtual hardware.
+-
+-In that case it is assumed that a third-party tool has created the
+-target VM in the supported KVM-based hypervisor based on the source VM
+-configuration and contents, but using virtual devices more appropriate
+-for KVM (e.g. virtio storage and network, etc.).
+-
+-Then, to make the guest OS boot and run in the changed environment,
+-one can use:
+-
+- virt-v2v -ic qemu:///system converted_vm --in-place
+-
+-Virt-v2v will analyze the configuration of C<converted_vm> in the
+-C<qemu:///system> libvirt instance, and apply various fixups to the
+-guest OS configuration to make it match the VM configuration.  This
+-may include installing virtio drivers, configuring the bootloader, the
+-mountpoints, the network interfaces, and so on.
+-
+-Should an error occur during the operation, virt-v2v exits with an
+-error code leaving the VM in an undefined state.
+-
+ =head1 MACHINE READABLE OUTPUT
+ 
+ The I<--machine-readable> option can be used to make the output more
+-- 
+2.13.4
+

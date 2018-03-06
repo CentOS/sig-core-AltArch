@@ -1,0 +1,93 @@
+From 93d34d8282b48c737fe2e1e749dfa916086b15c9 Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Sun, 30 Aug 2015 03:21:57 -0400
+Subject: [PATCH] RHEL 7: Fix tests for libguestfs-winsupport 7.2.
+
+It doesn't let us use guestfish for arbitrary Windows edits.
+---
+ test-data/phony-guests/make-windows-img.sh | 1 +
+ tests/charsets/test-charset-fidelity.c     | 2 ++
+ v2v/test-v2v-virtio-win-iso.sh             | 8 +++++++-
+ v2v/test-v2v-windows-conversion.sh         | 8 +++++++-
+ 4 files changed, 17 insertions(+), 2 deletions(-)
+
+diff --git a/test-data/phony-guests/make-windows-img.sh b/test-data/phony-guests/make-windows-img.sh
+index 2d18ea489..9eed756d8 100755
+--- a/test-data/phony-guests/make-windows-img.sh
++++ b/test-data/phony-guests/make-windows-img.sh
+@@ -37,6 +37,7 @@ fi
+ 
+ # Create a disk image.
+ guestfish <<EOF
++set-program virt-testing
+ sparse windows.img-t 512M
+ run
+ 
+diff --git a/tests/charsets/test-charset-fidelity.c b/tests/charsets/test-charset-fidelity.c
+index 952256edd..d45e83c13 100644
+--- a/tests/charsets/test-charset-fidelity.c
++++ b/tests/charsets/test-charset-fidelity.c
+@@ -93,6 +93,8 @@ main (int argc, char *argv[])
+   if (g == NULL)
+     error (EXIT_FAILURE, 0, "failed to create handle");
+ 
++  guestfs_set_program (g, "virt-testing");
++
+   if (guestfs_add_drive_scratch (g, 1024*1024*1024, -1) == -1)
+     exit (EXIT_FAILURE);
+ 
+diff --git a/v2v/test-v2v-virtio-win-iso.sh b/v2v/test-v2v-virtio-win-iso.sh
+index 6e99f0f1d..a8e572c5f 100755
+--- a/v2v/test-v2v-virtio-win-iso.sh
++++ b/v2v/test-v2v-virtio-win-iso.sh
+@@ -79,6 +79,12 @@ mktest ()
+ :> "$script"
+ :> "$expected"
+ 
++cat >> "$script" <<EOF
++  set-program virt-testing
++  run
++  mount /dev/sda2 /
++EOF
++
+ firstboot_dir="/Program Files/Guestfs/Firstboot"
+ mktest "is-dir \"$firstboot_dir\"" true
+ mktest "is-file \"$firstboot_dir/firstboot.bat\"" true
+@@ -91,7 +97,7 @@ for drv in netkvm vioscsi viostor; do
+     done
+ done
+ 
+-guestfish --ro -a "$d/windows-sda" -i < "$script" > "$response"
++guestfish --ro -a "$d/windows-sda" < "$script" > "$response"
+ diff -u "$expected" "$response"
+ 
+ rm -r $d
+diff --git a/v2v/test-v2v-windows-conversion.sh b/v2v/test-v2v-windows-conversion.sh
+index f1da222a9..ff94fe39b 100755
+--- a/v2v/test-v2v-windows-conversion.sh
++++ b/v2v/test-v2v-windows-conversion.sh
+@@ -73,6 +73,12 @@ mktest ()
+ :> "$script"
+ :> "$expected"
+ 
++cat >> "$script" <<EOF
++  set-program virt-testing
++  run
++  mount /dev/sda2 /
++EOF
++
+ firstboot_dir="/Program Files/Guestfs/Firstboot"
+ mktest "is-dir \"$firstboot_dir\"" true
+ mktest "is-file \"$firstboot_dir/firstboot.bat\"" true
+@@ -85,7 +91,7 @@ for drv in netkvm qxl vioscsi viostor; do
+     done
+ done
+ 
+-guestfish --ro -a "$d/windows-sda" -i < "$script" > "$response"
++guestfish --ro -a "$d/windows-sda" < "$script" > "$response"
+ diff -u "$expected" "$response"
+ 
+ # We also update the Registry several times, for firstboot, and (ONLY
+-- 
+2.13.4
+
