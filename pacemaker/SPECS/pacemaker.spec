@@ -143,7 +143,7 @@
 Name:          pacemaker
 Summary:       Scalable High-Availability cluster resource manager
 Version:       %{pcmkversion}
-Release:       %{pcmk_release}%{?dist}.7
+Release:       %{pcmk_release}%{?dist}.8
 %if %{defined _unitdir}
 License:       GPLv2+ and LGPLv2+
 %else
@@ -270,6 +270,7 @@ Patch109:       109-bundles.patch
 Patch110:       110-bundles.patch
 Patch111:       111-use-of-null.patch
 Patch112:       112-use-of-null.patch
+Patch113:       113-bundles.patch
 
 # patches that aren't from upstream
 Patch200:      lrmd-protocol-version.patch
@@ -290,7 +291,7 @@ Provides:      pcmk-cluster-manager
 %systemd_requires
 %endif
 
-ExclusiveArch: i686 x86_64 ppc64le s390x armv7hl
+ExclusiveArch: i686 x86_64 ppc64le s390x
 
 # Pacemaker targets compatibility with python 2.6+ and 3.2+
 Requires:      python >= 2.6
@@ -940,8 +941,11 @@ exit 0
 %attr(0644,root,root) %{_datadir}/pacemaker/nagios/plugins-metadata/*
 
 %changelog
-* Wed Aug 09 2017 Fabian Arrotin <arrfab@centos.org> - 1.1.16-12.7
-- Added armv7hl to supported arches (centos userland)
+* Wed Jan 24 2018 Ken Gaillot <kgaillot@redhat.com> - 1.1.16-12.8
+- Fix pcs resource --wait timeout when bundles are used
+- Observe colocation constraints correctly with bundles in master role
+- Resolves: rhbz#1520798
+- Resolves: rhbz#1537557
 
 * Tue Jan 2 2018 Ken Gaillot <kgaillot@redhat.com> - 1.1.16-12.7
 - Fix use-of-NULL memory issues
