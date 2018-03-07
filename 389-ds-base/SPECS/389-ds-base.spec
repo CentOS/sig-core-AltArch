@@ -11,7 +11,7 @@
 %global use_Socket6 0
 %global use_nunc_stans 1
 
-%ifnarch s390 s390x %{arm}
+%if %{_arch} != "s390x" && %{_arch} != "s390"
 %global use_tcmalloc 1
 %else
 %global use_tcmalloc 0
@@ -30,7 +30,7 @@
 Summary:          389 Directory Server (base)
 Name:             389-ds-base
 Version:          1.3.6.1
-Release:          %{?relprefix}26%{?prerel}%{?dist}
+Release:          %{?relprefix}28%{?prerel}%{?dist}
 License:          GPLv3+
 URL:              https://www.port389.org/
 Group:            System Environment/Daemons
@@ -220,6 +220,10 @@ Patch83:          0083-Ticket-49410-opened-connection-can-remain-no-longer-.patc
 Patch84:          0084-Ticket-48118-backport-changelog-can-be-erronously-re.patch
 Patch85:          0085-Ticket-49495-Fix-memory-management-is-vattr.patch
 Patch86:          0086-CVE-2017-15134-389-ds-base-Remote-DoS-via-search-fil.patch
+Patch87:          0087-Ticket-49509-Indexing-of-internationalized-matching-.patch
+Patch88:          0088-Ticket-bz1525628-1.3.6-backport-invalid-password-mig.patch
+Patch89:          0089-Ticket-49545-final-substring-extended-filter-search-.patch
+Patch90:          0090-Ticket-49471-heap-buffer-overflow-in-ss_unescape.patch
 
 %description
 389 Directory Server is an LDAPv3 compliant server.  The base package includes
@@ -376,6 +380,10 @@ cp %{SOURCE2} README.devel
 %patch84 -p1
 %patch85 -p1
 %patch86 -p1
+%patch87 -p1
+%patch88 -p1
+%patch89 -p1
+%patch90 -p1
 
 %build
 
@@ -608,11 +616,18 @@ fi
 %{_sysconfdir}/%{pkgname}/dirsrvtests
 
 %changelog
-* Thu Aug 31 2017 Fabian Arrotin <arrfab@centos.org> - - 1.3.6.1-26
-- Disabled tcmalloc for armhfp (jacco@redsleeve.org)
+* Mon Feb 26 2018 Mark Reynolds <mreynolds@redhat.com> - 1.3.6.1-28
+- Bump version to 1.3.6.1-28
+- Resolves: Bug 1540105 - CVE-2018-1054 - remote Denial of Service (DoS) via search filters in SetUnicodeStringFromUTF_8
+
+* Tue Feb 13 2018 Mark Reynolds <mreynolds@redhat.com> - 1.3.6.1-27
+- Bump version to 1.3.6.1-27
+- Resolves: Bug 1536343 - Indexing of internationalized matching rules is failing
+- Resolves: Bug 1535539 - CVE-2017-15135 - Authentication bypass due to lack of size check in slapi_ct_memcmp function
+- Resolves: Bug 1540105 - CVE-2018-1054 - remote Denial of Service (DoS) via search filters in SetUnicodeStringFromUTF_8
 
 * Tue Jan 16 2018 Mark Reynolds <mreynolds@redhat.com> - 1.3.6.1-26
-- Bump version to 1.3.6.1-25
+- Bump version to 1.3.6.1-26
 - Resolves: Bug 1534430 - crash in slapi_filter_sprintf 
 
 * Mon Dec 18 2017 Mark Reynolds <mreynolds@redhat.com> - 1.3.6.1-25
