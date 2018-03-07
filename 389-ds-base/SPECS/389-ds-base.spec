@@ -11,7 +11,7 @@
 %global use_Socket6 0
 %global use_nunc_stans 1
 
-%if %{_arch} != "s390x" && %{_arch} != "s390"
+%ifnarch s390 s390x %{arm}
 %global use_tcmalloc 1
 %else
 %global use_tcmalloc 0
@@ -616,6 +616,9 @@ fi
 %{_sysconfdir}/%{pkgname}/dirsrvtests
 
 %changelog
+* Wed Mar  7 2018 Johnny Hughes <johnnny@centos.org> - 1.3.6.1-28
+- Disabled tcmalloc for armhfp (jacco@redsleeve.org)
+
 * Mon Feb 26 2018 Mark Reynolds <mreynolds@redhat.com> - 1.3.6.1-28
 - Bump version to 1.3.6.1-28
 - Resolves: Bug 1540105 - CVE-2018-1054 - remote Denial of Service (DoS) via search filters in SetUnicodeStringFromUTF_8
