@@ -46,6 +46,13 @@ BuildRequires:  vboot-utils
 BuildRequires:  arm-trusted-firmware-armv8
 %endif
 
+# Added for .el7 rebuild, so newer gcc is needed
+%if 0%{?rhel} == 7
+BuildRequires: devtoolset-6-build
+BuildRequires: devtoolset-6-gcc
+BuildRequires: devtoolset-6-gcc-c++
+%endif
+
 Requires:       dtc
 Requires:       systemd
 
@@ -102,6 +109,9 @@ cp %SOURCE1 %SOURCE2 %SOURCE3 %SOURCE4 .
 
 %build
 mkdir builds
+
+#Enabling DTS for .el7
+%{?enable_devtoolset6:%{enable_devtoolset6}}
 
 %ifarch aarch64 %{arm}
 for board in $(cat %{_arch}-boards)
@@ -285,6 +295,9 @@ cp -p board/warp7/README builds/docs/README.warp7
 %endif
 
 %changelog
+* Thu Mar  8 2018 Fabian Arrotin <arrfab@centos.org> 2018.01-1
+- Added conditional to enable devtoolset-6-gcc for .el7 build
+
 * Tue Jan  9 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.01-1
 - 2018.01
 
