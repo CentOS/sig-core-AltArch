@@ -1,0 +1,189 @@
+From 715bdd7fd707d4addf52c21051ec3ab90951a691 Mon Sep 17 00:00:00 2001
+From: Thierry Bordaz <tbordaz@redhat.com>
+Date: Wed, 6 Dec 2017 15:14:57 +0100
+Subject: [PATCH] Ticket 49471 - heap-buffer-overflow in ss_unescape
+
+Bug Description:
+	Two problems here
+		- when searching for wildcard and escape char, ss_unescape assumes the string
+		  is at least 3 chars longs. So memcmp can overflow a shorter string
+		- while splitting a string into substring pattern, it loops over
+		  wildcard and can overpass the string end
+
+Fix Description:
+	For the first problem, it checks the string size is long enough to memcmp
+        a wildcard or an escape
+	For the second it exits from the loop  as soon as the end of the string is reached
+
+https://pagure.io/389-ds-base/issue/49471
+
+Reviewed by: William Brown
+
+Platforms tested: F23
+
+Flag Day: no
+
+Doc impact: no
+
+(cherry picked from commit 5991388ce75fba8885579b769711d57acfd43cd3)
+(cherry picked from commit 3fb1c408cb4065de8d9c0c1de050d08969d51bb0)
+---
+ dirsrvtests/tests/tickets/ticket49471_test.py | 79 +++++++++++++++++++++++++++
+ ldap/servers/plugins/collation/orfilter.c     | 48 +++++++++-------
+ 2 files changed, 106 insertions(+), 21 deletions(-)
+ create mode 100644 dirsrvtests/tests/tickets/ticket49471_test.py
+
+diff --git a/dirsrvtests/tests/tickets/ticket49471_test.py b/dirsrvtests/tests/tickets/ticket49471_test.py
+new file mode 100644
+index 000000000..0456a5182
+--- /dev/null
++++ b/dirsrvtests/tests/tickets/ticket49471_test.py
+@@ -0,0 +1,79 @@
++import logging
++import pytest
++import os
++import time
++import ldap
++from lib389._constants import *
++from lib389.topologies import topology_st as topo
++from lib389 import Entry
++
++DEBUGGING = os.getenv("DEBUGGING", default=False)
++if DEBUGGING:
++    logging.getLogger(__name__).setLevel(logging.DEBUG)
++else:
++    logging.getLogger(__name__).setLevel(logging.INFO)
++log = logging.getLogger(__name__)
++
++
++USER_CN='user_'
++def _user_get_dn(no):
++    cn = '%s%d' % (USER_CN, no)
++    dn = 'cn=%s,ou=people,%s' % (cn, SUFFIX)
++    return (cn, dn)
++
++def add_user(server, no, desc='dummy', sleep=True):
++    (cn, dn) = _user_get_dn(no)
++    log.fatal('Adding user (%s): ' % dn)
++    server.add_s(Entry((dn, {'objectclass': ['top', 'person', 'inetuser', 'userSecurityInformation'],
++                             'cn': [cn],
++                             'description': [desc],
++                             'sn': [cn],
++                             'description': ['add on that host']})))
++    if sleep:
++        time.sleep(2)
++
++def test_ticket49471(topo):
++    """Specify a test case purpose or name here
++
++    :id: 457ab172-9455-4eb2-89a0-150e3de5993f
++    :setup: Fill in set up configuration here
++    :steps:
++        1. Fill in test case steps here
++        2. And indent them like this (RST format requirement)
++    :expectedresults:
++        1. Fill in the result that is expected
++        2. For each test step
++    """
++
++    # If you need any test suite initialization,
++    # please, write additional fixture for that (including finalizer).
++    # Topology for suites are predefined in lib389/topologies.py.
++
++    # If you need host, port or any other data about instance,
++    # Please, use the instance object attributes for that (for example, topo.ms["master1"].serverid)
++
++    S1 = topo.standalone
++    add_user(S1, 1)
++
++    Filter = "(description:2.16.840.1.113730.3.3.2.1.1.6:=\*on\*)"
++    ents = S1.search_s(SUFFIX, ldap.SCOPE_SUBTREE, Filter)
++    assert len(ents) == 1
++
++    #
++    # The following is for the test 49491
++    # skipped here else it crashes in ASAN
++    #Filter = "(description:2.16.840.1.113730.3.3.2.1.1.6:=\*host)"
++    #ents = S1.search_s(SUFFIX, ldap.SCOPE_SUBTREE, Filter)
++    #assert len(ents) == 1
++
++    if DEBUGGING:
++        # Add debugging steps(if any)...
++        pass
++
++
++if __name__ == '__main__':
++    # Run isolated
++    # -s for DEBUG mode
++    CURRENT_FILE = os.path.realpath(__file__)
++    pytest.main("-s %s" % CURRENT_FILE)
++
+diff --git a/ldap/servers/plugins/collation/orfilter.c b/ldap/servers/plugins/collation/orfilter.c
+index 8f10f81b6..438efafef 100644
+--- a/ldap/servers/plugins/collation/orfilter.c
++++ b/ldap/servers/plugins/collation/orfilter.c
+@@ -317,19 +317,21 @@ ss_unescape (struct berval* val)
+     char* t = s;
+     char* limit = s + val->bv_len;
+     while (s < limit) {
+-	if (!memcmp (s, "\\2a", 3) ||
+-	    !memcmp (s, "\\2A", 3)) {
+-	    *t++ = WILDCARD;
+-	    s += 3;
+-	} else if (!memcmp (s, "\\5c", 3) ||
+-		   !memcmp (s, "\\5C", 3)) {
+-	    *t++ = '\\';
+-	    s += 3;
+-	} else {
+-	    if (t == s) LDAP_UTF8INC (t);
+-	    else t += LDAP_UTF8COPY (t, s);
+-	    LDAP_UTF8INC (s);
+-	}
++        if (((limit - s) >= 3) &&
++                (!memcmp(s, "\\2a", 3) || !memcmp(s, "\\2A", 3))) {
++            *t++ = WILDCARD;
++            s += 3;
++        } else if ((limit - s) >= 3 &&
++                (!memcmp(s, "\\5c", 3) || !memcmp(s, "\\5C", 3))) {
++            *t++ = '\\';
++            s += 3;
++        } else {
++            if (t == s)
++                LDAP_UTF8INC(t);
++            else
++                t += LDAP_UTF8COPY(t, s);
++            LDAP_UTF8INC(s);
++        }
+     }
+     val->bv_len = t - val->bv_val;
+ }
+@@ -405,14 +407,18 @@ ss_filter_values (struct berval* pattern, int* query_op)
+     n = 0;
+     s = pattern->bv_val;
+     for (p = s; p < plimit; LDAP_UTF8INC(p)) {
+-	switch (*p) {
+-	  case WILDCARD:
+-	    result[n++] = ss_filter_value (s, p-s, &val);
+-	    while (++p != plimit && *p == WILDCARD);
+-	    s = p;
+-	    break;
+-	  default: break;
+-	}
++        switch (*p) {
++        case WILDCARD:
++            result[n++] = ss_filter_value(s, p - s, &val);
++            while (p != plimit && *p == WILDCARD) p++;
++            s = p;
++            break;
++        default:
++            break;
++        }
++        if (p >= plimit) {
++            break;
++        }
+     }
+     if (p != s || s == plimit) {
+ 	result[n++] = ss_filter_value (s, p-s, &val);
+-- 
+2.13.6
+

@@ -1,0 +1,92 @@
+From 2ce5fc46463ff7b9a5a2c68602d8c5b35a7c37d7 Mon Sep 17 00:00:00 2001
+From: Andrew Beekhof <andrew@beekhof.net>
+Date: Tue, 16 Jan 2018 19:05:31 +1100
+Subject: [PATCH 1/2] Bug rhbz#1519812 - Prevent notify actions from causing
+ --wait to hang
+
+---
+ tools/crm_resource_runtime.c | 21 ++++++++++++++++-----
+ 1 file changed, 16 insertions(+), 5 deletions(-)
+
+diff --git a/tools/crm_resource_runtime.c b/tools/crm_resource_runtime.c
+index 22bdebf..189d1b3 100644
+--- a/tools/crm_resource_runtime.c
++++ b/tools/crm_resource_runtime.c
+@@ -1343,10 +1343,19 @@ done:
+     return rc;
+ }
+ 
+-#define action_is_pending(action) \
+-    ((is_set((action)->flags, pe_action_optional) == FALSE) \
+-    && (is_set((action)->flags, pe_action_runnable) == TRUE) \
+-    && (is_set((action)->flags, pe_action_pseudo) == FALSE))
++static inline int action_is_pending(action_t *action) 
++{
++    if(is_set(action->flags, pe_action_optional)) {
++        return FALSE;
++    } else if(is_set(action->flags, pe_action_runnable) == FALSE) {
++        return FALSE;
++    } else if(is_set(action->flags, pe_action_pseudo)) {
++        return FALSE;
++    } else if(safe_str_eq("notify", action->task)) {
++        return FALSE;
++    }
++    return TRUE;
++}
+ 
+ /*!
+  * \internal
+@@ -1362,7 +1371,9 @@ actions_are_pending(GListPtr actions)
+     GListPtr action;
+ 
+     for (action = actions; action != NULL; action = action->next) {
+-        if (action_is_pending((action_t *) action->data)) {
++        action_t *a = (action_t *)action->data;
++        if (action_is_pending(a)) {
++            crm_notice("Waiting for %s (flags=0x%.8x)", a->uuid, a->flags);
+             return TRUE;
+         }
+     }
+-- 
+1.8.3.1
+
+
+From ef15ea4f687e7f9ba1f8a99548ee1e0bf9d4b50a Mon Sep 17 00:00:00 2001
+From: Andrew Beekhof <andrew@beekhof.net>
+Date: Mon, 22 Jan 2018 21:18:46 +1100
+Subject: [PATCH 2/2] Fix: rhbz#1527072 - Correctly observe colocation
+ constraints with bundles in the Master role
+
+---
+ pengine/container.c | 14 +++++++++++---
+ 1 file changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/pengine/container.c b/pengine/container.c
+index f5d916c..15d094d 100644
+--- a/pengine/container.c
++++ b/pengine/container.c
+@@ -486,10 +486,18 @@ container_rsc_colocation_rh(resource_t * rsc_lh, resource_t * rsc, rsc_colocatio
+         } else {
+             node_t *chosen = tuple->docker->fns->location(tuple->docker, NULL, FALSE);
+ 
+-            if (chosen != NULL && is_set_recursive(tuple->docker, pe_rsc_block, TRUE) == FALSE) {
+-                pe_rsc_trace(rsc, "Allowing %s: %s %d", constraint->id, chosen->details->uname, chosen->weight);
+-                allocated_rhs = g_list_prepend(allocated_rhs, chosen);
++            if (chosen == NULL || is_set_recursive(tuple->docker, pe_rsc_block, TRUE)) {
++                continue;
++            }
++            if(constraint->role_rh >= RSC_ROLE_MASTER && tuple->child == NULL) {
++                continue;
+             }
++            if(constraint->role_rh >= RSC_ROLE_MASTER && tuple->child->next_role < RSC_ROLE_MASTER) {
++                continue;
++            }
++
++            pe_rsc_trace(rsc, "Allowing %s: %s %d", constraint->id, chosen->details->uname, chosen->weight);
++            allocated_rhs = g_list_prepend(allocated_rhs, chosen);
+         }
+     }
+ 
+-- 
+1.8.3.1
+
