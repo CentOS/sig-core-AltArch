@@ -1,0 +1,115 @@
+From 1a8fa60aedff8a2368ac357a51dc15357065fabe Mon Sep 17 00:00:00 2001
+From: Peter Robinson <pbrobinson@gmail.com>
+Date: Tue, 5 Dec 2017 00:11:54 +0000
+Subject: [PATCH 3/5] usb kbd fixes
+
+Signed-off-by: Peter Robinson <pbrobinson@gmail.com>
+---
+ common/usb_kbd.c  | 66 +++++++++++++++++++++++++++++++++++++++++--------------
+ include/console.h |  2 --
+ 2 files changed, 50 insertions(+), 18 deletions(-)
+
+diff --git a/common/usb_kbd.c b/common/usb_kbd.c
+index 8cbdba6ac2..82ad93f6ca 100644
+--- a/common/usb_kbd.c
++++ b/common/usb_kbd.c
+@@ -516,25 +516,59 @@ static int probe_usb_keyboard(struct usb_device *dev)
+ 		return error;
+ 
+ 	stdinname = env_get("stdin");
+-#if CONFIG_IS_ENABLED(CONSOLE_MUX)
+-	error = iomux_doenv(stdin, stdinname);
+-	if (error)
+-		return error;
+-#else
+-	/* Check if this is the standard input device. */
+-	if (strcmp(stdinname, DEVNAME))
+-		return 1;
++	if (CONFIG_IS_ENABLED(CONSOLE_MUX)) {
++		char *devname = DEVNAME;
++		char *newstdin = NULL;
++		/*
++		 * stdin might not be set yet.. either way, with console-
++		 * mux the sensible thing to do is add ourselves to the
++		 * list of stdio devices:
++		 */
++		if (stdinname && !strstr(stdinname, DEVNAME)) {
++			newstdin = malloc(strlen(stdinname) +
++					strlen(","DEVNAME) + 1);
++			sprintf(newstdin, "%s,"DEVNAME, stdinname);
++			stdinname = newstdin;
++		} else if (!stdinname) {
++			stdinname = devname;
++		}
++		error = iomux_doenv(stdin, stdinname);
++		free(newstdin);
++		if (error)
++			goto unregister_stdio;
++	} else {
++		/* Check if this is the standard input device. */
++		if (strcmp(stdinname, DEVNAME)) {
++			error = -1;
++			goto unregister_stdio;
++		}
+ 
+-	/* Reassign the console */
+-	if (overwrite_console())
+-		return 1;
++		/* Reassign the console */
++		if (overwrite_console()) {
++			error = -1;
++			goto unregister_stdio;
++		}
+ 
+-	error = console_assign(stdin, DEVNAME);
+-	if (error)
+-		return error;
+-#endif
++		error = console_assign(stdin, DEVNAME);
++		if (error)
++			goto unregister_stdio;
++	}
++
++	return 0;
+ 
++unregister_stdio:
++	/*
++	 * If probe fails, the device will be removed.. leaving dangling
++	 * pointers if the stdio device is not unregistered.  If u-boot
++	 * is built without stdio_deregister(), just pretend to succeed
++	 * in order to avoid dangling pointers.
++	 */
++#if CONFIG_IS_ENABLED(SYS_STDIO_DEREGISTER)
++	stdio_deregister(DEVNAME, 1);
++	return error;
++#else
+ 	return 0;
++#endif
+ }
+ 
+ #ifndef CONFIG_DM_USB
+@@ -640,7 +674,7 @@ static int usb_kbd_remove(struct udevice *dev)
+ 
+ 	return 0;
+ err:
+-	printf("%s: warning, ret=%d", __func__, ret);
++	printf("%s: warning, ret=%d\n", __func__, ret);
+ 	return ret;
+ }
+ 
+diff --git a/include/console.h b/include/console.h
+index cea29ed6dc..7dfd36d7d1 100644
+--- a/include/console.h
++++ b/include/console.h
+@@ -57,8 +57,6 @@ int console_announce_r(void);
+ /*
+  * CONSOLE multiplexing.
+  */
+-#ifdef CONFIG_CONSOLE_MUX
+ #include <iomux.h>
+-#endif
+ 
+ #endif
+-- 
+2.14.3
+
