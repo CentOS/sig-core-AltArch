@@ -1,0 +1,297 @@
+From ddf482232a47f5d2db9b3d40d89ee4094a6ac936 Mon Sep 17 00:00:00 2001
+From: Peter Jones <pjones@redhat.com>
+Date: Wed, 22 Jun 2016 14:07:49 -0400
+Subject: [PATCH 50/55] grubby: add --set-index to specify which position to
+ add new entries as
+
+This adds an option, "--set-index N", to grubby, and will cause creation
+of any new entry to be at a particular zero-indexed position in the
+resulting configuration file.
+
+Related: rhbz#1285601
+
+Signed-off-by: Peter Jones <pjones@redhat.com>
+---
+ .gitignore             |  1 +
+ grubby.8               | 10 +++++++---
+ grubby.c               | 26 +++++++++++++++++++++-----
+ test.sh                | 14 ++++++++++++++
+ test/grub.15           | 19 +++++++++++++++++++
+ test/results/add/g1.10 | 22 ++++++++++++++++++++++
+ test/results/add/g1.17 | 19 +++++++++++++++++++
+ test/results/add/g1.8  | 22 ++++++++++++++++++++++
+ test/results/add/g1.9  | 22 ++++++++++++++++++++++
+ 9 files changed, 147 insertions(+), 8 deletions(-)
+ create mode 100644 test/grub.15
+ create mode 100644 test/results/add/g1.10
+ create mode 100644 test/results/add/g1.17
+ create mode 100644 test/results/add/g1.8
+ create mode 100644 test/results/add/g1.9
+
+diff --git a/.gitignore b/.gitignore
+index e78a392..1c00ff7 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -3,3 +3,4 @@ version.h
+ *.o
+ core.*
+ vgcore.*
++*.tar.*
+diff --git a/grubby.8 b/grubby.8
+index 85e22c5..b2a5447 100644
+--- a/grubby.8
++++ b/grubby.8
+@@ -8,10 +8,10 @@ grubby \- command line tool for configuring grub, lilo, elilo, yaboot and zipl
+        [--bootloader-probe] [--config-file \fIpath\fR] [--copy-default]
+        [--debug] [--default-kernel] [--default-index] [--default-title]
+        [--grub] [--lilo] [--yaboot] [--silo] [--zipl]
+-       [--info=\fIkernel-path\fR] [--initrd=\fIinitrd-path\fR] 
+-       [--make-default] [-o path] [--version]
++       [--info=\fIkernel-path\fR] [--initrd=\fIinitrd-path\fR]
++       [--make-default] [-o path] [--version] [--set-entry=\fIentry-index\fR]
+        [--remove-kernel=\fIkernel-path\fR] [--remove-args=\fIargs\fR]
+-       [--set-default=\fIkernel-path\fR] [--set-default-index=\fientry-index\fR]
++       [--set-default=\fIkernel-path\fR] [--set-default-index=\fIentry-index\fR]
+        [--title=entry-title] [--add-multiboot=\fImultiboot-path\fR]
+        [--mbargs=\fIargs\fR] [--remove-multiboot=\fImultiboot-path\fR]
+        [--remove-mbargs=\fIargs\fR]
+@@ -48,6 +48,10 @@ with that title are used.
+ Add a new boot entry for the kernel located at \fIkernel-path\fR.
+ 
+ .TP
++\fB-\-set-entry\fR=\fIentry-index\fR
++Set the position at which to add a new entry created with \fB-\-add-kernel\fR.
++
++.TP
+ \fB-\-args\fR=\fIkernel-args\fR
+ When a new kernel is added, this specifies the command line arguments
+ which should be passed to the kernel by default (note they are merged
+diff --git a/grubby.c b/grubby.c
+index ad2b662..0c260f2 100644
+--- a/grubby.c
++++ b/grubby.c
+@@ -4286,9 +4286,10 @@ int addNewKernel(struct grubConfig *config, struct singleEntry *template,
+ 		 const char *newKernelPath, const char *newKernelTitle,
+ 		 const char *newKernelArgs, const char *newKernelInitrd,
+ 		 const char **extraInitrds, int extraInitrdCount,
+-		 const char *newMBKernel, const char *newMBKernelArgs)
++		 const char *newMBKernel, const char *newMBKernelArgs
++		 int newIndex)
+ {
+-	struct singleEntry *new;
++	struct singleEntry *new, *entry, *prev = NULL;
+ 	struct singleLine *newLine = NULL, *tmplLine = NULL, *masterLine = NULL;
+ 	int needs;
+ 	char *chptr;
+@@ -4318,9 +4319,20 @@ int addNewKernel(struct grubConfig *config, struct singleEntry *template,
+ 	new = malloc(sizeof(*new));
+ 	new->skip = 0;
+ 	new->multiboot = 0;
+-	new->next = config->entries;
+ 	new->lines = NULL;
+-	config->entries = new;
++	entry = config->entries;
++	for (unsigned int i = 0; i < newIndex; i++) {
++		if (!entry)
++			break;
++		prev = entry;
++		entry = entry->next;
++	}
++	new->next = entry;
++
++	if (prev)
++		prev->next = new;
++	else
++		config->entries = new;
+ 
+ 	/* copy/update from the template */
+ 	needs = NEED_KERNEL | NEED_TITLE;
+@@ -4771,6 +4783,7 @@ int main(int argc, const char **argv)
+ 	char *newKernelVersion = NULL;
+ 	char *newMBKernel = NULL;
+ 	char *newMBKernelArgs = NULL;
++	int newIndex = 0;
+ 	char *removeMBKernelArgs = NULL;
+ 	char *removeMBKernel = NULL;
+ 	char *bootPrefix = NULL;
+@@ -4873,6 +4886,9 @@ int main(int argc, const char **argv)
+ 		{"set-default-index", 0, POPT_ARG_INT, &defaultIndex, 0,
+ 		 _("make the given entry index the default entry"),
+ 		 _("entry-index")},
++		{"set-index", 0, POPT_ARG_INT, &newIndex, 0,
++		 _("use the given index when creating a new entry"),
++		 _("entry-index")},
+ 		{"silo", 0, POPT_ARG_NONE, &configureSilo, 0,
+ 		 _("configure silo bootloader")},
+ 		{"title", 0, POPT_ARG_STRING, &newKernelTitle, 0,
+@@ -5289,7 +5305,7 @@ int main(int argc, const char **argv)
+ 	if (addNewKernel(config, template, bootPrefix, newKernelPath,
+ 			 newKernelTitle, newKernelArgs, newKernelInitrd,
+ 			 (const char **)extraInitrds, extraInitrdCount,
+-			 newMBKernel, newMBKernelArgs))
++			 newMBKernel, newMBKernelArgs, newIndex))
+ 		return 1;
+ 
+ 	if (numEntries(config) == 0) {
+diff --git a/test.sh b/test.sh
+index b90798c..9ac0ec9 100755
+--- a/test.sh
++++ b/test.sh
+@@ -485,6 +485,20 @@ grubTest grub.8 add/g8.2 --add-kernel=/boot/new-kernel.img --title='title' \
+ grubTest grub.11 add/g11.1 --add-kernel=/boot/new-kernel.img --title='title' \
+     --initrd=/boot/new-initrd --boot-filesystem=/boot --copy-default \
+     --args='console=tty0 console=ttyS1,9600n81 single'
++grubTest grub.1 add/g1.1 --add-kernel=/boot/new-kernel.img --title='title' \
++    --initrd=/boot/new-initrd --boot-filesystem=/ --set-index 0
++grubTest grub.1 add/g1.17 --add-kernel=/boot/new-kernel.img --title='title' \
++    --initrd=/boot/new-initrd --boot-filesystem=/ --set-index 1
++grubTest grub.1 add/g1.17 --add-kernel=/boot/new-kernel.img --title='title' \
++    --initrd=/boot/new-initrd --boot-filesystem=/ --set-index 2
++grubTest grub.15 add/g1.10 --add-kernel=/boot/new-kernel.img --title='title' \
++    --initrd=/boot/new-initrd --boot-filesystem=/ --set-index 0
++grubTest grub.15 add/g1.8 --add-kernel=/boot/new-kernel.img --title='title' \
++    --initrd=/boot/new-initrd --boot-filesystem=/ --set-index 1
++grubTest grub.15 add/g1.9 --add-kernel=/boot/new-kernel.img --title='title' \
++    --initrd=/boot/new-initrd --boot-filesystem=/ --set-index 2
++grubTest grub.15 add/g1.9 --add-kernel=/boot/new-kernel.img --title='title' \
++    --initrd=/boot/new-initrd --boot-filesystem=/ --set-index 5
+ 
+ testgrub2=n
+ ARCH=$(uname -m | sed s,i[3456789]86,ia32,)
+diff --git a/test/grub.15 b/test/grub.15
+new file mode 100644
+index 0000000..e1c5f8a
+--- /dev/null
++++ b/test/grub.15
+@@ -0,0 +1,19 @@
++# grub.conf generated by anaconda
++#
++# Note that you do not have to rerun grub after making changes to this file
++# NOTICE:  You have a /boot partition.  This means that
++#          all kernel and initrd paths are relative to /boot/, eg.
++#          root (hd0,0)
++#          kernel /vmlinuz-version ro root=/dev/sda1
++#          initrd /initrd-version.img
++#boot=/dev/hda
++default=1
++timeout=10
++splashimage=(hd0,0)/grub/splash.xpm.gz
++title Red Hat Linux (2.4.7-2)
++	root (hd0,0)
++	kernel /vmlinuz-2.4.7-2 ro root=/dev/sda1
++	initrd /initrd-2.4.7-2.img
++title zonk
++	kernel /boot/new-kernel.img
++	initrd /boot/new-initrd
+diff --git a/test/results/add/g1.10 b/test/results/add/g1.10
+new file mode 100644
+index 0000000..dcdd8a8
+--- /dev/null
++++ b/test/results/add/g1.10
+@@ -0,0 +1,22 @@
++# grub.conf generated by anaconda
++#
++# Note that you do not have to rerun grub after making changes to this file
++# NOTICE:  You have a /boot partition.  This means that
++#          all kernel and initrd paths are relative to /boot/, eg.
++#          root (hd0,0)
++#          kernel /vmlinuz-version ro root=/dev/sda1
++#          initrd /initrd-version.img
++#boot=/dev/hda
++default=2
++timeout=10
++splashimage=(hd0,0)/grub/splash.xpm.gz
++title title
++	kernel /boot/new-kernel.img
++	initrd /boot/new-initrd
++title Red Hat Linux (2.4.7-2)
++	root (hd0,0)
++	kernel /vmlinuz-2.4.7-2 ro root=/dev/sda1
++	initrd /initrd-2.4.7-2.img
++title zonk
++	kernel /boot/new-kernel.img
++	initrd /boot/new-initrd
+diff --git a/test/results/add/g1.17 b/test/results/add/g1.17
+new file mode 100644
+index 0000000..6a38822
+--- /dev/null
++++ b/test/results/add/g1.17
+@@ -0,0 +1,19 @@
++# grub.conf generated by anaconda
++#
++# Note that you do not have to rerun grub after making changes to this file
++# NOTICE:  You have a /boot partition.  This means that
++#          all kernel and initrd paths are relative to /boot/, eg.
++#          root (hd0,0)
++#          kernel /vmlinuz-version ro root=/dev/sda1
++#          initrd /initrd-version.img
++#boot=/dev/hda
++default=1
++timeout=10
++splashimage=(hd0,0)/grub/splash.xpm.gz
++title Red Hat Linux (2.4.7-2)
++	root (hd0,0)
++	kernel /vmlinuz-2.4.7-2 ro root=/dev/sda1
++	initrd /initrd-2.4.7-2.img
++title title
++	kernel /boot/new-kernel.img
++	initrd /boot/new-initrd
+diff --git a/test/results/add/g1.8 b/test/results/add/g1.8
+new file mode 100644
+index 0000000..5893a2f
+--- /dev/null
++++ b/test/results/add/g1.8
+@@ -0,0 +1,22 @@
++# grub.conf generated by anaconda
++#
++# Note that you do not have to rerun grub after making changes to this file
++# NOTICE:  You have a /boot partition.  This means that
++#          all kernel and initrd paths are relative to /boot/, eg.
++#          root (hd0,0)
++#          kernel /vmlinuz-version ro root=/dev/sda1
++#          initrd /initrd-version.img
++#boot=/dev/hda
++default=2
++timeout=10
++splashimage=(hd0,0)/grub/splash.xpm.gz
++title Red Hat Linux (2.4.7-2)
++	root (hd0,0)
++	kernel /vmlinuz-2.4.7-2 ro root=/dev/sda1
++	initrd /initrd-2.4.7-2.img
++title title
++	kernel /boot/new-kernel.img
++	initrd /boot/new-initrd
++title zonk
++	kernel /boot/new-kernel.img
++	initrd /boot/new-initrd
+diff --git a/test/results/add/g1.9 b/test/results/add/g1.9
+new file mode 100644
+index 0000000..310623d
+--- /dev/null
++++ b/test/results/add/g1.9
+@@ -0,0 +1,22 @@
++# grub.conf generated by anaconda
++#
++# Note that you do not have to rerun grub after making changes to this file
++# NOTICE:  You have a /boot partition.  This means that
++#          all kernel and initrd paths are relative to /boot/, eg.
++#          root (hd0,0)
++#          kernel /vmlinuz-version ro root=/dev/sda1
++#          initrd /initrd-version.img
++#boot=/dev/hda
++default=2
++timeout=10
++splashimage=(hd0,0)/grub/splash.xpm.gz
++title Red Hat Linux (2.4.7-2)
++	root (hd0,0)
++	kernel /vmlinuz-2.4.7-2 ro root=/dev/sda1
++	initrd /initrd-2.4.7-2.img
++title zonk
++	kernel /boot/new-kernel.img
++	initrd /boot/new-initrd
++title title
++	kernel /boot/new-kernel.img
++	initrd /boot/new-initrd
+-- 
+2.5.5
+

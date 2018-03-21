@@ -1,0 +1,182 @@
+From 78b6384b47585fc7d8f4020920ad72100623ce3b Mon Sep 17 00:00:00 2001
+From: Peter Jones <pjones@redhat.com>
+Date: Thu, 2 Jul 2015 12:34:30 -0400
+Subject: [PATCH 38/41] Add a bunch of tests for various
+ --default-{kernel,title,index}.
+
+... and fix some failures where we see them.
+
+Related: rhbz#1184014
+
+(though I can't actually replicate his failure.)
+
+Signed-off-by: Peter Jones <pjones@redhat.com>
+---
+ grubby.c                        | 50 ++++++++++++++++++++++++-----------------
+ test.sh                         | 10 +++++++++
+ test/results/defaultkernel/g.1  |  1 +
+ test/results/defaultkernel/l1.1 |  1 +
+ test/results/defaultkernel/z.1  |  1 +
+ test/results/defaulttitle/z.1   |  1 +
+ 6 files changed, 44 insertions(+), 20 deletions(-)
+ create mode 100644 test/results/defaultkernel/g.1
+ create mode 100644 test/results/defaultkernel/l1.1
+ create mode 100644 test/results/defaultkernel/z.1
+ create mode 100644 test/results/defaulttitle/z.1
+
+diff --git a/grubby.c b/grubby.c
+index a2b0d55..ecd0e9b 100644
+--- a/grubby.c
++++ b/grubby.c
+@@ -423,7 +423,7 @@ char *grub2ExtractTitle(struct singleLine * line) {
+ 
+     /* bail out if line does not start with menuentry */
+     if (strcmp(line->elements[0].item, "menuentry"))
+-      return NULL;
++	return NULL;
+ 
+     i = 1;
+     current = line->elements[i].item;
+@@ -432,10 +432,12 @@ char *grub2ExtractTitle(struct singleLine * line) {
+     /* if second word is quoted, strip the quotes and return single word */
+     if (isquote(*current) && isquote(current[current_len - 1])) {
+ 	char *tmp;
+-	
+-	tmp = strdup(current);
+-	*(tmp + current_len - 1) = '\0';
+-	return ++tmp;
++
++	tmp = strdup(current+1);
++	if (!tmp)
++	    return NULL;
++	tmp[strlen(tmp)-1] = '\0';
++	return tmp;
+     }
+ 
+     /* if no quotes, return second word verbatim */
+@@ -448,11 +450,11 @@ char *grub2ExtractTitle(struct singleLine * line) {
+     char * result;
+     /* need to ensure that ' does not match " as we search */
+     char quote_char = *current;
+-    
++
+     resultMaxSize = sizeOfSingleLine(line);
+     result = malloc(resultMaxSize);
+     snprintf(result, resultMaxSize, "%s", ++current);
+-    
++
+     i++;
+     for (; i < line->numElements; ++i) {
+ 	current = line->elements[i].item;
+@@ -4596,27 +4598,35 @@ int main(int argc, const char ** argv) {
+ 	struct singleLine * line;
+ 	struct singleEntry * entry;
+ 
+-	if (config->defaultImage == -1) return 0;
++	if (config->defaultImage == -1)
++	    return 0;
+ 	if (config->defaultImage == DEFAULT_SAVED_GRUB2 &&
+ 		cfi->defaultIsSaved)
+ 	    config->defaultImage = 0;
+ 	entry = findEntryByIndex(config, config->defaultImage);
+-	if (!entry) return 0;
++	if (!entry)
++		return 0;
+ 
+ 	if (!configureGrub2) {
+-	  line = getLineByType(LT_TITLE, entry->lines);
+-	  if (!line) return 0;
+-	  printf("%s\n", line->elements[1].item);
+-
++	    char *title;
++	    line = getLineByType(LT_TITLE, entry->lines);
++	    if (!line)
++		return 0;
++	    title = extractTitle(config, line);
++	    if (!title)
++		return 0;
++	    printf("%s\n", title);
++	    free(title);
+ 	} else {
+-	  char * title;
++	    char * title;
+ 
+-	  dbgPrintf("This is GRUB2, default title is embeded in menuentry\n");
+-	  line = getLineByType(LT_MENUENTRY, entry->lines);
+-	  if (!line) return 0;
+-	  title = grub2ExtractTitle(line);
+-	  if (title)
+-	    printf("%s\n", title);
++	    dbgPrintf("This is GRUB2, default title is embeded in menuentry\n");
++	    line = getLineByType(LT_MENUENTRY, entry->lines);
++	    if (!line)
++		return 0;
++	    title = grub2ExtractTitle(line);
++	    if (title)
++		printf("%s\n", title);
+ 	}
+ 	return 0;
+ 
+diff --git a/test.sh b/test.sh
+index 30115d1..efd9e84 100755
+--- a/test.sh
++++ b/test.sh
+@@ -298,6 +298,9 @@ grubDisplayTest grub.9 defaulttitle/g.9 --default-title
+ grubDisplayTest grub.10 defaulttitle/g.10 --default-title
+ grubDisplayTest grub.11 defaulttitle/g.11 --default-title
+ 
++testing="GRUB display default kernel"
++grubDisplayTest grub.1 defaultkernel/g.1 --default-kernel
++
+ testing="LILO default directive"
+ liloTest lilo.1 default/l1.1 --set-default=/boot/vmlinuz-2.4.18-4
+ liloTest lilo.1 default/l1.2 --remove-kernel=/boot/vmlinuz-2.4.18-4smp
+@@ -305,10 +308,17 @@ liloTest lilo.1 default/l1.3 --add-kernel /boot/kernel --title label \
+     --copy-default
+ liloTest lilo.1 default/l1.4 --add-kernel /boot/kernel --title label \
+     --copy-default --make-default
++liloDisplayTest lilo.1 defaultkernel/l1.1 --default-kernel
+ 
+ testing="Z/IPL default directive"
+ ziplTest zipl.1 default/z1.1 --add-kernel /boot/new-kernel --title test
+ ziplTest zipl.1 default/z1.2 --add-kernel /boot/new-kernel --title test --make-default
++testing="Z/IPL display default index"
++ziplDisplayTest zipl.1 defaultindex/0 --default-index
++testing="Z/IPL display default title"
++ziplDisplayTest zipl.1 defaulttitle/z.1 --default-title
++testing="Z/IPL display default kernel"
++ziplDisplayTest zipl.1 defaultkernel/z.1 --default-kernel
+ 
+ testing="GRUB fallback directive"
+ grubTest grub.5 fallback/g5.1 --remove-kernel=/boot/vmlinuz-2.4.7-ac3 \
+diff --git a/test/results/defaultkernel/g.1 b/test/results/defaultkernel/g.1
+new file mode 100644
+index 0000000..2c3ac11
+--- /dev/null
++++ b/test/results/defaultkernel/g.1
+@@ -0,0 +1 @@
++/boot/vmlinuz-2.4.7-2
+diff --git a/test/results/defaultkernel/l1.1 b/test/results/defaultkernel/l1.1
+new file mode 100644
+index 0000000..fd22b1b
+--- /dev/null
++++ b/test/results/defaultkernel/l1.1
+@@ -0,0 +1 @@
++/boot/vmlinuz-2.4.18-4smp
+diff --git a/test/results/defaultkernel/z.1 b/test/results/defaultkernel/z.1
+new file mode 100644
+index 0000000..2c62e98
+--- /dev/null
++++ b/test/results/defaultkernel/z.1
+@@ -0,0 +1 @@
++/boot/vmlinuz-2.4.9-37
+diff --git a/test/results/defaulttitle/z.1 b/test/results/defaulttitle/z.1
+new file mode 100644
+index 0000000..a08e1f3
+--- /dev/null
++++ b/test/results/defaulttitle/z.1
+@@ -0,0 +1 @@
++linux
+-- 
+2.4.3
+

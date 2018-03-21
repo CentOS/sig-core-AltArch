@@ -1,0 +1,581 @@
+From 8a3357d1257e5e36648c944ff1e461f0f77c88f4 Mon Sep 17 00:00:00 2001
+From: Peter Jones <pjones@redhat.com>
+Date: Thu, 6 Aug 2015 10:07:11 -0400
+Subject: [PATCH 3/3] Make SET_VARIABLE get handled individually in
+ GetNextLine()
+
+Resolves: rhbz#1152550
+
+Signed-off-by: Peter Jones <pjones@redhat.com>
+---
+ .gitignore               |   2 +
+ grubby.c                 | 118 ++++++++++++++++++++++++++------
+ test.sh                  |   8 +++
+ test/grub2.16            | 156 +++++++++++++++++++++++++++++++++++++++++++
+ test/results/add/g2-1.16 | 170 +++++++++++++++++++++++++++++++++++++++++++++++
+ 5 files changed, 433 insertions(+), 21 deletions(-)
+ create mode 100644 test/grub2.16
+ create mode 100644 test/results/add/g2-1.16
+
+diff --git a/.gitignore b/.gitignore
+index e64d3bc..e78a392 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,3 +1,5 @@
+ grubby
+ version.h
+ *.o
++core.*
++vgcore.*
+diff --git a/grubby.c b/grubby.c
+index 53c11a8..04c5bcb 100644
+--- a/grubby.c
++++ b/grubby.c
+@@ -75,6 +75,7 @@ struct lineElement {
+ };
+ 
+ enum lineType_e {
++	LT_UNIDENTIFIED = 0,
+ 	LT_WHITESPACE = 1 << 0,
+ 	LT_TITLE = 1 << 1,
+ 	LT_KERNEL = 1 << 2,
+@@ -740,6 +741,33 @@ static char *sdupprintf(const char *format, ...)
+ 	return buf;
+ }
+ 
++static inline int
++kwcmp(struct keywordTypes *kw, const char * label, int case_insensitive)
++{
++    int kwl = strlen(kw->key);
++    int ll = strlen(label);
++    int rc;
++    int (*snc)(const char *s1, const char *s2, size_t n) =
++           case_insensitive ? strncasecmp : strncmp;
++    int (*sc)(const char *s1, const char *s2) =
++           case_insensitive ? strcasecmp : strcmp;
++
++    rc = snc(kw->key, label, kwl);
++    if (rc)
++       return rc;
++
++    for (int i = kwl; i < ll; i++) {
++       if (isspace(label[i]))
++           return 0;
++       if (kw->separatorChar && label[i] == kw->separatorChar)
++           return 0;
++       else if (kw->nextChar && label[i] == kw->nextChar)
++           return 0;
++       return sc(kw->key+kwl, label+kwl);
++    }
++    return 0;
++}
++
+ static enum lineType_e preferredLineType(enum lineType_e type,
+ 					 struct configFileInfo *cfi)
+ {
+@@ -805,13 +833,8 @@ static enum lineType_e getTypeByKeyword(char *keyword,
+ 					struct configFileInfo *cfi)
+ {
+ 	for (struct keywordTypes * kw = cfi->keywords; kw->key; kw++) {
+-		if (cfi->caseInsensitive) {
+-			if (!strcasecmp(keyword, kw->key))
+-				return kw->type;
+-		} else {
+-			if (!strcmp(keyword, kw->key))
+-				return kw->type;
+-		}
++		if (!kwcmp(kw, keyword, cfi->caseInsensitive))
++			return kw->type;
+ 	}
+ 	return LT_UNKNOWN;
+ }
+@@ -906,6 +929,7 @@ static int readFile(int fd, char **bufPtr)
+ 
+ static void lineInit(struct singleLine *line)
+ {
++	line->type = LT_UNIDENTIFIED;
+ 	line->indent = NULL;
+ 	line->elements = NULL;
+ 	line->numElements = 0;
+@@ -987,7 +1011,7 @@ static int lineWrite(FILE * out, struct singleLine *line,
+ 
+ 		if (fprintf(out, "%s", line->elements[i].item) == -1)
+ 			return -1;
+-		if (i < line->numElements - 1)
++		if (i < line->numElements - 1 || line->type == LT_SET_VARIABLE)
+ 			if (fprintf(out, "%s", line->elements[i].indent) == -1)
+ 				return -1;
+ 	}
+@@ -1042,6 +1066,8 @@ static int getNextLine(char **bufPtr, struct singleLine *line,
+ 				break;
+ 			chptr++;
+ 		}
++		if (line->type == LT_UNIDENTIFIED)
++			line->type = getTypeByKeyword(start, cfi);
+ 		element->item = strndup(start, chptr - start);
+ 		start = chptr;
+ 
+@@ -1105,7 +1131,7 @@ static int getNextLine(char **bufPtr, struct singleLine *line,
+ 				line->type = LT_WHITESPACE;
+ 				line->numElements = 0;
+ 			}
+-		} else {
++		} else if (line->type == LT_INITRD) {
+ 			struct keywordTypes *kw;
+ 
+ 			kw = getKeywordByType(line->type, cfi);
+@@ -1167,6 +1193,39 @@ static int getNextLine(char **bufPtr, struct singleLine *line,
+ 					}
+ 				}
+ 			}
++		} else if (line->type == LT_SET_VARIABLE) {
++			/* and if it's a "set blah=" we need to split it
++			 * yet a third way to avoid rhbz# XXX FIXME :/
++			 */
++			char *eq;
++			int l;
++			int numElements = line->numElements;
++			struct lineElement *newElements;
++			eq = strchr(line->elements[1].item, '=');
++			if (!eq)
++				return 0;
++			l = eq - line->elements[1].item;
++			if (eq[1] != 0)
++				numElements++;
++			newElements = calloc(numElements,sizeof (*newElements));
++			memcpy(&newElements[0], &line->elements[0],
++			       sizeof (newElements[0]));
++			newElements[1].item =
++				strndup(line->elements[1].item, l);
++			newElements[1].indent = "=";
++			*(eq++) = '\0';
++			newElements[2].item = strdup(eq);
++			free(line->elements[1].item);
++			if (line->elements[1].indent)
++				newElements[2].indent = line->elements[1].indent;
++			for (int i = 2; i < line->numElements; i++) {
++				newElements[i+1].item = line->elements[i].item;
++				newElements[i+1].indent =
++					line->elements[i].indent;
++			}
++			free(line->elements);
++			line->elements = newElements;
++			line->numElements = numElements;
+ 		}
+ 	}
+ 
+@@ -1272,8 +1331,8 @@ static struct grubConfig *readConfig(const char *inName,
+ 			    getKeywordByType(LT_DEFAULT, cfi);
+ 			if (kwType && line->numElements == 3
+ 			    && !strcmp(line->elements[1].item, kwType->key)
+-			    && !is_special_grub2_variable(line->elements[2].
+-							  item)) {
++			    && !is_special_grub2_variable(
++						line->elements[2].item)) {
+ 				dbgPrintf("Line sets default config\n");
+ 				cfg->flags &= ~GRUB_CONFIG_NO_DEFAULT;
+ 				defaultLine = line;
+@@ -1529,16 +1588,33 @@ static struct grubConfig *readConfig(const char *inName,
+ 				}
+ 			}
+ 		} else if (cfi->defaultIsVariable) {
+-			char *value = defaultLine->elements[2].item;
+-			while (*value && (*value == '"' || *value == '\'' ||
+-					  *value == ' ' || *value == '\t'))
+-				value++;
+-			cfg->defaultImage = strtol(value, &end, 10);
+-			while (*end && (*end == '"' || *end == '\'' ||
+-					*end == ' ' || *end == '\t'))
+-				end++;
+-			if (*end)
+-				cfg->defaultImage = -1;
++			if (defaultLine->numElements == 2) {
++				char *value = defaultLine->elements[1].item + 8;
++				while (*value && (*value == '"' ||
++						  *value == '\'' ||
++						  *value == ' ' ||
++						  *value == '\t'))
++					value++;
++				cfg->defaultImage = strtol(value, &end, 10);
++				while (*end && (*end == '"' || *end == '\'' ||
++						*end == ' ' || *end == '\t'))
++					end++;
++				if (*end)
++					cfg->defaultImage = -1;
++			} else if (defaultLine->numElements == 3) {
++				char *value = defaultLine->elements[2].item;
++				while (*value && (*value == '"' ||
++						  *value == '\'' ||
++						  *value == ' ' ||
++						  *value == '\t'))
++					value++;
++				cfg->defaultImage = strtol(value, &end, 10);
++				while (*end && (*end == '"' || *end == '\'' ||
++						*end == ' ' || *end == '\t'))
++					end++;
++				if (*end)
++					cfg->defaultImage = -1;
++			}
+ 		} else if (cfi->defaultSupportSaved &&
+ 			   !strncmp(defaultLine->elements[1].item, "saved",
+ 				    5)) {
+diff --git a/test.sh b/test.sh
+index c2a66e2..9e9be23 100755
+--- a/test.sh
++++ b/test.sh
+@@ -542,6 +542,14 @@ if [ "$testgrub2" == "y" ]; then
+             ;;
+         esac
+ 
++    # a grub2 add with a "set" of the form: set foo="bar=1,2".  bz#1152550
++    # has this being emitted as: set foo="bar=1,2"=1,2"
++    # which is wrong.
++    grub2Test grub2.16 add/g2-1.16 \
++        --add-kernel=/boot/vmlinuz-foo \
++        --copy-default --title 'Red Hat Enterprise Linux Server' \
++        --args=root=/dev/mapper/foo--
++
+     testing="GRUB2 add initrd"
+     grub2Test grub2.2 add/g2-1.4 --update-kernel=/boot/new-kernel.img \
+         --initrd=/boot/new-initrd --boot-filesystem=/boot/
+diff --git a/test/grub2.16 b/test/grub2.16
+new file mode 100644
+index 0000000..136880a
+--- /dev/null
++++ b/test/grub2.16
+@@ -0,0 +1,156 @@
++#
++# DO NOT EDIT THIS FILE
++#
++# It is automatically generated by grub2-mkconfig using templates
++# from /etc/grub.d and settings from /etc/default/grub
++#
++
++### BEGIN /etc/grub.d/00_header ###
++set pager=1
++
++if [ -s $prefix/grubenv ]; then
++  load_env
++fi
++if [ "${next_entry}" ] ; then
++   set default="${next_entry}"
++   set next_entry=
++   save_env next_entry
++   set boot_once=true
++else
++   set default="${saved_entry}"
++fi
++
++if [ x"${feature_menuentry_id}" = xy ]; then
++  menuentry_id_option="--id"
++else
++  menuentry_id_option=""
++fi
++
++export menuentry_id_option
++
++if [ "${prev_saved_entry}" ]; then
++  set saved_entry="${prev_saved_entry}"
++  save_env saved_entry
++  set prev_saved_entry=
++  save_env prev_saved_entry
++  set boot_once=true
++fi
++
++function savedefault {
++  if [ -z "${boot_once}" ]; then
++    saved_entry="${chosen}"
++    save_env saved_entry
++  fi
++}
++
++function load_video {
++  if [ x$feature_all_video_module = xy ]; then
++    insmod all_video
++  else
++    insmod efi_gop
++    insmod efi_uga
++    insmod ieee1275_fb
++    insmod vbe
++    insmod vga
++    insmod video_bochs
++    insmod video_cirrus
++  fi
++}
++
++serial --speed=115200
++terminal_input serial console
++terminal_output serial console
++if [ x$feature_timeout_style = xy ] ; then
++  set timeout_style=menu
++  set timeout=5
++# Fallback normal timeout code in case the timeout_style feature is
++# unavailable.
++else
++  set timeout=5
++fi
++### END /etc/grub.d/00_header ###
++
++### BEGIN /etc/grub.d/00_tuned ###
++set tuned_params="isolcpus=1,3"
++### END /etc/grub.d/00_tuned ###
++
++### BEGIN /etc/grub.d/01_users ###
++if [ -f ${prefix}/user.cfg ]; then
++  source ${prefix}/user.cfg
++  if [ -n ${GRUB2_PASSWORD} ]; then
++    set superusers="root"
++    export superusers
++    password_pbkdf2 root ${GRUB2_PASSWORD}
++  fi
++fi
++### END /etc/grub.d/01_users ###
++
++### BEGIN /etc/grub.d/10_linux ###
++menuentry 'Red Hat Enterprise Linux Server (3.10.0-297.el7.x86_64) 7.2 (Maipo)' --class red --class gnu-linux --class gnu --class os --unrestricted $menuentry_id_option 'gnulinux-3.10.0-296.el7.x86_64-advanced-ae7b3742-9092-4432-9f7f-8abdbf0dc3db' {
++	load_video
++	set gfxpayload=keep
++	insmod gzio
++	insmod part_msdos
++	insmod xfs
++	set root='hd0,msdos1'
++	if [ x$feature_platform_search_hint = xy ]; then
++	  search --no-floppy --fs-uuid --set=root --hint='hd0,msdos1'  cae02b39-f239-4d26-9032-674d261c93d8
++	else
++	  search --no-floppy --fs-uuid --set=root cae02b39-f239-4d26-9032-674d261c93d8
++	fi
++	linux16 /vmlinuz-3.10.0-297.el7.x86_64 root=/dev/mapper/rhel_hp--dl380pgen8--02--vm--10-root ro crashkernel=auto rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/root rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/swap console=ttyS0,115200n81  $tuned_params LANG=en_US.UTF-8
++}
++menuentry 'Red Hat Enterprise Linux Server (3.10.0-296.el7.x86_64) 7.2 (Maipo)' --class red --class gnu-linux --class gnu --class os --unrestricted $menuentry_id_option 'gnulinux-3.10.0-296.el7.x86_64-advanced-ae7b3742-9092-4432-9f7f-8abdbf0dc3db' {
++	load_video
++	set gfxpayload=keep
++	insmod gzio
++	insmod part_msdos
++	insmod xfs
++	set root='hd0,msdos1'
++	if [ x$feature_platform_search_hint = xy ]; then
++	  search --no-floppy --fs-uuid --set=root --hint='hd0,msdos1'  cae02b39-f239-4d26-9032-674d261c93d8
++	else
++	  search --no-floppy --fs-uuid --set=root cae02b39-f239-4d26-9032-674d261c93d8
++	fi
++	linux16 /vmlinuz-3.10.0-296.el7.x86_64 root=/dev/mapper/rhel_hp--dl380pgen8--02--vm--10-root ro crashkernel=auto rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/root rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/swap console=ttyS0,115200n81  $tuned_params
++	initrd16 /initramfs-3.10.0-296.el7.x86_64.img
++}
++menuentry 'Red Hat Enterprise Linux Server (0-rescue-cc21b92886f9ebbd3ed5a494639b7fd7) 7.2 (Maipo)' --class red --class gnu-linux --class gnu --class os --unrestricted $menuentry_id_option 'gnulinux-0-rescue-cc21b92886f9ebbd3ed5a494639b7fd7-advanced-ae7b3742-9092-4432-9f7f-8abdbf0dc3db' {
++	load_video
++	insmod gzio
++	insmod part_msdos
++	insmod xfs
++	set root='hd0,msdos1'
++	if [ x$feature_platform_search_hint = xy ]; then
++	  search --no-floppy --fs-uuid --set=root --hint='hd0,msdos1'  cae02b39-f239-4d26-9032-674d261c93d8
++	else
++	  search --no-floppy --fs-uuid --set=root cae02b39-f239-4d26-9032-674d261c93d8
++	fi
++	linux16 /vmlinuz-0-rescue-cc21b92886f9ebbd3ed5a494639b7fd7 root=/dev/mapper/rhel_hp--dl380pgen8--02--vm--10-root ro crashkernel=auto rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/root rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/swap console=ttyS0,115200n81  $tuned_params
++	initrd16 /initramfs-0-rescue-cc21b92886f9ebbd3ed5a494639b7fd7.img
++}
++if [ "x$default" = 'Red Hat Enterprise Linux Server (3.10.0-296.el7.x86_64) 7.2 (Maipo)' ]; then default='Advanced options for Red Hat Enterprise Linux Server>Red Hat Enterprise Linux Server (3.10.0-296.el7.x86_64) 7.2 (Maipo)'; fi;
++### END /etc/grub.d/10_linux ###
++
++### BEGIN /etc/grub.d/20_linux_xen ###
++### END /etc/grub.d/20_linux_xen ###
++
++### BEGIN /etc/grub.d/20_ppc_terminfo ###
++### END /etc/grub.d/20_ppc_terminfo ###
++
++### BEGIN /etc/grub.d/30_os-prober ###
++### END /etc/grub.d/30_os-prober ###
++
++### BEGIN /etc/grub.d/40_custom ###
++# This file provides an easy way to add custom menu entries.  Simply type the
++# menu entries you want to add after this comment.  Be careful not to change
++# the 'exec tail' line above.
++### END /etc/grub.d/40_custom ###
++
++### BEGIN /etc/grub.d/41_custom ###
++if [ -f  ${config_directory}/custom.cfg ]; then
++  source ${config_directory}/custom.cfg
++elif [ -z "${config_directory}" -a -f  $prefix/custom.cfg ]; then
++  source $prefix/custom.cfg;
++fi
++### END /etc/grub.d/41_custom ###
+diff --git a/test/results/add/g2-1.16 b/test/results/add/g2-1.16
+new file mode 100644
+index 0000000..fc98757
+--- /dev/null
++++ b/test/results/add/g2-1.16
+@@ -0,0 +1,170 @@
++#
++# DO NOT EDIT THIS FILE
++#
++# It is automatically generated by grub2-mkconfig using templates
++# from /etc/grub.d and settings from /etc/default/grub
++#
++
++### BEGIN /etc/grub.d/00_header ###
++set pager=1
++
++if [ -s $prefix/grubenv ]; then
++  load_env
++fi
++if [ "${next_entry}" ] ; then
++   set default="${next_entry}"
++   set next_entry=
++   save_env next_entry
++   set boot_once=true
++else
++   set default="${saved_entry}"
++fi
++
++if [ x"${feature_menuentry_id}" = xy ]; then
++  menuentry_id_option="--id"
++else
++  menuentry_id_option=""
++fi
++
++export menuentry_id_option
++
++if [ "${prev_saved_entry}" ]; then
++  set saved_entry="${prev_saved_entry}"
++  save_env saved_entry
++  set prev_saved_entry=
++  save_env prev_saved_entry
++  set boot_once=true
++fi
++
++function savedefault {
++  if [ -z "${boot_once}" ]; then
++    saved_entry="${chosen}"
++    save_env saved_entry
++  fi
++}
++
++function load_video {
++  if [ x$feature_all_video_module = xy ]; then
++    insmod all_video
++  else
++    insmod efi_gop
++    insmod efi_uga
++    insmod ieee1275_fb
++    insmod vbe
++    insmod vga
++    insmod video_bochs
++    insmod video_cirrus
++  fi
++}
++
++serial --speed=115200
++terminal_input serial console
++terminal_output serial console
++if [ x$feature_timeout_style = xy ] ; then
++  set timeout_style=menu
++  set timeout=5
++# Fallback normal timeout code in case the timeout_style feature is
++# unavailable.
++else
++  set timeout=5
++fi
++### END /etc/grub.d/00_header ###
++
++### BEGIN /etc/grub.d/00_tuned ###
++set tuned_params="isolcpus=1,3"
++### END /etc/grub.d/00_tuned ###
++
++### BEGIN /etc/grub.d/01_users ###
++if [ -f ${prefix}/user.cfg ]; then
++  source ${prefix}/user.cfg
++  if [ -n ${GRUB2_PASSWORD} ]; then
++    set superusers="root"
++    export superusers
++    password_pbkdf2 root ${GRUB2_PASSWORD}
++  fi
++fi
++### END /etc/grub.d/01_users ###
++
++### BEGIN /etc/grub.d/10_linux ###
++menuentry 'Red Hat Enterprise Linux Server' --class red --class gnu-linux --class gnu --class os --unrestricted $menuentry_id_option 'gnulinux-3.10.0-296.el7.x86_64-advanced-ae7b3742-9092-4432-9f7f-8abdbf0dc3db' {
++	load_video
++	set gfxpayload=keep
++	insmod gzio
++	insmod part_msdos
++	insmod xfs
++	set root='hd0,msdos1'
++	if [ x$feature_platform_search_hint = xy ]; then
++	  search --no-floppy --fs-uuid --set=root --hint='hd0,msdos1'  cae02b39-f239-4d26-9032-674d261c93d8
++	else
++	  search --no-floppy --fs-uuid --set=root cae02b39-f239-4d26-9032-674d261c93d8
++	fi
++	linux16 /vmlinuz-foo root=/dev/mapper/foo-- ro crashkernel=auto rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/root rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/swap console=ttyS0,115200n81  $tuned_params LANG=en_US.UTF-8
++}
++menuentry 'Red Hat Enterprise Linux Server (3.10.0-297.el7.x86_64) 7.2 (Maipo)' --class red --class gnu-linux --class gnu --class os --unrestricted $menuentry_id_option 'gnulinux-3.10.0-296.el7.x86_64-advanced-ae7b3742-9092-4432-9f7f-8abdbf0dc3db' {
++	load_video
++	set gfxpayload=keep
++	insmod gzio
++	insmod part_msdos
++	insmod xfs
++	set root='hd0,msdos1'
++	if [ x$feature_platform_search_hint = xy ]; then
++	  search --no-floppy --fs-uuid --set=root --hint='hd0,msdos1'  cae02b39-f239-4d26-9032-674d261c93d8
++	else
++	  search --no-floppy --fs-uuid --set=root cae02b39-f239-4d26-9032-674d261c93d8
++	fi
++	linux16 /vmlinuz-3.10.0-297.el7.x86_64 root=/dev/mapper/rhel_hp--dl380pgen8--02--vm--10-root ro crashkernel=auto rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/root rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/swap console=ttyS0,115200n81  $tuned_params LANG=en_US.UTF-8
++}
++menuentry 'Red Hat Enterprise Linux Server (3.10.0-296.el7.x86_64) 7.2 (Maipo)' --class red --class gnu-linux --class gnu --class os --unrestricted $menuentry_id_option 'gnulinux-3.10.0-296.el7.x86_64-advanced-ae7b3742-9092-4432-9f7f-8abdbf0dc3db' {
++	load_video
++	set gfxpayload=keep
++	insmod gzio
++	insmod part_msdos
++	insmod xfs
++	set root='hd0,msdos1'
++	if [ x$feature_platform_search_hint = xy ]; then
++	  search --no-floppy --fs-uuid --set=root --hint='hd0,msdos1'  cae02b39-f239-4d26-9032-674d261c93d8
++	else
++	  search --no-floppy --fs-uuid --set=root cae02b39-f239-4d26-9032-674d261c93d8
++	fi
++	linux16 /vmlinuz-3.10.0-296.el7.x86_64 root=/dev/mapper/rhel_hp--dl380pgen8--02--vm--10-root ro crashkernel=auto rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/root rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/swap console=ttyS0,115200n81  $tuned_params
++	initrd16 /initramfs-3.10.0-296.el7.x86_64.img
++}
++menuentry 'Red Hat Enterprise Linux Server (0-rescue-cc21b92886f9ebbd3ed5a494639b7fd7) 7.2 (Maipo)' --class red --class gnu-linux --class gnu --class os --unrestricted $menuentry_id_option 'gnulinux-0-rescue-cc21b92886f9ebbd3ed5a494639b7fd7-advanced-ae7b3742-9092-4432-9f7f-8abdbf0dc3db' {
++	load_video
++	insmod gzio
++	insmod part_msdos
++	insmod xfs
++	set root='hd0,msdos1'
++	if [ x$feature_platform_search_hint = xy ]; then
++	  search --no-floppy --fs-uuid --set=root --hint='hd0,msdos1'  cae02b39-f239-4d26-9032-674d261c93d8
++	else
++	  search --no-floppy --fs-uuid --set=root cae02b39-f239-4d26-9032-674d261c93d8
++	fi
++	linux16 /vmlinuz-0-rescue-cc21b92886f9ebbd3ed5a494639b7fd7 root=/dev/mapper/rhel_hp--dl380pgen8--02--vm--10-root ro crashkernel=auto rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/root rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/swap console=ttyS0,115200n81  $tuned_params
++	initrd16 /initramfs-0-rescue-cc21b92886f9ebbd3ed5a494639b7fd7.img
++}
++if [ "x$default" = 'Red Hat Enterprise Linux Server (3.10.0-296.el7.x86_64) 7.2 (Maipo)' ]; then default='Advanced options for Red Hat Enterprise Linux Server>Red Hat Enterprise Linux Server (3.10.0-296.el7.x86_64) 7.2 (Maipo)'; fi;
++### END /etc/grub.d/10_linux ###
++
++### BEGIN /etc/grub.d/20_linux_xen ###
++### END /etc/grub.d/20_linux_xen ###
++
++### BEGIN /etc/grub.d/20_ppc_terminfo ###
++### END /etc/grub.d/20_ppc_terminfo ###
++
++### BEGIN /etc/grub.d/30_os-prober ###
++### END /etc/grub.d/30_os-prober ###
++
++### BEGIN /etc/grub.d/40_custom ###
++# This file provides an easy way to add custom menu entries.  Simply type the
++# menu entries you want to add after this comment.  Be careful not to change
++# the 'exec tail' line above.
++### END /etc/grub.d/40_custom ###
++
++### BEGIN /etc/grub.d/41_custom ###
++if [ -f  ${config_directory}/custom.cfg ]; then
++  source ${config_directory}/custom.cfg
++elif [ -z "${config_directory}" -a -f  $prefix/custom.cfg ]; then
++  source $prefix/custom.cfg;
++fi
++### END /etc/grub.d/41_custom ###
+-- 
+2.4.3
+

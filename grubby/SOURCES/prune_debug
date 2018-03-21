@@ -1,0 +1,173 @@
+#!/bin/sh
+
+######################################################################
+# Prune undesired systemd.debug entries in kernels that are not
+# marked for debugging. See Red Hat bugzilla 1285601.
+######################################################################
+
+PATH=/usr/bin:/usr/sbin
+EPOCH_DATE=$(date +"%s")
+LOG_DIR="/var/log"
+LOG_FILE="${LOG_DIR}/grubby_prune_debug"
+
+display_event()
+{
+    EVENT_LABEL="$1"
+    EVENT_DATA="$2"
+    JUSTIFIED_LABEL=$(printf "%-12s" "${EVENT_LABEL}")
+    LOG_TIMESTAMP=$(date +"%s")
+    echo "[${LOG_TIMESTAMP}] ${JUSTIFIED_LABEL}: ${EVENT_DATA}" >> "${LOG_FILE}"
+}
+
+exit_event()
+{
+    display_event "Exit" "Exiting script"
+    exit $1
+}
+
+find_entry_by_title()
+{
+    SEARCH_TITLE=$1
+
+    display_event "Examine" "Searching for entry title - ${SEARCH_TITLE}"
+
+    for current_index in $(grubby --info=ALL|grep "^index="| sed 's/^index=//') ; do
+        CURRENT_TITLE=$(grubby --info="${current_index}" 2> /dev/null |grep "^title=" | sed 's/^title=//')
+
+        # do not do anything if this was empty
+        [ -z "${CURRENT_TITLE}" ] && continue
+
+        if [ "${CURRENT_TITLE}" = "${SEARCH_TITLE}" ]; then
+            echo "${current_index}"
+            break;
+        fi
+    done
+}
+
+[ -d "${LOG_DIR}" ] || mkdir -p -m 0755 "${LOG_DIR}"
+
+display_event "Start" "Begin search for extraneous debug arguments"
+
+if [ "$(id -u)" -ne 0 ]; then
+    display_event "Error" "This script may only run as root."
+    exit_event 0
+fi
+
+######################################################################
+# Back up the grub.cfg for sanity
+######################################################################
+BOOTLOADER_CFG=
+BOOTLOADER_CFG_BK=
+
+if [ -f "/etc/grub2.cfg" ]; then
+    BOOTLOADER_CFG=$(realpath "/etc/grub2.cfg")
+    BOOTLOADER_CFG_BK="${BOOTLOADER_CFG}.${EPOCH_DATE}.rpmsave"
+elif [ -f "/etc/grub2-efi.cfg" ]; then
+    BOOTLOADER_CFG=$(realpath "/etc/grub2-efi.cfg")
+    BOOTLOADER_CFG_BK="${BOOTLOADER_CFG}.${EPOCH_DATE}.rpmsave"
+elif [ -f "/etc/zipl.conf" ]; then
+    BOOTLOADER_CFG=$(realpath "/etc/zipl.conf")
+    BOOTLOADER_CFG_BK="${BOOTLOADER_CFG}.${EPOCH_DATE}.rpmsave"
+elif [ -f "/etc/yaboot.conf" ]; then
+    BOOTLOADER_CFG=$(realpath "/etc/yaboot.conf")
+    BOOTLOADER_CFG_BK="${BOOTLOADER_CFG}.${EPOCH_DATE}.rpmsave"
+fi
+
+if [ -z "${BOOTLOADER_CFG}" ]; then
+    display_event "Error" "Could not find a bootloader configuration to back up"
+    exit_event 0
+fi
+
+if [ -f "${BOOTLOADER_CFG}" ]; then
+    if cp -a "${BOOTLOADER_CFG}" "${BOOTLOADER_CFG_BK}" 2> /dev/null; then
+        display_event "Copied" \
+            "Current configuration backed up to ${BOOTLOADER_CFG_BK}"
+    else
+        display_event "Error" "Could not write ${BOOTLOADER_CFG_BK}"
+        exit_event 0
+    fi
+fi
+
+######################################################################
+#  Figure out what the debugging tag will look like
+######################################################################
+ARCH=$(uname -m)
+if [ $ARCH = 's390' -o $ARCH = 's390x' ]; then
+    DEBUGGING_TAG="_with_debugging"
+else
+    DEBUGGING_TAG=" with debugging"
+fi
+
+######################################################################
+# Remove the systemd.debug kernel arguments from standard non-debug
+# kernel entries only
+######################################################################
+display_event "Examine" "Searching for distribution provided debugging entries"
+for entry_index in $(grubby --info=ALL|grep "^index="| sed 's/^index=//') ; do
+    INDEX_TITLE=$(grubby --info="${entry_index}" 2> /dev/null |grep "^title=" | sed 's/^title=//')
+
+    # do not do anything if this was empty
+    [ -z "${INDEX_TITLE}" ] && continue
+
+    if echo "${INDEX_TITLE}" | grep -q "${DEBUGGING_TAG}$"; then
+        display_event "Found" "Found distribution provided debugging entry - ${INDEX_TITLE}"
+        NON_DEBUG_TITLE=$(echo "${INDEX_TITLE}" | sed "s/${DEBUGGING_TAG}$//")
+        NON_DEBUG_INDEX=$(find_entry_by_title "${NON_DEBUG_TITLE}")
+
+        if [ -n "${NON_DEBUG_INDEX}" ]; then
+            display_event "Found" "Found matching non-debugging entry - ${NON_DEBUG_TITLE}"
+            KERNEL_ARGS=$(grubby --info="${NON_DEBUG_INDEX}" 2> /dev/null |grep "^args=")
+            if echo "${KERNEL_ARGS}" | grep -E -q 'systemd.debug|systemd.log_level=debug|systemd.log_target=kmsg'; then
+                if grubby --update-kernel="${NON_DEBUG_INDEX}" --remove-args="systemd.debug systemd.log_level=debug systemd.log_target=kmsg"; then
+                    display_event "Update" "Removed debugging arguments for ${NON_DEBUG_TITLE}"
+                else
+                    display_event "Error" "grubby failed to remove debug argument from ${NON_DEBUG_TITLE}"
+                fi
+            else
+                display_event "Skip" "No debugging arguments to remove for ${NON_DEBUG_TITLE}"
+            fi
+        else
+            display_event "Error" "Could not find the matching non-debugging entry - ${NON_DEBUG_TITLE}"
+        fi
+    fi
+done
+
+######################################################################
+# The default entry should not have debugging statements
+######################################################################
+
+# source of ALLOW_DEBUGGING_DEFAULT
+[ -f /etc/sysconfig/kernel ] && . /etc/sysconfig/kernel
+
+CURRENT_DEFAULT_INDEX=$(grubby --default-index)
+CURRENT_TITLE=$(grubby --info="${CURRENT_DEFAULT_INDEX}" 2> /dev/null |grep "^title=" | sed 's/^title=//')
+if echo "${CURRENT_TITLE}" | grep -q "${DEBUGGING_TAG}$"; then
+    case "${ALLOW_DEBUGGING_DEFAULT}" in
+        [Yy][Ee][Ss]|[Tt][Rr][Uu][Ee]|1)
+            display_event "Examine" "Detected user preference to allow debugging default entries if present"
+            exit_event 0
+            ;;
+    esac
+
+    display_event "Examine" "Search for entry without debugging to replace default entry - ${CURRENT_TITLE}"
+
+    unset NON_DEBUG_INDEX
+    unset NON_DEBUG_TITLE
+
+    ARCH=$(uname -m)
+    NON_DEBUG_TITLE=$(echo "${CURRENT_TITLE}" | sed "s/${DEBUGGING_TAG}$//")
+
+    NON_DEBUG_INDEX=$(find_entry_by_title "${NON_DEBUG_TITLE}")
+
+    if [ -n "${NON_DEBUG_INDEX}" ]; then
+        if grubby --set-default-index="${NON_DEBUG_INDEX}"; then
+            display_event "Update" "Selected ${NON_DEBUG_TITLE} as the new default entry"
+        else
+            display_event "Error" "Could not set ${NON_DEBUG_TITLE} as default"
+        fi
+    else
+        display_event "Error" "Could not find the matching non-debugging entry"
+    fi
+fi
+
+exit_event 0

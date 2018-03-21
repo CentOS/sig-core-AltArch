@@ -1,0 +1,42 @@
+From 8f0ef3e08aaef134ec4acfe87a6628b3fda2243c Mon Sep 17 00:00:00 2001
+From: Don Zickus <dzickus@redhat.com>
+Date: Wed, 22 Jul 2015 13:58:53 -0400
+Subject: [PATCH] ppc64le sync grub.cfg changes to disk (#1212114)
+
+After installing a new kernel, if a panic is induced, not all the kernel
+pieces are on the disk (most importantly the grub.cfg changes).  This can
+lead to a hung system on a reboot because the older kernel can not be found.
+
+Address this by forcing all the changes (mainly the fs meta data) to disk
+before finishing the kernel package installation.
+
+Tested by 'yum install kernel-...; echo c > /proc/sysrq-trigger'.
+
+Before, the machine would panic and on reboot be stuck without a grub.cfg
+to read.  After, works as expected.
+
+Related: rhbz#1212114
+---
+ new-kernel-pkg | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/new-kernel-pkg b/new-kernel-pkg
+index 1f6ab39..90652da 100755
+--- a/new-kernel-pkg
++++ b/new-kernel-pkg
+@@ -927,4 +927,12 @@ fi
+ # if we mounted the U-Boot directory, unmount it.
+ [ -n "$mounted" ] && umount $ubootDir
+ 
++# make sure changes make it to the disk.
++# if /boot is a mountpoint, force the meta data on disk
++# to by-pass writeback delay.
++# PPC64LE-only to deal with Petitboot issues
++if [ "$ARCH" = "ppc64le" ]; then
++    sync && mountpoint -q /boot &&fsfreeze -f /boot && fsfreeze -u /boot
++fi
++
+ exit 0
+-- 
+1.8.3.1
+

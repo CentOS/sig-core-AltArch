@@ -1,0 +1,50 @@
+From db71a9ef9363f9ce01ee1746c827f8a2feac73e7 Mon Sep 17 00:00:00 2001
+From: Robert Marshall <rmarshall@redhat.com>
+Date: Thu, 8 Dec 2016 16:52:45 -0500
+Subject: [PATCH 63/69] Track configuration modifications
+
+The setDefaultImage function had a subtle dependency on being run before
+addNewKernel is invoked. Added the ability to track invocation to
+prevent them from being so tightly coupled.
+
+Related: rhbz#1285601
+---
+ grubby.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/grubby.c b/grubby.c
+index bece23a..3929212 100644
+--- a/grubby.c
++++ b/grubby.c
+@@ -671,6 +671,8 @@ struct grubConfig {
+ 	int fallbackImage;	/* just like defaultImage */
+ 	int flags;
+ 	struct configFileInfo *cfi;
++	int isModified;		/* assumes only one entry added
++				   per invocation of grubby */
+ };
+ 
+ blkid_cache blkid;
+@@ -1399,6 +1401,7 @@ static struct grubConfig *readConfig(const char *inName,
+ 	cfg->theLines = NULL;
+ 	cfg->entries = NULL;
+ 	cfg->fallbackImage = 0;
++	cfg->isModified = 0;
+ 
+ 	/* copy everything we have */
+ 	while (*head) {
+@@ -4764,8 +4767,10 @@ int addNewKernel(struct grubConfig *config, struct singleEntry *template,
+ 	}
+ 
+ 	if (updateImage(config, indexs, prefix, newKernelArgs, NULL,
+-			newMBKernelArgs, NULL))
++			newMBKernelArgs, NULL)) {
++		config->isModified = 1;
+ 		return 1;
++	}
+ 
+ 	return 0;
+ }
+-- 
+2.9.3
+

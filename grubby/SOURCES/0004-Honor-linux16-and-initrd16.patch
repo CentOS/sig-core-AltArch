@@ -1,0 +1,638 @@
+From 5a5b33da8239428245f3595848f10c0f184041b3 Mon Sep 17 00:00:00 2001
+From: Peter Jones <pjones@redhat.com>
+Date: Mon, 18 Nov 2013 14:44:13 -0500
+Subject: [PATCH 04/41] Honor "linux16" and "initrd16"
+
+Resolves: rhbz#1031192
+Resolves: rhbz#1034743
+
+Signed-off-by: Peter Jones <pjones@redhat.com>
+---
+ grubby.c                 | 63 ++++++++++++++++++++++---------
+ test.sh                  | 16 ++++++++
+ test/grub2.10            | 84 +++++++++++++++++++++++++++++++++++++++++
+ test/grub2.11            | 97 +++++++++++++++++++++++++++++++++++++++++++++++
+ test/results/add/g2-1.10 | 96 +++++++++++++++++++++++++++++++++++++++++++++++
+ test/results/add/g2-1.11 | 98 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 6 files changed, 437 insertions(+), 17 deletions(-)
+ create mode 100644 test/grub2.10
+ create mode 100644 test/grub2.11
+ create mode 100644 test/results/add/g2-1.10
+ create mode 100644 test/results/add/g2-1.11
+
+diff --git a/grubby.c b/grubby.c
+index d91a847..aa228c3 100644
+--- a/grubby.c
++++ b/grubby.c
+@@ -90,7 +90,9 @@ enum lineType_e {
+     LT_SET_VARIABLE = 1 << 19,
+     LT_KERNEL_EFI   = 1 << 20,
+     LT_INITRD_EFI   = 1 << 21,
+-    LT_UNKNOWN      = 1 << 22,
++    LT_KERNEL_16    = 1 << 22,
++    LT_INITRD_16    = 1 << 23,
++    LT_UNKNOWN      = 1 << 24,
+ };
+ 
+ struct singleLine {
+@@ -220,8 +222,10 @@ struct keywordTypes grub2Keywords[] = {
+     { "fallback",   LT_FALLBACK,    ' ' },
+     { "linux",      LT_KERNEL,      ' ' },
+     { "linuxefi",   LT_KERNEL_EFI,  ' ' },
++    { "linux16",    LT_KERNEL_16,   ' ' },
+     { "initrd",     LT_INITRD,      ' ', ' ' },
+     { "initrdefi",  LT_INITRD_EFI,  ' ', ' ' },
++    { "initrd16",   LT_INITRD_16,   ' ', ' ' },
+     { "module",     LT_MBMODULE,    ' ' },
+     { "kernel",     LT_HYPER,       ' ' },
+     { NULL, 0, 0 },
+@@ -395,11 +399,11 @@ static int isquote(char q)
+ }
+ 
+ static int iskernel(enum lineType_e type) {
+-    return (type == LT_KERNEL || type == LT_KERNEL_EFI);
++    return (type == LT_KERNEL || type == LT_KERNEL_EFI || type == LT_KERNEL_16);
+ }
+ 
+ static int isinitrd(enum lineType_e type) {
+-    return (type == LT_INITRD || type == LT_INITRD_EFI);
++    return (type == LT_INITRD || type == LT_INITRD_EFI || type == LT_INITRD_16);
+ }
+ 
+ char *grub2ExtractTitle(struct singleLine * line) {
+@@ -717,6 +721,17 @@ static enum lineType_e preferredLineType(enum lineType_e type,
+ 	default:
+ 	    return type;
+ 	}
++#if defined(__i386__) || defined(__x86_64__)
++    } else if (cfi == &grub2ConfigType) {
++	switch (type) {
++	case LT_KERNEL:
++	    return LT_KERNEL_16;
++	case LT_INITRD:
++	    return LT_INITRD_16;
++	default:
++	    return type;
++	}
++#endif
+     }
+     return type;
+ }
+@@ -1804,7 +1819,7 @@ int suitableImage(struct singleEntry * entry, const char * bootPrefix,
+ 	return 0;
+     }
+ 
+-    line = getLineByType(LT_KERNEL|LT_HYPER|LT_KERNEL_EFI, entry->lines);
++    line = getLineByType(LT_KERNEL|LT_HYPER|LT_KERNEL_EFI|LT_KERNEL_16, entry->lines);
+     if (!line) {
+ 	notSuitablePrintf(entry, 0, "no line found\n");
+ 	return 0;
+@@ -1938,7 +1953,7 @@ struct singleEntry * findEntryByPath(struct grubConfig * config,
+ 	entry = findEntryByIndex(config, indexVars[i]);
+ 	if (!entry) return NULL;
+ 
+-	line = getLineByType(LT_KERNEL|LT_HYPER|LT_KERNEL_EFI, entry->lines);
++	line = getLineByType(LT_KERNEL|LT_HYPER|LT_KERNEL_EFI|LT_KERNEL_16, entry->lines);
+ 	if (!line) return NULL;
+ 
+ 	if (index) *index = indexVars[i];
+@@ -1989,9 +2004,9 @@ struct singleEntry * findEntryByPath(struct grubConfig * config,
+ 	    for (line = entry->lines; line; line = line->next) {
+ 		enum lineType_e ct = checkType;
+ 		if (entry->multiboot && checkType == LT_KERNEL)
+-		    ct = LT_KERNEL|LT_KERNEL_EFI|LT_MBMODULE|LT_HYPER;
++		    ct = LT_KERNEL|LT_KERNEL_EFI|LT_MBMODULE|LT_HYPER|LT_KERNEL_16;
+ 		else if (checkType & LT_KERNEL)
+-		    ct = checkType | LT_KERNEL_EFI;
++		    ct = checkType | LT_KERNEL_EFI | LT_KERNEL_16;
+ 		line = getLineByType(ct, line);
+ 		if (!line)
+ 		    break;  /* not found in this entry */
+@@ -2013,7 +2028,7 @@ struct singleEntry * findEntryByPath(struct grubConfig * config,
+ 	     * non-Linux boot entries (could find netbsd etc, though, which is
+ 	     * unfortunate)
+ 	     */
+-	    if (line && getLineByType(LT_KERNEL|LT_HYPER|LT_KERNEL_EFI, entry->lines))
++	    if (line && getLineByType(LT_KERNEL|LT_HYPER|LT_KERNEL_EFI|LT_KERNEL_16, entry->lines))
+ 		break; /* found 'im! */
+ 	}
+ 
+@@ -2247,7 +2262,7 @@ void displayEntry(struct singleEntry * entry, const char * prefix, int index) {
+ 
+     printf("index=%d\n", index);
+ 
+-    line = getLineByType(LT_KERNEL|LT_HYPER|LT_KERNEL_EFI, entry->lines);
++    line = getLineByType(LT_KERNEL|LT_HYPER|LT_KERNEL_EFI|LT_KERNEL_16, entry->lines);
+     if (!line) {
+         printf("non linux entry\n");
+         return;
+@@ -2312,7 +2327,7 @@ void displayEntry(struct singleEntry * entry, const char * prefix, int index) {
+ 	printf("root=%s\n", s);
+     }
+ 
+-    line = getLineByType(LT_INITRD|LT_INITRD_EFI, entry->lines);
++    line = getLineByType(LT_INITRD|LT_INITRD_EFI|LT_INITRD_16, entry->lines);
+ 
+     if (line && line->numElements >= 2) {
+ 	if (!strncmp(prefix, line->elements[1].item, strlen(prefix)))
+@@ -2729,7 +2744,7 @@ struct singleLine * addLineTmpl(struct singleEntry * entry,
+ 	insertElement(newLine, val, 1, cfi);
+ 
+ 	/* but try to keep the rootspec from the template... sigh */
+-	if (tmplLine->type & (LT_HYPER|LT_KERNEL|LT_MBMODULE|LT_INITRD|LT_KERNEL_EFI|LT_INITRD_EFI)) {
++	if (tmplLine->type & (LT_HYPER|LT_KERNEL|LT_MBMODULE|LT_INITRD|LT_KERNEL_EFI|LT_INITRD_EFI|LT_KERNEL_16|LT_INITRD_16)) {
+ 	    char * rootspec = getRootSpecifier(tmplLine->elements[1].item);
+ 	    if (rootspec != NULL) {
+ 		free(newLine->elements[1].item);
+@@ -3099,7 +3114,7 @@ int updateActualImage(struct grubConfig * cfg, const char * image,
+ 	    firstElement = 2;
+ 
+ 	} else {
+-	    line = getLineByType(LT_KERNEL|LT_MBMODULE|LT_KERNEL_EFI, entry->lines);
++	    line = getLineByType(LT_KERNEL|LT_MBMODULE|LT_KERNEL_EFI|LT_KERNEL_16, entry->lines);
+ 	    if (!line) {
+ 		/* no LT_KERNEL or LT_MBMODULE in this entry? */
+ 		continue;
+@@ -3300,10 +3315,10 @@ int updateInitrd(struct grubConfig * cfg, const char * image,
+     if (!image) return 0;
+ 
+     for (; (entry = findEntryByPath(cfg, image, prefix, &index)); index++) {
+-        kernelLine = getLineByType(LT_KERNEL|LT_KERNEL_EFI, entry->lines);
++        kernelLine = getLineByType(LT_KERNEL|LT_KERNEL_EFI|LT_KERNEL_16, entry->lines);
+         if (!kernelLine) continue;
+ 
+-        line = getLineByType(LT_INITRD|LT_INITRD_EFI, entry->lines);
++        line = getLineByType(LT_INITRD|LT_INITRD_EFI|LT_INITRD_16, entry->lines);
+         if (line)
+             removeLine(entry, line);
+         if (prefix) {
+@@ -3314,8 +3329,21 @@ int updateInitrd(struct grubConfig * cfg, const char * image,
+ 	endLine = getLineByType(LT_ENTRY_END, entry->lines);
+ 	if (endLine)
+ 	    removeLine(entry, endLine);
+-        line = addLine(entry, cfg->cfi, preferredLineType(LT_INITRD, cfg->cfi),
+-			kernelLine->indent, initrd);
++	enum lineType_e lt;
++	switch(kernelLine->type) {
++	    case LT_KERNEL:
++	        lt = LT_INITRD;
++		break;
++	    case LT_KERNEL_EFI:
++	        lt = LT_INITRD_EFI;
++		break;
++	    case LT_KERNEL_16:
++	        lt = LT_INITRD_16;
++		break;
++	    default:
++	        lt = preferredLineType(LT_INITRD, cfg->cfi);
++	}
++        line = addLine(entry, cfg->cfi, lt, kernelLine->indent, initrd);
+         if (!line)
+ 	    return 1;
+ 	if (endLine) {
+@@ -3913,6 +3941,7 @@ int addNewKernel(struct grubConfig * config, struct singleEntry * template,
+ 	switch (config->cfi->entryStart) {
+ 	    case LT_KERNEL:
+ 	    case LT_KERNEL_EFI:
++	    case LT_KERNEL_16:
+ 		if (new->multiboot && config->cfi->mbHyperFirst) {
+ 		    /* fall through to LT_HYPER */
+ 		} else {
+@@ -4471,7 +4500,7 @@ int main(int argc, const char ** argv) {
+ 	if (!entry) return 0;
+ 	if (!suitableImage(entry, bootPrefix, 0, flags)) return 0;
+ 
+-	line = getLineByType(LT_KERNEL|LT_HYPER|LT_KERNEL_EFI, entry->lines);
++	line = getLineByType(LT_KERNEL|LT_HYPER|LT_KERNEL_EFI|LT_KERNEL_16, entry->lines);
+ 	if (!line) return 0;
+ 
+         rootspec = getRootSpecifier(line->elements[1].item);
+diff --git a/test.sh b/test.sh
+index 17b40fe..5be4006 100755
+--- a/test.sh
++++ b/test.sh
+@@ -536,6 +536,22 @@ if [ "$testgrub2" == "y" ]; then
+ 
+     testing="GRUB2 --default-index with default=saved_entry and empty grubenv"
+     grub2DisplayTest grub2.8 defaultindex/0 --env grubenv.0 --default-index
++
++    testlinux16=n
++    case $ARCH in
++        ia32|x86_64) testlinux16=y ;;
++    esac
++
++    if [ "$testlinux16" == "y" ]; then
++        testing="GRUB2 add kernel with linux16"
++        grub2Test grub2.10 add/g2-1.10 --add-kernel=/boot/new-kernel.img \
++            --title='title' --initrd=/boot/new-initrd --boot-filesystem=/boot/ \
++            --copy-default
++
++        testing="GRUB2 add initrd with linux16"
++        grub2Test grub2.11 add/g2-1.11 --update-kernel=/boot/new-kernel.img \
++            --initrd=/boot/new-initrd --boot-filesystem=/boot/
++    fi
+ fi
+ 
+ testing="YABOOT add kernel"
+diff --git a/test/grub2.10 b/test/grub2.10
+new file mode 100644
+index 0000000..d010783
+--- /dev/null
++++ b/test/grub2.10
+@@ -0,0 +1,84 @@
++#
++# DO NOT EDIT THIS FILE
++#
++# It is automatically generated by grub2-mkconfig using templates
++# from /etc/grub.d and settings from /etc/default/grub
++#
++
++### BEGIN /etc/grub.d/00_header ###
++if [ -s $prefix/grubenv ]; then
++  load_env
++fi
++set default="0"
++if [ "${prev_saved_entry}" ]; then
++  set saved_entry="${prev_saved_entry}"
++  save_env saved_entry
++  set prev_saved_entry=
++  save_env prev_saved_entry
++  set boot_once=true
++fi
++
++function savedefault {
++  if [ -z "${boot_once}" ]; then
++    saved_entry="${chosen}"
++    save_env saved_entry
++  fi
++}
++
++function load_video {
++  insmod vbe
++  insmod vga
++  insmod video_bochs
++  insmod video_cirrus
++}
++
++set timeout=5
++### END /etc/grub.d/00_header ###
++
++### BEGIN /etc/grub.d/10_linux ###
++menuentry 'Linux, with Fedora 2.6.38.8-32.fc15.x86_64' --class gnu-linux --class gnu --class os {
++	load_video
++	set gfxpayload=keep
++	insmod part_msdos
++	insmod ext2
++	set root='(hd0,msdos1)'
++	search --no-floppy --fs-uuid --set=root df0170c9-7d05-415c-bbd1-d4d503ba0eed
++	echo	'Loading Fedora 2.6.38.8-32.fc15.x86_64 ...'
++	linux16	/vmlinuz-2.6.38.8-32.fc15.x86_64 root=/dev/mapper/vg_pjones5-lv_root ro quiet rhgb
++	echo	'Loading initial ramdisk ...'
++	initrd16	/initramfs-2.6.38.8-32.fc15.x86_64.img
++}
++menuentry 'Linux, with Linux 2.6.38.2-9.fc15.x86_64' --class gnu-linux --class gnu --class os {
++	load_video
++	set gfxpayload=keep
++	insmod part_msdos
++	insmod ext2
++	set root='(hd0,msdos1)'
++	search --no-floppy --fs-uuid --set=root df0170c9-7d05-415c-bbd1-d4d503ba0eed
++	echo	'Loading Linux 2.6.38.2-9.fc15.x86_64 ...'
++	linux16	/vmlinuz-2.6.38.2-9.fc15.x86_64 root=/dev/mapper/vg_pjones5-lv_root ro quiet rhgb
++	echo	'Loading initial ramdisk ...'
++	initrd16	/initramfs-2.6.38.2-9.fc15.x86_64.img
++}
++### END /etc/grub.d/10_linux ###
++
++### BEGIN /etc/grub.d/20_linux_xen ###
++### END /etc/grub.d/20_linux_xen ###
++
++### BEGIN /etc/grub.d/30_os-prober ###
++### END /etc/grub.d/30_os-prober ###
++
++### BEGIN /etc/grub.d/40_custom ###
++# This file provides an easy way to add custom menu entries.  Simply type the
++# menu entries you want to add after this comment.  Be careful not to change
++# the 'exec tail' line above.
++### END /etc/grub.d/40_custom ###
++
++### BEGIN /etc/grub.d/41_custom ###
++if [ -f  $prefix/custom.cfg ]; then
++  source $prefix/custom.cfg;
++fi
++### END /etc/grub.d/41_custom ###
++
++### BEGIN /etc/grub.d/90_persistent ###
++### END /etc/grub.d/90_persistent ###
+diff --git a/test/grub2.11 b/test/grub2.11
+new file mode 100644
+index 0000000..820880a
+--- /dev/null
++++ b/test/grub2.11
+@@ -0,0 +1,97 @@
++#
++# DO NOT EDIT THIS FILE
++#
++# It is automatically generated by grub2-mkconfig using templates
++# from /etc/grub.d and settings from /etc/default/grub
++#
++
++### BEGIN /etc/grub.d/00_header ###
++if [ -s $prefix/grubenv ]; then
++  load_env
++fi
++set default="0"
++if [ "${prev_saved_entry}" ]; then
++  set saved_entry="${prev_saved_entry}"
++  save_env saved_entry
++  set prev_saved_entry=
++  save_env prev_saved_entry
++  set boot_once=true
++fi
++
++function savedefault {
++  if [ -z "${boot_once}" ]; then
++    saved_entry="${chosen}"
++    save_env saved_entry
++  fi
++}
++
++function load_video {
++  insmod vbe
++  insmod vga
++  insmod video_bochs
++  insmod video_cirrus
++}
++
++set timeout=5
++### END /etc/grub.d/00_header ###
++
++set superusers="foo bar  baz"
++
++### BEGIN /etc/grub.d/10_linux ###
++menuentry 'title' --class gnu-linux --class gnu --class os {
++	load_video
++	set gfxpayload=keep
++	insmod part_msdos
++	insmod ext2
++	set root='(hd0,msdos1)'
++	search --no-floppy --fs-uuid --set=root df0170c9-7d05-415c-bbd1-d4d503ba0eed
++	echo 'Loading title'
++	linux16	/new-kernel.img root=/dev/mapper/vg_pjones5-lv_root ro quiet rhgb
++	echo 'Loading initial ramdisk ...'
++}
++menuentry 'Linux, with Linux 2.6.38.8-32.fc15.x86_64' --class gnu-linux --class gnu --class os {
++	load_video
++	set gfxpayload=keep
++	insmod part_msdos
++	insmod ext2
++	set root='(hd0,msdos1)'
++	search --no-floppy --fs-uuid --set=root df0170c9-7d05-415c-bbd1-d4d503ba0eed
++	echo	'Loading Linux 2.6.38.8-32.fc15.x86_64 ...'
++	linux16	/vmlinuz-2.6.38.8-32.fc15.x86_64 root=/dev/mapper/vg_pjones5-lv_root ro quiet rhgb
++	echo	'Loading initial ramdisk ...'
++	initrd16	/initramfs-2.6.38.8-32.fc15.x86_64.img
++}
++menuentry 'Linux, with Linux 2.6.38.2-9.fc15.x86_64' --class gnu-linux --class gnu --class os {
++	load_video
++	set gfxpayload=keep
++	insmod part_msdos
++	insmod ext2
++	set root='(hd0,msdos1)'
++	search --no-floppy --fs-uuid --set=root df0170c9-7d05-415c-bbd1-d4d503ba0eed
++	echo	'Loading Linux 2.6.38.2-9.fc15.x86_64 ...'
++	linux16	/vmlinuz-2.6.38.2-9.fc15.x86_64 root=/dev/mapper/vg_pjones5-lv_root ro quiet rhgb
++	echo	'Loading initial ramdisk ...'
++	initrd16	/initramfs-2.6.38.2-9.fc15.x86_64.img
++}
++### END /etc/grub.d/10_linux ###
++
++### BEGIN /etc/grub.d/20_linux_xen ###
++### END /etc/grub.d/20_linux_xen ###
++
++### BEGIN /etc/grub.d/30_os-prober ###
++### END /etc/grub.d/30_os-prober ###
++
++### BEGIN /etc/grub.d/40_custom ###
++# This file provides an easy way to add custom menu entries.  Simply type the
++# menu entries you want to add after this comment.  Be careful not to change
++# the 'exec tail' line above.
++### END /etc/grub.d/40_custom ###
++
++### BEGIN /etc/grub.d/41_custom ###
++if [ -f  $prefix/custom.cfg ]; then
++  source $prefix/custom.cfg;
++fi
++### END /etc/grub.d/41_custom ###
++
++### BEGIN /etc/grub.d/90_persistent ###
++### END /etc/grub.d/90_persistent ###
+diff --git a/test/results/add/g2-1.10 b/test/results/add/g2-1.10
+new file mode 100644
+index 0000000..bb2c71c
+--- /dev/null
++++ b/test/results/add/g2-1.10
+@@ -0,0 +1,96 @@
++#
++# DO NOT EDIT THIS FILE
++#
++# It is automatically generated by grub2-mkconfig using templates
++# from /etc/grub.d and settings from /etc/default/grub
++#
++
++### BEGIN /etc/grub.d/00_header ###
++if [ -s $prefix/grubenv ]; then
++  load_env
++fi
++set default="1"
++if [ "${prev_saved_entry}" ]; then
++  set saved_entry="${prev_saved_entry}"
++  save_env saved_entry
++  set prev_saved_entry=
++  save_env prev_saved_entry
++  set boot_once=true
++fi
++
++function savedefault {
++  if [ -z "${boot_once}" ]; then
++    saved_entry="${chosen}"
++    save_env saved_entry
++  fi
++}
++
++function load_video {
++  insmod vbe
++  insmod vga
++  insmod video_bochs
++  insmod video_cirrus
++}
++
++set timeout=5
++### END /etc/grub.d/00_header ###
++
++### BEGIN /etc/grub.d/10_linux ###
++menuentry 'title' --class gnu-linux --class gnu --class os {
++	load_video
++	set gfxpayload=keep
++	insmod part_msdos
++	insmod ext2
++	set root='(hd0,msdos1)'
++	search --no-floppy --fs-uuid --set=root df0170c9-7d05-415c-bbd1-d4d503ba0eed
++	echo 'Loading title'
++	linux16	/new-kernel.img root=/dev/mapper/vg_pjones5-lv_root ro quiet rhgb
++	echo 'Loading initial ramdisk ...'
++	initrd16	/new-initrd
++}
++menuentry 'Linux, with Fedora 2.6.38.8-32.fc15.x86_64' --class gnu-linux --class gnu --class os {
++	load_video
++	set gfxpayload=keep
++	insmod part_msdos
++	insmod ext2
++	set root='(hd0,msdos1)'
++	search --no-floppy --fs-uuid --set=root df0170c9-7d05-415c-bbd1-d4d503ba0eed
++	echo	'Loading Fedora 2.6.38.8-32.fc15.x86_64 ...'
++	linux16	/vmlinuz-2.6.38.8-32.fc15.x86_64 root=/dev/mapper/vg_pjones5-lv_root ro quiet rhgb
++	echo	'Loading initial ramdisk ...'
++	initrd16	/initramfs-2.6.38.8-32.fc15.x86_64.img
++}
++menuentry 'Linux, with Linux 2.6.38.2-9.fc15.x86_64' --class gnu-linux --class gnu --class os {
++	load_video
++	set gfxpayload=keep
++	insmod part_msdos
++	insmod ext2
++	set root='(hd0,msdos1)'
++	search --no-floppy --fs-uuid --set=root df0170c9-7d05-415c-bbd1-d4d503ba0eed
++	echo	'Loading Linux 2.6.38.2-9.fc15.x86_64 ...'
++	linux16	/vmlinuz-2.6.38.2-9.fc15.x86_64 root=/dev/mapper/vg_pjones5-lv_root ro quiet rhgb
++	echo	'Loading initial ramdisk ...'
++	initrd16	/initramfs-2.6.38.2-9.fc15.x86_64.img
++}
++### END /etc/grub.d/10_linux ###
++
++### BEGIN /etc/grub.d/20_linux_xen ###
++### END /etc/grub.d/20_linux_xen ###
++
++### BEGIN /etc/grub.d/30_os-prober ###
++### END /etc/grub.d/30_os-prober ###
++
++### BEGIN /etc/grub.d/40_custom ###
++# This file provides an easy way to add custom menu entries.  Simply type the
++# menu entries you want to add after this comment.  Be careful not to change
++# the 'exec tail' line above.
++### END /etc/grub.d/40_custom ###
++
++### BEGIN /etc/grub.d/41_custom ###
++if [ -f  $prefix/custom.cfg ]; then
++  source $prefix/custom.cfg;
++fi
++### END /etc/grub.d/41_custom ###
++
++### BEGIN /etc/grub.d/90_persistent ###
++### END /etc/grub.d/90_persistent ###
+diff --git a/test/results/add/g2-1.11 b/test/results/add/g2-1.11
+new file mode 100644
+index 0000000..a11cb41
+--- /dev/null
++++ b/test/results/add/g2-1.11
+@@ -0,0 +1,98 @@
++#
++# DO NOT EDIT THIS FILE
++#
++# It is automatically generated by grub2-mkconfig using templates
++# from /etc/grub.d and settings from /etc/default/grub
++#
++
++### BEGIN /etc/grub.d/00_header ###
++if [ -s $prefix/grubenv ]; then
++  load_env
++fi
++set default="0"
++if [ "${prev_saved_entry}" ]; then
++  set saved_entry="${prev_saved_entry}"
++  save_env saved_entry
++  set prev_saved_entry=
++  save_env prev_saved_entry
++  set boot_once=true
++fi
++
++function savedefault {
++  if [ -z "${boot_once}" ]; then
++    saved_entry="${chosen}"
++    save_env saved_entry
++  fi
++}
++
++function load_video {
++  insmod vbe
++  insmod vga
++  insmod video_bochs
++  insmod video_cirrus
++}
++
++set timeout=5
++### END /etc/grub.d/00_header ###
++
++set superusers="foo bar  baz"
++
++### BEGIN /etc/grub.d/10_linux ###
++menuentry 'title' --class gnu-linux --class gnu --class os {
++	load_video
++	set gfxpayload=keep
++	insmod part_msdos
++	insmod ext2
++	set root='(hd0,msdos1)'
++	search --no-floppy --fs-uuid --set=root df0170c9-7d05-415c-bbd1-d4d503ba0eed
++	echo 'Loading title'
++	linux16	/new-kernel.img root=/dev/mapper/vg_pjones5-lv_root ro quiet rhgb
++	echo 'Loading initial ramdisk ...'
++	initrd16 /new-initrd
++}
++menuentry 'Linux, with Linux 2.6.38.8-32.fc15.x86_64' --class gnu-linux --class gnu --class os {
++	load_video
++	set gfxpayload=keep
++	insmod part_msdos
++	insmod ext2
++	set root='(hd0,msdos1)'
++	search --no-floppy --fs-uuid --set=root df0170c9-7d05-415c-bbd1-d4d503ba0eed
++	echo	'Loading Linux 2.6.38.8-32.fc15.x86_64 ...'
++	linux16	/vmlinuz-2.6.38.8-32.fc15.x86_64 root=/dev/mapper/vg_pjones5-lv_root ro quiet rhgb
++	echo	'Loading initial ramdisk ...'
++	initrd16	/initramfs-2.6.38.8-32.fc15.x86_64.img
++}
++menuentry 'Linux, with Linux 2.6.38.2-9.fc15.x86_64' --class gnu-linux --class gnu --class os {
++	load_video
++	set gfxpayload=keep
++	insmod part_msdos
++	insmod ext2
++	set root='(hd0,msdos1)'
++	search --no-floppy --fs-uuid --set=root df0170c9-7d05-415c-bbd1-d4d503ba0eed
++	echo	'Loading Linux 2.6.38.2-9.fc15.x86_64 ...'
++	linux16	/vmlinuz-2.6.38.2-9.fc15.x86_64 root=/dev/mapper/vg_pjones5-lv_root ro quiet rhgb
++	echo	'Loading initial ramdisk ...'
++	initrd16	/initramfs-2.6.38.2-9.fc15.x86_64.img
++}
++### END /etc/grub.d/10_linux ###
++
++### BEGIN /etc/grub.d/20_linux_xen ###
++### END /etc/grub.d/20_linux_xen ###
++
++### BEGIN /etc/grub.d/30_os-prober ###
++### END /etc/grub.d/30_os-prober ###
++
++### BEGIN /etc/grub.d/40_custom ###
++# This file provides an easy way to add custom menu entries.  Simply type the
++# menu entries you want to add after this comment.  Be careful not to change
++# the 'exec tail' line above.
++### END /etc/grub.d/40_custom ###
++
++### BEGIN /etc/grub.d/41_custom ###
++if [ -f  $prefix/custom.cfg ]; then
++  source $prefix/custom.cfg;
++fi
++### END /etc/grub.d/41_custom ###
++
++### BEGIN /etc/grub.d/90_persistent ###
++### END /etc/grub.d/90_persistent ###
+-- 
+2.4.3
+

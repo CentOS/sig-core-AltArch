@@ -1,0 +1,64 @@
+From 939f2d3dc981fe6a3258ac943673c43d7a4964a1 Mon Sep 17 00:00:00 2001
+From: no one <noone@example.com>
+Date: Thu, 13 Feb 2014 10:30:11 -0500
+Subject: [PATCH 08/41] Use the correct load commands for aarch64 efi.
+
+Resolves: rhbz#1081269
+---
+ grubby.c |  7 +++++++
+ test.sh  | 17 ++++++++++++++---
+ 2 files changed, 21 insertions(+), 3 deletions(-)
+
+diff --git a/grubby.c b/grubby.c
+index aa228c3..0205882 100644
+--- a/grubby.c
++++ b/grubby.c
+@@ -714,10 +714,17 @@ static enum lineType_e preferredLineType(enum lineType_e type,
+ 					 struct configFileInfo *cfi) {
+     if (isEfi && cfi == &grub2ConfigType) {
+ 	switch (type) {
++#if defined(__aarch64__)
++	case LT_KERNEL:
++	    return LT_KERNEL;
++	case LT_INITRD:
++	    return LT_INITRD;
++#else
+ 	case LT_KERNEL:
+ 	    return LT_KERNEL_EFI;
+ 	case LT_INITRD:
+ 	    return LT_INITRD_EFI;
++#endif
+ 	default:
+ 	    return type;
+ 	}
+diff --git a/test.sh b/test.sh
+index 5be4006..1d28fb1 100755
+--- a/test.sh
++++ b/test.sh
+@@ -443,9 +443,20 @@ if [ "$testgrub2" == "y" ]; then
+     grub2Test grub2.1 add/g2-1.1 --add-kernel=/boot/new-kernel.img \
+         --title='title' --initrd=/boot/new-initrd --boot-filesystem=/boot/ \
+         --copy-default
+-    grub2Test grub2.1 add/g2-1.6 --add-kernel=/boot/new-kernel.img \
+-        --title='title' --initrd=/boot/new-initrd --boot-filesystem=/boot/ \
+-        --copy-default --efi
++    case $ARCH in
++        aarch64)
++            grub2Test grub2.1 add/g2-1.1 --add-kernel=/boot/new-kernel.img \
++                --title='title' \
++                --initrd=/boot/new-initrd --boot-filesystem=/boot/ \
++                --copy-default --efi
++            ;;
++        *)
++            grub2Test grub2.1 add/g2-1.6 --add-kernel=/boot/new-kernel.img \
++                --title='title' \
++                --initrd=/boot/new-initrd --boot-filesystem=/boot/ \
++                --copy-default --efi
++            ;;
++    esac
+     grub2Test grub2.6 add/g2-1.7 --add-kernel=/boot/new-kernel.img \
+         --title='title' --initrd=/boot/new-initrd --boot-filesystem=/boot/ \
+         --copy-default --efi
+-- 
+2.4.3
+

@@ -1,0 +1,162 @@
+From 280f1ed9a0066cb508d77fe6d072c7c5aa772967 Mon Sep 17 00:00:00 2001
+From: Nishanth Aravamudan <nacc@linux.vnet.ibm.com>
+Date: Tue, 16 Jun 2015 10:43:21 -0700
+Subject: [PATCH 35/41] grubby: properly handle mixed ' and " and nested quotes
+
+The SLES12 grub2.cfg file on ppc64le by default contains a line like:
+
+  submenu "Bootable snapshot #$snapshot_num" {
+    menuentry "If OK, run 'snapper rollback $snapshot_num' reboot." { true; }
+  }
+
+On any grubby (tested with 8.40) invocation that updates the config
+file, the combination of nested quotes and mixed quotes leads to a
+generated file content like:
+
+  submenu "Bootable snapshot #$snapshot_num" {
+    menuentry 'If OK, run snapper rollback $snapshot_num' rollback $snapshot_num' and reboot." { true; }
+  }
+
+which includes both a change from " to ', but also improperly quoted
+strings and trailing characters relative to the string. This actually
+leads to a failure to boot from the disk by default when using grubby
+(e.g., Autotest) on SLES12 ppc64le. Whether SLES12 should be adding an
+entry like this by default or not is probably open to debate, but grubby
+should be able to hand this input file.
+
+To fix the issue, three changes were necessary:
+
+1) grub2ExtractTitle needs to check that if the second element starts
+with a quote, that the matching element found ends with the same
+quote-type (' vs. ")
+
+2) lineWrite needs to output the right kind of quote based upon if the
+string to be outputted itself contains quotes. This is not currently
+possible in the code, because quotes are stripped out normally by
+readConfig, but with the change in 3), that only happens now for the
+quotes that actually delineate a string.
+
+3) readConfig needs to check that when it is extracting titles and
+determining extras, it uses matching quotes.
+
+With these changes, a simple grubby --set-default=SLES12 (for example),
+now produces:
+
+   submenu "Bootable snapshot #$snapshot_num" {
+     menuentry "If OK, run 'snapper rollback $snapshot_num' and reboot." { true; }
+   }
+
+as expected.
+
+Signed-off-by: Nishanth Aravamudan <nacc@linux.vnet.ibm.com>
+---
+ grubby.c | 42 +++++++++++++++++++++++++++++++++---------
+ 1 file changed, 33 insertions(+), 9 deletions(-)
+
+diff --git a/grubby.c b/grubby.c
+index 232704a..407c65d 100644
+--- a/grubby.c
++++ b/grubby.c
+@@ -446,6 +446,8 @@ char *grub2ExtractTitle(struct singleLine * line) {
+      * whose last character is also quote (assuming it's the closing one) */
+     int resultMaxSize;
+     char * result;
++    /* need to ensure that ' does not match " as we search */
++    char quote_char = *current;
+     
+     resultMaxSize = sizeOfSingleLine(line);
+     result = malloc(resultMaxSize);
+@@ -459,7 +461,7 @@ char *grub2ExtractTitle(struct singleLine * line) {
+ 	current_indent_len = strlen(current_indent);
+ 
+ 	strncat(result, current_indent, current_indent_len);
+-	if (!isquote(current[current_len-1])) {
++	if (current[current_len-1] != quote_char) {
+ 	    strncat(result, current, current_len);
+ 	} else {
+ 	    strncat(result, current, current_len - 1);
+@@ -921,10 +923,23 @@ static int lineWrite(FILE * out, struct singleLine * line,
+ 	/* Need to handle this, because we strip the quotes from
+ 	 * menuentry when read it. */
+ 	if (line->type == LT_MENUENTRY && i == 1) {
+-	    if(!isquote(*line->elements[i].item))
+-		fprintf(out, "\'%s\'", line->elements[i].item);
+-	    else
++	    if(!isquote(*line->elements[i].item)) {
++		int substring = 0;
++		/* If the line contains nested quotes, we did not strip
++		 * the "interna" quotes and we must use the right quotes
++		 * again when writing the updated file. */
++		for (int j = i; j < line->numElements; j++) {
++		    if (strchr(line->elements[i].item, '\'') != NULL) {
++		       substring = 1;
++		       fprintf(out, "\"%s\"", line->elements[i].item);
++		       break;
++		    }
++		}
++		if (!substring)
++		    fprintf(out, "\'%s\'", line->elements[i].item);
++	    } else {
+ 		fprintf(out, "%s", line->elements[i].item);
++	    }
+ 	    fprintf(out, "%s", line->elements[i].indent);
+ 
+ 	    continue;
+@@ -1260,6 +1275,8 @@ static struct grubConfig * readConfig(const char * inName,
+ 	    len = 0;
+ 	    char *extras;
+ 	    char *title;
++	    /* initially unseen value */
++	    char quote_char = '\0';
+ 
+ 	    for (int i = 1; i < line->numElements; i++) {
+ 		len += strlen(line->elements[i].item);
+@@ -1276,13 +1293,16 @@ static struct grubConfig * readConfig(const char * inName,
+ 	    for (int i = 0; i < line->numElements; i++) {
+ 		if (!strcmp(line->elements[i].item, "menuentry"))
+ 		    continue;
+-		if (isquote(*line->elements[i].item))
++		if (isquote(*line->elements[i].item) && quote_char == '\0') {
++		    /* ensure we properly pair off quotes */
++		    quote_char = *line->elements[i].item;
+ 		    title = line->elements[i].item + 1;
+-		else
++		} else {
+ 		    title = line->elements[i].item;
++		}
+ 
+ 		len = strlen(title);
+-	        if (isquote(title[len-1])) {
++	        if (title[len-1] == quote_char) {
+ 		    strncat(buf, title,len-1);
+ 		    break;
+ 		} else {
+@@ -1293,6 +1313,7 @@ static struct grubConfig * readConfig(const char * inName,
+ 
+ 	    /* get extras */
+ 	    int count = 0;
++	    quote_char = '\0';
+ 	    for (int i = 0; i < line->numElements; i++) {
+ 		if (count >= 2) {
+ 		    strcat(extras, line->elements[i].item);
+@@ -1303,12 +1324,15 @@ static struct grubConfig * readConfig(const char * inName,
+ 		    continue;
+ 
+ 		/* count ' or ", there should be two in menuentry line. */
+-		if (isquote(*line->elements[i].item))
++		if (isquote(*line->elements[i].item) && quote_char == '\0') {
++		    /* ensure we properly pair off quotes */
++	            quote_char = *line->elements[i].item;
+ 		    count++;
++		}
+ 
+ 		len = strlen(line->elements[i].item);
+ 
+-		if (isquote(line->elements[i].item[len -1]))
++		if (line->elements[i].item[len -1] == quote_char)
+ 		    count++;
+ 
+ 		/* ok, we get the final ' or ", others are extras. */
+-- 
+2.4.3
+

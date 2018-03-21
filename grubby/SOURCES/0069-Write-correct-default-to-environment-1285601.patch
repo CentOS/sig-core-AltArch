@@ -1,0 +1,43 @@
+From 23355786a334e05a99b60b6c7769665ffeb3bdc4 Mon Sep 17 00:00:00 2001
+From: Robert Marshall <rmarshall@redhat.com>
+Date: Thu, 22 Dec 2016 17:56:44 -0500
+Subject: [PATCH 69/69] Write correct default to environment (#1285601)
+
+grubby writes the title of the default boot entry to the bootloader
+environment. The title lookup did not correctly account for the offset
+required if some boot entries were marked for removal.
+
+Related: rhbz#1285601
+---
+ grubby.c | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/grubby.c b/grubby.c
+index 57c1ed7..9d9d748 100644
+--- a/grubby.c
++++ b/grubby.c
+@@ -1809,7 +1809,20 @@ static void writeDefault(FILE * out, char *indent,
+ 		fprintf(out, "%sset default=\"${saved_entry}\"\n", indent);
+ 		if (cfg->defaultImage >= FIRST_ENTRY_INDEX && cfg->cfi->setEnv) {
+ 			char *title;
+-			entry = findEntryByIndex(cfg, cfg->defaultImage);
++			int trueIndex, currentIndex;
++
++			trueIndex = 0;
++			currentIndex = 0;
++
++			while ((entry = findEntryByIndex(cfg, currentIndex))) {
++				if (!entry->skip) {
++					if (trueIndex == cfg->defaultImage) {
++						break;
++					}
++					trueIndex++;
++				}
++				currentIndex++;
++			}
+ 			line = getLineByType(LT_MENUENTRY, entry->lines);
+ 			if (!line)
+ 				line = getLineByType(LT_TITLE, entry->lines);
+-- 
+2.9.3
+

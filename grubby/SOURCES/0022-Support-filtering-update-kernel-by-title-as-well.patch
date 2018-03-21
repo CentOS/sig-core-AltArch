@@ -1,0 +1,106 @@
+From bd9c532d853ac6b95ec83983e85e3266ebbcc004 Mon Sep 17 00:00:00 2001
+From: Peter Jones <pjones@redhat.com>
+Date: Mon, 15 Sep 2014 15:18:48 -0400
+Subject: [PATCH 22/41] Support filtering --update-kernel= by title as well.
+
+If there are two entries with the same kernel, we need to match the
+title to uniquely identify one.
+
+Related: rhbz#957681
+Signed-off-by: Peter Jones <pjones@redhat.com>
+---
+ grubby.c | 40 +++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 35 insertions(+), 5 deletions(-)
+
+diff --git a/grubby.c b/grubby.c
+index 6670ff0..f8e9c25 100644
+--- a/grubby.c
++++ b/grubby.c
+@@ -3288,7 +3288,8 @@ int updateImage(struct grubConfig * cfg, const char * image,
+ }
+ 
+ int addMBInitrd(struct grubConfig * cfg, const char *newMBKernel,
+-		 const char * image, const char * prefix, const char * initrd) {
++		 const char * image, const char * prefix, const char * initrd,
++		 const char * title) {
+     struct singleEntry * entry;
+     struct singleLine * line, * kernelLine, *endLine = NULL;
+     int index = 0;
+@@ -3299,6 +3300,20 @@ int addMBInitrd(struct grubConfig * cfg, const char *newMBKernel,
+         kernelLine = getLineByType(LT_MBMODULE, entry->lines);
+         if (!kernelLine) continue;
+ 
++	/* if title is supplied, the entry's title must match it. */
++	if (title) {
++	    line = getLineByType(LT_TITLE|LT_MENUENTRY, entry->lines);
++	    char *linetitle = extractTitle(line);
++
++	    if (!linetitle)
++		continue;
++	    if (strcmp(title, linetitle)) {
++		free(linetitle);
++		continue;
++	    }
++	    free(linetitle);
++	}
++
+         if (prefix) {
+             int prefixLen = strlen(prefix);
+             if (!strncmp(initrd, prefix, prefixLen))
+@@ -3324,7 +3339,7 @@ int addMBInitrd(struct grubConfig * cfg, const char *newMBKernel,
+ }
+ 
+ int updateInitrd(struct grubConfig * cfg, const char * image,
+-                 const char * prefix, const char * initrd) {
++                 const char * prefix, const char * initrd, const char * title) {
+     struct singleEntry * entry;
+     struct singleLine * line, * kernelLine, *endLine = NULL;
+     int index = 0;
+@@ -3335,6 +3350,20 @@ int updateInitrd(struct grubConfig * cfg, const char * image,
+         kernelLine = getLineByType(LT_KERNEL|LT_KERNEL_EFI|LT_KERNEL_16, entry->lines);
+         if (!kernelLine) continue;
+ 
++	/* if title is supplied, the entry's title must match it. */
++	if (title) {
++	    line = getLineByType(LT_TITLE|LT_MENUENTRY, entry->lines);
++	    char *linetitle = extractTitle(line);
++
++	    if (!linetitle)
++		continue;
++	    if (strcmp(title, linetitle)) {
++		free(linetitle);
++		continue;
++	    }
++	    free(linetitle);
++	}
++
+         line = getLineByType(LT_INITRD|LT_INITRD_EFI|LT_INITRD_16, entry->lines);
+         if (line)
+             removeLine(entry, line);
+@@ -4365,7 +4394,7 @@ int main(int argc, const char ** argv) {
+     if (newKernelPath && !newKernelTitle) {
+ 	fprintf(stderr, _("grubby: kernel title must be specified\n"));
+ 	return 1;
+-    } else if (!newKernelPath && (newKernelTitle  || copyDefault ||
++    } else if (!newKernelPath && (copyDefault ||
+ 				  (newKernelInitrd && !updateKernelPath)||
+ 				  makeDefault || extraInitrdCount > 0)) {
+ 	fprintf(stderr, _("grubby: kernel path expected\n"));
+@@ -4587,11 +4616,12 @@ int main(int argc, const char ** argv) {
+     if (updateKernelPath && newKernelInitrd) {
+ 	    if (newMBKernel) {
+ 		    if (addMBInitrd(config, newMBKernel, updateKernelPath,
+-					bootPrefix, newKernelInitrd))
++					bootPrefix, newKernelInitrd,
++					newKernelTitle))
+ 			    return 1;
+ 	    } else {
+ 		    if (updateInitrd(config, updateKernelPath, bootPrefix,
+-					newKernelInitrd))
++					newKernelInitrd, newKernelTitle))
+ 			return 1;
+ 	    }
+     }
+-- 
+2.4.3
+

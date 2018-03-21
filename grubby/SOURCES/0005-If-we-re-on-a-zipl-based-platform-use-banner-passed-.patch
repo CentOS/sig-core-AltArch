@@ -1,0 +1,55 @@
+From ce1c4cd2bbb326729ffaf186e96548bcf225dd11 Mon Sep 17 00:00:00 2001
+From: Peter Jones <pjones@redhat.com>
+Date: Wed, 22 Jan 2014 17:16:06 -0500
+Subject: [PATCH 05/41] If we're on a zipl-based platform, use --banner passed
+ to us (sanitized.)
+
+"lilo" type bootloaders have gotten $version as their title since
+forever, but on zipl that'll cause collisions when creating extra boot
+images with the same version.  So on that platform, choose to honor
+--banner even though it has a lot of limitations, and attempt to get rid
+of spaces in the result to avoid some of those problems.
+
+Related: rhbz#1032048
+
+Signed-off-by: Peter Jones <pjones@redhat.com>
+---
+ new-kernel-pkg | 14 ++++++++++----
+ 1 file changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/new-kernel-pkg b/new-kernel-pkg
+index 6373385..4fa94b7 100755
+--- a/new-kernel-pkg
++++ b/new-kernel-pkg
+@@ -179,10 +179,16 @@ install() {
+ 
+ 
+     if [ -n "$banner" ]; then
+-        title="$banner ($version)"
++	if [ $ARCH = 's390' -o $ARCH = 's390x' ]; then
++	    title=$(echo $banner | sed 's/ /_/g')
++	else
++	    title="$banner ($version)"
++	fi
++    elif [ $ARCH = 's390' -o $ARCH = 's390x' ]; then
++	title=$(echo $version | sed 's/ /_/g')
+     elif [ -f /etc/os-release ]; then
+-        . /etc/os-release
+-        title="$NAME ($version) $VERSION"
++	. /etc/os-release
++	title="$NAME ($version) $VERSION"
+     elif [ -f /etc/redhat-release ]; then
+ 	title="$(sed 's/ release.*$//' < /etc/redhat-release) ($version)"
+     else
+@@ -230,7 +236,7 @@ install() {
+ 	[ -n "$verbose" ] && echo "adding $version to $liloConfig"
+ 
+ 	$grubby --add-kernel=$kernelImage $INITRD \
+-		--copy-default $makedefault --title $version \
++		--copy-default $makedefault --title "$title" \
+ 		${mbkernel:+--add-multiboot="$mbkernel"} ${mbargs:+--mbargs="$mbargs"} \
+ 		--args="root=$rootdevice $kernargs" --remove-kernel="TITLE=$version" \
+ 		--$liloFlag
+-- 
+2.4.3
+

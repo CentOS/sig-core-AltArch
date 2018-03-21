@@ -1,0 +1,40 @@
+From 3d6e04814d4578a4f57cfc98709ec0640428977e Mon Sep 17 00:00:00 2001
+From: Robert Marshall <rmarshall@redhat.com>
+Date: Thu, 22 Dec 2016 17:52:14 -0500
+Subject: [PATCH 68/69] Fix findTemplate index logic (#1285601)
+
+The fallback case where findTemplate has to look for the first entry
+contained a logic flaw that could return an incorrect index. This
+discovered index should be reduced by one for each boot entry that will
+be skipped in the final output. The flaw occurred because the index
+variable was used for the loop upper bound at the same time as it was
+being decremented within the actual loop body. The loop would thus fail
+to examine a number of boot entries equal to the total number of
+iterations the loop performed.
+
+Related: rhbz#1285601
+---
+ grubby.c | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/grubby.c b/grubby.c
+index 4e872c0..57c1ed7 100644
+--- a/grubby.c
++++ b/grubby.c
+@@ -2534,8 +2534,11 @@ struct singleEntry *findTemplate(struct grubConfig *cfg, const char *prefix,
+ 	index = 0;
+ 	while ((entry = findEntryByIndex(cfg, index))) {
+ 		if (suitableImage(entry, prefix, skipRemoved, flags)) {
+-			int j;
+-			for (j = 0; j < index; j++) {
++			int j, unmodifiedIndex;
++
++			unmodifiedIndex = index;
++
++			for (j = 0; j < unmodifiedIndex; j++) {
+ 				entry2 = findEntryByIndex(cfg, j);
+ 				if (entry2->skip)
+ 					index--;
+-- 
+2.9.3
+

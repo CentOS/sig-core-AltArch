@@ -1,0 +1,59 @@
+From dab391a5c52622b4c08f87dc394f133419da218a Mon Sep 17 00:00:00 2001
+From: Robert Marshall <rmarshall@redhat.com>
+Date: Tue, 14 Mar 2017 15:20:53 -0400
+Subject: [PATCH 73/75] Fix --info for s390x/s390 (#1285601)
+
+The --info flag for grubby on s390/s390x always returned (null). Fixed
+codepath to use extractTitle where necessary and get the actual title.
+
+Related: rhbz#1285601
+---
+ grubby.c | 15 +++++++++++----
+ 1 file changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/grubby.c b/grubby.c
+index 4d3834b..f960ebd 100644
+--- a/grubby.c
++++ b/grubby.c
+@@ -2782,7 +2782,7 @@ void setFallbackImage(struct grubConfig *config, int hasNew)
+ 	}
+ }
+ 
+-void displayEntry(struct singleEntry *entry, const char *prefix, int index)
++void displayEntry(struct grubConfig *config, struct singleEntry *entry, const char *prefix, int index)
+ {
+ 	struct singleLine *line;
+ 	char *root = NULL;
+@@ -2877,7 +2877,14 @@ void displayEntry(struct singleEntry *entry, const char *prefix, int index)
+ 
+ 	line = getLineByType(LT_TITLE, entry->lines);
+ 	if (line) {
+-		printf("title=%s\n", line->elements[1].item);
++                char *entryTitle;
++                /* if we can extractTitle, then it's a zipl config and
++                 * if not then we go ahead with what's existed prior */
++                entryTitle = extractTitle(config, line);
++                if (!entryTitle) {
++                    entryTitle=line->elements[1].item;
++                }
++		printf("title=%s\n", entryTitle);
+ 	} else {
+ 		char *title;
+ 		line = getLineByType(LT_MENUENTRY, entry->lines);
+@@ -3277,11 +3284,11 @@ int displayInfo(struct grubConfig *config, char *kernel, const char *prefix)
+ 			printf("lba\n");
+ 	}
+ 
+-	displayEntry(entry, prefix, i);
++	displayEntry(config, entry, prefix, i);
+ 
+ 	i++;
+ 	while ((entry = findEntryByPath(config, kernel, prefix, &i))) {
+-		displayEntry(entry, prefix, i);
++		displayEntry(config, entry, prefix, i);
+ 		i++;
+ 	}
+ 
+-- 
+2.9.3
+

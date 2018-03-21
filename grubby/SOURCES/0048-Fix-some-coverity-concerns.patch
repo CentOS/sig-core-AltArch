@@ -1,0 +1,613 @@
+From 916d5770b5c8fb87503a99f98c13a5232a7dafbf Mon Sep 17 00:00:00 2001
+From: Peter Jones <pjones@redhat.com>
+Date: Thu, 10 Sep 2015 10:13:15 -0400
+Subject: [PATCH] Fix some coverity concerns...
+
+While checking on coverity's concern with kwcmp() having a loop it
+really didn't need, I discovered another problem with the fix here that
+made spaces not work right in grub2 variable assignment.  So here's a
+new version of the fix, and yet another test case.
+
+Resolves: rhbz#1152550
+
+Signed-off-by: Peter Jones <pjones@redhat.com>
+---
+ grubby.c                 | 204 ++++++++++++++++++++++++++++++++++++-----------
+ test.sh                  |   6 ++
+ test/grub2.17            | 156 ++++++++++++++++++++++++++++++++++++
+ test/results/add/g2-1.17 | 170 +++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 490 insertions(+), 46 deletions(-)
+ create mode 100644 test/grub2.17
+ create mode 100644 test/results/add/g2-1.17
+
+diff --git a/grubby.c b/grubby.c
+index d66c1c5..2a6eedb 100644
+--- a/grubby.c
++++ b/grubby.c
+@@ -751,28 +751,30 @@ static char *sdupprintf(const char *format, ...)
+ static inline int
+ kwcmp(struct keywordTypes *kw, const char * label, int case_insensitive)
+ {
+-    int kwl = strlen(kw->key);
+-    int ll = strlen(label);
+-    int rc;
+-    int (*snc)(const char *s1, const char *s2, size_t n) =
+-           case_insensitive ? strncasecmp : strncmp;
+-    int (*sc)(const char *s1, const char *s2) =
+-           case_insensitive ? strcasecmp : strcmp;
+-
+-    rc = snc(kw->key, label, kwl);
+-    if (rc)
+-       return rc;
+-
+-    for (int i = kwl; i < ll; i++) {
+-       if (isspace(label[i]))
+-           return 0;
+-       if (kw->separatorChar && label[i] == kw->separatorChar)
+-           return 0;
+-       else if (kw->nextChar && label[i] == kw->nextChar)
+-           return 0;
+-       return sc(kw->key+kwl, label+kwl);
+-    }
+-    return 0;
++	int kwl = strlen(kw->key);
++	int ll = strlen(label);
++	int rc;
++	int (*snc)(const char *s1, const char *s2, size_t n) =
++		case_insensitive ? strncasecmp : strncmp;
++	int (*sc)(const char *s1, const char *s2) =
++		case_insensitive ? strcasecmp : strcmp;
++
++	if (kwl > ll)
++		return ll - kwl;
++
++	rc = snc(kw->key, label, kwl);
++	if (rc)
++		return rc;
++
++	if (!label[kwl])
++		return 0;
++	if (isspace(label[kwl]))
++		return 0;
++	if (kw->separatorChar && label[kwl] == kw->separatorChar)
++		return 0;
++	if (kw->nextChar && label[kwl] == kw->nextChar)
++		return 0;
++	return sc(kw->key+kwl, label+kwl);
+ }
+ 
+ static enum lineType_e preferredLineType(enum lineType_e type,
+@@ -1034,6 +1036,123 @@ static int lineWrite(FILE * out, struct singleLine *line,
+ 	return 0;
+ }
+ 
++static int mergeElements(struct singleLine *line, int left, int right)
++{
++	struct lineElement *elements = alloca(sizeof (line->elements[0]) *
++					      line->numElements);
++	int i, j;
++	size_t itemsize = 0;
++	size_t newNumElements = 0;
++	char *newitem;
++	char *newindent = NULL;
++
++	if (right >= line->numElements)
++		right = line->numElements - 1;
++
++	if (!elements)
++		return -1;
++	for (i = 0; i < left; i++) {
++		elements[i] = line->elements[i];
++		newNumElements++;
++	}
++	for (; i <= right; i++) {
++		itemsize += strlen(line->elements[i].item);
++		if (line->elements[i].indent && line->elements[i].indent[0]) {
++			if (i != right)
++				itemsize += strlen(line->elements[i].indent);
++		}
++	}
++	newitem = calloc (itemsize+1, 1);
++	if (!newitem)
++		return -1;
++	for (i = left; i <= right; i++) {
++		strcat(newitem, line->elements[i].item);
++		if (line->elements[i].indent) {
++			if (i != right) {
++				strcat(newitem, line->elements[i].indent);
++				free(line->elements[i].indent);
++			} else {
++				newindent = line->elements[i].indent;
++			}
++		} else {
++			newindent = strdup("");
++		}
++	}
++	newNumElements++;
++	elements[left].item = newitem;
++	elements[left].indent = newindent;
++	if (left+1 < line->numElements && right+1 < line->numElements) {
++		for (j = left+1, i = right+1; i < line->numElements; i++) {
++			elements[j++] = line->elements[i];
++			newNumElements++;
++		}
++	}
++	memcpy(line->elements, elements,
++	       sizeof (line->elements[i]) * newNumElements);
++	line->numElements = newNumElements;
++	return 0;
++}
++
++static int emptyElement(struct lineElement *element)
++{
++	if (element->item && strlen(element->item) > 0)
++		return 0;
++	if (element->indent && strlen(element->indent) > 0)
++		return 0;
++	return 1;
++}
++
++static int splitElement(struct singleLine *line, int element, int splitchar)
++{
++	struct lineElement split[2] = {{0,0},{0,0}};
++	struct lineElement *elements = NULL;
++	int saved_errno;
++	int i, j;
++
++	elements = calloc(line->numElements + 1, sizeof (line->elements[0]));
++	if (!elements)
++		return -1;
++
++	split[0].item = strndup(line->elements[element].item, splitchar);
++	if (!split[0].item)
++		goto err;
++	split[0].indent = strndup(&line->elements[element].item[splitchar], 1);
++	if (!split[0].indent)
++		goto err;
++	split[1].item = strdup(&line->elements[element].item[splitchar+1]);
++	if (!split[1].item)
++		goto err;
++	split[1].indent = line->elements[element].indent;
++
++	for (i = j = 0; i < line->numElements; i++) {
++		if (i != element) {
++			memcpy(&elements[j++], &line->elements[i],
++			       sizeof(line->elements[i]));
++		} else {
++			memcpy(&elements[j++], &split[0], sizeof(split[0]));
++			memcpy(&elements[j++], &split[1], sizeof(split[1]));
++			free(line->elements[i].item);
++		}
++	}
++	free(line->elements);
++	line->elements = elements;
++	line->numElements++;
++
++	return 0;
++err:
++	saved_errno = errno;
++	if (split[0].item)
++		free(split[0].item);
++	if (split[0].indent)
++		free(split[0].indent);
++	if (split[1].item)
++		free(split[1].item);
++	if (elements)
++		free(elements);
++	errno = saved_errno;
++	return -1;
++}
++
+ /* we've guaranteed that the buffer ends w/ \n\0 */
+ static int getNextLine(char **bufPtr, struct singleLine *line,
+ 		       struct configFileInfo *cfi)
+@@ -1208,34 +1327,27 @@ static int getNextLine(char **bufPtr, struct singleLine *line,
+ 			 * yet a third way to avoid rhbz# XXX FIXME :/
+ 			 */
+ 			char *eq;
+-			int l;
+-			int numElements = line->numElements;
+-			struct lineElement *newElements;
++			int rc;
++			rc = mergeElements(line, 2, line->numElements);
++			if (rc < 0)
++				return rc;
+ 			eq = strchr(line->elements[1].item, '=');
+ 			if (!eq)
+ 				return 0;
+-			l = eq - line->elements[1].item;
+-			if (eq[1] != 0)
+-				numElements++;
+-			newElements = calloc(numElements,sizeof (*newElements));
+-			memcpy(&newElements[0], &line->elements[0],
+-			       sizeof (newElements[0]));
+-			newElements[1].item =
+-				strndup(line->elements[1].item, l);
+-			newElements[1].indent = "=";
+-			*(eq++) = '\0';
+-			newElements[2].item = strdup(eq);
+-			free(line->elements[1].item);
+-			if (line->elements[1].indent)
+-				newElements[2].indent = line->elements[1].indent;
+-			for (int i = 2; i < line->numElements; i++) {
+-				newElements[i+1].item = line->elements[i].item;
+-				newElements[i+1].indent =
+-					line->elements[i].indent;
++			rc = splitElement(line, 1, eq-line->elements[1].item);
++			if (rc < 0)
++				return rc;
++			/* now make sure we haven't got any bogus elements at
++			 * the end that don't mean anything.
++			 */
++			while (line->numElements > 1 &&
++			       emptyElement(
++					&line->elements[line->numElements-1])) {
++				rc = mergeElements(line, line->numElements-2,
++						   line->numElements-1);
++				if (rc < 0)
++					return rc;
+ 			}
+-			free(line->elements);
+-			line->elements = newElements;
+-			line->numElements = numElements;
+ 		}
+ 	}
+ 
+diff --git a/test.sh b/test.sh
+index ba466a5..d488333 100755
+--- a/test.sh
++++ b/test.sh
+@@ -551,6 +551,12 @@ if [ "$testgrub2" == "y" ]; then
+         --copy-default --title 'Red Hat Enterprise Linux Server' \
+         --args=root=/dev/mapper/foo--
+ 
++    # the same, but for: set foo = " bar=1,2 "
++    grub2Test grub2.17 add/g2-1.17 \
++        --boot-filesystem=/boot --add-kernel=/boot/vmlinuz-foo \
++        --copy-default --title 'Red Hat Enterprise Linux Server' \
++        --args=root=/dev/mapper/foo--
++
+     testing="GRUB2 add initrd"
+     grub2Test grub2.2 add/g2-1.4 --update-kernel=/boot/new-kernel.img \
+         --initrd=/boot/new-initrd --boot-filesystem=/boot/
+diff --git a/test/grub2.17 b/test/grub2.17
+new file mode 100644
+index 0000000..bd8c9c5
+--- /dev/null
++++ b/test/grub2.17
+@@ -0,0 +1,156 @@
++#
++# DO NOT EDIT THIS FILE
++#
++# It is automatically generated by grub2-mkconfig using templates
++# from /etc/grub.d and settings from /etc/default/grub
++#
++
++### BEGIN /etc/grub.d/00_header ###
++set pager=1
++
++if [ -s $prefix/grubenv ]; then
++  load_env
++fi
++if [ "${next_entry}" ] ; then
++   set default="${next_entry}"
++   set next_entry=
++   save_env next_entry
++   set boot_once=true
++else
++   set default="${saved_entry}"
++fi
++
++if [ x"${feature_menuentry_id}" = xy ]; then
++  menuentry_id_option="--id"
++else
++  menuentry_id_option=""
++fi
++
++export menuentry_id_option
++
++if [ "${prev_saved_entry}" ]; then
++  set saved_entry="${prev_saved_entry}"
++  save_env saved_entry
++  set prev_saved_entry=
++  save_env prev_saved_entry
++  set boot_once=true
++fi
++
++function savedefault {
++  if [ -z "${boot_once}" ]; then
++    saved_entry="${chosen}"
++    save_env saved_entry
++  fi
++}
++
++function load_video {
++  if [ x$feature_all_video_module = xy ]; then
++    insmod all_video
++  else
++    insmod efi_gop
++    insmod efi_uga
++    insmod ieee1275_fb
++    insmod vbe
++    insmod vga
++    insmod video_bochs
++    insmod video_cirrus
++  fi
++}
++
++serial --speed=115200
++terminal_input serial console
++terminal_output serial console
++if [ x$feature_timeout_style = xy ] ; then
++  set timeout_style=menu
++  set timeout=5
++# Fallback normal timeout code in case the timeout_style feature is
++# unavailable.
++else
++  set timeout=5
++fi
++### END /etc/grub.d/00_header ###
++
++### BEGIN /etc/grub.d/00_tuned ###
++set  tuned_params= " isolcpus=1,3 "
++### END /etc/grub.d/00_tuned ###
++
++### BEGIN /etc/grub.d/01_users ###
++if [ -f ${prefix}/user.cfg ]; then
++  source ${prefix}/user.cfg
++  if [ -n ${GRUB2_PASSWORD} ]; then
++    set superusers="root"
++    export superusers
++    password_pbkdf2 root ${GRUB2_PASSWORD}
++  fi
++fi
++### END /etc/grub.d/01_users ###
++
++### BEGIN /etc/grub.d/10_linux ###
++menuentry 'Red Hat Enterprise Linux Server (3.10.0-297.el7.x86_64) 7.2 (Maipo)' --class red --class gnu-linux --class gnu --class os --unrestricted $menuentry_id_option 'gnulinux-3.10.0-296.el7.x86_64-advanced-ae7b3742-9092-4432-9f7f-8abdbf0dc3db' {
++	load_video
++	set gfxpayload=keep
++	insmod gzio
++	insmod part_msdos
++	insmod xfs
++	set root='hd0,msdos1'
++	if [ x$feature_platform_search_hint = xy ]; then
++	  search --no-floppy --fs-uuid --set=root --hint='hd0,msdos1'  cae02b39-f239-4d26-9032-674d261c93d8
++	else
++	  search --no-floppy --fs-uuid --set=root cae02b39-f239-4d26-9032-674d261c93d8
++	fi
++	linux16 /vmlinuz-3.10.0-297.el7.x86_64 root=/dev/mapper/rhel_hp--dl380pgen8--02--vm--10-root ro crashkernel=auto rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/root rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/swap console=ttyS0,115200n81  $tuned_params LANG=en_US.UTF-8
++}
++menuentry 'Red Hat Enterprise Linux Server (3.10.0-296.el7.x86_64) 7.2 (Maipo)' --class red --class gnu-linux --class gnu --class os --unrestricted $menuentry_id_option 'gnulinux-3.10.0-296.el7.x86_64-advanced-ae7b3742-9092-4432-9f7f-8abdbf0dc3db' {
++	load_video
++	set gfxpayload=keep
++	insmod gzio
++	insmod part_msdos
++	insmod xfs
++	set root='hd0,msdos1'
++	if [ x$feature_platform_search_hint = xy ]; then
++	  search --no-floppy --fs-uuid --set=root --hint='hd0,msdos1'  cae02b39-f239-4d26-9032-674d261c93d8
++	else
++	  search --no-floppy --fs-uuid --set=root cae02b39-f239-4d26-9032-674d261c93d8
++	fi
++	linux16 /vmlinuz-3.10.0-296.el7.x86_64 root=/dev/mapper/rhel_hp--dl380pgen8--02--vm--10-root ro crashkernel=auto rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/root rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/swap console=ttyS0,115200n81  $tuned_params
++	initrd16 /initramfs-3.10.0-296.el7.x86_64.img
++}
++menuentry 'Red Hat Enterprise Linux Server (0-rescue-cc21b92886f9ebbd3ed5a494639b7fd7) 7.2 (Maipo)' --class red --class gnu-linux --class gnu --class os --unrestricted $menuentry_id_option 'gnulinux-0-rescue-cc21b92886f9ebbd3ed5a494639b7fd7-advanced-ae7b3742-9092-4432-9f7f-8abdbf0dc3db' {
++	load_video
++	insmod gzio
++	insmod part_msdos
++	insmod xfs
++	set root='hd0,msdos1'
++	if [ x$feature_platform_search_hint = xy ]; then
++	  search --no-floppy --fs-uuid --set=root --hint='hd0,msdos1'  cae02b39-f239-4d26-9032-674d261c93d8
++	else
++	  search --no-floppy --fs-uuid --set=root cae02b39-f239-4d26-9032-674d261c93d8
++	fi
++	linux16 /vmlinuz-0-rescue-cc21b92886f9ebbd3ed5a494639b7fd7 root=/dev/mapper/rhel_hp--dl380pgen8--02--vm--10-root ro crashkernel=auto rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/root rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/swap console=ttyS0,115200n81  $tuned_params
++	initrd16 /initramfs-0-rescue-cc21b92886f9ebbd3ed5a494639b7fd7.img
++}
++if [ "x$default" = 'Red Hat Enterprise Linux Server (3.10.0-296.el7.x86_64) 7.2 (Maipo)' ]; then default='Advanced options for Red Hat Enterprise Linux Server>Red Hat Enterprise Linux Server (3.10.0-296.el7.x86_64) 7.2 (Maipo)'; fi;
++### END /etc/grub.d/10_linux ###
++
++### BEGIN /etc/grub.d/20_linux_xen ###
++### END /etc/grub.d/20_linux_xen ###
++
++### BEGIN /etc/grub.d/20_ppc_terminfo ###
++### END /etc/grub.d/20_ppc_terminfo ###
++
++### BEGIN /etc/grub.d/30_os-prober ###
++### END /etc/grub.d/30_os-prober ###
++
++### BEGIN /etc/grub.d/40_custom ###
++# This file provides an easy way to add custom menu entries.  Simply type the
++# menu entries you want to add after this comment.  Be careful not to change
++# the 'exec tail' line above.
++### END /etc/grub.d/40_custom ###
++
++### BEGIN /etc/grub.d/41_custom ###
++if [ -f  ${config_directory}/custom.cfg ]; then
++  source ${config_directory}/custom.cfg
++elif [ -z "${config_directory}" -a -f  $prefix/custom.cfg ]; then
++  source $prefix/custom.cfg;
++fi
++### END /etc/grub.d/41_custom ###
+diff --git a/test/results/add/g2-1.17 b/test/results/add/g2-1.17
+new file mode 100644
+index 0000000..afb151d
+--- /dev/null
++++ b/test/results/add/g2-1.17
+@@ -0,0 +1,170 @@
++#
++# DO NOT EDIT THIS FILE
++#
++# It is automatically generated by grub2-mkconfig using templates
++# from /etc/grub.d and settings from /etc/default/grub
++#
++
++### BEGIN /etc/grub.d/00_header ###
++set pager=1
++
++if [ -s $prefix/grubenv ]; then
++  load_env
++fi
++if [ "${next_entry}" ] ; then
++   set default="${next_entry}"
++   set next_entry=
++   save_env next_entry
++   set boot_once=true
++else
++   set default="${saved_entry}"
++fi
++
++if [ x"${feature_menuentry_id}" = xy ]; then
++  menuentry_id_option="--id"
++else
++  menuentry_id_option=""
++fi
++
++export menuentry_id_option
++
++if [ "${prev_saved_entry}" ]; then
++  set saved_entry="${prev_saved_entry}"
++  save_env saved_entry
++  set prev_saved_entry=
++  save_env prev_saved_entry
++  set boot_once=true
++fi
++
++function savedefault {
++  if [ -z "${boot_once}" ]; then
++    saved_entry="${chosen}"
++    save_env saved_entry
++  fi
++}
++
++function load_video {
++  if [ x$feature_all_video_module = xy ]; then
++    insmod all_video
++  else
++    insmod efi_gop
++    insmod efi_uga
++    insmod ieee1275_fb
++    insmod vbe
++    insmod vga
++    insmod video_bochs
++    insmod video_cirrus
++  fi
++}
++
++serial --speed=115200
++terminal_input serial console
++terminal_output serial console
++if [ x$feature_timeout_style = xy ] ; then
++  set timeout_style=menu
++  set timeout=5
++# Fallback normal timeout code in case the timeout_style feature is
++# unavailable.
++else
++  set timeout=5
++fi
++### END /etc/grub.d/00_header ###
++
++### BEGIN /etc/grub.d/00_tuned ###
++set  tuned_params= " isolcpus=1,3 "
++### END /etc/grub.d/00_tuned ###
++
++### BEGIN /etc/grub.d/01_users ###
++if [ -f ${prefix}/user.cfg ]; then
++  source ${prefix}/user.cfg
++  if [ -n ${GRUB2_PASSWORD} ]; then
++    set superusers="root"
++    export superusers
++    password_pbkdf2 root ${GRUB2_PASSWORD}
++  fi
++fi
++### END /etc/grub.d/01_users ###
++
++### BEGIN /etc/grub.d/10_linux ###
++menuentry 'Red Hat Enterprise Linux Server' --class red --class gnu-linux --class gnu --class os --unrestricted $menuentry_id_option 'gnulinux-3.10.0-296.el7.x86_64-advanced-ae7b3742-9092-4432-9f7f-8abdbf0dc3db' {
++	load_video
++	set gfxpayload=keep
++	insmod gzio
++	insmod part_msdos
++	insmod xfs
++	set root='hd0,msdos1'
++	if [ x$feature_platform_search_hint = xy ]; then
++	  search --no-floppy --fs-uuid --set=root --hint='hd0,msdos1'  cae02b39-f239-4d26-9032-674d261c93d8
++	else
++	  search --no-floppy --fs-uuid --set=root cae02b39-f239-4d26-9032-674d261c93d8
++	fi
++	linux16 /vmlinuz-foo root=/dev/mapper/foo-- ro crashkernel=auto rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/root rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/swap console=ttyS0,115200n81  $tuned_params LANG=en_US.UTF-8
++}
++menuentry 'Red Hat Enterprise Linux Server (3.10.0-297.el7.x86_64) 7.2 (Maipo)' --class red --class gnu-linux --class gnu --class os --unrestricted $menuentry_id_option 'gnulinux-3.10.0-296.el7.x86_64-advanced-ae7b3742-9092-4432-9f7f-8abdbf0dc3db' {
++	load_video
++	set gfxpayload=keep
++	insmod gzio
++	insmod part_msdos
++	insmod xfs
++	set root='hd0,msdos1'
++	if [ x$feature_platform_search_hint = xy ]; then
++	  search --no-floppy --fs-uuid --set=root --hint='hd0,msdos1'  cae02b39-f239-4d26-9032-674d261c93d8
++	else
++	  search --no-floppy --fs-uuid --set=root cae02b39-f239-4d26-9032-674d261c93d8
++	fi
++	linux16 /vmlinuz-3.10.0-297.el7.x86_64 root=/dev/mapper/rhel_hp--dl380pgen8--02--vm--10-root ro crashkernel=auto rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/root rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/swap console=ttyS0,115200n81  $tuned_params LANG=en_US.UTF-8
++}
++menuentry 'Red Hat Enterprise Linux Server (3.10.0-296.el7.x86_64) 7.2 (Maipo)' --class red --class gnu-linux --class gnu --class os --unrestricted $menuentry_id_option 'gnulinux-3.10.0-296.el7.x86_64-advanced-ae7b3742-9092-4432-9f7f-8abdbf0dc3db' {
++	load_video
++	set gfxpayload=keep
++	insmod gzio
++	insmod part_msdos
++	insmod xfs
++	set root='hd0,msdos1'
++	if [ x$feature_platform_search_hint = xy ]; then
++	  search --no-floppy --fs-uuid --set=root --hint='hd0,msdos1'  cae02b39-f239-4d26-9032-674d261c93d8
++	else
++	  search --no-floppy --fs-uuid --set=root cae02b39-f239-4d26-9032-674d261c93d8
++	fi
++	linux16 /vmlinuz-3.10.0-296.el7.x86_64 root=/dev/mapper/rhel_hp--dl380pgen8--02--vm--10-root ro crashkernel=auto rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/root rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/swap console=ttyS0,115200n81  $tuned_params
++	initrd16 /initramfs-3.10.0-296.el7.x86_64.img
++}
++menuentry 'Red Hat Enterprise Linux Server (0-rescue-cc21b92886f9ebbd3ed5a494639b7fd7) 7.2 (Maipo)' --class red --class gnu-linux --class gnu --class os --unrestricted $menuentry_id_option 'gnulinux-0-rescue-cc21b92886f9ebbd3ed5a494639b7fd7-advanced-ae7b3742-9092-4432-9f7f-8abdbf0dc3db' {
++	load_video
++	insmod gzio
++	insmod part_msdos
++	insmod xfs
++	set root='hd0,msdos1'
++	if [ x$feature_platform_search_hint = xy ]; then
++	  search --no-floppy --fs-uuid --set=root --hint='hd0,msdos1'  cae02b39-f239-4d26-9032-674d261c93d8
++	else
++	  search --no-floppy --fs-uuid --set=root cae02b39-f239-4d26-9032-674d261c93d8
++	fi
++	linux16 /vmlinuz-0-rescue-cc21b92886f9ebbd3ed5a494639b7fd7 root=/dev/mapper/rhel_hp--dl380pgen8--02--vm--10-root ro crashkernel=auto rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/root rd.lvm.lv=rhel_hp-dl380pgen8-02-vm-10/swap console=ttyS0,115200n81  $tuned_params
++	initrd16 /initramfs-0-rescue-cc21b92886f9ebbd3ed5a494639b7fd7.img
++}
++if [ "x$default" = 'Red Hat Enterprise Linux Server (3.10.0-296.el7.x86_64) 7.2 (Maipo)' ]; then default='Advanced options for Red Hat Enterprise Linux Server>Red Hat Enterprise Linux Server (3.10.0-296.el7.x86_64) 7.2 (Maipo)'; fi;
++### END /etc/grub.d/10_linux ###
++
++### BEGIN /etc/grub.d/20_linux_xen ###
++### END /etc/grub.d/20_linux_xen ###
++
++### BEGIN /etc/grub.d/20_ppc_terminfo ###
++### END /etc/grub.d/20_ppc_terminfo ###
++
++### BEGIN /etc/grub.d/30_os-prober ###
++### END /etc/grub.d/30_os-prober ###
++
++### BEGIN /etc/grub.d/40_custom ###
++# This file provides an easy way to add custom menu entries.  Simply type the
++# menu entries you want to add after this comment.  Be careful not to change
++# the 'exec tail' line above.
++### END /etc/grub.d/40_custom ###
++
++### BEGIN /etc/grub.d/41_custom ###
++if [ -f  ${config_directory}/custom.cfg ]; then
++  source ${config_directory}/custom.cfg
++elif [ -z "${config_directory}" -a -f  $prefix/custom.cfg ]; then
++  source $prefix/custom.cfg;
++fi
++### END /etc/grub.d/41_custom ###
+-- 
+2.4.3
+

@@ -1,0 +1,363 @@
+From 7d2fc73dad0e7000f7fbeb985bc6d80fbb0ea848 Mon Sep 17 00:00:00 2001
+From: Peter Jones <pjones@redhat.com>
+Date: Tue, 14 Apr 2015 14:34:10 -0400
+Subject: [PATCH 32/41] Make the cases for 0cb78dab /actually work/, not just
+ not crash.
+
+Resolves: rhbz#1204353
+Resolves: rhbz#1204888
+Resolves: rhbz#1206943
+
+Signed-off-by: Peter Jones <pjones@redhat.com>
+---
+ grubby.c              | 30 +++++++++++-----
+ test.sh               |  3 ++
+ test/grub.14          | 96 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ test/results/add/g1.7 | 97 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 218 insertions(+), 8 deletions(-)
+ create mode 100644 test/grub.14
+ create mode 100644 test/results/add/g1.7
+
+diff --git a/grubby.c b/grubby.c
+index f7209a9..e4358ad 100644
+--- a/grubby.c
++++ b/grubby.c
+@@ -217,6 +217,7 @@ struct configFileInfo grubConfigType = {
+     .mbHyperFirst = 1,
+     .mbInitRdIsModule = 1,
+     .mbAllowExtraInitRds = 1,
++    .titlePosition = 1,
+ };
+ 
+ struct keywordTypes grub2Keywords[] = {
+@@ -586,6 +587,7 @@ struct configFileInfo eliloConfigType = {
+     .needsBootPrefix = 1,
+     .argsInQuotes = 1,
+     .mbConcatArgs = 1,
++    .titlePosition = 1,
+ };
+ 
+ struct configFileInfo liloConfigType = {
+@@ -594,6 +596,7 @@ struct configFileInfo liloConfigType = {
+     .entryStart = LT_KERNEL,
+     .argsInQuotes = 1,
+     .maxTitleLength = 15,
++    .titlePosition = 1,
+ };
+ 
+ struct configFileInfo yabootConfigType = {
+@@ -604,6 +607,7 @@ struct configFileInfo yabootConfigType = {
+     .argsInQuotes = 1,
+     .maxTitleLength = 15,
+     .mbAllowExtraInitRds = 1,
++    .titlePosition = 1,
+ };
+ 
+ struct configFileInfo siloConfigType = {
+@@ -613,6 +617,7 @@ struct configFileInfo siloConfigType = {
+     .needsBootPrefix = 1,
+     .argsInQuotes = 1,
+     .maxTitleLength = 15,
++    .titlePosition = 1,
+ };
+ 
+ struct configFileInfo ziplConfigType = {
+@@ -632,6 +637,7 @@ struct configFileInfo extlinuxConfigType = {
+     .maxTitleLength = 255,
+     .mbAllowExtraInitRds = 1,
+     .defaultIsUnquoted = 1,
++    .titlePosition = 1,
+ };
+ 
+ struct grubConfig {
+@@ -820,12 +826,20 @@ static int isEntryStart(struct singleLine * line,
+ }
+ 
+ /* extract the title from within brackets (for zipl) */
+-static char * extractTitle(struct singleLine * line) {
++static char * extractTitle(struct grubConfig *cfg, struct singleLine * line) {
+     /* bracketed title... let's extract it */
+     char * title = NULL;
++    if (cfg->cfi == &grub2ConfigType)
++	return grub2ExtractTitle(line);
+     if (line->type == LT_TITLE) {
+-	title = strdup(line->elements[0].item + 1);
+-	*(title + strlen(title) - 1) = '\0';
++	char *tmp = line->elements[cfg->cfi->titlePosition].item;
++	if (cfg->cfi->titleBracketed) {
++	    tmp++;
++	    title = strdup(tmp);
++	    *(title + strlen(title) - 1) = '\0';
++	} else {
++	    title = strdup(tmp);
++	}
+     } else if (line->type == LT_MENUENTRY)
+ 	title = strdup(line->elements[1].item);
+     else
+@@ -1433,7 +1447,7 @@ static struct grubConfig * readConfig(const char * inName,
+                                 line->elements[1].item)) break;
+                 } else if (line) {
+                     if (!strcmp(defaultLine->elements[1].item, 
+-                                extractTitle(line))) break;
++                                extractTitle(cfg, line))) break;
+                 }
+ 		i++;
+ 		entry = NULL;
+@@ -1484,7 +1498,7 @@ static void writeDefault(FILE * out, char * indent,
+ 	    if (!line)
+ 		line = getLineByType(LT_TITLE, entry->lines);
+ 	    if (line) {
+-		title = extractTitle(line);
++		title = extractTitle(cfg, line);
+ 		if (title)
+ 		    cfg->cfi->setEnv(cfg->cfi, "saved_entry", title);
+ 	    }
+@@ -1522,7 +1536,7 @@ static void writeDefault(FILE * out, char * indent,
+             else if (line && (line->numElements == 1) && 
+                      cfg->cfi->titleBracketed) {
+ 		fprintf(out, "%sdefault%s%s\n", indent, separator, 
+-                        extractTitle(line));
++                        extractTitle(cfg, line));
+             }
+ 	}
+     }
+@@ -3309,7 +3323,7 @@ int addMBInitrd(struct grubConfig * cfg, const char *newMBKernel,
+ 	    if (!line)
+ 		continue;
+ 
+-	    linetitle = extractTitle(line);
++	    linetitle = extractTitle(cfg, line);
+ 	    if (!linetitle)
+ 		continue;
+ 	    if (strcmp(title, linetitle)) {
+@@ -3363,7 +3377,7 @@ int updateInitrd(struct grubConfig * cfg, const char * image,
+ 	    if (!line)
+ 		continue;
+ 
+-	    linetitle = extractTitle(line);
++	    linetitle = extractTitle(cfg, line);
+ 	    if (!linetitle)
+ 		continue;
+ 	    if (strcmp(title, linetitle)) {
+diff --git a/test.sh b/test.sh
+index fb13033..30115d1 100755
+--- a/test.sh
++++ b/test.sh
+@@ -269,6 +269,9 @@ grubTest grub.13 setdefaultindex/g.13.0 --set-default-index=0
+ grubTest grub.13 setdefaultindex/g.13.1 --set-default-index=1
+ grubTest grub.13 setdefaultindex/g.13.9 --set-default-index=9
+ 
++testing="GRUB add initrd"
++grubTest grub.14 add/g1.7 --boot-filesystem=/ --update-kernel=/vmlinuz-4.0.0-0.rc4.git1.4.fc23.x86_64 --initrd /initramfs-4.0.0-0.rc4.git1.4.fc23.x86_64.img '--args= LANG=en_US.UTF-8' '--title=Fedora (4.0.0-0.rc4.git1.4.fc23.x86_64) 23 (Rawhide)'
++
+ testing="GRUB display default index"
+ grubDisplayTest grub.1 defaultindex/0 --default-index
+ grubDisplayTest grub.2 defaultindex/0 --default-index
+diff --git a/test/grub.14 b/test/grub.14
+new file mode 100644
+index 0000000..5c0b9b3
+--- /dev/null
++++ b/test/grub.14
+@@ -0,0 +1,96 @@
++# grub.conf generated by anaconda
++#
++# Note that you do not have to rerun grub after making changes to this file
++# NOTICE:  You have a  partition.  This means that
++#          all kernel and initrd paths are relative to /, eg.
++#          root (hd0,0)
++#          kernel /vmlinuz-version ro root=/dev/d2/root
++#          initrd /initrd-version.img
++#boot=/dev/hda
++timeout=5
++splashimage=(hd0,0)/grub/splash.xpm.gz
++default=0
++hiddenmenu
++title Fedora (4.0.0-0.rc4.git1.4.fc23.x86_64) 23 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-4.0.0-0.rc4.git1.4.fc23.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++title Fedora (4.0.0-0.rc4.git0.1.fc23.x86_64) 23 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-4.0.0-0.rc4.git0.1.fc23.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-4.0.0-0.rc4.git0.1.fc23.x86_64.img
++title Fedora (4.0.0-0.rc1.git1.2.fc23.x86_64) 23 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-4.0.0-0.rc1.git1.2.fc23.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-4.0.0-0.rc1.git1.2.fc23.x86_64.img
++title Fedora (4.0.0-0.rc1.git0.1.fc23.x86_64) 23 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-4.0.0-0.rc1.git0.1.fc23.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-4.0.0-0.rc1.git0.1.fc23.x86_64.img
++title Fedora (3.20.0-0.rc0.git9.2.fc23.x86_64) 23 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.20.0-0.rc0.git9.2.fc23.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.20.0-0.rc0.git9.2.fc23.x86_64.img
++title Fedora (3.20.0-0.rc0.git6.2.fc23.x86_64) 23 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.20.0-0.rc0.git6.2.fc23.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.20.0-0.rc0.git6.2.fc23.x86_64.img
++title Fedora (3.19.0-1.fc22.x86_64) 22 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.19.0-1.fc22.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.19.0-1.fc22.x86_64.img
++title Fedora (3.19.0-0.rc7.git1.2.fc22.x86_64) 22 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.19.0-0.rc7.git1.2.fc22.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.19.0-0.rc7.git1.2.fc22.x86_64.img
++title Fedora (3.19.0-0.rc7.git0.1.fc22.x86_64) 22 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.19.0-0.rc7.git0.1.fc22.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.19.0-0.rc7.git0.1.fc22.x86_64.img
++title Fedora (3.19.0-0.rc6.git0.1.fc22.x86_64) 22 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.19.0-0.rc6.git0.1.fc22.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.19.0-0.rc6.git0.1.fc22.x86_64.img
++title Fedora (3.19.0-0.rc5.git0.1.fc22.x86_64) 22 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.19.0-0.rc5.git0.1.fc22.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.19.0-0.rc5.git0.1.fc22.x86_64.img
++title Fedora (3.19.0-0.rc4.git2.2.fc22.x86_64) 22 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.19.0-0.rc4.git2.2.fc22.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.19.0-0.rc4.git2.2.fc22.x86_64.img
++title Fedora (3.19.0-0.rc4.git0.1.fc22.x86_64) 22 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.19.0-0.rc4.git0.1.fc22.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.19.0-0.rc4.git0.1.fc22.x86_64.img
++title Fedora (3.19.0-0.rc3.git0.1.fc22.x86_64) 22 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.19.0-0.rc3.git0.1.fc22.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.19.0-0.rc3.git0.1.fc22.x86_64.img
++title Fedora (3.18.1-2.fc22.x86_64) 22 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.18.1-2.fc22.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.18.1-2.fc22.x86_64.img
++title Fedora (3.17.1-302.fc21.x86_64) 22 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.17.1-302.fc21.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.17.1-302.fc21.x86_64.img
++title Fedora 20 Rescue 4b741960432e833443a6bc004563501d (3.10.0-0.rc4.git0.1.fc20.x86_64)
++	root (hd0,0)
++	kernel /vmlinuz-0-rescue-4b741960432e833443a6bc004563501d ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-0-rescue-4b741960432e833443a6bc004563501d.img
++title Fedora 20 Rescue 4b741960432e833443a6bc004563501d (3.9.0-0.rc4.git0.1.fc20.x86_64)
++	root (hd0,0)
++	kernel /vmlinuz-0-rescue-4b741960432e833443a6bc004563501d ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-0-rescue-4b741960432e833443a6bc004563501d.img
++title Memtest86+ (4.20)
++	root (hd0,0)
++	kernel /elf-memtest86+-4.20
++title Fedora (2.6.29.5-191.fc11.x86_64)
++        root (hd0,0)
++	kernel /vmlinuz-2.6.29.5-191.fc11.x86_64 ro root=/dev/d2/rescue64
++	initrd /initrd-2.6.29.5-191.fc11.x86_64.img
++title install
++	kernel /f10vz
++	initrd /f10ird.img
++title gittest
++	kernel /gittest
+diff --git a/test/results/add/g1.7 b/test/results/add/g1.7
+new file mode 100644
+index 0000000..dc77c0f
+--- /dev/null
++++ b/test/results/add/g1.7
+@@ -0,0 +1,97 @@
++# grub.conf generated by anaconda
++#
++# Note that you do not have to rerun grub after making changes to this file
++# NOTICE:  You have a  partition.  This means that
++#          all kernel and initrd paths are relative to /, eg.
++#          root (hd0,0)
++#          kernel /vmlinuz-version ro root=/dev/d2/root
++#          initrd /initrd-version.img
++#boot=/dev/hda
++timeout=5
++splashimage=(hd0,0)/grub/splash.xpm.gz
++default=0
++hiddenmenu
++title Fedora (4.0.0-0.rc4.git1.4.fc23.x86_64) 23 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-4.0.0-0.rc4.git1.4.fc23.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-4.0.0-0.rc4.git1.4.fc23.x86_64.img
++title Fedora (4.0.0-0.rc4.git0.1.fc23.x86_64) 23 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-4.0.0-0.rc4.git0.1.fc23.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-4.0.0-0.rc4.git0.1.fc23.x86_64.img
++title Fedora (4.0.0-0.rc1.git1.2.fc23.x86_64) 23 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-4.0.0-0.rc1.git1.2.fc23.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-4.0.0-0.rc1.git1.2.fc23.x86_64.img
++title Fedora (4.0.0-0.rc1.git0.1.fc23.x86_64) 23 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-4.0.0-0.rc1.git0.1.fc23.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-4.0.0-0.rc1.git0.1.fc23.x86_64.img
++title Fedora (3.20.0-0.rc0.git9.2.fc23.x86_64) 23 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.20.0-0.rc0.git9.2.fc23.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.20.0-0.rc0.git9.2.fc23.x86_64.img
++title Fedora (3.20.0-0.rc0.git6.2.fc23.x86_64) 23 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.20.0-0.rc0.git6.2.fc23.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.20.0-0.rc0.git6.2.fc23.x86_64.img
++title Fedora (3.19.0-1.fc22.x86_64) 22 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.19.0-1.fc22.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.19.0-1.fc22.x86_64.img
++title Fedora (3.19.0-0.rc7.git1.2.fc22.x86_64) 22 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.19.0-0.rc7.git1.2.fc22.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.19.0-0.rc7.git1.2.fc22.x86_64.img
++title Fedora (3.19.0-0.rc7.git0.1.fc22.x86_64) 22 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.19.0-0.rc7.git0.1.fc22.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.19.0-0.rc7.git0.1.fc22.x86_64.img
++title Fedora (3.19.0-0.rc6.git0.1.fc22.x86_64) 22 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.19.0-0.rc6.git0.1.fc22.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.19.0-0.rc6.git0.1.fc22.x86_64.img
++title Fedora (3.19.0-0.rc5.git0.1.fc22.x86_64) 22 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.19.0-0.rc5.git0.1.fc22.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.19.0-0.rc5.git0.1.fc22.x86_64.img
++title Fedora (3.19.0-0.rc4.git2.2.fc22.x86_64) 22 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.19.0-0.rc4.git2.2.fc22.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.19.0-0.rc4.git2.2.fc22.x86_64.img
++title Fedora (3.19.0-0.rc4.git0.1.fc22.x86_64) 22 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.19.0-0.rc4.git0.1.fc22.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.19.0-0.rc4.git0.1.fc22.x86_64.img
++title Fedora (3.19.0-0.rc3.git0.1.fc22.x86_64) 22 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.19.0-0.rc3.git0.1.fc22.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.19.0-0.rc3.git0.1.fc22.x86_64.img
++title Fedora (3.18.1-2.fc22.x86_64) 22 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.18.1-2.fc22.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.18.1-2.fc22.x86_64.img
++title Fedora (3.17.1-302.fc21.x86_64) 22 (Rawhide)
++	root (hd0,0)
++	kernel /vmlinuz-3.17.1-302.fc21.x86_64 ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-3.17.1-302.fc21.x86_64.img
++title Fedora 20 Rescue 4b741960432e833443a6bc004563501d (3.10.0-0.rc4.git0.1.fc20.x86_64)
++	root (hd0,0)
++	kernel /vmlinuz-0-rescue-4b741960432e833443a6bc004563501d ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-0-rescue-4b741960432e833443a6bc004563501d.img
++title Fedora 20 Rescue 4b741960432e833443a6bc004563501d (3.9.0-0.rc4.git0.1.fc20.x86_64)
++	root (hd0,0)
++	kernel /vmlinuz-0-rescue-4b741960432e833443a6bc004563501d ro root=/dev/sda1 SYSFONT=latarcyrheb-sun16 LANG=en_US.UTF-8 KEYTABLE=us rd_plytheme=charge
++	initrd /initramfs-0-rescue-4b741960432e833443a6bc004563501d.img
++title Memtest86+ (4.20)
++	root (hd0,0)
++	kernel /elf-memtest86+-4.20
++title Fedora (2.6.29.5-191.fc11.x86_64)
++        root (hd0,0)
++	kernel /vmlinuz-2.6.29.5-191.fc11.x86_64 ro root=/dev/d2/rescue64
++	initrd /initrd-2.6.29.5-191.fc11.x86_64.img
++title install
++	kernel /f10vz
++	initrd /f10ird.img
++title gittest
++	kernel /gittest
+-- 
+2.4.3
+
