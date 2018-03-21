@@ -83,6 +83,9 @@ Patch0073: 0073-Fix-info-for-s390x-s390-1285601.patch
 Patch0074: 0074-Add-s390-s390x-set-default-index-test-1285601.patch
 Patch0075: 0075-Fix-setDefaultImage-for-s390-s390x-1285601.patch
 
+##only for arm
+Patch1000: 1000-Update-extlinux.conf-with-sed-instead-of-backporting.patch
+
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 BuildRequires: pkgconfig glib2-devel popt-devel 
 BuildRequires: libblkid-devel git
@@ -158,6 +161,9 @@ rm -rf $RPM_BUILD_ROOT
 %endif
 
 %changelog
+* Wed Mar 21 2018 pablo@fliagreco.com.ar - 8.28-23
+- Fix fdtdir on extlinux.conf
+
 * Tue Mar 21 2017 rmarshall@redhat.com - 8.28-23
 - Fixes --info flag on s390/s390x.
   Related: rhbz#1285601
