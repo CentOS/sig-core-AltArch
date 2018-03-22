@@ -155,10 +155,6 @@ rm -rf %{buildroot}
 %attr(0755,root,root) %{_bindir}/rootfs-expand
 
 %post
-# Detecting if rpi or generic kernel
-if [ -x /usr/bin/egrep ];then
-egrep -q 'BCM2709|BCM2710|BCM2835' /proc/cpuinfo && echo rpi2 >/etc/yum/vars/kvariant || echo generic >/etc/yum/vars/kvariant
-fi
 if [ -e /usr/local/bin/rootfs-expand ];then
 rm -f /usr/local/bin/rootfs-expand
 fi
