@@ -99,6 +99,7 @@ Requires: s390utils-base
 %endif
 %ifarch %{arm}
 Requires: uboot-tools
+Requires: extlinux-bootloader
 %endif
 Requires: system-release
 
@@ -161,6 +162,9 @@ rm -rf $RPM_BUILD_ROOT
 %endif
 
 %changelog
+* Tue Mar 27 2018 pablo@fliagreco.com.ar - 8.28-23
+- Add extlinux-bootloader require on armhfp
+
 * Wed Mar 21 2018 pablo@fliagreco.com.ar - 8.28-23
 - Fix fdtdir on extlinux.conf
 
