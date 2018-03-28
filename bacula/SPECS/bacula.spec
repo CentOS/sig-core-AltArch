@@ -46,6 +46,8 @@ Patch9:             %{name}-non-free-code.patch
 Patch10:            %{name}-multilib.patch
 Patch11:            %{name}-name-length.patch
 
+Patch1001:          %{name}-multilib-arm.patch
+
 BuildRequires:      desktop-file-utils
 BuildRequires:      perl
 BuildRequires:      sed
@@ -331,6 +333,11 @@ Provides check_bacula support for Nagios.
 %patch9 -p1 -b .non-free-code
 %patch10 -p1 -b .multilib
 %patch11 -p1 -b .name-length
+
+%ifarch %{arm}
+%patch1001 -p1 -b .multilib-arm
+%endif
+
 cp %{SOURCE2} %{SOURCE3} %{SOURCE4} %{SOURCE5} .
 
 # Remove execution permissions from files we're packaging as docs later on
@@ -915,6 +922,9 @@ fi
 %{_libdir}/nagios/plugins/check_bacula
 
 %changelog
+* Wed Mar 28 2018 Pablo Greco <pablo@fliagreco.com.ar> - 5.2.13-23.1
+- Fix build on armhfp
+
 * Fri Aug 07 2015 Petr Hracek <phracek@redhat.com> - 5.2.13-23.1
 - Update SPEC file
   Related: #1195625
