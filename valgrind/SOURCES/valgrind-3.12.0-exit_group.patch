@@ -1,0 +1,52 @@
+commit 18b3ffc1a8dc951d8a8cdb076e7e30aafc216571
+Author: philippe <philippe@a5019735-40e9-0310-863c-91ae7b9d1cf9>
+Date:   Sat Nov 19 14:54:44 2016 +0000
+
+    Fix 372504  Hanging on exit_group
+    
+    Note that it is unclear if the PRE syscall for rt_sigsuspend
+    is properly setting up a temporary mask in the thread state
+    tmp_sig_mask:  if an handler is called while a thread is
+    calling sigsuspend, the mask during the handler run must be
+    the temporary mask set by sigsuspend.
+    It is not clear if/where the valgrind sigframe builder/handler
+    sets the tmp_sig_mask to the value as expected by the user
+    (i.e. the value of the temporary mask which was given to
+    the sigsuspend syscall)
+    
+    
+    
+    git-svn-id: svn://svn.valgrind.org/valgrind/trunk@16141 a5019735-40e9-0310-863c-91ae7b9d1cf9
+
+diff --git a/coregrind/m_syswrap/syswrap-linux.c b/coregrind/m_syswrap/syswrap-linux.c
+index 1dcb95d..fda8dd1 100644
+--- a/coregrind/m_syswrap/syswrap-linux.c
++++ b/coregrind/m_syswrap/syswrap-linux.c
+@@ -3558,6 +3558,12 @@ PRE(sys_rt_sigsuspend)
+    PRE_REG_READ2(int, "rt_sigsuspend", vki_sigset_t *, mask, vki_size_t, size)
+    if (ARG1 != (Addr)NULL) {
+       PRE_MEM_READ( "rt_sigsuspend(mask)", ARG1, sizeof(vki_sigset_t) );
++      VG_(sigdelset)((vki_sigset_t*)ARG1, VG_SIGVGKILL); 
++      /* We cannot mask VG_SIGVGKILL, as otherwise this thread would not
++         be killable by VG_(nuke_all_threads_except).
++         We thus silently ignore the user request to mask this signal.
++         Note that this is similar to what is done for e.g.
++         sigprocmask (see m_signals.c calculate_SKSS_from_SCSS).  */
+    }
+ }
+ 
+diff --git a/coregrind/pub_core_threadstate.h b/coregrind/pub_core_threadstate.h
+index 861f233..f3d956c 100644
+--- a/coregrind/pub_core_threadstate.h
++++ b/coregrind/pub_core_threadstate.h
+@@ -354,7 +354,9 @@ typedef struct {
+       different values is during the execution of a sigsuspend, where
+       tmp_sig_mask is the temporary mask which sigsuspend installs.
+       It is only consulted to compute the signal mask applied to a
+-      signal handler. */
++      signal handler. 
++      PW Nov 2016 : it is not clear if and where this tmp_sig_mask
++      is set when an handler runs "inside" a sigsuspend. */
+    vki_sigset_t tmp_sig_mask;
+ 
+    /* A little signal queue for signals we can't get the kernel to

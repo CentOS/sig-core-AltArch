@@ -1,0 +1,33 @@
+commit cd685e0ff55060e9ec341c86b23c6dbb2d3127f4
+Author: tom <tom@8f6e269a-dfd6-0310-a8e1-e2731360e62c>
+Date:   Sat Feb 11 10:44:29 2017 +0000
+
+    Handle unknown HINT instructions on aarch64 by ignoring them. BZ#376279.
+    
+    
+    git-svn-id: svn://svn.valgrind.org/vex/trunk@3302 8f6e269a-dfd6-0310-a8e1-e2731360e62c
+
+diff --git a/VEX/priv/guest_arm64_toIR.c b/VEX/priv/guest_arm64_toIR.c
+index e527447..484a26e 100644
+--- a/VEX/priv/guest_arm64_toIR.c
++++ b/VEX/priv/guest_arm64_toIR.c
+@@ -7022,6 +7022,19 @@ Bool dis_ARM64_branch_etc(/*MB_OUT*/DisResult* dres, UInt insn,
+       return True;
+    }
+ 
++   /* -------------------- HINT ------------------- */
++   /* 31        23        15   11   4 3
++      1101 0101 0000 0011 0010 imm7 1 1111
++   */
++   if (INSN(31,24) == BITS8(1,1,0,1,0,1,0,1)
++       && INSN(23,16) == BITS8(0,0,0,0,0,0,1,1)
++       && INSN(15,12) == BITS4(0,0,1,0)
++       && INSN(4,0) == BITS5(1,1,1,1,1)) {
++      UInt imm7 = INSN(11,5);
++      DIP("hint #%u\n", imm7);
++      return True;
++   }
++
+    /* ------------------- CLREX ------------------ */
+    /* 31        23        15   11 7
+       1101 0101 0000 0011 0011 m  0101 1111  CLREX CRm
