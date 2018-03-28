@@ -147,6 +147,9 @@ Patch24: valgrind-3.12.0-ll-sc-fallback4.patch
 # The result would only be used for two test cases.
 Patch7001: valgrind-3.11.0-ppc-fppo.patch
 
+# Fix test link on arm32
+Patch8001: valgrind-3.12.0-fix-tests-arm.patch
+
 %if %{build_multilib}
 # Ensure glibc{,-devel} is installed for both multilib arches
 BuildRequires: /lib/libc.so.6 /usr/lib/libc.so /lib64/libc.so.6 /usr/lib64/libc.so
@@ -285,6 +288,10 @@ rm -f none/tests/cmdline?.stdout.exp.orig
 
 # RHEL7 specific patches
 %patch7001 -p1
+
+%ifarch %{arm}
+%patch8001 -p1
+%endif
 
 %build
 # We need to use the software collection compiler and binutils if available.
@@ -479,6 +486,9 @@ echo ===============END TESTING===============
 %endif
 
 %changelog
+* Wed Mar 28 2018 Pablo Greco <pablo@fliagreco.com.ar> - 3.12.0-9
+- Fix tests on armhfp
+
 * Thu Sep 21 2017 Mark Wielaard <mjw@redhat.com> - 3.12.0-9
 - Add valgrind-3.12.0-ll-sc-fallback[1234].patch (#1492753)
 
