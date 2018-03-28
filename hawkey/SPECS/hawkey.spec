@@ -23,6 +23,10 @@ BuildRequires:  check-devel
 %ifnarch s390
 BuildRequires:  valgrind
 %endif
+
+Patch0002:      0002-Fixes-for-building-with-libsolv-0.6.21-117.patch
+Patch0003:      0001-util-detect-armv7hnl-properly.patch
+
 Requires:       libsolv%{?_isa} >= %{libsolv_version}
 
 %description
@@ -75,7 +79,7 @@ Python 3 bindings for the hawkey library.
 %endif
 
 %prep
-%autosetup
+%autosetup -p1
 
 mkdir build
 
@@ -150,6 +154,9 @@ popd
 %endif
 
 %changelog
+* Wed Mar 28 2018 Pablo Greco <pablo@fliagreco.com.ar> - 0.6.3-4
+- Backport patches from Fedora to fix armhfp
+
 * Tue Jun 21 2016 Igor Gnatenko <ignatenko@redhat.com> - 0.6.3-4
 - Fix obsoletes again (RHBZ #1348167)
 

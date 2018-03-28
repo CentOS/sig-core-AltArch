@@ -1,0 +1,103 @@
+From 43119cffd65c09e492ffac0b8dd56232c3bd8571 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Neal=20Gompa=20=28=E3=83=8B=E3=83=BC=E3=83=AB=E3=83=BB?=
+ =?UTF-8?q?=E3=82=B4=E3=83=B3=E3=83=91=29?= <ngompa13@gmail.com>
+Date: Wed, 29 Jun 2016 06:36:26 -0700
+Subject: [PATCH 2/2] Fixes for building with libsolv-0.6.21 (#117)
+
+* tests/sack: do not raise exceptions on empty/unknown arches
+
+libsolv 0.6.21 now permits handling custom architectures,
+which completely breaks these tests.
+
+* Add build option to enable urpmreorder solver flag
+
+This optionally enables the urpm-style solution reordering
+required to ensure the proper subset of locale and kernel packages
+were being installed.
+
+Reference: https://bugs.mageia.org/show_bug.cgi?id=18315
+
+* spec: bump required libsolv to 0.6.21
+---
+ CMakeLists.txt                  | 7 +++++++
+ hawkey.spec                     | 2 +-
+ src/goal.c                      | 5 +++++
+ tests/python/tests/test_sack.py | 2 --
+ tests/test_sack.c               | 4 ----
+ 5 files changed, 13 insertions(+), 7 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index f638bb9..06432d3 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -12,6 +12,13 @@ IF(NOT CMAKE_BUILD_TYPE)
+ ENDIF(NOT CMAKE_BUILD_TYPE)
+ 
+ INCLUDE_DIRECTORIES (${CMAKE_SOURCE_DIR})
++
++OPTION (ENABLE_SOLV_URPMREORDER "Build with support for URPM-like solution reordering?" OFF)
++
++IF (ENABLE_SOLV_URPMREORDER)
++   ADD_DEFINITIONS(-DLIBSOLV_FLAG_URPMREORDER=1)
++ENDIF()
++
+ if (LIBSOLV_PATH)
+    INCLUDE_DIRECTORIES (${LIBSOLV_PATH}/build/)
+    FIND_LIBRARY (SOLV_LIBRARY NAMES solv PATHS ${LIBSOLV_PATH}/build/src NO_DEFAULT_PATH)
+diff --git a/hawkey.spec b/hawkey.spec
+index 05c2b45..18c56b4 100644
+--- a/hawkey.spec
++++ b/hawkey.spec
+@@ -1,4 +1,4 @@
+-%global libsolv_version 0.6.4-1
++%global libsolv_version 0.6.21-1
+ 
+ %if 0%{?rhel} && 0%{?rhel} <= 7
+ %bcond_with python3
+diff --git a/src/goal.c b/src/goal.c
+index 1a2198d..442bc4a 100644
+--- a/src/goal.c
++++ b/src/goal.c
+@@ -221,6 +221,11 @@ init_solver(HyGoal goal, int flags)
+     /* support package splits via obsoletes */
+     solver_set_flag(solv, SOLVER_FLAG_YUM_OBSOLETES, 1);
+ 
++#if defined(LIBSOLV_FLAG_URPMREORDER)
++    /* support urpm-like solution reordering */
++    solver_set_flag(solv, SOLVER_FLAG_URPM_REORDER, 1);
++#endif
++
+     return solv;
+ }
+ 
+diff --git a/tests/python/tests/test_sack.py b/tests/python/tests/test_sack.py
+index 6661caa..cb0449c 100644
+--- a/tests/python/tests/test_sack.py
++++ b/tests/python/tests/test_sack.py
+@@ -55,8 +55,6 @@ class BasicTest(unittest.TestCase):
+     def test_creation(self):
+         hawkey.Sack(arch="noarch")
+         hawkey.Sack(arch="x86_64")
+-        self.assertRaises(hawkey.ArchException, hawkey.Sack, arch="")
+-        self.assertRaises(hawkey.ValueException, hawkey.Sack, arch="play")
+ 
+     def test_deepcopy(self):
+         sack = hawkey.Sack()
+diff --git a/tests/test_sack.c b/tests/test_sack.c
+index 9c97f4e..a179d2d 100644
+--- a/tests/test_sack.c
++++ b/tests/test_sack.c
+@@ -55,10 +55,6 @@ START_TEST(test_sack_create)
+     fail_if(sack_pool(sack) == NULL, NULL);
+     hy_sack_free(sack);
+ 
+-    sack = hy_sack_create(test_globals.tmpdir, "", NULL, NULL,
+-			  HY_MAKE_CACHE_DIR);
+-    fail_unless(sack == NULL);
+-    fail_unless(hy_get_errno() == HY_E_ARCH);
+ }
+ END_TEST
+ 
+-- 
+2.9.2
+
