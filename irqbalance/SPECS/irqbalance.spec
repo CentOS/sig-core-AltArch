@@ -14,9 +14,9 @@ BuildRequires:  autoconf automake libtool libcap-ng
 BuildRequires:  glib2-devel pkgconfig libcap-ng-devel
 %ifnarch %{arm}
 BuildRequires:  numactl-devel
-BuildRequires:  systemd-units
 Requires: numactl-libs
 %endif
+BuildRequires:  systemd-units
 Requires(post): systemd-units
 Requires(postun):systemd-units
 Requires(preun):systemd-units
@@ -105,6 +105,9 @@ fi
 /sbin/chkconfig --del irqbalance >/dev/null 2>&1 || :
 
 %changelog
+* Thu Mar 29 2018 Pablo Greco <pablo@fliagreco.com.ar> - 3:1.0.7-10
+- Fix build on armhfp
+
 * Tue May 16 2017 Petr Oros <poros@redhat.com> - 3:1.0.7-10
 - irqbalance node package patch
 - Resolves: #1444195
