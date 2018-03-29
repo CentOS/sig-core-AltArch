@@ -1,0 +1,141 @@
+From 976e741c59b64d51fec0b8c4f5c1c8d3cf8ed3be Mon Sep 17 00:00:00 2001
+From: Rik van Riel <riel@redhat.com>
+Date: Thu, 12 Mar 2015 17:47:00 -0400
+Subject: [PATCH 1/3] import __bitmap_parselist from Linux kernel
+
+Import __bitmap_parselist from the Linux kernel, in order to parse
+CPU ranges as used in eg. the kernel isolcpus= commandline argument.
+
+This code appears to have been in the Linux kernel since the initial
+git import in 2005, so I do not have attribution of which changeset(s)
+introduced it into the kernel.
+
+Signed-off-by: Rik van Riel <riel@redhat.com>
+---
+ bitmap.c | 84 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ bitmap.h | 10 ++++++--
+ 2 files changed, 92 insertions(+), 2 deletions(-)
+
+diff --git a/bitmap.c b/bitmap.c
+index 2f44660..6a7421a 100644
+--- a/bitmap.c
++++ b/bitmap.c
+@@ -377,3 +377,87 @@ int __bitmap_parse(const char *buf, unsigned int buflen,
+ 
+ 	return 0;
+ }
++
++/**
++ * __bitmap_parselist - convert list format ASCII string to bitmap
++ * @buf: read nul-terminated user string from this buffer
++ * @buflen: buffer size in bytes.  If string is smaller than this
++ *    then it must be terminated with a \0.
++ * @is_user: location of buffer, 0 indicates kernel space
++ * @maskp: write resulting mask here
++ * @nmaskbits: number of bits in mask to be written
++ *
++ * Input format is a comma-separated list of decimal numbers and
++ * ranges.  Consecutively set bits are shown as two hyphen-separated
++ * decimal numbers, the smallest and largest bit numbers set in
++ * the range.
++ *
++ * Returns 0 on success, -errno on invalid input strings.
++ * Error values:
++ *    %-EINVAL: second number in range smaller than first
++ *    %-EINVAL: invalid character in string
++ *    %-ERANGE: bit number specified too large for mask
++ */
++int __bitmap_parselist(const char *buf, unsigned int buflen,
++		int is_user __attribute((unused)), unsigned long *maskp,
++		int nmaskbits)
++{
++	int a, b, c, old_c, totaldigits;
++	int exp_digit, in_range;
++
++	totaldigits = c = 0;
++	bitmap_zero(maskp, nmaskbits);
++	do {
++		exp_digit = 1;
++		in_range = 0;
++		a = b = 0;
++
++		/* Get the next cpu# or a range of cpu#'s */
++		while (buflen) {
++			old_c = c;
++			c = *buf++;
++			buflen--;
++			if (isspace(c))
++				continue;
++
++			/*
++			 * If the last character was a space and the current
++			 * character isn't '\0', we've got embedded whitespace.
++			 * This is a no-no, so throw an error.
++			 */
++			if (totaldigits && c && isspace(old_c))
++				return -EINVAL;
++
++			/* A '\0' or a ',' signal the end of a cpu# or range */
++			if (c == '\0' || c == ',')
++				break;
++
++			if (c == '-') {
++				if (exp_digit || in_range)
++					return -EINVAL;
++				b = 0;
++				in_range = 1;
++				exp_digit = 1;
++				continue;
++			}
++
++			if (!isdigit(c))
++				return -EINVAL;
++
++			b = b * 10 + (c - '0');
++			if (!in_range)
++				a = b;
++			exp_digit = 0;
++			totaldigits++;
++		}
++		if (!(a <= b))
++			return -EINVAL;
++		if (b >= nmaskbits)
++			return -ERANGE;
++		while (a <= b) {
++			set_bit(a, maskp);
++			a++;
++		}
++	} while (buflen && c == ',');
++	return 0;
++}
+diff --git a/bitmap.h b/bitmap.h
+index 91ed499..7afce59 100644
+--- a/bitmap.h
++++ b/bitmap.h
+@@ -185,8 +185,8 @@ extern int __bitmap_parse(const char *buf, unsigned int buflen, int is_user,
+ 			unsigned long *dst, int nbits);
+ extern int bitmap_scnlistprintf(char *buf, unsigned int len,
+ 			const unsigned long *src, int nbits);
+-extern int bitmap_parselist(const char *buf, unsigned long *maskp,
+-			int nmaskbits);
++extern int __bitmap_parselist(const char *buf, unsigned int buflen, int is_user,
++			unsigned long *dst, int nbits);
+ extern void bitmap_remap(unsigned long *dst, const unsigned long *src,
+ 		const unsigned long *old, const unsigned long *new, int bits);
+ extern int bitmap_bitremap(int oldbit,
+@@ -351,6 +351,12 @@ static inline int bitmap_parse(const char *buf, unsigned int buflen,
+ 	return __bitmap_parse(buf, buflen, 0, maskp, nmaskbits);
+ }
+ 
++static inline int bitmap_parselist(const char *buf, unsigned int buflen,
++			unsigned long *maskp, int nmaskbits)
++{
++	return __bitmap_parselist(buf, buflen, 0, maskp, nmaskbits);
++}
++
+ #endif /* __ASSEMBLY__ */
+ 
+ #endif /* __LINUX_BITMAP_H */
+-- 
+2.1.0
+

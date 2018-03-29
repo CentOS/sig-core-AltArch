@@ -1,0 +1,101 @@
+From ca5a3f13bf247561e64ef2323b3dd28a2c3b880d Mon Sep 17 00:00:00 2001
+From: Rik van Riel <riel@redhat.com>
+Date: Thu, 12 Mar 2015 17:47:00 -0400
+Subject: [PATCH 3/3] parse isolcpus= from /proc/cmdline to set up banned_cpus
+
+When the user specifies a range of CPUs to be isolated from system
+tasks with isolcpus= on the kernel command line, it would be nice
+if those CPUs could automatically be excluded from getting interrupts
+routed to them, as well.
+
+This patch does that, by looking at /proc/cmdline
+
+The environment variable IRQBALANCE_BANNED_CPUS will override the
+automatically detectable banned_cpus.
+
+Signed-off-by: Rik van Riel <riel@redhat.com>
+---
+ cputree.c    | 44 ++++++++++++++++++++++++++++++++++++++++++++
+ irqbalance.c |  4 ----
+ 2 files changed, 44 insertions(+), 4 deletions(-)
+
+diff --git a/cputree.c b/cputree.c
+index 8b8cf5e..cfa70b6 100644
+--- a/cputree.c
++++ b/cputree.c
+@@ -58,6 +58,48 @@ cpumask_t cpu_possible_map;
+ */
+ cpumask_t unbanned_cpus;
+ 
++/*
++ * By default do not place IRQs on CPUs the kernel keeps isolated,
++ * as specified through the isolcpus= boot commandline. Users can
++ * override this with the IRQBALANCE_BANNED_CPUS environment variable.
++ */
++static void setup_banned_cpus(void)
++{
++	FILE *file;
++	char *c, *line = NULL;
++	size_t size = 0;
++	const char *isolcpus = "isolcpus=";
++	char buffer[4096];
++
++	/* A manually specified cpumask overrides auto-detection. */
++	if (getenv("IRQBALANCE_BANNED_CPUS"))  {
++		cpumask_parse_user(getenv("IRQBALANCE_BANNED_CPUS"), strlen(getenv("IRQBALANCE_BANNED_CPUS")), banned_cpus);
++		goto out;
++	}
++
++	file = fopen("/proc/cmdline", "r");
++	if (!file)
++		goto out;
++
++	if (getline(&line, &size, file) <= 0)
++		goto out;
++
++	if ((c = strstr(line, isolcpus))) {
++		char *end;
++		int len;
++
++		c += strlen(isolcpus);
++		for (end = c; *end != ' ' && *end != '\0' && *end != '\n'; end++);
++		len = end - c;
++
++		cpulist_parse(c, len, banned_cpus);
++	}
++
++ out:
++	cpumask_scnprintf(buffer, 4096, banned_cpus);
++	log(TO_CONSOLE, LOG_INFO, "Isolated CPUs: %s\n", buffer);
++}
++
+ static struct topo_obj* add_cache_domain_to_package(struct topo_obj *cache, 
+ 						    int packageid, cpumask_t package_mask)
+ {
+@@ -372,6 +414,8 @@ void parse_cpu_tree(void)
+ 	DIR *dir;
+ 	struct dirent *entry;
+ 
++	setup_banned_cpus();
++
+ 	cpus_complement(unbanned_cpus, banned_cpus);
+ 
+ 	dir = opendir("/sys/devices/system/cpu");
+diff --git a/irqbalance.c b/irqbalance.c
+index a5079b9..e4f3b93 100644
+--- a/irqbalance.c
++++ b/irqbalance.c
+@@ -276,10 +276,6 @@ int main(int argc, char** argv)
+  	 */
+ 	openlog(argv[0], 0, LOG_DAEMON);
+ 
+-	if (getenv("IRQBALANCE_BANNED_CPUS"))  {
+-		cpumask_parse_user(getenv("IRQBALANCE_BANNED_CPUS"), strlen(getenv("IRQBALANCE_BANNED_CPUS")), banned_cpus);
+-	}
+-
+ 	if (getenv("IRQBALANCE_ONESHOT")) 
+ 		one_shot_mode=1;
+ 
+-- 
+2.1.0
+
