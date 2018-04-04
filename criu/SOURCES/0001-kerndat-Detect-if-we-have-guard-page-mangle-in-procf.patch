@@ -1,0 +1,127 @@
+From 8a4a164f3e33be9b2d28d54fe430e92f40626054 Mon Sep 17 00:00:00 2001
+From: Cyrill Gorcunov <gorcunov@openvz.org>
+Date: Mon, 26 Jun 2017 23:55:28 +0300
+Subject: [PATCH 1/2] kerndat: Detect if we have guard page mangle in procfs
+ output
+
+In vanilla kernel commit 1be7107fbe18eed3e319a6c3e83c78254b693acb
+show_map_vma() no longer report PAGE_SIZE. Detect it with
+simple test and remember in kdat settings.
+
+Suggested-by: Oleg Nesterov <oleg@redhat.com>
+Signed-off-by: Cyrill Gorcunov <gorcunov@openvz.org>
+Signed-off-by: Andrei Vagin <avagin@virtuozzo.com>
+---
+ criu/include/kerndat.h |  1 +
+ criu/kerndat.c         | 76 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 77 insertions(+)
+
+diff --git a/criu/include/kerndat.h b/criu/include/kerndat.h
+index ba8c10da7..891cbdd41 100644
+--- a/criu/include/kerndat.h
++++ b/criu/include/kerndat.h
+@@ -44,6 +44,7 @@ struct kerndat_s {
+ 	unsigned int has_xtlocks;
+ 	unsigned long mmap_min_addr;
+ 	bool has_tcp_half_closed;
++	bool stack_guard_gap_hidden;
+ };
+ 
+ extern struct kerndat_s kdat;
+diff --git a/criu/kerndat.c b/criu/kerndat.c
+index 354fb672b..80ec58bcf 100644
+--- a/criu/kerndat.c
++++ b/criu/kerndat.c
+@@ -563,6 +563,80 @@ int kerndat_tcp_repair(void)
+ 	return exit_code;
+ }
+ 
++static int kerndat_detect_stack_guard_gap(void)
++{
++	int num, ret = -1, detected = 0;
++	unsigned long start, end;
++	char r, w, x, s;
++	char buf[1024];
++	FILE *maps;
++	void *mem;
++
++	mem = mmap(NULL, (3ul << 20), PROT_READ | PROT_WRITE,
++		   MAP_PRIVATE | MAP_ANONYMOUS | MAP_GROWSDOWN, -1, 0);
++	if (mem == MAP_FAILED) {
++		pr_perror("Can't mmap stack area");
++		return -1;
++	}
++	munmap(mem, (3ul << 20));
++
++	mem = mmap(mem + (2ul << 20), (1ul << 20), PROT_READ | PROT_WRITE,
++		   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED | MAP_GROWSDOWN, -1, 0);
++	if (mem == MAP_FAILED) {
++		pr_perror("Can't mmap stack area");
++		return -1;
++	}
++
++	maps = fopen("/proc/self/maps", "r");
++	if (maps == NULL) {
++		munmap(mem, 4096);
++		return -1;
++	}
++
++	while (fgets(buf, sizeof(buf), maps)) {
++		num = sscanf(buf, "%lx-%lx %c%c%c%c",
++			     &start, &end, &r, &w, &x, &s);
++		if (num < 6) {
++			pr_err("Can't parse: %s\n", buf);
++			goto err;
++		}
++
++		/*
++		 * When reading /proc/$pid/[s]maps the
++		 * start/end addresses migh be cutted off
++		 * with PAGE_SIZE on kernels prior 4.12
++		 * (see kernel commit 1be7107fbe18ee).
++		 *
++		 * Same time there was semi-complete
++		 * patch released which hitted a number
++		 * of repos (Ubuntu, Fedora) where instead
++		 * of PAGE_SIZE the 1M gap is cutted off.
++		 */
++		if (start == (unsigned long)mem) {
++			kdat.stack_guard_gap_hidden = false;
++			detected = 1;
++			break;
++		} else if (start == ((unsigned long)mem + (1ul << 20))) {
++			pr_warn("Unsupported stack guard detected, confused but continue\n");
++			kdat.stack_guard_gap_hidden = true;
++			detected = 1;
++			break;
++		} else if (start == ((unsigned long)mem + PAGE_SIZE)) {
++			kdat.stack_guard_gap_hidden = true;
++			detected = 1;
++			break;
++		}
++	}
++
++	if (detected)
++		ret = 0;
++
++err:
++	munmap(mem, (1ul << 20));
++	fclose(maps);
++	return ret;
++}
++
+ int kerndat_init(void)
+ {
+ 	int ret;
+@@ -676,6 +750,8 @@ int kerndat_init(void)
+ 		ret = kerndat_iptables_has_xtlocks();
+ 	if (!ret)
+ 		ret = kerndat_tcp_repair();
++	if (!ret)
++		ret = kerndat_detect_stack_guard_gap();
+ 
+ 	kerndat_lsm();
+ 	kerndat_mmap_min_addr();
+-- 
+2.13.0
+

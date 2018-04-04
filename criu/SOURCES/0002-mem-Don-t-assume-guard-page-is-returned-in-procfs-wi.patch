@@ -1,0 +1,115 @@
+From be37925cff8aaf43f14866bd0a60dca6068a8d97 Mon Sep 17 00:00:00 2001
+From: Cyrill Gorcunov <gorcunov@openvz.org>
+Date: Mon, 26 Jun 2017 23:55:29 +0300
+Subject: [PATCH 2/2] mem: Don't assume guard page is returned in procfs with
+ new kernels
+
+If the guard page is not reported in show_map_vma we should
+not ajust vma address neither we should call unmap_guard_pages
+in restorer.
+
+https://github.com/xemul/criu/issues/322
+
+Signed-off-by: Cyrill Gorcunov <gorcunov@openvz.org>
+Signed-off-by: Andrei Vagin <avagin@virtuozzo.com>
+---
+ criu/include/mem.h |  2 ++
+ criu/mem.c         | 19 ++++++++++++++-----
+ criu/proc_parse.c  |  3 ++-
+ 3 files changed, 18 insertions(+), 6 deletions(-)
+
+diff --git a/criu/include/mem.h b/criu/include/mem.h
+index 2fae797c6..2fc8e1e0e 100644
+--- a/criu/include/mem.h
++++ b/criu/include/mem.h
+@@ -9,11 +9,13 @@ struct parasite_ctl;
+ struct vm_area_list;
+ struct page_pipe;
+ struct pstree_item;
++struct vma_area;
+ 
+ struct mem_dump_ctl {
+ 	bool	pre_dump;
+ };
+ 
++extern bool vma_has_guard_gap_hidden(struct vma_area *vma);
+ extern bool page_in_parent(bool dirty);
+ extern int prepare_mm_pid(struct pstree_item *i);
+ extern int do_task_reset_dirty_track(int pid);
+diff --git a/criu/mem.c b/criu/mem.c
+index 2c4323d8c..cd41829b2 100644
+--- a/criu/mem.c
++++ b/criu/mem.c
+@@ -499,7 +499,7 @@ int prepare_mm_pid(struct pstree_item *i)
+ 
+ 		if (vma_area_is_private(vma, kdat.task_size)) {
+ 			ri->vmas.priv_size += vma_area_len(vma);
+-			if (vma->e->flags & MAP_GROWSDOWN)
++			if (vma_has_guard_gap_hidden(vma))
+ 				ri->vmas.priv_size += PAGE_SIZE;
+ 		}
+ 
+@@ -634,7 +634,7 @@ static int premap_private_vma(struct pstree_item *t, struct vma_area *vma, void
+ 	 * A grow-down VMA has a guard page, which protect a VMA below it.
+ 	 * So one more page is mapped here to restore content of the first page
+ 	 */
+-	if (vma->e->flags & MAP_GROWSDOWN) {
++	if (vma_has_guard_gap_hidden(vma)) {
+ 		vma->e->start -= PAGE_SIZE;
+ 		if (paddr)
+ 			paddr -= PAGE_SIZE;
+@@ -702,7 +702,7 @@ static int premap_private_vma(struct pstree_item *t, struct vma_area *vma, void
+ 	pr_debug("\tpremap %#016"PRIx64"-%#016"PRIx64" -> %016lx\n",
+ 		vma->e->start, vma->e->end, (unsigned long)addr);
+ 
+-	if (vma->e->flags & MAP_GROWSDOWN) { /* Skip gurad page */
++	if (vma_has_guard_gap_hidden(vma)) { /* Skip gurad page */
+ 		vma->e->start += PAGE_SIZE;
+ 		vma->premmaped_addr += PAGE_SIZE;
+ 	}
+@@ -1046,6 +1047,11 @@ out:
+ 	return ret;
+ }
+ 
++bool vma_has_guard_gap_hidden(struct vma_area *vma)
++{
++	return kdat.stack_guard_gap_hidden && (vma->e->flags & MAP_GROWSDOWN);
++}
++
+ /*
+  * A gard page must be unmapped after restoring content and
+  * forking children to restore COW memory.
+@@ -1055,6 +1061,9 @@ int unmap_guard_pages(struct pstree_item *t)
+ 	struct vma_area *vma;
+ 	struct list_head *vmas = &rsti(t)->vmas.h;
+ 
++	if (!kdat.stack_guard_gap_hidden)
++		return 0;
++
+ 	list_for_each_entry(vma, vmas, list) {
+ 		if (!vma_area_is_private(vma, kdat.task_size))
+ 			continue;
+diff --git a/criu/proc_parse.c b/criu/proc_parse.c
+index f1237cf9f..5e36db540 100644
+--- a/criu/proc_parse.c
++++ b/criu/proc_parse.c
+@@ -25,6 +25,7 @@
+ #include "kerndat.h"
+ #include "vdso.h"
+ #include "vma.h"
++#include "mem.h"
+ #include "bfd.h"
+ #include "proc_parse.h"
+ #include "fdinfo.h"
+@@ -637,7 +638,7 @@ static int vma_list_add(struct vma_area *vma_area,
+ 	}
+ 
+ 	/* Add a guard page only if here is enough space for it */
+-	if ((vma_area->e->flags & MAP_GROWSDOWN) &&
++	if (vma_has_guard_gap_hidden(vma_area) &&
+ 	    *prev_end < vma_area->e->start)
+ 		vma_area->e->start -= PAGE_SIZE; /* Guard page */
+ 	*prev_end = vma_area->e->end;
+-- 
+2.13.0
+
