@@ -34,9 +34,7 @@ BuildRequires: asciidoc xmlto
 # code is very architecture specific
 # once imported in RCS it needs a bug openend explaining the ExclusiveArch
 # https://bugzilla.redhat.com/show_bug.cgi?id=902875
-%if 0%{?fedora}
-ExclusiveArch: x86_64 %{arm} ppc64le aarch64
-%elif 0%{?rhel}
+%if 0%{?fedora} || 0%{?rhel}
 ExclusiveArch: x86_64 %{arm} ppc64le aarch64
 %else
 ExclusiveArch: x86_64 ppc64le
