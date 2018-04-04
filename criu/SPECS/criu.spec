@@ -36,6 +36,8 @@ BuildRequires: asciidoc xmlto
 # https://bugzilla.redhat.com/show_bug.cgi?id=902875
 %if 0%{?fedora}
 ExclusiveArch: x86_64 %{arm} ppc64le aarch64
+%elif 0%{?rhel}
+ExclusiveArch: x86_64 %{arm} ppc64le aarch64
 %else
 ExclusiveArch: x86_64 ppc64le
 %endif
@@ -137,6 +139,9 @@ rm -rf $RPM_BUILD_ROOT%{_libexecdir}/%{name}
 
 
 %changelog
+* Wed Apr  4 2018 Pablo Greco <pablo@fliagreco.com.ar> - 2.12-2
+- Update to build on armhfp
+
 * Wed Jun 28 2017 Adrian Reber <areber@redhat.com> - 2.12-2
 - Added patches for guard page kernel fixes
 
