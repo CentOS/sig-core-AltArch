@@ -1,0 +1,55 @@
+--- libitm/config/x86/target.h.jj	2013-06-23 20:43:50.000000000 +0200
++++ libitm/config/x86/target.h	2013-08-13 17:14:57.540012109 +0200
+@@ -64,7 +64,7 @@ cpu_relax (void)
+ 
+ // Use Intel RTM if supported by the assembler.
+ // See gtm_thread::begin_transaction for how these functions are used.
+-#ifdef HAVE_AS_RTM
++#if 1 /* def HAVE_AS_RTM */
+ #define USE_HTM_FASTPATH
+ #ifdef __x86_64__
+ // Use the custom fastpath in ITM_beginTransaction.
+@@ -97,7 +97,10 @@ htm_init ()
+ static inline uint32_t
+ htm_begin ()
+ {
+-  return _xbegin();
++//  return _xbegin();
++  uint32_t ret;
++  __asm volatile ("movl $-1, %%eax; .byte 0xc7, 0xf8, 0, 0, 0, 0" : "=a" (ret) : : "memory");
++  return ret;
+ }
+ 
+ static inline bool
+@@ -109,7 +112,8 @@ htm_begin_success (uint32_t begin_ret)
+ static inline void
+ htm_commit ()
+ {
+-  _xend();
++//  _xend();
++  __asm volatile (".byte 0x0f, 0x01, 0xd5" : : : "memory");
+ }
+ 
+ static inline void
+@@ -117,7 +121,8 @@ htm_abort ()
+ {
+   // ??? According to a yet unpublished ABI rule, 0xff is reserved and
+   // supposed to signal a busy lock.  Source: andi.kleen@intel.com
+-  _xabort(0xff);
++//  _xabort(0xff);
++  __asm volatile (".byte 0xc6, 0xf8, 0xff" : : : "memory");
+ }
+ 
+ static inline bool
+@@ -130,7 +135,10 @@ htm_abort_should_retry (uint32_t begin_r
+ static inline bool
+ htm_transaction_active ()
+ {
+-  return _xtest() != 0;
++//  return _xtest() != 0;
++  bool ret;
++  __asm volatile (".byte 0x0f, 0x01, 0xd6; setne %%al" : "=a" (ret) : : "memory");
++  return ret;
+ }
+ #endif
+ 
