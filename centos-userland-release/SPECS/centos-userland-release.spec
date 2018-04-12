@@ -6,28 +6,28 @@
 %define base_release_version 7
 %define full_release_version 7
 %define dist_release_version 7
-%define upstream_rel 7.4
-%define centos_rel 4.1708
+%define upstream_rel_long 7.5-8
+%define upstream_rel 7.5
+%define centos_rel 5.1804
 %define beta Beta
 %define dist .el%{dist_release_version}.centos
 
 Name:           centos-userland-release
 Version:        %{base_release_version}
-Release:        %{centos_rel}%{?dist}.0.2
+Release:        %{centos_rel}%{?dist}.0.1
 Summary:        %{product_family} release file
 Group:          System Environment/Base
 License:        GPLv2
 Provides:       centos-release = %{version}-%{release}
 Provides:       centos-release(upstream) = %{upstream_rel}
-Provides:       redhat-release = %{upstream_rel}
-Provides:       system-release = %{upstream_rel}
+Provides:       redhat-release = %{upstream_rel_long}
+Provides:       system-release = %{upstream_rel_long}
 Provides:       system-release(releasever) = %{base_release_version}
 Source0:        centos-release-%{base_release_version}-%{centos_rel}.tar.gz
 Source1:        85-display-manager.preset
 Source2:        90-default.preset
 Source99:	update-boot
 Source100:	rootfs-expand
-Patch1000:	1000-centos-release-cr.patch
 
 
 %description
@@ -35,7 +35,6 @@ Patch1000:	1000-centos-release-cr.patch
 
 %prep
 %setup -q -n centos-release-%{base_release_version}
-%patch1000 -p1
 
 %build
 echo OK
@@ -159,8 +158,13 @@ if [ -e /usr/local/bin/rootfs-expand ];then
 rm -f /usr/local/bin/rootfs-expand
 fi
 
+/usr/bin/uname -m | grep -q 'x86_64'  && echo 'centos' >/etc/yum/vars/contentdir || echo 'altarch' > /etc/yum/vars/contentdir
+
 %changelog
-* Wed Mar 21 2018 Pablo Greco<pablo@fliagreco.com.ar>
+* Thu Apr 12 2018 Fabian Arrotin <arrfab@centos.org>
+- Bump release for 7.5.1804
+
+* Wed Mar 21 2018 Pablo Greco <pablo@fliagreco.com.ar>
 - Update rootfs-expand to detect rootfs
 - Obsolete update-boot
 - Remove old versions of rootfs-expand
