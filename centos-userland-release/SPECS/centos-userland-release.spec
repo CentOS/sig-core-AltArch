@@ -155,10 +155,16 @@ rm -rf %{buildroot}
 %attr(0755,root,root) %{_bindir}/rootfs-expand
 
 %post
-# Detecting if rpi or generic kernel
-egrep -q 'BCM2709|BCM2710|BCM2835' /proc/cpuinfo && echo rpi2 >/etc/yum/vars/kvariant || echo generic >/etc/yum/vars/kvariant
+if [ -e /usr/local/bin/rootfs-expand ];then
+rm -f /usr/local/bin/rootfs-expand
+fi
 
 %changelog
+* Wed Mar 21 2018 Pablo Greco<pablo@fliagreco.com.ar>
+- Update rootfs-expand to detect rootfs
+- Obsolete update-boot
+- Remove old versions of rootfs-expand
+
 * Thu Dec 28 2017 Fabian Arrotin <arrfab@centos.org>
 - Fixed the post scriptlet to detect correctly rpi2/rpi3 with 4.9 kernel
 
