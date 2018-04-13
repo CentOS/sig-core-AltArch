@@ -1,0 +1,48 @@
+From 441bf55e978cf37167d515a0d48773736cadfe2e Mon Sep 17 00:00:00 2001
+From: Honggang Li <honli@redhat.com>
+Date: Wed, 20 Dec 2017 03:09:58 +0800
+Subject: [PATCH] srp_daemon: Don't create async_ev_thread if only run once
+
+fd3005f0cd34 moves the signal handler setup from ibsrpdm path. So,
+default signal handler will be used when the main pthread send signal
+SIGINT to pthread async_ev_thread. ibsrpdm will exit with non-zero
+exit code as default signal handler killed it. ibsrpdm should return
+with exit code zero, if no error emerged.
+
+We should not create async_ev_thread for ibsrpdm.
+
+Fixes: fd3005f0cd34 ("srp_daemon: Move the setup of the wakeup_pipe after openlog")
+Reviewed-by: Bart Van Assche <bart.vanassche@wdc.com>
+Signed-off-by: Honggang Li <honli@redhat.com>
+Signed-off-by: Leon Romanovsky <leon@kernel.org>
+(cherry picked from commit 3f58c9237533ed9d92f3d08cad56527299781862)
+Signed-off-by: Honggang Li <honli@redhat.com>
+---
+ srp_daemon/srp_daemon.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/srp_daemon/srp_daemon.c b/srp_daemon/srp_daemon.c
+index 2465ccd9..df6a8b17 100644
+--- a/srp_daemon/srp_daemon.c
++++ b/srp_daemon/srp_daemon.c
+@@ -1945,12 +1945,12 @@ static struct resources *alloc_res(void)
+ 				     run_thread_get_trap_notices, &res->res);
+ 		if (ret)
+ 			goto err;
+-	}
+ 
+-	ret = pthread_create(&res->res.async_ev_thread, NULL,
+-			     run_thread_listen_to_events, &res->res);
+-	if (ret)
+-		goto err;
++		ret = pthread_create(&res->res.async_ev_thread, NULL,
++				     run_thread_listen_to_events, &res->res);
++		if (ret)
++			goto err;
++	}
+ 
+ 	if (config->retry_timeout && !config->once) {
+ 		ret = pthread_create(&res->res.reconnect_thread, NULL,
+-- 
+2.15.GIT
+

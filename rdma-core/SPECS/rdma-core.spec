@@ -1,6 +1,6 @@
 Name: rdma-core
-Version: 13
-Release: 7%{?dist}
+Version: 15
+Release: 6%{?dist}
 Summary: RDMA core userspace libraries and daemons
 
 # Almost everything is licensed under the OFA dual GPLv2, 2 Clause BSD license
@@ -9,21 +9,22 @@ Summary: RDMA core userspace libraries and daemons
 #  providers/hfi1verbs Uses the 3 Clause BSD license
 License: GPLv2 or BSD
 Url: https://github.com/linux-rdma/rdma-core
-Source: https://github.com/linux-rdma/rdma-core/archive/%{name}-%{version}.tar.gz
+Source: https://github.com/linux-rdma/rdma-core/releases/download/v%{version}/%{name}-%{version}.tar.gz
 Patch1: redhat-kernel-init-ocrdma-is-tech-preview.patch
 Patch2: redhat-kernel-init-libi40iw-no-longer-tech-preview.patch
-Patch3: fix-udma_to_device_barrier-on-aarch64.patch
-Patch4: 0001-srp_daemon-srp_daemon.c-Don-t-rely-on-attribute-offs.patch
-Patch5: 0002-srp_daemon-srp_daemon.c-Eliminate-some-unneeded-code.patch
-Patch6: 0003-srp_daemon-Use-consistent-format-when-printing-LID.patch
-Patch7: 0001-Use-integer-as-getopt_long-returns-integer.patch
-Patch8: 0001-libibumad-clean-up-htonll-ntohnll-handling.patch
-Patch9: 0001-ibverbs-Report-raw-packet-caps-as-part-of-query-devi.patch
-Patch10: 0002-ibverbs-Allow-creation-and-modification-of-WQ-with-c.patch
-Patch11: 0003-ibverbs-Allow-creation-of-QP-with-cvlan-stripping-of.patch
-Patch12: 0004-ibverbs-Add-an-option-to-poll-cvlan-value-from-a-CQ.patch
-Patch13: 0005-mlx5-Add-read_cvlan-support.patch
-Patch14: 0006-ibverbs-Add-support-for-scatter-FCS-ability-in-WQ.patch
+Patch3: 0001-ibacm-incorrect-usage-of-be-byte.patch
+Patch4: 0002-ibacm-incorrect-list-used-for.patch
+Patch5: 0001-srp_daemon-Don-t-create-async_ev_thread-if-only-run-.patch
+Patch6: 0001-srp_daemon-Remove-unsupported-systemd-configurations.patch
+Patch7: 0001-srp_daemon-srp_daemon.service-should-be-started-afte.patch
+Patch8: librdmacm-add-support-for-extended-join-mc.patch
+Patch9: librdmacm-mckey-test-support-for-send-only-full-member.patch
+Patch10: 0001-Add-a-helper-function-to-verify-64-bit-comp-mask.patch
+Patch11: 0002-mlx5-Report-Multi-Packet-RQ-capabilities-through-mlx.patch
+Patch12: 0003-mlx5-Allow-creation-of-a-Multi-Packet-RQ-using-direc.patch
+Patch13: mlx4-add-a-report-of-rss-cap.patch
+Patch14: 0001-iwpmd-fix-double-mutex-unlock.patch
+Patch15: libbnxt_re_fix_lat_test_failure_in_event_mode.patch
 
 BuildRequires: binutils
 BuildRequires: cmake >= 2.8.11
@@ -111,10 +112,8 @@ Provides: libipathverbs-static = %{version}-%{release}
 Obsoletes: libipathverbs-static < %{version}-%{release}
 Provides: libmlx4-static = %{version}-%{release}
 Obsoletes: libmlx4-static < %{version}-%{release}
-%ifnarch %{arm}
 Provides: libmlx5-static = %{version}-%{release}
 Obsoletes: libmlx5-static < %{version}-%{release}
-%endif
 Provides: libnes-static = %{version}-%{release}
 Obsoletes: libnes-static < %{version}-%{release}
 Provides: libocrdma-static = %{version}-%{release}
@@ -129,8 +128,6 @@ RDMA core development libraries and headers.
 
 %package -n libibverbs
 Summary: A library and drivers for direct userspace use of RDMA (InfiniBand/iWARP/RoCE) hardware
-Requires(post): /sbin/ldconfig
-Requires(postun): /sbin/ldconfig
 Requires: %{name}%{?_isa} = %{version}-%{release}
 Provides: libcxgb3 = %{version}-%{release}
 Obsoletes: libcxgb3 < %{version}-%{release}
@@ -144,7 +141,7 @@ Provides: libipathverbs = %{version}-%{release}
 Obsoletes: libipathverbs < %{version}-%{release}
 Provides: libmlx4 = %{version}-%{release}
 Obsoletes: libmlx4 < %{version}-%{release}
-%ifnarch s390x s390 %{arm}
+%ifnarch s390
 Provides: libmlx5 = %{version}-%{release}
 Obsoletes: libmlx5 < %{version}-%{release}
 %endif
@@ -156,6 +153,8 @@ Provides: libocrdma = %{version}-%{release}
 Obsoletes: libocrdma < %{version}-%{release}
 Provides: librxe = %{version}-%{release}
 Obsoletes: librxe < %{version}-%{release}
+Provides: libusnic_verbs = %{version}-%{release}
+Obsoletes: libusnic_verbs < %{version}-%{release}
 
 %description -n libibverbs
 libibverbs is a library that allows userspace processes to use RDMA
@@ -166,9 +165,11 @@ fast path operations.
 
 Device-specific plug-in ibverbs userspace drivers are included:
 
+- libbxnt_re: Broadcom NetXtreme-E RoCE HCA
 - libcxgb3: Chelsio T3 iWARP HCA
 - libcxgb4: Chelsio T4 iWARP HCA
 - libhfi1: Intel Omni-Path HFI
+- libhns: HiSilicon Hip06 SoC
 - libi40iw: Intel Ethernet Connection X722 RDMA
 - libipathverbs: QLogic InfiniPath HCA
 - libmlx4: Mellanox ConnectX-3 InfiniBand HCA
@@ -176,7 +177,9 @@ Device-specific plug-in ibverbs userspace drivers are included:
 - libmthca: Mellanox InfiniBand HCA
 - libnes: NetEffect RNIC
 - libocrdma: Emulex OneConnect RDMA/RoCE Device
+- libqedr: QLogic QL4xxx RoCE HCA
 - librxe: A software implementation of the RoCE protocol
+- libvmw_pvrdma: VMware paravirtual RDMA device
 
 %package -n libibverbs-utils
 Summary: Examples for the libibverbs library
@@ -282,6 +285,7 @@ discover and use SCSI devices via the SCSI RDMA Protocol over InfiniBand.
 %patch12 -p1
 %patch13 -p1
 %patch14 -p1
+%patch15 -p1
 
 %build
 
@@ -331,16 +335,11 @@ install -D -m0644 redhat/rdma.mlx4.conf %{buildroot}/%{_sysconfdir}/rdma/mlx4.co
 install -D -m0755 redhat/rdma.ifup-ib %{buildroot}/%{_sysconfdir}/sysconfig/network-scripts/ifup-ib
 install -D -m0755 redhat/rdma.ifdown-ib %{buildroot}/%{_sysconfdir}/sysconfig/network-scripts/ifdown-ib
 install -D -m0644 redhat/rdma.service %{buildroot}%{_unitdir}/rdma.service
-install -D -m0644 redhat/rdma.udev-ipoib-naming.rules %{buildroot}%{_sysconfdir}/udev/rules.d/70-persistent-ipoib.rules
-install -D -m0644 redhat/rdma.mlx4.user.modprobe %{buildroot}%{_sysconfdir}/modprobe.d/mlx4.conf
 install -D -m0755 redhat/rdma.modules-setup.sh %{buildroot}%{dracutlibdir}/modules.d/05rdma/module-setup.sh
 install -D -m0644 redhat/rdma.udev-rules %{buildroot}%{_udevrulesdir}/98-rdma.rules
 install -D -m0644 redhat/rdma.mlx4.sys.modprobe %{buildroot}%{sysmodprobedir}/libmlx4.conf
-install -D -m0644 redhat/rdma.cxgb3.sys.modprobe %{buildroot}%{sysmodprobedir}/cxgb3.conf
-install -D -m0644 redhat/rdma.cxgb4.sys.modprobe %{buildroot}%{sysmodprobedir}/cxgb4.conf
 install -D -m0755 redhat/rdma.kernel-init %{buildroot}%{_libexecdir}/rdma-init-kernel
 install -D -m0755 redhat/rdma.sriov-init %{buildroot}%{_libexecdir}/rdma-set-sriov-vf
-install -D -m0644 redhat/rdma.fixup-mtrr.awk %{buildroot}%{_libexecdir}/rdma-fixup-mtrr.awk
 install -D -m0755 redhat/rdma.mlx4-setup.sh %{buildroot}%{_libexecdir}/mlx4-setup.sh
 
 # ibacm
@@ -349,19 +348,9 @@ bin/ib_acme -D . -O
 sed -i -e 's|%{_libdir}|/usr/lib|' %{buildroot}%{_mandir}/man7/ibacm_prov.7
 sed -i -e 's|%{_libdir}|/usr/lib|' ibacm_opts.cfg
 install -D -m0644 ibacm_opts.cfg %{buildroot}%{_sysconfdir}/rdma/
-install -D -m0644 redhat/ibacm.service %{buildroot}%{_unitdir}/
-
-# srp_daemon
-install -D -m0644 redhat/srp_daemon.service %{buildroot}%{_unitdir}/
 
 # Delete the package's init.d scripts
 rm -rf %{buildroot}/%{_initrddir}/
-
-# Remove ibverbs provider libs we don't (yet?) support
-rm -f %{buildroot}/%{_libdir}/libibverbs/libvmw_pvrdma-rdmav2.so
-rm -f %{buildroot}/%{_sysconfdir}/libibverbs.d/vmw_pvrdma.driver
-rm -f %{buildroot}/%{_libdir}/libibverbs/libhns-rdmav2.so
-rm -f %{buildroot}/%{_sysconfdir}/libibverbs.d/hns.driver
 
 %post -n libibverbs -p /sbin/ldconfig
 %postun -n libibverbs -p /sbin/ldconfig
@@ -400,21 +389,23 @@ rm -f %{buildroot}/%{_sysconfdir}/libibverbs.d/hns.driver
 %dir %{_sysconfdir}/rdma
 %dir %{_docdir}/%{name}-%{version}
 %doc %{_docdir}/%{name}-%{version}/README.md
+%doc %{_docdir}/%{name}-%{version}/udev.md
 %config(noreplace) %{_sysconfdir}/rdma/*
 %config(noreplace) %{_sysconfdir}/udev/rules.d/*
+%ifnarch s390 %{arm}
 %config(noreplace) %{_sysconfdir}/modprobe.d/mlx4.conf
+%endif
 %config(noreplace) %{_sysconfdir}/modprobe.d/truescale.conf
 %{_sysconfdir}/sysconfig/network-scripts/*
+%{_unitdir}/rdma-hw.target
+%{_unitdir}/rdma-load-modules@.service
 %{_unitdir}/rdma.service
 %dir %{dracutlibdir}/modules.d/05rdma
 %{dracutlibdir}/modules.d/05rdma/module-setup.sh
 %{_udevrulesdir}/*
 %{sysmodprobedir}/libmlx4.conf
-%{sysmodprobedir}/cxgb3.conf
-%{sysmodprobedir}/cxgb4.conf
 %{_libexecdir}/rdma-init-kernel
 %{_libexecdir}/rdma-set-sriov-vf
-%{_libexecdir}/rdma-fixup-mtrr.awk
 %{_libexecdir}/mlx4-setup.sh
 %{_libexecdir}/truescale-serdes.cmds
 %{_sbindir}/rdma-ndd
@@ -433,7 +424,8 @@ rm -f %{buildroot}/%{_sysconfdir}/libibverbs.d/hns.driver
 %{_mandir}/man3/rdma*
 %{_mandir}/man3/umad*
 %{_mandir}/man3/*_to_ibv_rate.*
-%ifnarch s390x s390 %{arm}
+%ifnarch s390 %{arm}
+%{_mandir}/man3/mlx4dv*
 %{_mandir}/man3/mlx5dv*
 %endif
 %{_mandir}/man7/rdma_cm.*
@@ -443,7 +435,8 @@ rm -f %{buildroot}/%{_sysconfdir}/libibverbs.d/hns.driver
 %dir %{_libdir}/libibverbs
 %{_libdir}/libibverbs*.so.*
 %{_libdir}/libibverbs/*.so
-%ifnarch s390x s390 %{arm}
+%ifnarch s390 %{arm}
+%{_libdir}/libmlx4.so.*
 %{_libdir}/libmlx5.so.*
 %endif
 %config(noreplace) %{_sysconfdir}/libibverbs.d/*.driver
@@ -451,7 +444,8 @@ rm -f %{buildroot}/%{_sysconfdir}/libibverbs.d/hns.driver
 %doc %{_docdir}/%{name}-%{version}/rxe.md
 %{_bindir}/rxe_cfg
 %{_mandir}/man7/rxe*
-%ifnarch s390x s390 %{arm}
+%ifnarch s390 %{arm}
+%{_mandir}/man7/mlx4dv*
 %{_mandir}/man7/mlx5dv*
 %endif
 %{_mandir}/man8/rxe*
@@ -469,15 +463,16 @@ rm -f %{buildroot}/%{_sysconfdir}/libibverbs.d/hns.driver
 %{_mandir}/man7/ibacm.*
 %{_mandir}/man7/ibacm_prov.*
 %{_unitdir}/ibacm.service
+%{_unitdir}/ibacm.socket
 %dir %{_libdir}/ibacm
 %{_libdir}/ibacm/*
 %doc %{_docdir}/%{name}-%{version}/ibacm.md
 
 %files -n iwpmd
-%{_bindir}/iwpmd
+%{_sbindir}/iwpmd
 %{_unitdir}/iwpmd.service
 %config(noreplace) %{_sysconfdir}/iwpmd.conf
-%{_mandir}/man1/iwpmd.*
+%{_mandir}/man8/iwpmd.*
 %{_mandir}/man5/iwpmd.*
 
 %files -n libibcm
@@ -508,6 +503,7 @@ rm -f %{buildroot}/%{_sysconfdir}/libibverbs.d/hns.driver
 %{_bindir}/ucmatose
 %{_bindir}/udaddy
 %{_bindir}/udpong
+%{_mandir}/man1/cmtime.*
 %{_mandir}/man1/mckey.*
 %{_mandir}/man1/rcopy.*
 %{_mandir}/man1/rdma_client.*
@@ -519,21 +515,57 @@ rm -f %{buildroot}/%{_sysconfdir}/libibverbs.d/hns.driver
 %{_mandir}/man1/rstream.*
 %{_mandir}/man1/ucmatose.*
 %{_mandir}/man1/udaddy.*
+%{_mandir}/man1/udpong.*
 
 %files -n srp_daemon
 %config(noreplace) %{_sysconfdir}/srp_daemon.conf
+%{_libexecdir}/srp_daemon/start_on_all_ports
 %{_unitdir}/srp_daemon.service
+%{_unitdir}/srp_daemon_port@.service
 %{_sbindir}/ibsrpdm
 %{_sbindir}/srp_daemon
 %{_sbindir}/srp_daemon.sh
 %{_sbindir}/run_srp_daemon
 %{_mandir}/man1/ibsrpdm.1*
 %{_mandir}/man1/srp_daemon.1*
+%{_mandir}/man5/srp_daemon.service.5*
+%{_mandir}/man5/srp_daemon_port@.service.5*
 %doc %{_docdir}/%{name}-%{version}/ibsrpdm.md
 
 %changelog
-* Wed Feb 28 2018 Pablo Greco <pablo@fliagreco.com.ar> 13-7
-- Update to build on armv7hl, based on fedora spec
+* Fri Apr 13 2018 Pablo Greco <pablo@fliagreco.com.ar> 15-6
+- Update to build on armv7hl
+
+* Mon Feb 19 2018 Jarod Wilson <jarod@redhat.com> 15-6
+- libbnxt_re: fix lat test failure in event mode
+- Resolves: rhbz#1545248
+
+* Tue Feb 06 2018 Jarod Wilson <jarod@redhat.com> 15-5
+- libmlx4: report RSS caps for improved DPDK support
+- Fix double mutex unlock in iwpmd
+- Resolves: rhbz#1527350
+- Resolves: rhbz#1542362
+
+* Mon Jan 15 2018 Jarod Wilson <jarod@redhat.com> 15-4
+- Add support for extended join multicast API in librdmacm
+- Add support for striding RQ on mlx5
+- Resolves: rhbz#1515487, rhbz#1516571
+
+* Tue Dec 26 2017 Honggang Li <honli@redhat.com> 15-3
+- srp_daemon: Don't create async_ev_thread if only run once
+- srp_daemon: Remove unsupported systemd configurations
+- srp_daemon: Start srp_daemon service after network target
+- Resolves: bz1525193
+- Resolves: bz1528671
+
+* Mon Nov 13 2017 Jarod Wilson <jarod@redhat.com> 15-2
+- Fix ibacm segfault and improper multicast handling
+- Resolves: rhbz#1502745
+- Resolves: rhbz#1502759
+
+* Fri Sep 22 2017 Jarod Wilson <jarod@redhat.com> 15-1
+- Update to upstream v15 release
+- Resolves: rhbz#1494607
 
 * Tue May 30 2017 Jarod Wilson <jarod@redhat.com> 13-7
 - Add support for mlx5 Expand raw packet capabilities

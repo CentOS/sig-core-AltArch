@@ -1,0 +1,51 @@
+commit f3a969b4542204c9b09d5c2d229c7b55aaa0995e
+Author: Michael J. Ruhl <michael.j.ruhl@intel.com>
+Date:   Mon Oct 16 10:24:40 2017 -0400
+
+    ibacm: Incorrect list used for subnet list causes a segfault
+    
+    Setting the provider keyword in the ibacm_opts.cfg file to something
+    other than 'default' will cause ibacm to segfault on startup:
+    
+    ibacm[32739]: segfault at 302e40 ip 000000000040432d
+    sp 00007ffe4039e1c0 error 4 in ibacm[400000+c000]
+    
+    To re-produce the segfault, change the provider keyword in
+    ibacm_opts.cfg from:
+    
+    provider ibacmp default
+    
+    to:
+    
+    provider ibacmp 0xFE80000000000000
+    
+    When adding subnets to a provider subnet list, the incorrect list is
+    used.  The list used is the provider_list (list of all providers)
+    rather than the (specific) provider subnet list.
+    
+    This corrupts the provider_list, and causes ibacm to crash with the
+    above segfault.
+    
+    Use the correct list when adding subnet information to a provider.
+    
+    Fixes: 26e05f8304a506 ("ibacm: use ccan/list.h")
+    Reviewed-by: Mike Marciniszyn <mike.marciniszyn@intel.com>
+    Signed-off-by: Michael J. Ruhl <michael.j.ruhl@intel.com>
+    Tested-by: Nicolas Morey-Chaisemartin <nmoreychaisemartin@suse.com>
+    Signed-off-by: Doug Ledford <dledford@redhat.com>
+
+diff --git a/ibacm/src/acm.c b/ibacm/src/acm.c
+index 1ccef948..a67001d4 100644
+--- a/ibacm/src/acm.c
++++ b/ibacm/src/acm.c
+@@ -2587,8 +2587,8 @@ static void acm_load_prov_config(void)
+ 					return;
+ 				}
+ 				subnet->subnet_prefix = htobe64(prefix);
+-				list_add_after(&provider_list, &prov->entry,
+-						&subnet->entry);
++				list_add_tail(&prov->subnet_list,
++					      &subnet->entry);
+ 			}
+ 		}
+ 	}
