@@ -1,0 +1,51 @@
+commit e2c3c3fefa26287dcce1e70634792cff47d775ff
+Author: Michael J. Ruhl <michael.j.ruhl@intel.com>
+Date:   Mon Oct 16 10:24:21 2017 -0400
+
+    ibacm: Incorrect usage of BE byte order of MLID attach/detach_mcast()
+    
+    The MLID value passed to ibv_attach/detach_mcast() must be in host
+    byte order.
+    
+    acmp.c incorrectly uses the big endian format when doing a multicast
+    attach/detach (join). Multicast packets are used to do name resolution
+    by the libibacmp library.
+    
+    There are two possible results because of this issue.
+    
+    If a kernel has commit 8561eae60ff9, the attach will fail with an
+    EINVAL.  ibacm will log this as a failure during the multicast join.
+    
+    If a kernel does not have commit 8561eae60ff9, the attach will
+    complete successfully.  Packets sent to this address will be dropped
+    because the packet dlid value and the multicast address information
+    given by the attach will not match.
+    
+    Update MLID usage to use the correct byte order.
+    
+    Reviewed-by: Mike Marciniszyn <mike.marciniszyn@intel.com>
+    Signed-off-by: Michael J. Ruhl <michael.j.ruhl@intel.com>
+    Signed-off-by: Doug Ledford <dledford@redhat.com>
+
+diff --git a/ibacm/prov/acmp/src/acmp.c b/ibacm/prov/acmp/src/acmp.c
+index aa784166..78d9a295 100644
+--- a/ibacm/prov/acmp/src/acmp.c
++++ b/ibacm/prov/acmp/src/acmp.c
+@@ -732,7 +732,7 @@ static void acmp_process_join_resp(struct acm_sa_mad *sa_mad)
+ 			acm_log(0, "ERROR - unable to create ah\n");
+ 			goto out;
+ 		}
+-		ret = ibv_attach_mcast(ep->qp, &mc_rec->mgid, mc_rec->mlid);
++		ret = ibv_attach_mcast(ep->qp, &dest->mgid, dest->av.dlid);
+ 		if (ret) {
+ 			acm_log(0, "ERROR - unable to attach QP to multicast group\n");
+ 			ibv_destroy_ah(dest->ah);
+@@ -1429,7 +1429,7 @@ static void acmp_ep_join(struct acmp_ep *ep)
+ 
+ 	if (ep->mc_dest[0].state == ACMP_READY && ep->mc_dest[0].ah) {
+ 		ibv_detach_mcast(ep->qp, &ep->mc_dest[0].mgid,
+-				 be16toh(ep->mc_dest[0].av.dlid));
++				 ep->mc_dest[0].av.dlid);
+ 		ibv_destroy_ah(ep->mc_dest[0].ah);
+ 		ep->mc_dest[0].ah = NULL;
+ 	}

@@ -1,0 +1,96 @@
+commit 9db80df802bf9158c2d5a979175667babfce6506
+Author: Jason Gunthorpe <jgg@mellanox.com>
+Date:   Fri Nov 17 15:04:46 2017 -0700
+
+    librdmacm: mckey test support for send only full member
+    
+    Added a new flag (-o) to mckey which allows mckey to join the multicast
+    group as Send Only Full Member.
+    
+    Demonstrates the use of rdma_join_multicast_ex instead of
+    rdma_join_multicast.
+    
+    Signed-off-by: Alex Vesker <valex@mellanox.com>
+    Signed-off-by: Christoph Lameter <cl@linux.com>
+    Signed-off-by: Jason Gunthorpe <jgg@mellanox.com>
+
+diff --git a/librdmacm/examples/mckey.c b/librdmacm/examples/mckey.c
+index 60cf8a24..7abb5246 100644
+--- a/librdmacm/examples/mckey.c
++++ b/librdmacm/examples/mckey.c
+@@ -77,6 +77,7 @@ static int connections = 1;
+ static int message_size = 100;
+ static int message_count = 10;
+ static int is_sender;
++static int send_only;
+ static int unmapped_addr;
+ static char *dst_addr;
+ static char *src_addr;
+@@ -241,6 +242,7 @@ static void connect_error(void)
+ static int addr_handler(struct cmatest_node *node)
+ {
+ 	int ret;
++	struct rdma_cm_join_mc_attr_ex mc_attr;
+ 
+ 	ret = verify_test_params(node);
+ 	if (ret)
+@@ -256,7 +258,14 @@ static int addr_handler(struct cmatest_node *node)
+ 			goto err;
+ 	}
+ 
+-	ret = rdma_join_multicast(node->cma_id, test.dst_addr, node);
++	mc_attr.comp_mask =
++	    RDMA_CM_JOIN_MC_ATTR_ADDRESS | RDMA_CM_JOIN_MC_ATTR_JOIN_FLAGS;
++	mc_attr.addr = test.dst_addr;
++	mc_attr.join_flags = send_only ? RDMA_MC_JOIN_FLAG_SENDONLY_FULLMEMBER
++				       : RDMA_MC_JOIN_FLAG_FULLMEMBER;
++
++	ret = rdma_join_multicast_ex(node->cma_id, &mc_attr, node);
++
+ 	if (ret) {
+ 		perror("mckey: failure joining");
+ 		goto err;
+@@ -555,8 +564,7 @@ int main(int argc, char **argv)
+ {
+ 	int op, ret;
+ 
+-
+-	while ((op = getopt(argc, argv, "m:M:sb:c:C:S:p:")) != -1) {
++	while ((op = getopt(argc, argv, "m:M:sb:c:C:S:p:o")) != -1) {
+ 		switch (op) {
+ 		case 'm':
+ 			dst_addr = optarg;
+@@ -584,6 +592,10 @@ int main(int argc, char **argv)
+ 		case 'p':
+ 			port_space = strtol(optarg, NULL, 0);
+ 			break;
++		case 'o':
++			send_only = 1;
++			break;
++
+ 		default:
+ 			printf("usage: %s\n", argv[0]);
+ 			printf("\t-m multicast_address\n");
+@@ -596,6 +608,7 @@ int main(int argc, char **argv)
+ 			printf("\t[-S message_size]\n");
+ 			printf("\t[-p port_space - %#x for UDP (default), "
+ 			       "%#x for IPOIB]\n", RDMA_PS_UDP, RDMA_PS_IPOIB);
++			printf("\t[-o join as a send-only full-member]\n");
+ 			exit(1);
+ 		}
+ 	}
+diff --git a/librdmacm/man/mckey.1 b/librdmacm/man/mckey.1
+index a36f57ba..5e47ce5d 100644
+--- a/librdmacm/man/mckey.1
++++ b/librdmacm/man/mckey.1
+@@ -41,6 +41,10 @@ The size of each message transferred, in bytes.  This value must be smaller
+ than the MTU of the underlying RDMA transport, or an error will occur.
+ (default 100)
+ .TP
++\-o
++Join the multicast group as a send-only full-member. Otherwise the group is
++joined as a full-member.
++.TP
+ \-p port_space
+ The port space of the datagram communication.  May be either the RDMA
+ UDP (0x0111) or IPoIB (0x0002) port space.  (default RDMA_PS_UDP)

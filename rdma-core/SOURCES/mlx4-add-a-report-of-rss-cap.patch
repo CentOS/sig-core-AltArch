@@ -1,0 +1,50 @@
+commit 22a04b26a8c1428b87b3cc35fd256ee615172648
+Author: Guy Levi <guyle@mellanox.com>
+Date:   Tue Oct 17 15:23:10 2017 +0300
+
+    mlx4: Add a report of RSS capabilities in ibv_query_device_ex
+    
+    Report few extra RSS capabilities that were missed in previous patches.
+    
+    Signed-off-by: Guy Levi <guyle@mellanox.com>
+    Reviewed-by: Yishai Hadas <yishaih@mellanox.com>
+
+diff --git a/providers/mlx4/mlx4-abi.h b/providers/mlx4/mlx4-abi.h
+index 4f2132c2..c4783d29 100644
+--- a/providers/mlx4/mlx4-abi.h
++++ b/providers/mlx4/mlx4-abi.h
+@@ -99,13 +99,19 @@ struct mlx4_resize_cq {
+ 	__u64				buf_addr;
+ };
+ 
++struct mlx4_rss_caps {
++	__u64 rx_hash_fields_mask; /* enum ibv_rx_hash_fields */
++	__u8 rx_hash_function; /* enum ibv_rx_hash_function_flags */
++	__u8 reserved[7];
++};
++
+ struct mlx4_query_device_ex_resp {
+ 	struct ibv_query_device_resp_ex ibv_resp;
+ 	__u32				comp_mask;
+ 	__u32				response_length;
+ 	__u64				hca_core_clock_offset;
+ 	__u32				max_inl_recv_sz;
+-	__u32				reserved;
++	struct mlx4_rss_caps            rss_caps; /* vendor data channel */
+ };
+ 
+ struct mlx4_query_device_ex {
+diff --git a/providers/mlx4/verbs.c b/providers/mlx4/verbs.c
+index 8532882e..8a2773f9 100644
+--- a/providers/mlx4/verbs.c
++++ b/providers/mlx4/verbs.c
+@@ -87,6 +87,9 @@ int mlx4_query_device_ex(struct ibv_context *context,
+ 	if (err)
+ 		return err;
+ 
++	attr->rss_caps.rx_hash_fields_mask = resp.rss_caps.rx_hash_fields_mask;
++	attr->rss_caps.rx_hash_function = resp.rss_caps.rx_hash_function;
++
+ 	if (resp.comp_mask & MLX4_QUERY_DEV_RESP_MASK_CORE_CLOCK_OFFSET) {
+ 		mctx->core_clock.offset = resp.hca_core_clock_offset;
+ 		mctx->core_clock.offset_valid = 1;
