@@ -1,0 +1,145 @@
+From 7c322f4b9a7f36eba1d3ca74d7dd8fe1093ca7bd Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 22 Jan 2018 11:38:22 -0600
+Subject: [PATCH] Low: crmd: quorum gain should always cause new transition
+
+0b689055 aborted the transition on quorum loss, but quorum can also be acquired
+without triggering a new transition, if corosync gives quorum without a node
+joining (e.g. forced via corosync-cmapctl, or perhaps via heuristics).
+
+This aborts the transition when quorum is gained, but only after a 5-second
+delay, if the transition has not been aborted in that time. This avoids an
+unnecessary abort in the vast majority of cases where an abort is already done,
+and it allows some time for all nodes to connect when quorum is gained, rather
+than immediately fencing remaining unseen nodes.
+---
+ crmd/membership.c | 22 +++++++++++++++++-----
+ crmd/te_utils.c   | 48 ++++++++++++++++++++++++++++++++++++++++++++++--
+ crmd/tengine.h    |  2 ++
+ 3 files changed, 65 insertions(+), 7 deletions(-)
+
+diff --git a/crmd/membership.c b/crmd/membership.c
+index c36dbed..4f2fa8a 100644
+--- a/crmd/membership.c
++++ b/crmd/membership.c
+@@ -438,12 +438,24 @@ crm_update_quorum(gboolean quorum, gboolean force_update)
+         fsa_register_cib_callback(call_id, FALSE, NULL, cib_quorum_update_complete);
+         free_xml(update);
+ 
+-        /* If a node not running any resources is cleanly shut down and drops us
+-         * below quorum, we won't necessarily abort the transition, so abort it
+-         * here to be safe.
++        /* Quorum changes usually cause a new transition via other activity:
++         * quorum gained via a node joining will abort via the node join,
++         * and quorum lost via a node leaving will usually abort via resource
++         * activity and/or fencing.
++         *
++         * However, it is possible that nothing else causes a transition (e.g.
++         * someone forces quorum via corosync-cmaptcl, or quorum is lost due to
++         * a node in standby shutting down cleanly), so here ensure a new
++         * transition is triggered.
+          */
+-        if (quorum == FALSE) {
+-            abort_transition(INFINITY, tg_restart, "Quorum loss", NULL);
++        if (quorum) {
++            /* If quorum was gained, abort after a short delay, in case multiple
++             * nodes are joining around the same time, so the one that brings us
++             * to quorum doesn't cause all the remaining ones to be fenced.
++             */
++            abort_after_delay(INFINITY, tg_restart, "Quorum gained", 5000);
++        } else {
++            abort_transition(INFINITY, tg_restart, "Quorum lost", NULL);
+         }
+     }
+     fsa_has_quorum = quorum;
+diff --git a/crmd/te_utils.c b/crmd/te_utils.c
+index dab02d3..8d105dc 100644
+--- a/crmd/te_utils.c
++++ b/crmd/te_utils.c
+@@ -530,6 +530,46 @@ trigger_graph_processing(const char *fn, int line)
+     mainloop_set_trigger(transition_trigger);
+ }
+ 
++static struct abort_timer_s {
++    bool aborted;
++    guint id;
++    int priority;
++    enum transition_action action;
++    const char *text;
++} abort_timer = { 0, };
++
++static gboolean
++abort_timer_popped(gpointer data)
++{
++    if (abort_timer.aborted == FALSE) {
++        abort_transition(abort_timer.priority, abort_timer.action,
++                         abort_timer.text, NULL);
++    }
++    abort_timer.id = 0;
++    return FALSE; // do not immediately reschedule timer
++}
++
++/*!
++ * \internal
++ * \brief Abort transition after delay, if not already aborted in that time
++ *
++ * \param[in] abort_text  Must be literal string
++ */
++void
++abort_after_delay(int abort_priority, enum transition_action abort_action,
++                  const char *abort_text, guint delay_ms)
++{
++    if (abort_timer.id) {
++        // Timer already in progress, stop and reschedule
++        g_source_remove(abort_timer.id);
++    }
++    abort_timer.aborted = FALSE;
++    abort_timer.priority = abort_priority;
++    abort_timer.action = abort_action;
++    abort_timer.text = abort_text;
++    abort_timer.id = g_timeout_add(delay_ms, abort_timer_popped, NULL);
++}
++
+ void
+ abort_transition_graph(int abort_priority, enum transition_action abort_action,
+                        const char *abort_text, xmlNode * reason, const char *fn, int line)
+@@ -557,6 +597,8 @@ abort_transition_graph(int abort_priority, enum transition_action abort_action,
+             break;
+     }
+ 
++    abort_timer.aborted = TRUE;
++
+     /* Make sure any queued calculations are discarded ASAP */
+     free(fsa_pe_ref);
+     fsa_pe_ref = NULL;
+@@ -660,10 +702,12 @@ abort_transition_graph(int abort_priority, enum transition_action abort_action,
+                        (transition_graph->complete? "true" : "false"));
+ 
+         } else {
++            const char *id = ID(reason);
++
+             do_crm_log(level, "Transition aborted by %s.%s '%s': %s "
+                        CRM_XS " cib=%d.%d.%d source=%s:%d path=%s complete=%s",
+-                       TYPE(reason), ID(reason), (op? op : "change"), abort_text,
+-                       add[0], add[1], add[2], fn, line, path,
++                       TYPE(reason), (id? id : ""), (op? op : "change"),
++                       abort_text, add[0], add[1], add[2], fn, line, path,
+                        (transition_graph->complete? "true" : "false"));
+         }
+     }
+diff --git a/crmd/tengine.h b/crmd/tengine.h
+index 7205c16..6a75a08 100644
+--- a/crmd/tengine.h
++++ b/crmd/tengine.h
+@@ -59,6 +59,8 @@ extern void notify_crmd(crm_graph_t * graph);
+ #  include <te_callbacks.h>
+ 
+ extern void trigger_graph_processing(const char *fn, int line);
++void abort_after_delay(int abort_priority, enum transition_action abort_action,
++                       const char *abort_text, guint delay_ms);
+ extern void abort_transition_graph(int abort_priority, enum transition_action abort_action,
+                                    const char *abort_text, xmlNode * reason, const char *fn,
+                                    int line);
+-- 
+1.8.3.1
+
