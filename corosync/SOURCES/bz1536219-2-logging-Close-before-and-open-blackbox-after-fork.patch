@@ -1,0 +1,75 @@
+From 995ed0bd814ff3eacf6c09534841e6ce39ab6614 Mon Sep 17 00:00:00 2001
+From: Jan Friesse <jfriesse@redhat.com>
+Date: Mon, 22 Jan 2018 11:17:52 +0100
+Subject: [PATCH] logging: Close before and open blackbox after fork
+
+Signed-off-by: Jan Friesse <jfriesse@redhat.com>
+Reviewed-by: Christine Caulfield <ccaulfie@redhat.com>
+(cherry picked from commit 11fa527ed4960488d275867c28b1bff773e9cf7f)
+---
+ exec/logsys.c             |   16 ++++++++++++++++
+ exec/main.c               |    6 ++++++
+ include/corosync/logsys.h |    5 +++++
+ 3 files changed, 27 insertions(+), 0 deletions(-)
+
+diff --git a/exec/logsys.c b/exec/logsys.c
+index a38cc5e..8c9c222 100644
+--- a/exec/logsys.c
++++ b/exec/logsys.c
+@@ -862,3 +862,19 @@ void logsys_blackbox_set(int enable)
+ 
+ 	pthread_mutex_unlock (&logsys_config_mutex);
+ }
++
++/*
++ * To set correct pid to qb blackbox filename after tty dettach (fork) we have to
++ * close (this function) and (if needed) reopen blackbox (logsys_blackbox_postfork function).
++ */
++void logsys_blackbox_prefork(void)
++{
++
++	(void)qb_log_ctl(QB_LOG_BLACKBOX, QB_LOG_CONF_ENABLED, QB_FALSE);
++}
++
++void logsys_blackbox_postfork(void)
++{
++
++	_logsys_config_apply_blackbox();
++}
+diff --git a/exec/main.c b/exec/main.c
+index cd587dc..426e56d 100644
+--- a/exec/main.c
++++ b/exec/main.c
+@@ -1460,7 +1460,13 @@ int main (int argc, char **argv, char **envp)
+ 	 * Now we are fully initialized.
+ 	 */
+ 	if (background) {
++		logsys_blackbox_prefork();
++
+ 		corosync_tty_detach ();
++
++		logsys_blackbox_postfork();
++
++		log_printf (LOGSYS_LEVEL_DEBUG, "Corosync TTY detached");
+ 	}
+ 
+ 	/*
+diff --git a/include/corosync/logsys.h b/include/corosync/logsys.h
+index ec38d2c..a4aad69 100644
+--- a/include/corosync/logsys.h
++++ b/include/corosync/logsys.h
+@@ -258,6 +258,11 @@ extern int logsys_thread_start (void);
+ 
+ extern void logsys_blackbox_set(int enable);
+ 
++extern void logsys_blackbox_prefork(void);
++
++extern void logsys_blackbox_postfork(void);
++
++
+ /**
+  * @brief logsys_subsys_id
+  */
+-- 
+1.7.1
+

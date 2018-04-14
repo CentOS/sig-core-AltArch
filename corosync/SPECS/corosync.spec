@@ -23,44 +23,18 @@
 
 Name: corosync
 Summary: The Corosync Cluster Engine and Application Programming Interfaces
-Version: 2.4.0
-Release: 9%{?gitver}%{?dist}.2
+Version: 2.4.3
+Release: 2%{?gitver}%{?dist}
 License: BSD
 Group: System Environment/Base
 URL: http://corosync.github.io/corosync/
 Source0: http://build.clusterlabs.org/corosync/releases/%{name}-%{version}%{?gittarver}.tar.gz
 
-Patch0: bz1363654-1-Config-Flag-config-uidgid-entries.patch
-Patch1: bz1367813-1-Man-Fix-corosync-qdevice-net-certutil-link.patch
-Patch2: bz1367813-2-man-mention-qdevice-incompatibilites-in-votequorum.5.patch
-Patch3: bz1367813-3-Qnetd-LMS-Fix-two-partition-use-case.patch
-Patch4: bz1371880-1-libvotequorum-Bump-version.patch
-Patch5: bz1371880-2-votequorum-Don-t-update-expected_votes-display-if-va.patch
-Patch6: bz1371880-3-votequorum-simplify-reconfigure-message-handling.patch
-Patch7: bz1371880-4-build-Fix-build-on-RHEL7.3-latest.patch
-Patch8: bz1434528-1-cfg-Prevents-use-of-uninitialized-buffer.patch
-Patch9: bz1434529-1-man-Fix-typos-in-man-page.patch
-Patch10: bz1434529-2-Fix-typo-Destorying-Destroying.patch
-Patch11: bz1434529-3-init-Add-doc-URIs-to-the-systemd-service-files.patch
-Patch12: bz1434529-4-man-Modify-man-page-according-to-command-usage.patch
-Patch13: bz1434528-2-Totempg-remove-duplicate-memcpy-in-mcast_msg-func.patch
-Patch14: bz1434529-5-upstart-Add-softdog-module-loading-example.patch
-Patch15: bz1434529-6-Remove-deprecated-doxygen-flags.patch
-Patch16: bz1434528-3-Remove-redundant-header-file-inclusion.patch
-Patch17: bz1434529-7-Qdevice-fix-spell-errors-in-qdevice.patch
-Patch18: bz1434529-8-doc-document-watchdog_device-parameter.patch
-Patch19: bz1434534-1-Logsys-Change-logsys-syslog_priority-priority.patch
-Patch20: bz1434534-2-logconfig-Do-not-overwrite-logger_subsys-priority.patch
-Patch21: bz1445001-1-Main-Call-mlockall-after-fork.patch
-Patch22: bz1477461-1-main-Add-option-to-set-priority.patch
-Patch23: bz1477461-2-main-Add-support-for-libcgroup.patch
-Patch24: bz1484264-1-totem-Propagate-totem-initialization-failure.patch
-Patch25: bz1484264-2-totemcrypto-Refactor-symmetric-key-importing.patch
-Patch26: bz1484264-3-totemcrypto-Use-different-method-to-import-key.patch
-Patch27: bz1484264-4-totemcrypto-Fix-compiler-warning.patch
+Patch0: bz1536219-1-logging-Make-blackbox-configurable.patch
+Patch1: bz1536219-2-logging-Close-before-and-open-blackbox-after-fork.patch
 
 %if 0%{?rhel}
-ExclusiveArch: i686 x86_64 s390x ppc64le armv7hl
+ExclusiveArch: i686 x86_64 s390x ppc64le
 %endif
 
 # Runtime bits
@@ -115,34 +89,8 @@ BuildRoot: %(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
 
 %prep
 %setup -q -n %{name}-%{version}%{?gittarver}
-%patch0 -p1 -b .bz1363654-1
-%patch1 -p1 -b .bz1367813-1
-%patch2 -p1 -b .bz1367813-2
-%patch3 -p1 -b .bz1367813-3
-%patch4 -p1 -b .bz1371880-1
-%patch5 -p1 -b .bz1371880-2
-%patch6 -p1 -b .bz1371880-3
-%patch7 -p1 -b .bz1371880-4
-%patch8 -p1 -b .bz1434528-1
-%patch9 -p1 -b .bz1434529-1
-%patch10 -p1 -b .bz1434529-2
-%patch11 -p1 -b .bz1434529-3
-%patch12 -p1 -b .bz1434529-4
-%patch13 -p1 -b .bz1434528-2
-%patch14 -p1 -b .bz1434529-5
-%patch15 -p1 -b .bz1434529-6
-%patch16 -p1 -b .bz1434528-3
-%patch17 -p1 -b .bz1434529-7
-%patch18 -p1 -b .bz1434529-8
-%patch19 -p1 -b .bz1434534-1
-%patch20 -p1 -b .bz1434534-2
-%patch21 -p1 -b .bz1445001-1
-%patch22 -p1 -b .bz1477461-1
-%patch23 -p1 -b .bz1477461-2
-%patch24 -p1 -b .bz1484264-1
-%patch25 -p1 -b .bz1484264-2
-%patch26 -p1 -b .bz1484264-3
-%patch27 -p1 -b .bz1484264-4
+%patch0 -p1 -b .bz1536219-1
+%patch1 -p1 -b .bz1536219-2
 
 %build
 %if %{with runautogen}
@@ -574,28 +522,38 @@ fi
 %endif
 
 %changelog
-* Wed Aug 09 2017 Fabian Arrotin <arrfab@centos.org> 2.4.0-9
-- Added armhfp to supported arches (for centos userland)
+* Mon Feb 05 2018 Jan Friesse <jfriesse@redhat.com> 2.4.3-2
+- Resolves: rhbz#1536219
 
-* Thu Aug 24 2017 Jan Friesse <jfriesse@redhat.com> 2.4.0-9.2
-- Resolves: rhbz#1484264
+- logging: Make blackbox configurable (rhbz#1536219)
+- merge upstream commit 8af39f66e56e319b6b93804c0400e6e29737a90f (rhbz#1536219)
+- logging: Close before and open blackbox after fork (rhbz#1536219)
+- merge upstream commit 995ed0bd814ff3eacf6c09534841e6ce39ab6614 (rhbz#1536219)
 
-- totem: Propagate totem initialization failure (rhbz#1484264)
-- merge upstream commit 0413a8f4672352171f0df731b7d9c1fe20acbc4c (rhbz#1484264)
-- totemcrypto: Refactor symmetric key importing (rhbz#1484264)
-- merge upstream commit a885868181c07ba9ab5cdfdad1d66d387b2a4428 (rhbz#1484264)
-- totemcrypto: Use different method to import key (rhbz#1484264)
-- merge upstream commit 5dadebd21862074deaeb9a337fc9e49f5e9f692a (rhbz#1484264)
-- totemcrypto: Fix compiler warning (rhbz#1484264)
-- merge upstream commit fdeed33f514e0056e322a45d9a0a04ca4b9a2709 (rhbz#1484264)
+* Fri Oct 20 2017 Jan Friesse <jfriesse@redhat.com> 2.4.3-1
+- Resolves: rhbz#1413573
+- Resolves: rhbz#1503008
 
-* Wed Aug 02 2017 Jan Friesse <jfriesse@redhat.com> 2.4.0-9.1
-- Resolves: rhbz#1477461
+* Tue Oct 17 2017 Jan Friesse <jfriesse@redhat.com> 2.4.0-10
+- Resolves: rhbz#1439205
+- Resolves: rhbz#1461450
+- Resolves: rhbz#1469170
+- Resolves: rhbz#1476214
 
-- main: Add option to set priority (rhbz#1477461)
-- merge upstream commit a008448efb2b1d45c432867caf08f0bcf2b4b9b0 (rhbz#1477461)
-- main: Add support for libcgroup (rhbz#1477461)
-- merge upstream commit c56086c701d08fc17cf6d8ef603caf505a4021b7 (rhbz#1477461)
+- main: Don't ask libqb to handle segv, it doesn't work (rhbz#1439205)
+- merge upstream commit c0da36a6c0ecf7bc7def252a06336a7088e68086 (rhbz#1439205)
+- totem: Propagate totem initialization failure (rhbz#1461450)
+- merge upstream commit 0413a8f4672352171f0df731b7d9c1fe20acbc4c (rhbz#1461450)
+- totemcrypto: Refactor symmetric key importing (rhbz#1461450)
+- merge upstream commit a885868181c07ba9ab5cdfdad1d66d387b2a4428 (rhbz#1461450)
+- totemcrypto: Use different method to import key (rhbz#1461450)
+- merge upstream commit 5dadebd21862074deaeb9a337fc9e49f5e9f692a (rhbz#1461450)
+- main: Add option to set priority (rhbz#1469170)
+- merge upstream commit a008448efb2b1d45c432867caf08f0bcf2b4b9b0 (rhbz#1469170)
+- main: Add support for libcgroup (rhbz#1476214)
+- merge upstream commit c56086c701d08fc17cf6d8ef603caf505a4021b7 (rhbz#1476214)
+- totemcrypto: Fix compiler warning (rhbz#1461450)
+- merge upstream commit fdeed33f514e0056e322a45d9a0a04ca4b9a2709 (rhbz#1461450)
 
 * Wed Apr 26 2017 Jan Friesse <jfriesse@redhat.com> 2.4.0-9
 - Resolves: rhbz#1445001
