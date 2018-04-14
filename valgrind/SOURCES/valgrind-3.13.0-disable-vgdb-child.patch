@@ -1,0 +1,36 @@
+commit 59af5db9c15d8ea03c1521736fb1f107d66bce08
+Author: philippe <philippe@a5019735-40e9-0310-863c-91ae7b9d1cf9>
+Date:   Sun Jun 25 20:25:50 2017 +0000
+
+    After fork, vgdb activity is polled according to the nr of bbs done :
+    once the nr of bbs done reaches the next vgdb poll, a check for vgdb
+    activity is done.
+    This might lead to the activation of gdbserver after fork.
+    Such poll is however not expected, unless the children is
+    to be trace.
+    This spurious poll in the forked child can cause failures
+    depending on the nr of bbs done before the fork, and the
+    nr of bbs done between the fork and the exec.
+    
+    => disable vgdb poll in the child in the cleanup after fork
+    in the child, unless the children have to be traced.
+    
+    
+    
+    git-svn-id: svn://svn.valgrind.org/valgrind/trunk@16454 a5019735-40e9-0310-863c-91ae7b9d1cf9
+
+diff --git a/coregrind/m_gdbserver/m_gdbserver.c b/coregrind/m_gdbserver/m_gdbserver.c
+index 87fbce2..648d543 100644
+--- a/coregrind/m_gdbserver/m_gdbserver.c
++++ b/coregrind/m_gdbserver/m_gdbserver.c
+@@ -646,6 +646,10 @@ static void gdbserver_cleanup_in_child_after_fork(ThreadId me)
+    
+    if (VG_(clo_trace_children)) {
+       VG_(gdbserver_prerun_action) (me);
++   } else {
++      /* After fork, if we do not trace the children, disable vgdb
++         poll to avoid gdbserver being called unexpectedly. */
++      VG_(disable_vgdb_poll) ();
+    }
+ }
+ 
