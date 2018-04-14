@@ -48,7 +48,20 @@
             <xsl:value-of select="concat('Wrong number specification: ', $version-local)"/>
         </xsl:message>
     </xsl:if>
-    <xsl:value-of select="number($version-local)"/>
+    <xsl:value-of select="$version-local"/>
+</xsl:variable>
+<xsl:variable name="version-major">
+    <xsl:choose>
+        <xsl:when test="contains($version, '.')">
+            <xsl:value-of select="number(substring-before($version, '.'))"/>
+        </xsl:when>
+        <xsl:otherwise>
+            <xsl:value-of select="number($version)"/>
+        </xsl:otherwise>
+    </xsl:choose>
+</xsl:variable>
+<xsl:variable name="version-minor">
+    <xsl:value-of select="number(concat('0', substring-after($version, '.')))"/>
 </xsl:variable>
 
 <xsl:template match="/rng:grammar">
@@ -75,9 +88,22 @@
     <xsl:choose>
         <xsl:when test="starts-with(text(), 'pacemaker-')
                         and
-                        number(
-                            substring-after(text(), 'pacemaker-')
-                        ) &gt; $version"/>
+                        (
+                            number(
+                                substring-before(substring-after(text(), 'pacemaker-'), '.')
+                            ) &gt; $version-major
+                            or
+                            (
+                                number(
+                                    substring-before(substring-after(text(), 'pacemaker-'), '.')
+                                ) = $version-major
+                                and
+                                number(
+                                    concat('0', substring-after(substring-after(text(), 'pacemaker-'), '.'))
+                                ) &gt; $version-minor
+
+                            )
+                        )"/>
         <xsl:otherwise>
             <xsl:copy>
                 <xsl:apply-templates select="@*|node()"/>
