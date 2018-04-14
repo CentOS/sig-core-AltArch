@@ -2,8 +2,8 @@
 
 Summary: Tool for finding memory management bugs in programs
 Name: %{?scl_prefix}valgrind
-Version: 3.12.0
-Release: 9%{?dist}
+Version: 3.13.0
+Release: 10%{?dist}
 Epoch: 1
 License: GPLv2+
 URL: http://www.valgrind.org/
@@ -51,6 +51,29 @@ BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
   %endif
 %endif
 
+# Whether to run the full regtest or only a limited set
+# The full regtest includes gdb_server integration tests.
+# On arm the gdb integration tests hang for unknown reasons.
+# On rhel6 the gdb_server tests hang.
+# On rhel7 they hang on ppc64 and ppc64le.
+%ifarch %{arm}
+  %global run_full_regtest 0
+%else
+  %if 0%{?rhel} == 6
+    %global run_full_regtest 0
+  %else
+    %if 0%{?rhel} == 7
+      %ifarch ppc64 ppc64le
+        %global run_full_regtest 0
+      %else
+        %global run_full_regtest 1
+      %endif
+    %else
+      %global run_full_regtest 1
+    %endif
+  %endif
+%endif
+
 # Generating minisymtabs doesn't really work for the staticly linked
 # tools. Note (below) that we don't strip the vgpreload libraries at all
 # because valgrind might read and need the debuginfo in those (client)
@@ -58,7 +81,7 @@ BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 # So those will already have their full symbol table.
 %undefine _include_minidebuginfo
 
-Source0: http://www.valgrind.org/downloads/valgrind-%{version}.tar.bz2
+Source0: ftp://sourceware.org/pub/valgrind/valgrind-%{version}.tar.bz2
 
 # Needs investigation and pushing upstream
 Patch1: valgrind-3.9.0-cachegrind-improvements.patch
@@ -69,75 +92,60 @@ Patch2: valgrind-3.9.0-helgrind-race-supp.patch
 # Make ld.so supressions slightly less specific.
 Patch3: valgrind-3.9.0-ldso-supp.patch
 
-# KDE#371396 - workaround helgrind and drd pth_cond_destroy_busy testcase hangs
-Patch4: valgrind-3.12.0-skip-cond-var.patch
+# KDE#381272  ppc64 doesn't compile test_isa_2_06_partx.c without VSX support
+Patch4: valgrind-3.13.0-ppc64-check-no-vsx.patch
 
-# RHBZ#1390282 upstream svn r16134
-# Cleanup none/tests/nocwd.vgtest tmp dirs.
-Patch5: valgrind-3.12.0-nocwd-cleanup.patch
+# KDE#381289 epoll_pwait can have a NULL sigmask.
+Patch5: valgrind-3.13.0-epoll_pwait.patch
 
-# RHBZ#1424367
-# GCC7 now diagnoses inline assembly that clobbers register r2.
-# This has always been invalid code, and is no longer quietly tolerated.
-Patch6: valgrind-3.12.0-ppc64-r2.patch
+# KDE#381274 powerpc too chatty even with --sigill-diagnostics=no
+Patch6: valgrind-3.13.0-ppc64-diag.patch
 
-# KDE#376611 ppc64 and arm64 don't know about prlimit64 syscall
-Patch7: valgrind-3.12.0-arm64-ppc64-prlimit64.patch
+# KDE#381556 arm64: Handle feature registers access on 4.11 Linux kernel
+# Workaround that masks CPUID support in HWCAP on aarch64 (#1464211)
+Patch7: valgrind-3.13.0-arm64-hwcap.patch
 
-# KDE#376279 Handle unknown HINT instructions on aarch64 by ignoring them.
-Patch8: valgrind-3.12.0-arm64-hint.patch
+# RHBZ#1466017 ARM ld.so index warnings.
+# KDE#381805 arm32 needs ld.so index hardwire for new glibc security fixes
+Patch8: valgrind-3.13.0-arm-index-hardwire.patch
 
-# KDE#342040 Valgrind mishandles clone with CLONE_VFORK | CLONE_VM
-#            that clones to a different stack
-# KDE#373192 Calling posix_spawn in glibc 2.24 completely broken
-Patch9: valgrind-3.12.0-clone-spawn.patch
+# KDE#381769 Use ucontext_t instead of struct ucontext
+Patch9: valgrind-3.13.0-ucontext_t.patch
 
-# KDE#372600 process loops forever when fatal signals are arriving quickly
-Patch10: valgrind-3.12.0-quick-fatal-sigs.patch
+# valgrind svn r16453 Fix some tests failure with GDB 8.0
+Patch10: valgrind-3.13.0-gdb-8-testfix.patch
 
-# KDE#372504 Hanging on exit_group
-Patch11: valgrind-3.12.0-exit_group.patch
+# valgrind svn r16454. disable vgdb poll in the child after fork
+Patch11: valgrind-3.13.0-disable-vgdb-child.patch
 
-# KDE#373046 Stacks registered by core are never deregistered
-Patch12: valgrind-3.12.0-deregister-stack.patch
+# KDE#382998 xml-socket doesn't work
+Patch12: valgrind-3.13.0-xml-socket.patch
 
-# KDE#344139
-# Initialize x86 system GDT on first use.
-# VEX: Recognize the SS segment prefix on x86.
-Patch13: valgrind-3.12.0-x86-gdt-and-ss.patch
+# KDE#385334
+# PPC64, vpermr, xxperm, xxpermr fix Iop_Perm8x16 selector field
+# PPC64, revert the change to vperm instruction.
+# KDE#385183
+# PPC64, Add support for xscmpeqdp, xscmpgtdp, xscmpgedp, xsmincdp instructions
+# PPC64, Fix bug in vperm instruction.
+# KDE#385210
+# PPC64, Re-implement the vpermr instruction using the Iop_Perm8x16.
+# KDE#385208
+# PPC64, Use the vperm code to implement the xxperm inst.
+# PPC64, Replace body of generate_store_FPRF with C helper function.
+# PPC64, Add support for the Data Stream Control Register (DSCR)
+Patch13: valgrind-3.13.0-ppc64-vex-fixes.patch
 
-# KDE#352767 - Wine/valgrind: noted but unhandled ioctl 0x5307 (CDROMSTOP)
-# KDE#348616 - Wine/valgrind: noted but unhandled ioctl 0x5390 (DVD_READ_STRUCT)
-Patch14: valgrind-3.12.0-cd-dvd-ioctl.patch
+# Fix eflags handling in amd64 instruction tests
+Patch14: valgrind-3.13.0-amd64-eflags-tests.patch
 
-# KDE#373069 force old implementation of std::string for leak_cpp_interior test
-Patch15: valgrind-3.12.0-tests-cxx11_abi_0.patch
+# KDE#385868 ld.so _dl_runtime_resolve_avx_slow conditional jump warning
+Patch15: valgrind-3.13.0-suppress-dl-trampoline-sse-avx.patch
 
-# KDE#375806 add suppression for helgrind/tests/tc22_exit_w_lock
-Patch16: valgrind-3.12.0-helgrind-dl_allocate_tls-supp.patch
+# Implement static TLS code for more platforms
+Patch16: valgrind-3.13.0-static-tls.patch
 
-# KDE#372195 Power PC, xxsel instruction is not always recognized.
-Patch17: valgrind-3.12.0-ppc-xxsel.patch
-
-# Combined valgrind svn r16229:r16248 patches.
-# Enables pivot_root, sync_file_range, unshare, get_robust_list,
-# delete_module, sched_rr_get_interval, tkill, request_key, move_pages,
-# rt_tgsigqueueinfo, fanotify_init, fanotify_mark, clock_adjtime, kcmp,
-# getcpu and sethostname syscalls on arm64.
-Patch18: valgrind-3.12.0-aarch64-syscalls.patch
-
-# KDE#377427 Fix incorrect register pair check for lxv, stxv, stxsd,
-#            stxssp, lxsd, lxssp instructions
-Patch19: valgrind-3.12.0-powerpc-register-pair.patch
-
-# KDE#377478 PPC64: ISA 3.0 setup fixes
-Patch20: valgrind-3.12.0-ppc64-isa-3_00.patch
-
-# KDE#369459 valgrind on arm64 violates the ARMv8 spec (ldxr/stxr)
-Patch21: valgrind-3.12.0-ll-sc-fallback1.patch
-Patch22: valgrind-3.12.0-ll-sc-fallback2.patch
-Patch23: valgrind-3.12.0-ll-sc-fallback3.patch
-Patch24: valgrind-3.12.0-ll-sc-fallback4.patch
+# KDE#386397 PPC64 valgrind truncates powerpc timebase to 32-bits.
+Patch17: valgrind-3.13.0-ppc64-timebase.patch
 
 # RHEL7 specific patches.
 
@@ -148,9 +156,10 @@ Patch24: valgrind-3.12.0-ll-sc-fallback4.patch
 Patch7001: valgrind-3.11.0-ppc-fppo.patch
 
 # Fix test link on arm32
-Patch8001: valgrind-3.12.0-fix-tests-arm.patch
+Patch8001: valgrind-3.13.0-fix-tests-arm.patch
 
 %if %{build_multilib}
+
 # Ensure glibc{,-devel} is installed for both multilib arches
 BuildRequires: /lib/libc.so.6 /usr/lib/libc.so /lib64/libc.so.6 /usr/lib64/libc.so
 %endif
@@ -171,7 +180,9 @@ BuildRequires: openmpi-devel >= 1.3.3
 
 # For %%build and %%check.
 # In case of a software collection, pick the matching gdb and binutils.
+%if %{run_full_regtest}
 BuildRequires: %{?scl_prefix}gdb
+%endif
 BuildRequires: %{?scl_prefix}binutils
 
 # gdbserver_tests/filter_make_empty uses ps in test
@@ -227,12 +238,15 @@ ExclusiveArch: %{ix86} x86_64 ppc ppc64 ppc64le s390x armv7hl aarch64
 %endif
 
 %description
-Valgrind is a tool to help you find memory-management problems in your
-programs. When a program is run under Valgrind's supervision, all
-reads and writes of memory are checked, and calls to
-malloc/new/free/delete are intercepted. As a result, Valgrind can
-detect a lot of problems that are otherwise very hard to
-find/diagnose.
+Valgrind is an instrumentation framework for building dynamic analysis
+tools. There are Valgrind tools that can automatically detect many
+memory management and threading bugs, and profile your programs in
+detail. You can also use Valgrind to build new tools. The Valgrind
+distribution currently includes six production-quality tools: a memory
+error detector (memcheck, the default tool), two thread error
+detectors (helgrind and drd), a cache and branch-prediction profiler
+(cachegrind), a call-graph generating cache and branch-prediction
+profiler (callgrind), and a heap profiler (massif).
 
 %package devel
 Summary: Development files for valgrind
@@ -276,21 +290,11 @@ Valgrind User Manual for details.
 %patch15 -p1
 %patch16 -p1
 %patch17 -p1
-%patch18 -p1
-%patch19 -p1
-%patch20 -p1
-%patch21 -p1
-%patch22 -p1
-%patch23 -p1
-%patch24 -p1
-# Remove patch artifacts from tests to pacify makefile consistency checker.
-rm -f none/tests/cmdline?.stdout.exp.orig
 
 # RHEL7 specific patches
 %patch7001 -p1
-
 %ifarch %{arm}
-%patch8001 -p1
+%patch8001 -p1 -b .armtests
 %endif
 
 %build
@@ -403,13 +407,19 @@ chmod 644 $RPM_BUILD_ROOT%{_libdir}/valgrind/vgpreload*-%{valarch}-*so
 
 %check
 # Make sure some info about the system is in the build.log
+# Add || true because rpm on copr EPEL6 acts weirdly and we don't want
+# to break the build.
 uname -a
-rpm -q glibc gcc %{?scl_prefix}binutils %{?scl_prefix}gdb
+rpm -q glibc gcc %{?scl_prefix}binutils || true
+%if %{run_full_regtest}
+rpm -q %{?scl_prefix}gdb || true
+%endif
+
 LD_SHOW_AUXV=1 /bin/true
 cat /proc/cpuinfo
 
-# Make sure a basic binary runs.
-./vg-in-place /bin/true
+# Make sure a basic binary runs. There should be no errors.
+./vg-in-place --error-exitcode=1 /bin/true
 
 # Build the test files with the software collection compiler if available.
 %{?scl:PATH=%{_bindir}${PATH:+:${PATH}}}
@@ -417,13 +427,15 @@ cat /proc/cpuinfo
 # the testsuite sets all flags necessary. See also configure above.
 make %{?_smp_mflags} CFLAGS="" CXXFLAGS="" LDFLAGS="" check
 
+# Workaround https://bugzilla.redhat.com/show_bug.cgi?id=1434601
+# for gdbserver tests.
+export PYTHONCOERCECLOCALE=0
+
 echo ===============TESTING===================
-# On arm the gdb integration tests hang for unknown reasons.
-# Only run the main tools tests.
-%ifarch %{arm}
-./close_fds make nonexp-regtest || :
+%if %{run_full_regtest}
+  ./close_fds make regtest || :
 %else
-./close_fds make regtest || :
+  ./close_fds make nonexp-regtest || :
 %endif
 
 # Make sure test failures show up in build.log
@@ -486,8 +498,31 @@ echo ===============END TESTING===============
 %endif
 
 %changelog
-* Wed Mar 28 2018 Pablo Greco <pablo@fliagreco.com.ar> - 3.12.0-9
+* Sat Apr 14 2018 Pablo Greco <pablo@fliagreco.com.ar> - 3.13.0-10
 - Fix tests on armhfp
+
+* Thu Nov  2 2017 Mark Wielaard <mjw@redhat.com> - 3.13.0-10
+- Add valgrind-3.13.0-ppc64-timebase.patch (#1508148)
+
+* Tue Oct 17 2017 Mark Wielaard <mjw@redhat.com> - 3.13.0-9
+- valgrind 3.13.0 (fedora).
+- Update description.
+- Drop all upstreamed patches.
+- Add valgrind-3.13.0-ppc64-check-no-vsx.patch
+- Add valgrind-3.13.0-epoll_pwait.patch (#1462258)
+- Add valgrind-3.13.0-ppc64-diag.patch
+- Add valgrind-3.13.0-arm64-hwcap.patch (#1464211)
+- Add valgrind-3.13.0-arm-index-hardwire.patch (#1466017)
+- Add valgrind-3.13.0-ucontext_t.patch
+- Add valgrind-3.13.0-gdb-8-testfix.patch
+- Add valgrind-3.13.0-disable-vgdb-child.patch
+- Add --error-exitcode=1 to /bin/true check.
+- Add valgrind-3.13.0-xml-socket.patch
+- Add valgrind-3.13.0-ppc64-vex-fixes.patch
+- Add valgrind-3.13.0-amd64-eflags-tests.patch
+- Add valgrind-3.13.0-suppress-dl-trampoline-sse-avx.patch
+- Add valgrind-3.13.0-static-tls.patch
+- Workaround gdb/python bug in testsuite (#1434601)
 
 * Thu Sep 21 2017 Mark Wielaard <mjw@redhat.com> - 3.12.0-9
 - Add valgrind-3.12.0-ll-sc-fallback[1234].patch (#1492753)

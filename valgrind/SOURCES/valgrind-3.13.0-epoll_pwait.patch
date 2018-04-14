@@ -1,0 +1,68 @@
+commit 79865f0eed7cf0e0ad687ee0a59d59a1d505b514
+Author: mjw <mjw@a5019735-40e9-0310-863c-91ae7b9d1cf9>
+Date:   Sat Jun 17 13:49:22 2017 +0000
+
+    epoll_pwait can have a NULL sigmask.
+    
+    According to the epoll_pwait(2) man page:
+    
+           The  sigmask  argument  may  be  specified  as  NULL,  in  which  case
+           epoll_pwait() is equivalent to epoll_wait().
+    
+    But doing that under valgrind gives:
+    
+    ==13887== Syscall param epoll_pwait(sigmask) points to unaddressable byte(s)
+    ==13887==    at 0x4F2B940: epoll_pwait (epoll_pwait.c:43)
+    ==13887==    by 0x400ADE: main (syscalls-2007.c:89)
+    ==13887==  Address 0x0 is not stack'd, malloc'd or (recently) free'd
+    
+    This is because the sys_epoll_pwait wrapper has:
+    
+       if (ARG4)
+          PRE_MEM_READ( "epoll_pwait(sigmask)", ARG5, sizeof(vki_sigset_t) );
+    
+    Which looks like a typo (ARG4 is timeout and ARG5 is sigmask).
+    
+    This shows up with newer glibc which translates an epoll_wait call into
+    an epoll_pwait call with NULL sigmask.
+    
+    Fix typo and add a testcase.
+    
+    https://bugs.kde.org/show_bug.cgi?id=381289
+    
+    git-svn-id: svn://svn.valgrind.org/valgrind/trunk@16451 a5019735-40e9-0310-863c-91ae7b9d1cf9
+
+diff --git a/coregrind/m_syswrap/syswrap-linux.c b/coregrind/m_syswrap/syswrap-linux.c
+index 26e02fd..4120c1d 100644
+--- a/coregrind/m_syswrap/syswrap-linux.c
++++ b/coregrind/m_syswrap/syswrap-linux.c
+@@ -1901,7 +1901,7 @@ PRE(sys_epoll_pwait)
+                  int, maxevents, int, timeout, vki_sigset_t *, sigmask,
+                  vki_size_t, sigsetsize);
+    PRE_MEM_WRITE( "epoll_pwait(events)", ARG2, sizeof(struct vki_epoll_event)*ARG3);
+-   if (ARG4)
++   if (ARG5)
+       PRE_MEM_READ( "epoll_pwait(sigmask)", ARG5, sizeof(vki_sigset_t) );
+ }
+ POST(sys_epoll_pwait)
+diff --git a/memcheck/tests/linux/syscalls-2007.c b/memcheck/tests/linux/syscalls-2007.c
+index b61c6d5..5494623 100644
+--- a/memcheck/tests/linux/syscalls-2007.c
++++ b/memcheck/tests/linux/syscalls-2007.c
+@@ -79,5 +79,16 @@ int main (void)
+   }
+ #endif
+ 
++#if defined(HAVE_EPOLL_CREATE) && defined(HAVE_EPOLL_PWAIT)
++  {
++    int fd3;
++    struct epoll_event evs[10];
++
++    fd3 = epoll_create (10);
++    /* epoll_pwait can take a NULL sigmask. */
++    epoll_pwait (fd3, evs, 10, 1, NULL);
++  }
++#endif
++
+   return 0;
+ }
