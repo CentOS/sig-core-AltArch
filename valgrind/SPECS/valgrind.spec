@@ -154,6 +154,10 @@ Patch17: valgrind-3.13.0-ppc64-timebase.patch
 # public header under /usr/include/valgrind causing multilib problems.
 # The result would only be used for two test cases.
 Patch7001: valgrind-3.11.0-ppc-fppo.patch
+
+# Fix test link on arm32
+Patch8001: valgrind-3.13.0-fix-tests-arm.patch
+
 %if %{build_multilib}
 
 # Ensure glibc{,-devel} is installed for both multilib arches
@@ -289,6 +293,9 @@ Valgrind User Manual for details.
 
 # RHEL7 specific patches
 %patch7001 -p1
+%ifarch %{arm}
+%patch8001 -p1 -b .armtests
+%endif
 
 %build
 # We need to use the software collection compiler and binutils if available.
@@ -491,6 +498,9 @@ echo ===============END TESTING===============
 %endif
 
 %changelog
+* Sat Apr 14 2018 Pablo Greco <pablo@fliagreco.com.ar> - 3.13.0-10
+- Fix tests on armhfp
+
 * Thu Nov  2 2017 Mark Wielaard <mjw@redhat.com> - 3.13.0-10
 - Add valgrind-3.13.0-ppc64-timebase.patch (#1508148)
 
