@@ -43,7 +43,7 @@ Patch0:         https://pagure.io/clufter/c/a75e1456f11725b7a58bc81148a6d6403b25
 
 # for pacemaker BuildRequires dependency
 %if 0%{?rhel} > 0
-ExclusiveArch: i686 x86_64 ppc64le s390x
+ExclusiveArch: i686 x86_64 ppc64le s390x %{arm}
 %endif
 
 %description
@@ -358,6 +358,9 @@ test -x '%{_bindir}/%{name}' && test -f "${bashcomp}" \
 %{_datarootdir}/%{name}/ext-plugins/lib-pcs
 
 %changelog
+* Sat Apr 14 2018 Fabian Arrotin <arrfab@centos.org> - 0.77.0-2
+- Added %{arm} to supported arches to allow building for c7 armhfp
+
 * Fri Dec 01 2017 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.77.0-2
 - fix nodelist.node.name configuration option (originaly devised by pacemaker)
   not supported in corosync.conf with the built-in validation schema
