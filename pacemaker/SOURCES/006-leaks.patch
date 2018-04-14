@@ -1,0 +1,296 @@
+From 5042a3b19a2f2bfa3d09b4d1029f53e6b674918b Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Thu, 14 Dec 2017 09:16:47 -0600
+Subject: [PATCH 1/5] Test: CTS: remove dead code
+
+makes static analysis happy
+---
+ cts/CTSaudits.py   | 1 -
+ cts/environment.py | 1 -
+ cts/remote.py      | 5 +----
+ cts/watcher.py     | 6 +++---
+ 4 files changed, 4 insertions(+), 9 deletions(-)
+
+diff --git a/cts/CTSaudits.py b/cts/CTSaudits.py
+index aff897f..d9fbeb9 100755
+--- a/cts/CTSaudits.py
++++ b/cts/CTSaudits.py
+@@ -190,7 +190,6 @@ class DiskAudit(ClusterAudit):
+ 
+                         if answer and answer == "n":
+                             raise ValueError("Disk full on %s" % (node))
+-                            ret = 0
+ 
+                     elif remaining_mb < 100 or used_percent > 90:
+                         self.CM.log("WARN: Low on log disk space (%dMB) on %s" % (remaining_mb, node))
+diff --git a/cts/environment.py b/cts/environment.py
+index 75a18c8..6c4831c 100644
+--- a/cts/environment.py
++++ b/cts/environment.py
+@@ -182,7 +182,6 @@ class Environment:
+ 
+         else:
+             raise ValueError("Unknown stack: "+name)
+-            sys.exit(1)
+ 
+     def get_stack_short(self):
+         # Create the Cluster Manager object
+diff --git a/cts/remote.py b/cts/remote.py
+index 8c36918..7cef40e 100644
+--- a/cts/remote.py
++++ b/cts/remote.py
+@@ -220,10 +220,7 @@ class RemoteExec:
+ 
+         if not silent:
+             for err in errors:
+-                if stdout == 3:
+-                    result.append("error: "+err)
+-                else:
+-                    self.debug("cmd: stderr: %s" % err)
++                self.debug("cmd: stderr: %s" % err)
+ 
+         if stdout == 0:
+             if not silent and result:
+diff --git a/cts/watcher.py b/cts/watcher.py
+index de032f7..42685ad 100644
+--- a/cts/watcher.py
++++ b/cts/watcher.py
+@@ -337,19 +337,19 @@ class LogWatcher(RemoteExec):
+             self.kind    = kind
+         else:
+             raise
+-            self.kind    = self.Env["LogWatcher"]
++            #self.kind    = self.Env["LogWatcher"]
+ 
+         if log:
+             self.filename    = log
+         else:
+             raise
+-            self.filename    = self.Env["LogFileName"]
++            #self.filename    = self.Env["LogFileName"]
+ 
+         if hosts:
+             self.hosts = hosts
+         else:
+             raise
+-            self.hosts = self.Env["nodes"]
++            #self.hosts = self.Env["nodes"]
+ 
+         if trace_lw:
+             self.debug_level = 3
+-- 
+1.8.3.1
+
+
+From 570929eba229558b1a6900ffc54e4d5ee4150f74 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Thu, 14 Dec 2017 09:23:03 -0600
+Subject: [PATCH 2/5] Refactor: pengine: validate more function arguments
+
+not an issue with current code, but makes static analysis happy
+---
+ pengine/clone.c       | 3 ++-
+ pengine/utilization.c | 1 +
+ 2 files changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/pengine/clone.c b/pengine/clone.c
+index 99bac7e..e81dbc8 100644
+--- a/pengine/clone.c
++++ b/pengine/clone.c
+@@ -955,6 +955,7 @@ is_child_compatible(resource_t *child_rsc, node_t * local_node, enum rsc_role_e
+     node_t *node = NULL;
+     enum rsc_role_e next_role = child_rsc->fns->state(child_rsc, current);
+ 
++    CRM_CHECK(child_rsc && local_node, return FALSE);
+     if (is_set_recursive(child_rsc, pe_rsc_block, TRUE) == FALSE) {
+         /* We only want instances that haven't failed */
+         node = child_rsc->fns->location(child_rsc, NULL, current);
+@@ -965,7 +966,7 @@ is_child_compatible(resource_t *child_rsc, node_t * local_node, enum rsc_role_e
+         return FALSE;
+     }
+ 
+-    if (node && local_node && node->details == local_node->details) {
++    if (node && (node->details == local_node->details)) {
+         return TRUE;
+ 
+     } else if (node) {
+diff --git a/pengine/utilization.c b/pengine/utilization.c
+index f42c85d..05f8d78 100644
+--- a/pengine/utilization.c
++++ b/pengine/utilization.c
+@@ -341,6 +341,7 @@ process_utilization(resource_t * rsc, node_t ** prefer, pe_working_set_t * data_
+ {
+     int alloc_details = scores_log_level + 1;
+ 
++    CRM_CHECK(rsc && prefer && data_set, return);
+     if (safe_str_neq(data_set->placement_strategy, "default")) {
+         GHashTableIter iter;
+         GListPtr colocated_rscs = NULL;
+-- 
+1.8.3.1
+
+
+From db2fdc9a452fef11d397e25202fde8ba1bad4cd3 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Thu, 14 Dec 2017 10:36:20 -0600
+Subject: [PATCH 3/5] Low: libcrmservice: avoid memory leak on DBus error
+
+---
+ lib/services/dbus.c | 47 +++++++++++++++++++++++++++++++++++++----------
+ 1 file changed, 37 insertions(+), 10 deletions(-)
+
+diff --git a/lib/services/dbus.c b/lib/services/dbus.c
+index fb3e867..58df927 100644
+--- a/lib/services/dbus.c
++++ b/lib/services/dbus.c
+@@ -23,6 +23,15 @@ struct db_getall_data {
+     void (*callback)(const char *name, const char *value, void *userdata);
+ };
+ 
++static void
++free_db_getall_data(struct db_getall_data *data)
++{
++    free(data->target);
++    free(data->object);
++    free(data->name);
++    free(data);
++}
++
+ DBusConnection *
+ pcmk_dbus_connect(void)
+ {
+@@ -196,6 +205,20 @@ pcmk_dbus_send_recv(DBusMessage *msg, DBusConnection *connection,
+     return reply;
+ }
+ 
++/*!
++ * \internal
++ * \brief Send a DBus message with a callback for the reply
++ *
++ * \param[in]     msg         DBus message to send
++ * \param[in,out] connection  DBus connection to send on
++ * \param[in]     done        Function to call when pending call completes
++ * \param[in]     user_data   Data to pass to done callback
++ *
++ * \return Handle for reply on success, NULL on error
++ * \note The caller can assume that the done callback is called always and
++ *       only when the return value is non-NULL. (This allows the caller to
++ *       know where it should free dynamically allocated user_data.)
++ */
+ DBusPendingCall *
+ pcmk_dbus_send(DBusMessage *msg, DBusConnection *connection,
+                void(*done)(DBusPendingCall *pending, void *user_data),
+@@ -359,11 +382,7 @@ pcmk_dbus_lookup_result(DBusMessage *reply, struct db_getall_data *data)
+     }
+ 
+   cleanup:
+-    free(data->target);
+-    free(data->object);
+-    free(data->name);
+-    free(data);
+-
++    free_db_getall_data(data);
+     return output;
+ }
+ 
+@@ -424,11 +443,19 @@ pcmk_dbus_get_property(DBusConnection *connection, const char *target,
+         query_data->name = strdup(name);
+     }
+ 
+-    if(query_data->callback) {
+-        DBusPendingCall* _pending;
+-        _pending = pcmk_dbus_send(msg, connection, pcmk_dbus_lookup_cb, query_data, timeout);
+-        if (pending != NULL) {
+-            *pending = _pending;
++    if (query_data->callback) {
++        DBusPendingCall *local_pending;
++
++        local_pending = pcmk_dbus_send(msg, connection, pcmk_dbus_lookup_cb,
++                                       query_data, timeout);
++        if (local_pending == NULL) {
++            // pcmk_dbus_lookup_cb() was not called in this case
++            free_db_getall_data(query_data);
++            query_data = NULL;
++        }
++
++        if (pending) {
++            *pending = local_pending;
+         }
+ 
+     } else {
+-- 
+1.8.3.1
+
+
+From 4a774710ec7269ec3a1427ae09fc6ca435c66e92 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Thu, 14 Dec 2017 12:44:04 -0600
+Subject: [PATCH 4/5] Build: systemd unit files: restore DBus dependency
+
+06e2e26 removed the unit files' DBus dependency on the advice of a
+systemd developer, but it is necessary
+---
+ lrmd/pacemaker_remote.service.in | 3 +++
+ mcp/pacemaker.service.in         | 4 ++++
+ 2 files changed, 7 insertions(+)
+
+diff --git a/lrmd/pacemaker_remote.service.in b/lrmd/pacemaker_remote.service.in
+index d5717f6..1c596e1 100644
+--- a/lrmd/pacemaker_remote.service.in
++++ b/lrmd/pacemaker_remote.service.in
+@@ -2,8 +2,11 @@
+ Description=Pacemaker Remote Service
+ Documentation=man:pacemaker_remoted http://clusterlabs.org/doc/en-US/Pacemaker/1.1-pcs/html/Pacemaker_Remote/index.html
+ 
++# See main pacemaker unit file for descriptions of why these are needed
+ After=network.target
+ After=time-sync.target
++After=dbus.service
++Wants=dbus.service
+ After=resource-agents-deps.target
+ Wants=resource-agents-deps.target
+ After=syslog.service
+diff --git a/mcp/pacemaker.service.in b/mcp/pacemaker.service.in
+index 516de0f..e532ea2 100644
+--- a/mcp/pacemaker.service.in
++++ b/mcp/pacemaker.service.in
+@@ -14,6 +14,10 @@ After=network.target
+ # and failure timestamps, so wait until it's done.
+ After=time-sync.target
+ 
++# Managing systemd resources requires DBus.
++After=dbus.service
++Wants=dbus.service
++
+ # Some OCF resources may have dependencies that aren't managed by the cluster;
+ # these must be started before Pacemaker and stopped after it. The
+ # resource-agents package provides this target, which lets system adminstrators
+-- 
+1.8.3.1
+
+
+From 69de188a7263ba66afa0e8a3a46a64f07a7facca Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Thu, 14 Dec 2017 16:05:12 -0600
+Subject: [PATCH 5/5] Low: attrd: avoid small memory leak at start-up
+
+introduced by 3518544
+---
+ attrd/commands.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/attrd/commands.c b/attrd/commands.c
+index 0a20b26..20bd82f 100644
+--- a/attrd/commands.c
++++ b/attrd/commands.c
+@@ -539,6 +539,7 @@ attrd_broadcast_protocol()
+     crm_xml_add(attrd_op, F_ATTRD_VALUE, ATTRD_PROTOCOL_VERSION);
+     crm_xml_add_int(attrd_op, F_ATTRD_IS_PRIVATE, 1);
+     attrd_client_update(attrd_op);
++    free_xml(attrd_op);
+ }
+ 
+ void
+-- 
+1.8.3.1
+

@@ -1,0 +1,99 @@
+From d0278eca6f2f8d4e707f73d12b4f8161f07e42fe Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Thu, 2 Nov 2017 18:26:03 -0500
+Subject: [PATCH 1/2] Feature: tools: enable new crm_resource
+ --cleanup/--refresh behavior
+
+it was temporarily disabled by 3576364
+---
+ tools/crm_resource.c | 6 +-----
+ 1 file changed, 1 insertion(+), 5 deletions(-)
+
+diff --git a/tools/crm_resource.c b/tools/crm_resource.c
+index 92255df..356bb05 100644
+--- a/tools/crm_resource.c
++++ b/tools/crm_resource.c
+@@ -212,14 +212,11 @@ static struct crm_option long_options[] = {
+     },
+     {
+         "cleanup", no_argument, NULL, 'C',
+-#if 0
+-        // new behavior disabled until 2.0.0
+         "\t\tDelete failed operations from a resource's history allowing its current state to be rechecked.\n"
+         "\t\t\t\tOptionally filtered by --resource, --node, --operation, and --interval (otherwise all).\n"
+     },
+     {
+         "refresh", no_argument, NULL, 'R',
+-#endif
+         "\t\tDelete resource's history (including failures) so its current state is rechecked.\n"
+         "\t\t\t\tOptionally filtered by --resource, --node, --operation, and --interval (otherwise all).\n"
+         "\t\t\t\tUnless --force is specified, resource's group or clone (if any) will also be cleaned"
+@@ -384,7 +381,6 @@ static struct crm_option long_options[] = {
+     {"un-migrate", no_argument, NULL, 'U', NULL, pcmk_option_hidden},
+     {"un-move", no_argument, NULL, 'U', NULL, pcmk_option_hidden},
+ 
+-    {"refresh",    0, 0, 'R', NULL, pcmk_option_hidden}, // remove this line for 2.0.0
+     {"reprobe", no_argument, NULL, 'P', NULL, pcmk_option_hidden},
+ 
+     {"-spacer-", 1, NULL, '-', "\nExamples:", pcmk_option_paragraph},
+@@ -645,7 +641,7 @@ main(int argc, char **argv)
+                 if (cib_file == NULL) {
+                     require_crmd = TRUE;
+                 }
+-                just_errors = FALSE; // disable until 2.0.0
++                just_errors = TRUE;
+                 rsc_cmd = 'C';
+                 find_flags = pe_find_renamed|pe_find_anon;
+                 break;
+-- 
+1.8.3.1
+
+
+From b48ceeb041cee65a9b93b9b76235e475fa1a128f Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 16 Oct 2017 09:45:18 -0500
+Subject: [PATCH 2/2] Feature: crmd: default record-pending to TRUE
+
+---
+ crmd/lrm.c | 15 ++++++---------
+ 1 file changed, 6 insertions(+), 9 deletions(-)
+
+diff --git a/crmd/lrm.c b/crmd/lrm.c
+index eb4e16e..36dc076 100644
+--- a/crmd/lrm.c
++++ b/crmd/lrm.c
+@@ -2061,25 +2061,22 @@ stop_recurring_actions(gpointer key, gpointer value, gpointer user_data)
+ static void
+ record_pending_op(const char *node_name, lrmd_rsc_info_t *rsc, lrmd_event_data_t *op)
+ {
++    const char *record_pending = NULL;
++
+     CRM_CHECK(node_name != NULL, return);
+     CRM_CHECK(rsc != NULL, return);
+     CRM_CHECK(op != NULL, return);
+ 
+-    if (op->op_type == NULL
++    if ((op->op_type == NULL) || (op->params == NULL)
+         || safe_str_eq(op->op_type, CRMD_ACTION_CANCEL)
+         || safe_str_eq(op->op_type, CRMD_ACTION_DELETE)) {
+         return;
+     }
+ 
+-    if (op->params == NULL) {
++    // defaults to true
++    record_pending = crm_meta_value(op->params, XML_OP_ATTR_PENDING);
++    if (record_pending && !crm_is_true(record_pending)) {
+         return;
+-
+-    } else {
+-        const char *record_pending = crm_meta_value(op->params, XML_OP_ATTR_PENDING);
+-
+-        if (record_pending == NULL || crm_is_true(record_pending) == FALSE) {
+-            return;
+-         }
+     }
+ 
+     op->call_id = -1;
+-- 
+1.8.3.1
+

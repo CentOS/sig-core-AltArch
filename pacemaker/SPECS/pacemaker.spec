@@ -13,12 +13,15 @@
 ## Upstream pacemaker version, and its package version (specversion
 ## can be incremented to build packages reliably considered "newer"
 ## than previously built packages with the same pcmkversion)
-%global pcmkversion 1.1.16
-%global specversion 12
+%global pcmkversion 1.1.18
+%global specversion 11
 
 ## Upstream commit (or git tag, such as "Pacemaker-" plus the
 ## {pcmkversion} macro for an official release) to use for this package
-%global commit 94ff4df51a55cc30d01843ea11b3292bac755432
+%global commit 2b07d5c5a908998891c3317faa30328c108d3a91
+## Since git v2.11, the extent of abbreviation is autoscaled by default
+## (used to be constant of 7), so we need to convey it for non-tags, too.
+%global commit_abbrev 7
 
 
 # Define globals for convenient use later
@@ -30,16 +33,21 @@
 ## Short version of git commit
 %define shortcommit %(c=%{commit}; case ${c} in
                       Pacemaker-*%{rparen} echo ${c:10};;
-                      *%{rparen} echo ${c:0:7};; esac)
+                      *%{rparen} echo ${c:0:%{commit_abbrev}};; esac)
 
-## Whether this is a release candidate
-%define pre_release %(s=%{shortcommit}; [ ${s: -4:3} != -rc ]; echo $?)
+## Whether this is a tagged release
+%define tag_release %([ %{commit} != Pacemaker-%{shortcommit} ]; echo $?)
+
+## Whether this is a release candidate (in case of a tagged release)
+%define pre_release %([ "%{tag_release}" -eq 0 ] || {
+                      case "%{shortcommit}" in *-rc[[:digit:]]*%{rparen} false;;
+                      esac; }; echo $?)
 
 ## Whether this is a development branch
 %define post_release %([ %{commit} = Pacemaker-%{shortcommit} ]; echo $?)
 
 ## Turn off auto-compilation of python files outside site-packages directory,
-## so that the -devel package is multilib-compliant
+## so that the -libs-devel package is multilib-compliant (no *.py[co] files)
 %global __os_install_post %(echo '%{__os_install_post}' | {
                             sed -e 's!/usr/lib[^[:space:]]*/brp-python-bytecompile[[:space:]].*$!!g'; })
 
@@ -81,8 +89,8 @@
 
 # Definitions for backward compatibility with older RPM versions
 
-## Ensure %license macro behaves consistently (older RPM will otherwise
-## overwrite %license once it encounters "License:"). Courtesy Jason Tibbitts:
+## Ensure the license macro behaves consistently (older RPM will otherwise
+## overwrite it once it encounters "License:"). Courtesy Jason Tibbitts:
 ## https://pkgs.fedoraproject.org/cgit/rpms/epel-rpm-macros.git/tree/macros.zzz-epel?h=el6&id=e1adcb77
 %if !%{defined _licensedir}
 %define description %{lua:
@@ -90,6 +98,7 @@
     print("%description")
 }
 %endif
+
 
 # Define conditionals so that "rpmbuild --with <feature>" and
 # "rpmbuild --without <feature>" can enable and disable specific features
@@ -116,6 +125,10 @@
 ## Add option to enable CMAN support
 %bcond_with cman
 
+## Add option to turn on SNMP / ESMTP support
+%bcond_with snmp
+%bcond_with esmtp
+
 ## Add option to turn off hardening of libraries and daemon executables
 %bcond_without hardening
 
@@ -130,20 +143,27 @@
 
 
 # Define the release version
-%if %{with pre_release} || 0%{pre_release}
+# (do not look at externally enforced pre-release flag for tagged releases
+# as only -rc tags, captured with the second condition, implies that then)
+%if (!%{tag_release} && %{with pre_release}) || 0%{pre_release}
 %if 0%{pre_release}
 %define pcmk_release 0.%{specversion}.%(s=%{shortcommit}; echo ${s: -3})
 %else
 %define pcmk_release 0.%{specversion}.%{shortcommit}.git
 %endif
 %else
+%if 0%{tag_release}
 %define pcmk_release %{specversion}
+%else
+# Never use the short commit in a RHEL release number
+%define pcmk_release %{specversion}
+%endif
 %endif
 
 Name:          pacemaker
 Summary:       Scalable High-Availability cluster resource manager
 Version:       %{pcmkversion}
-Release:       %{pcmk_release}%{?dist}.8
+Release:       %{pcmk_release}%{?dist}
 %if %{defined _unitdir}
 License:       GPLv2+ and LGPLv2+
 %else
@@ -153,129 +173,26 @@ License:       GPLv2+ and LGPLv2+ and BSD
 Url:           http://www.clusterlabs.org
 Group:         System Environment/Daemons
 
-# eg. https://github.com/ClusterLabs/pacemaker/archive/8ae45302394b039fb098e150f156df29fc0cb576/pacemaker-8ae4530.tar.gz
+# Hint: use "spectool -s 0 pacemaker.spec" (rpmdevtools) to check the final URL:
+# https://github.com/ClusterLabs/pacemaker/archive/e91769e5a39f5cb2f7b097d3c612368f0530535e/pacemaker-e91769e.tar.gz
 Source0:       https://github.com/%{github_owner}/%{name}/archive/%{commit}/%{name}-%{shortcommit}.tar.gz
 Source1:       nagios-agents-metadata-%{nagios_hash}.tar.gz
 
 # upstream commits
-Patch1:         001-crm_report-log-search.patch
-Patch2:         002-crm_diff-no-version.patch
-Patch3:         003-guest-pseudo-fence.patch
-Patch4:         004-null-filename.patch
-Patch5:         005-feature-set.patch
-Patch6:         006-xml-stream.patch
-Patch7:         007-schema.patch
-Patch8:         008-systemd-reloads.patch
-Patch9:         009-dup-stonith.patch
-Patch10:        010-permissions.patch
-Patch11:        011-pe-regression-test.patch
-Patch12:        012-dbus.patch
-Patch13:        013-alert_snmp.patch
-Patch14:        014-dbus.patch
-Patch15:        015-tools-test.patch
-Patch16:        016-waitpid.patch
-Patch17:        017-use-of-null.patch
-Patch18:        018-crm_node-ra.patch
-Patch19:        019-crm_node-ra-tests.patch
-Patch20:        020-libservices.patch
-Patch21:        021-xml-comments.patch
-Patch22:        022-crm_attribute-ra.patch
-Patch23:        023-use-of-null.patch
-Patch24:        024-failcount-clear-fix.patch
-Patch25:        025-pe-test.patch
-Patch26:        026-cts.patch
-Patch27:        027-crm_report-drbd.patch
-Patch28:        028-libservices-memory-issues.patch
-Patch29:        029-stonith-action-param.patch
-Patch30:        030-crm_resource.patch
-Patch31:        031-crm_resource-validate.patch
-Patch32:        032-demote-recovery.patch
-Patch33:        033-logging-spelling.patch
-Patch34:        034-bundle.patch
-Patch35:        035-unmanaged-remotes.patch
-Patch36:        036-glib-compat.patch
-Patch37:        037-clone-detection.patch
-Patch38:        038-clone-handling.patch
-Patch39:        039-bundle-fixes.patch
-Patch40:        040-bundle-control-port.patch
-Patch41:        041-bundle-port-fixes.patch
-Patch42:        042-bundle-internal-port.patch
-Patch43:        043-coverity-happy.patch
-Patch44:        044-bundle-syntax.patch
-Patch45:        045-bundle-logging.patch
-Patch46:        046-bundle-run-command.patch
-Patch47:        047-more-bundle-fixes.patch
-Patch48:        048-bundle-hostname.patch
-Patch49:        049-stonith-max-attempts.patch
-Patch50:        050-stonith-fail-handling.patch
-Patch51:        051-spelling.patch
-Patch52:        052-hotplug-cpus.patch
-Patch53:        053-ipc-eviction.patch
-Patch54:        054-bundles-on-remotes.patch
-Patch55:        055-bundle-interleave.patch
-Patch56:        056-resource-agents-deps.patch
-Patch57:        057-bundle-remote-remotes.patch
-Patch58:        058-guest-cleanup.patch
-Patch59:        059-soname-compat.patch
-Patch60:        060-bundle-remote-fixes.patch
-Patch61:        061-bundle-memory-fix.patch
-Patch62:        062-remote-recovery.patch
-Patch63:        063-empty-remotes.patch
-Patch64:        064-bundle-meta.patch
-Patch65:        065-coverity-cleanup.patch
-Patch66:        066-forward-compat.patch
-Patch67:        067-bundle-constraints.patch
-Patch68:        068-bundle-weight-fix.patch
-Patch69:        069-ipc-refactor.patch
-Patch70:        070-check_positive_number.patch
-Patch71:        071-cluster-ipc-limit.patch
-Patch72:        072-bundle-placement.patch
-Patch73:        073-shutdown-logging.patch
-Patch74:        074-bundle-ordering.patch
-Patch75:        075-bundle-memory.patch
-Patch76:        076-quorum-loss.patch
-Patch77:        077-reenable-fence-device.patch
-Patch78:        078-fencing-memory.patch
-Patch79:        079-crm_report.patch
-Patch80:        080-docker-location.patch
-Patch81:        081-fence-logs.patch
-Patch82:        082-unrecoverable-remotes.patch
-Patch83:        083-unrecoverable-remotes-test.patch
-Patch84:        084-remote-fence-test.patch
-Patch85:        085-remote-fence-test2.patch
-Patch86:        086-nested-containers.patch
-Patch87:        087-nested-containers-test.patch
-Patch88:        088-str-table.patch
-Patch89:        089-unfencing.patch
-Patch90:        090-remote-fence-loop.patch
-Patch91:        091-compat.patch
-Patch92:        092-remote-fencing.patch
-Patch93:        093-bundle-fixes.patch
-Patch94:        094-attrd_updater.patch
-Patch95:        095-attrd-client-leak.patch
-Patch96:        096-digest-leak.patch
-Patch97:        097-bundle-child-flags.patch
-Patch98:        098-cleanup.patch
-Patch99:        099-remote-probe.patch
-Patch100:       100-bundle-fixes.patch
-Patch101:       101-bundle-probes.patch
-Patch102:       102-stop-before-probes.patch
-Patch103:       103-use-of-null.patch
-Patch104:       104-cleanup-wait.patch
-Patch105:       105-refactor.patch
-Patch106:       106-probes.patch
-Patch107:       107-unfencing.patch
-Patch108:       108-bundle-migrate.patch
-Patch109:       109-bundles.patch
-Patch110:       110-bundles.patch
-Patch111:       111-use-of-null.patch
-Patch112:       112-use-of-null.patch
-Patch113:       113-bundles.patch
+Patch1:        001-new-behavior.patch
+Patch2:        002-fixes.patch
+Patch3:        003-cleanup.patch
+Patch4:        004-cleanup.patch
+Patch5:        005-cleanup.patch
+Patch6:        006-leaks.patch
+Patch7:        007-bundles.patch
+Patch8:        008-quorum.patch
+Patch9:        009-crm_resource.patch
+Patch10:       010-crm_master.patch
 
 # patches that aren't from upstream
-Patch200:      lrmd-protocol-version.patch
-Patch201:      rhbz-url.patch
-Patch202:      regression-test-feature-set.patch
+Patch100:      lrmd-protocol-version.patch
+Patch101:      rhbz-url.patch
 
 BuildRoot:     %(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
 AutoReqProv:   on
@@ -291,7 +208,7 @@ Provides:      pcmk-cluster-manager
 %systemd_requires
 %endif
 
-ExclusiveArch: i686 x86_64 ppc64le s390x armv7hl
+ExclusiveArch: i686 x86_64 ppc64le s390x %{arm}
 
 # Pacemaker targets compatibility with python 2.6+ and 3.2+
 Requires:      python >= 2.6
@@ -306,7 +223,9 @@ BuildRequires: coreutils findutils grep sed
 
 # Required for core functionality
 BuildRequires: automake autoconf libtool pkgconfig libtool-ltdl-devel
-BuildRequires: pkgconfig(glib-2.0) libxml2-devel libxslt-devel libuuid-devel
+## version lower bound for: G_GNUC_INTERNAL
+BuildRequires: pkgconfig(glib-2.0) >= 2.6
+BuildRequires: libxml2-devel libxslt-devel libuuid-devel
 BuildRequires: bzip2-devel pam-devel
 
 # Required for agent_config.h which specifies the correct scratch directory
@@ -441,6 +360,7 @@ manager for Corosync, CMAN and/or Linux-HA.
 The %{name}-libs-devel package contains headers and shared libraries
 for developing tools for Pacemaker.
 
+# NOTE: can be noarch if lrmd_test is moved to another subpackage
 %package       cts
 License:       GPLv2+ and LGPLv2+
 Summary:       Test framework for cluster-related technologies like Pacemaker
@@ -451,12 +371,12 @@ Requires:      %{name}-libs = %{version}-%{release}
 # systemd python bindings are separate package in some distros
 %if %{defined systemd_requires}
 
-%if 0%{?fedora} > 20
+%if 0%{?fedora} > 22
+Requires:      python2-systemd
+%else
+%if 0%{?fedora} > 20 || 0%{?rhel} > 6
 Requires:      systemd-python
 %endif
-
-%if 0%{?rhel} > 6
-Requires:      systemd-python
 %endif
 
 %endif
@@ -536,6 +456,8 @@ export LDFLAGS_HARDENED_LIB="%{?_hardening_ldflags}"
         %{?with_profiling:   --with-profiling}     \
         %{?with_coverage:    --with-coverage}      \
         %{!?with_cman:       --without-cman}       \
+        %{!?with_snmp:       --without-snmp}       \
+        %{!?with_esmtp:      --without-esmtp}      \
         --without-heartbeat                        \
         %{!?with_doc:        --with-brand=}        \
         %{!?with_hardening:  --disable-hardening}  \
@@ -941,58 +863,96 @@ exit 0
 %attr(0644,root,root) %{_datadir}/pacemaker/nagios/plugins-metadata/*
 
 %changelog
-* Wed Mar  7 2018 Johnny Hughes <jhughes@centos.org> - 1.1.16-12.8
+* Sat Apr 14 2018 Johnny Hughes <jhughes@centos.org> - 1.1.18-11
 - Added armv7hl to supported arches (centos userland)
 
-* Wed Jan 24 2018 Ken Gaillot <kgaillot@redhat.com> - 1.1.16-12.8
+* Fri Jan 26 2018 Ken Gaillot <kgaillot@redhat.com> - 1.1.18-11
+- Fix regression in crm_master
+- Resolves: rhbz#1539113
+
+* Wed Jan 24 2018 Ken Gaillot <kgaillot@redhat.com> - 1.1.18-10
+- Always trigger transition when quorum changes
+- Match clone names correctly with crm_resource --cleanup
 - Fix pcs resource --wait timeout when bundles are used
 - Observe colocation constraints correctly with bundles in master role
-- Resolves: rhbz#1520798
-- Resolves: rhbz#1537557
+- Resolves: rhbz#1464068
+- Resolves: rhbz#1508350
+- Resolves: rhbz#1519812
+- Resolves: rhbz#1527072
 
-* Tue Jan 2 2018 Ken Gaillot <kgaillot@redhat.com> - 1.1.16-12.7
-- Fix use-of-NULL memory issues
-- Resolves: rhbz#1527810
+* Mon Dec 18 2017 Ken Gaillot <kgaillot@redhat.com> - 1.1.18-9
+- Fix small memory leak introduced by node attribute delay fix
+- Resolves: rhbz#1454960
 
-* Wed Dec 20 2017 Ken Gaillot <kgaillot@redhat.com> - 1.1.16-12.6
-- Fix unfencing regression
-- Prevent invalid transition with bundles
-- Resolves: rhbz#1524828
-- Resolves: rhbz#1527810
+* Tue Dec 12 2017 Ken Gaillot <kgaillot@redhat.com> - 1.1.18-8
+- Regression fix for "pcs resource cleanup" was incomplete
+- Resolves: rhbz#1508350
 
-* Mon Nov 13 2017 Ken Gaillot <kgaillot@redhat.com> - 1.1.16-12.5
-- Fix multiple issues with bundle resources
-- Handle clean-ups of primitive within bundle properly
-- Resolves: rhbz#1509871
-- Resolves: rhbz#1509874
+* Mon Dec 11 2017 Ken Gaillot <kgaillot@redhat.com> - 1.1.18-7
+- Avoid node attribute write delay when corosync.conf has only IP addresses
+- Fix regressions in "pcs resource cleanup" behavior
+- Restore ordering of unfencing before fence device starts
+- Ensure --wait options work when bundles are in use
+- Fix possible invalid transition with bundle ordering constraints
+- Resolves: rhbz#1454960
+- Resolves: rhbz#1508350
+- Resolves: rhbz#1517796
+- Resolves: rhbz#1519812
+- Resolves: rhbz#1522822
 
-* Mon Oct 2 2017 Ken Gaillot <kgaillot@redhat.com> - 1.1.16-12.4
-- Avoid memory leak when unfencing is needed
-- Resolves: rhbz#1491544
+* Wed Nov 15 2017 Ken Gaillot <kgaillot@redhat.com> - 1.1.18-6
+- Rebase to upstream 2b07d5c5a908998891c3317faa30328c108d3a91 (1.1.18)
+- If on-fail=ignore, migration-threshold should also be ignored
+- Resolves: rhbz#1474428
+- Resolves: rhbz#1507344
 
-* Mon Oct 2 2017 Ken Gaillot <kgaillot@redhat.com> - 1.1.16-12.3
-- Allow unfencing of remote nodes
-- Support clone notifications for bundle resources
-- Support colocation constraints involving bundles
-- Support container-attribute-target resource meta-attribute
-- Resolves: rhbz#1491544
-- Resolves: rhbz#1497602
+* Fri Nov 3 2017 Ken Gaillot <kgaillot@redhat.com> - 1.1.18-5
+- Properly clean up primitive inside bundle
+- Scalability improvements
+- Resolves: rhbz#1499217
+- Resolves: rhbz#1508373
 
-* Fri Aug 18 2017 Ken Gaillot <kgaillot@redhat.com> - 1.1.16-12.2
-- Allow crm_report to work when no log files are specified
-- Resolves: rhbz#1482852
+* Fri Nov 3 2017 Ken Gaillot <kgaillot@redhat.com> - 1.1.18-4
+- Rebase to upstream 1a4ef7d180e77bcd6423f342d62e05e516c4e852 (1.1.18-rc4)
+- Resolves: rhbz#1381754
+- Resolves: rhbz#1474428
+- Resolves: rhbz#1499217
+- Resolves: rhbz#1508373
 
-* Tue Aug 15 2017 Ken Gaillot <kgaillot@redhat.com> - 1.1.16-12.1
-- Add cluster-ipc-limit option to avoid CIB eviction in large clusters
-- Implement ordering constraints involving bundles
-- Always re-check resource placement after quorum loss
-- Avoid stonithd crash when disabling fence device with queued actions
-- Allow re-enabled fence devices to be used
-- Resolves: rhbz#1478298
-- Resolves: rhbz#1481139
-- Resolves: rhbz#1481140
-- Resolves: rhbz#1481141
-- Resolves: rhbz#1481142
+* Tue Oct 24 2017 Ken Gaillot <kgaillot@redhat.com> - 1.1.18-3
+- Rebase to upstream 36d2962a8613322fc43d727d95720d61a47d0138 (1.1.18-rc3)
+- Resolves: rhbz#1474428
+
+* Mon Oct 16 2017 Ken Gaillot <kgaillot@redhat.com> - 1.1.18-2
+- Rebase to upstream 5cccc41c95d6288eab27d93901b650b071f976dc (1.1.18-rc2)
+- Default record-pending to true
+- Resolves: rhbz#1323546
+- Resolves: rhbz#1376556
+- Resolves: rhbz#1382364
+- Resolves: rhbz#1461976
+- Resolves: rhbz#1474428
+- Resolves: rhbz#1500509
+- Resolves: rhbz#1501903
+- Resolves: rhbz#1501924
+
+* Mon Oct 9 2017 Ken Gaillot <kgaillot@redhat.com> - 1.1.18-1
+- Rebase to upstream 1cb712c5369c98f03d42bcf8648cacd86a5f48f7 (1.1.18-rc1)
+- Resolves: rhbz#1298581
+- Resolves: rhbz#1394418
+- Resolves: rhbz#1427648
+- Resolves: rhbz#1454933
+- Resolves: rhbz#1454957
+- Resolves: rhbz#1454960
+- Resolves: rhbz#1462253
+- Resolves: rhbz#1464068
+- Resolves: rhbz#1465519
+- Resolves: rhbz#1470262
+- Resolves: rhbz#1471506
+- Resolves: rhbz#1474428
+- Resolves: rhbz#1474463
+- Resolves: rhbz#1482278
+- Resolves: rhbz#1489728
+- Resolves: rhbz#1489735
 
 * Tue Jun 20 2017 Ken Gaillot <kgaillot@redhat.com> - 1.1.16-12
 - Avoid unnecessary restarts when recovering remote connections

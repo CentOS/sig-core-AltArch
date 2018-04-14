@@ -4,8 +4,8 @@
 #   python2-clufter -> python-clufter
 
 Name:           clufter
-Version:        0.76.0
-Release:        1%{?dist}
+Version:        0.77.0
+Release:        2%{?dist}
 Group:          System Environment/Base
 Summary:        Tool/library for transforming/analyzing cluster configuration formats
 License:        GPLv2+
@@ -39,6 +39,7 @@ Source0:        https://people.redhat.com/jpokorny/pkgs/%{name}/%{name}-%{versio
 Source1:        https://people.redhat.com/jpokorny/pkgs/%{name}/%{name}-%{testver}-tests.tar.xz
 Source2:        https://pagure.io/%{name}/raw/v%{version}/f/misc/fix-jing-simplified-rng.xsl
 Source3:        https://pagure.io/%{name}/raw/v%{version}/f/misc/pacemaker-borrow-schemas
+Patch0:         https://pagure.io/clufter/c/a75e1456f11725b7a58bc81148a6d6403b2530d2.patch
 
 # for pacemaker BuildRequires dependency
 %if 0%{?rhel} > 0
@@ -153,7 +154,14 @@ configuration: either experimental commands or internally unused, reusable
 formats and filters.
 
 %prep
-%autosetup -p1 -S git -b 1
+%setup -b 1
+#XXX cannot patch ccs-flatten this way
+pushd %{name} >/dev/null
+%global __scm git_am
+%{expand:%__scm_setup_%{__scm}}
+%{__git} config core.whitespace -blank-at-eol
+%autopatch -p1
+popd >/dev/null
 
 %if "%{testver}" != "%{version}"
     %{__cp} -a ../"%{name}-%{testver}"/* .
@@ -350,13 +358,20 @@ test -x '%{_bindir}/%{name}' && test -f "${bashcomp}" \
 %{_datarootdir}/%{name}/ext-plugins/lib-pcs
 
 %changelog
-* Tue Mar 06 2018 Fabian Arrotin <arrfab@centos.org> - 0.76.0-1
+* Sat Apr 14 2018 Fabian Arrotin <arrfab@centos.org> - 0.77.0-2
 - Added %{arm} to supported arches to allow building for c7 armhfp
+
+* Fri Dec 01 2017 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.77.0-2
+- fix nodelist.node.name configuration option (originaly devised by pacemaker)
+  not supported in corosync.conf with the built-in validation schema
+  [rhbz#1517834]
+
+* Fri Nov 10 2017 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.77.0-1
+- bump upstream package, see https://pagure.io/clufter/releases
 
 * Tue Jun 06 2017 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.76.0-1
 - factor "borrow validation schemas from pacemaker" out to a separate script
 - bump upstream package, see https://pagure.io/clufter/releases
-
 
 * Fri May 26 2017 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.75.0-1
 - move nano fallback editor dependency to -cli package [PGissue#1]

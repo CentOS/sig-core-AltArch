@@ -1,0 +1,217 @@
+From 8af39f66e56e319b6b93804c0400e6e29737a90f Mon Sep 17 00:00:00 2001
+From: Jan Friesse <jfriesse@redhat.com>
+Date: Mon, 22 Jan 2018 10:42:25 +0100
+Subject: [PATCH] logging: Make blackbox configurable
+
+Signed-off-by: Jan Friesse <jfriesse@redhat.com>
+Reviewed-by: Christine Caulfield <ccaulfie@redhat.com>
+(cherry picked from commit 79dba9c51f60c603673f97afd07fa506fd9ae9a7)
+---
+ exec/logconfig.c          |   40 +++++++++++++++++++++++++++++++++++++++-
+ exec/logsys.c             |   44 ++++++++++++++++++++++++++++++++++----------
+ exec/main.c               |    1 +
+ include/corosync/logsys.h |    2 ++
+ man/corosync.conf.5       |    6 ++++++
+ 5 files changed, 82 insertions(+), 11 deletions(-)
+
+diff --git a/exec/logconfig.c b/exec/logconfig.c
+index 6d0bed6..ccbffae 100644
+--- a/exec/logconfig.c
++++ b/exec/logconfig.c
+@@ -127,7 +127,7 @@ static int insert_into_buffer(
+ }
+ 
+ /*
+- * format set is the only global specific option that
++ * format set is global specific option that
+  * doesn't apply at system/subsystem level.
+  */
+ static int corosync_main_config_format_set (
+@@ -228,6 +228,40 @@ parse_error:
+ 	return (-1);
+ }
+ 
++/*
++ * blackbox is another global specific option that
++ * doesn't apply at system/subsystem level.
++ */
++static int corosync_main_config_blackbox_set (
++	const char **error_string)
++{
++	const char *error_reason;
++	char *value = NULL;
++
++	if (map_get_string("logging.blackbox", &value) == CS_OK) {
++		if (strcmp (value, "on") == 0) {
++			(void)logsys_blackbox_set(QB_TRUE);
++		} else if (strcmp (value, "off") == 0) {
++			(void)logsys_blackbox_set(QB_FALSE);
++		} else {
++			error_reason = "unknown value for blackbox";
++			free(value);
++			goto parse_error;
++		}
++
++		free(value);
++	} else {
++		(void)logsys_blackbox_set(QB_TRUE);
++	}
++
++	return (0);
++
++parse_error:
++	*error_string = error_reason;
++
++	return (-1);
++}
++
+ static int corosync_main_config_log_destination_set (
+ 	const char *path,
+ 	const char *key,
+@@ -522,6 +556,10 @@ static int corosync_main_config_read_logging (
+ 		goto parse_error;
+ 	}
+ 
++	if (corosync_main_config_blackbox_set(&error_reason) < 0) {
++		goto parse_error;
++	}
++
+ 	if (corosync_main_config_set ("logging", NULL, &error_reason) < 0) {
+ 		goto parse_error;
+ 	}
+diff --git a/exec/logsys.c b/exec/logsys.c
+index 6b4995d..a38cc5e 100644
+--- a/exec/logsys.c
++++ b/exec/logsys.c
+@@ -119,6 +119,8 @@ static char *format_buffer=NULL;
+ 
+ static int logsys_thread_started = 0;
+ 
++static int logsys_blackbox_enabled = 1;
++
+ static int _logsys_config_subsys_get_unlocked (const char *subsys)
+ {
+ 	unsigned int i;
+@@ -309,7 +311,6 @@ int _logsys_system_setup(
+ 	int i;
+ 	int32_t fidx;
+ 	char tempsubsys[LOGSYS_MAX_SUBSYS_NAMELEN];
+-	int blackbox_enable_res;
+ 
+ 	if ((mainsystem == NULL) ||
+ 	    (strlen(mainsystem) >= LOGSYS_MAX_SUBSYS_NAMELEN)) {
+@@ -371,7 +372,12 @@ int _logsys_system_setup(
+ 			  QB_LOG_FILTER_FILE, "*", LOG_TRACE);
+ 	qb_log_ctl(QB_LOG_BLACKBOX, QB_LOG_CONF_SIZE, IPC_LOGSYS_SIZE);
+ 	qb_log_ctl(QB_LOG_BLACKBOX, QB_LOG_CONF_THREADED, QB_FALSE);
+-	blackbox_enable_res = qb_log_ctl(QB_LOG_BLACKBOX, QB_LOG_CONF_ENABLED, QB_TRUE);
++
++	/*
++	 * Blackbox is disabled at the init and enabled later based
++	 * on config (logging.blackbox) value.
++	 */
++	qb_log_ctl(QB_LOG_BLACKBOX, QB_LOG_CONF_ENABLED, QB_FALSE);
+ 
+ 	if (logsys_format_set(NULL) == -1) {
+ 		return -1;
+@@ -397,14 +403,6 @@ int _logsys_system_setup(
+ 		}
+ 	}
+ 
+-	if (blackbox_enable_res < 0) {
+-		LOGSYS_PERROR (-blackbox_enable_res, LOGSYS_LEVEL_WARNING,
+-		    "Unable to initialize log flight recorder. "\
+-		    "The most common cause of this error is " \
+-		    "not enough space on /dev/shm. Corosync will continue work, " \
+-		    "but blackbox will not be available");
+-	}
+-
+ 	pthread_mutex_unlock (&logsys_config_mutex);
+ 
+ 	return (0);
+@@ -767,10 +765,26 @@ static void _logsys_config_apply_per_subsys(int32_t s)
+ 	logsys_loggers[s].dirty = QB_FALSE;
+ }
+ 
++static void _logsys_config_apply_blackbox(void) {
++	int blackbox_enable_res;
++
++	blackbox_enable_res = qb_log_ctl(QB_LOG_BLACKBOX, QB_LOG_CONF_ENABLED, logsys_blackbox_enabled);
++
++	if (blackbox_enable_res < 0) {
++		LOGSYS_PERROR (-blackbox_enable_res, LOGSYS_LEVEL_WARNING,
++		    "Unable to initialize log flight recorder. "\
++		    "The most common cause of this error is " \
++		    "not enough space on /dev/shm. Corosync will continue work, " \
++		    "but blackbox will not be available");
++	}
++}
++
+ void logsys_config_apply(void)
+ {
+ 	int32_t s;
+ 
++	_logsys_config_apply_blackbox();
++
+ 	for (s = 0; s <= LOGSYS_MAX_SUBSYS_COUNT; s++) {
+ 		if (strcmp(logsys_loggers[s].subsys, "") == 0) {
+ 			continue;
+@@ -838,3 +852,13 @@ int logsys_thread_start (void)
+ 
+ 	return (0);
+ }
++
++void logsys_blackbox_set(int enable)
++{
++
++	pthread_mutex_lock (&logsys_config_mutex);
++
++	logsys_blackbox_enabled = enable;
++
++	pthread_mutex_unlock (&logsys_config_mutex);
++}
+diff --git a/exec/main.c b/exec/main.c
+index 7fe24e2..cd587dc 100644
+--- a/exec/main.c
++++ b/exec/main.c
+@@ -220,6 +220,7 @@ static void corosync_blackbox_write_to_file (void)
+ 
+ 	if ((res = qb_log_blackbox_write_to_file(fname)) < 0) {
+ 		LOGSYS_PERROR(-res, LOGSYS_LEVEL_ERROR, "Can't store blackbox file");
++		return ;
+ 	}
+ 	snprintf(fdata_fname, sizeof(fdata_fname), "%s/fdata", get_run_dir());
+ 	unlink(fdata_fname);
+diff --git a/include/corosync/logsys.h b/include/corosync/logsys.h
+index 0b2fbff..ec38d2c 100644
+--- a/include/corosync/logsys.h
++++ b/include/corosync/logsys.h
+@@ -256,6 +256,8 @@ extern int _logsys_subsys_create (const char *subsys, const char *filename);
+  */
+ extern int logsys_thread_start (void);
+ 
++extern void logsys_blackbox_set(int enable);
++
+ /**
+  * @brief logsys_subsys_id
+  */
+diff --git a/man/corosync.conf.5 b/man/corosync.conf.5
+index 0639028..68103d0 100644
+--- a/man/corosync.conf.5
++++ b/man/corosync.conf.5
+@@ -539,6 +539,12 @@ This specifies that the code function name should be printed.
+ 
+ The default is off.
+ 
++.TP
++blackbox
++This specifies that blackbox functionality should be enabled.
++
++The defualt is on.
++
+ .PP
+ The following options are valid both for top level logging directive
+ and they can be overridden in logger_subsys entries.
+-- 
+1.7.1
+
