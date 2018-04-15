@@ -1,0 +1,109 @@
+From 2b3b5bfcd5f4161d17c0bc3d43f6edcfc4a2b294 Mon Sep 17 00:00:00 2001
+From: Nicolas Looss <nicolas.iooss@m4x.org>
+Date: Sat, 4 Jan 2014 03:03:51 +0000
+Subject: [PATCH] copy: fix a segfault in SELinux context copying code
+
+* src/selinux.c (restorecon_private): On ArchLinux the
+`fakeroot cp -a file1 file2` command segfaulted due
+to getfscreatecon() returning a NULL context.
+So map this to the sometimes ignored ENODATA error,
+rather than crashing.
+* tests/cp/no-ctx.sh: Add a new test case.
+* tests/local.mk: Reference the new test.
+---
+ src/selinux.c      |    5 ++++
+ tests/cp/no-ctx.sh |   53 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ tests/local.mk     |    1 +
+ 3 files changed, 59 insertions(+), 0 deletions(-)
+ create mode 100755 tests/cp/no-ctx.sh
+
+diff --git a/src/selinux.c b/src/selinux.c
+index cd38a81..016db16 100644
+--- a/src/selinux.c
++++ b/src/selinux.c
+@@ -192,6 +192,11 @@ restorecon_private (char const *path, bool local)
+     {
+       if (getfscreatecon (&tcon) < 0)
+         return rc;
++      if (!tcon)
++        {
++          errno = ENODATA;
++          return rc;
++        }
+       rc = lsetfilecon (path, tcon);
+       freecon (tcon);
+       return rc;
+diff --git a/tests/cp/no-ctx.sh b/tests/cp/no-ctx.sh
+new file mode 100755
+index 0000000..59d30de
+--- /dev/null
++++ b/tests/cp/no-ctx.sh
+@@ -0,0 +1,53 @@
++#!/bin/sh
++# Ensure we handle file systems returning no SELinux context,
++# which triggered a segmentation fault in coreutils-8.22.
++# This test is skipped on systems that lack LD_PRELOAD support; that's fine.
++# Similarly, on a system that lacks lgetfilecon altogether, skipping it is fine.
++
++# Copyright (C) 2014 Free Software Foundation, Inc.
++
++# This program is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++. "${srcdir=.}/tests/init.sh"; path_prepend_ ./src
++print_ver_ cp
++require_gcc_shared_
++
++# Replace each getfilecon and lgetfilecon call with a call to these stubs.
++cat > k.c <<'EOF' || skip_
++#include <selinux/selinux.h>
++#include <errno.h>
++
++int getfilecon (const char *path, security_context_t *con)
++{ errno=ENODATA; return -1; }
++int lgetfilecon (const char *path, security_context_t *con)
++{ errno=ENODATA; return -1; }
++EOF
++
++# Then compile/link it:
++$CC -shared -fPIC -O2 k.c -o k.so \
++  || skip_ 'failed to build SELinux shared library'
++
++touch file_src
++
++# New file with SELinux context optionally included
++LD_PRELOAD=./k.so cp -a file_src file_dst || fail=1
++
++# Existing file with SELinux context optionally included
++LD_PRELOAD=./k.so cp -a file_src file_dst || fail=1
++
++# ENODATA should give an immediate error when required to preserve ctx
++# This is debatable, and maybe we should not fail when no context available?
++LD_PRELOAD=./k.so cp --preserve=context file_src file_dst && fail=1
++
++Exit $fail
+diff --git a/tests/local.mk b/tests/local.mk
+index dc7341c..9d556f6 100644
+--- a/tests/local.mk
++++ b/tests/local.mk
+@@ -161,6 +161,7 @@ all_tests =					\
+   tests/rm/ext3-perf.sh				\
+   tests/rm/cycle.sh				\
+   tests/cp/link-heap.sh				\
++  tests/cp/no-ctx.sh				\
+   tests/misc/tty-eof.pl				\
+   tests/tail-2/inotify-hash-abuse.sh		\
+   tests/tail-2/inotify-hash-abuse2.sh		\
+-- 
+1.7.7.6
+

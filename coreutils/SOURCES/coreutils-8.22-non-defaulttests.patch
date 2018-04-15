@@ -1,0 +1,267 @@
+diff -urNp coreutils-8.22-orig/tests/cp/cp-a-selinux.sh coreutils-8.22/tests/cp/cp-a-selinux.sh
+--- coreutils-8.22-orig/tests/cp/cp-a-selinux.sh	2013-12-04 15:48:30.000000000 +0100
++++ coreutils-8.22/tests/cp/cp-a-selinux.sh	2015-08-17 13:59:27.837012142 +0200
+@@ -4,7 +4,7 @@
+ # Check also locally if --preserve=context, -a and --preserve=all
+ # does work
+ 
+-# Copyright (C) 2007-2013 Free Software Foundation, Inc.
++# Copyright (C) 2007-2015 Free Software Foundation, Inc.
+ 
+ # This program is free software: you can redistribute it and/or modify
+ # it under the terms of the GNU General Public License as published by
+@@ -37,16 +37,36 @@ cp -a c d 2>err || framework_failure_
+ cp --preserve=context c e || framework_failure_
+ cp --preserve=all c f || framework_failure_
+ ls -Z d | grep $ctx || fail=1
+-test -s err && fail=1   #there must be no stderr output for -a
++# there must be no stderr output for -a
++compare /dev/null err || fail=1
+ ls -Z e | grep $ctx || fail=1
+ ls -Z f | grep $ctx || fail=1
++rm -f f
++
++# Check handling of existing dirs which requires specific handling
++# due to recursion, and was handled incorrectly in coreutils-8.22
++# Note standard permissions are updated for existing directories
++# in the destination, so SELinux contexts should be updated too.
++chmod o+rw restore/existing_dir
++mkdir -p backup/existing_dir/ || framework_failure_
++ls -Zd backup/existing_dir > ed_ctx || fail=1
++grep $ctx ed_ctx && framework_failure_
++touch backup/existing_dir/file || framework_failure_
++chcon $ctx backup/existing_dir/file || framework_failure_
++# Set the dir context to ensure it is reset
++mkdir -p --context="$ctx" restore/existing_dir || framework_failure_
++# Copy and ensure existing directories updated
++cp -a backup/. restore/
++ls -Zd restore/existing_dir > ed_ctx || fail=1
++grep $ctx ed_ctx &&
++  { ls -lZd restore/existing_dir; fail=1; }
+ 
+ # Check restorecon (-Z) functionality for file and directory
+ get_selinux_type() { ls -Zd "$1" | sed -n 's/.*:\(.*_t\):.*/\1/p'; }
+ # Also make a dir with our known context
+ mkdir c_d || framework_failure_
+ chcon $ctx c_d || framework_failure_
+-# Get the type of this known context for file and dir
++# Get the type of this known context for file and dir for tracing
+ old_type_f=$(get_selinux_type c)
+ old_type_d=$(get_selinux_type c_d)
+ # Setup copies for manipulation with restorecon
+@@ -62,7 +82,7 @@ if restorecon Z1 Z1_d 2>/dev/null; then
+   cpZ_type_f=$(get_selinux_type Z2)
+   test "$cpZ_type_f" = "$new_type_f" || fail=1
+ 
+-  # Ensuze -Z overrides -a and that dirs are handled too
++  # Ensure -Z overrides -a and that dirs are handled too
+   cp -aZ c Z3 || fail=1
+   cp -aZ c_d Z3_d || fail=1
+   cpaZ_type_f=$(get_selinux_type Z3)
+@@ -93,27 +113,30 @@ test $skip = 1 \
+ 
+ cd mnt                                       || framework_failure_
+ 
+-echo > f                                     || framework_failure_
+-
++# Create files with hopefully different contexts
++echo > ../f                                  || framework_failure_
+ echo > g                                     || framework_failure_
++test "$(stat -c%C ../f)" = "$(stat -c%C g)" &&
++  skip_ "files on separate file systems have the same security context"
++
+ # /bin/cp from coreutils-6.7-3.fc7 would fail this test by letting cp
+ # succeed (giving no diagnostics), yet leaving the destination file empty.
+-cp -a f g 2>err || fail=1
++cp -a ../f g 2>err || fail=1
+ test -s g       || fail=1     # The destination file must not be empty.
+-test -s err     && fail=1     # There must be no stderr output.
++compare /dev/null err || fail=1
+ 
+ # =====================================================
+ # Here, we expect cp to succeed and not warn with "Operation not supported"
+ rm -f g
+ echo > g
+-cp --preserve=all f g 2>err || fail=1
++cp --preserve=all ../f g 2>err || fail=1
+ test -s g || fail=1
+ grep "Operation not supported" err && fail=1
+ 
+ # =====================================================
+ # The same as above except destination does not exist
+ rm -f g
+-cp --preserve=all f g 2>err || fail=1
++cp --preserve=all ../f g 2>err || fail=1
+ test -s g || fail=1
+ grep "Operation not supported" err && fail=1
+ 
+@@ -133,9 +156,9 @@ echo > g
+ # =====================================================
+ # Here, we expect cp to fail, because it cannot set the SELinux
+ # security context through NFS or a mount with fixed context.
+-cp --preserve=context f g 2> out && fail=1
++cp --preserve=context ../f g 2> out && fail=1
+ # Here, we *do* expect the destination to be empty.
+-test -s g && fail=1
++compare /dev/null g || fail=1
+ sed "s/ .g'.*//" out > k
+ mv k out
+ compare exp out || fail=1
+@@ -143,9 +166,9 @@ compare exp out || fail=1
+ rm -f g
+ echo > g
+ # Check if -a option doesn't silence --preserve=context option diagnostics
+-cp -a --preserve=context f g 2> out2 && fail=1
++cp -a --preserve=context ../f g 2> out2 && fail=1
+ # Here, we *do* expect the destination to be empty.
+-test -s g && fail=1
++compare /dev/null g || fail=1
+ sed "s/ .g'.*//" out2 > k
+ mv k out2
+ compare exp out2 || fail=1
+@@ -154,31 +177,33 @@ for no_g_cmd in '' 'rm -f g'; do
+   # restorecon equivalent.  Note even though the context
+   # returned from matchpathcon() will not match $ctx
+   # the resulting ENOTSUP warning will be suppressed.
++
+    # With absolute path
+   $no_g_cmd
+-  cp -Z f $(realpath g) || fail=1
++  cp -Z ../f $(realpath g) || fail=1
+    # With relative path
+   $no_g_cmd
+-  cp -Z f g || fail=1
++  cp -Z ../f g || fail=1
+    # -Z overrides -a
+   $no_g_cmd
+-  cp -Z -a f g || fail=1
++  cp -Z -a ../f g || fail=1
+    # -Z doesn't take an arg
+   $no_g_cmd
+-  cp -Z "$ctx" f g && fail=1
++  returns_ 1 cp -Z "$ctx" ../f g || fail=1
+ 
+   # Explicit context
+   $no_g_cmd
+    # Explicitly defaulting to the global $ctx should work
+-  cp --context="$ctx" f g || fail=1
++  cp --context="$ctx" ../f g || fail=1
+    # --context overrides -a
+   $no_g_cmd
+-  cp -a --context="$ctx" f g || fail=1
++  cp -a --context="$ctx" ../f g || fail=1
+ done
+ 
+-# Mutually exlusive options
+-cp -Z --preserve=context f g && fail=1
+-cp --preserve=context -Z f g && fail=1
+-cp --preserve=context --context="$ctx" f g && fail=1
++# Mutually exclusive options
++returns_ 1 cp -Z --preserve=context ../f g || fail=1
++returns_ 1 cp --preserve=context -Z ../f g || fail=1
++returns_ 1 cp --preserve=context --context="$ctx" ../f g || fail=1
+ 
+ Exit $fail
++
+diff -urNp coreutils-8.22-orig/tests/du/2g.sh coreutils-8.22/tests/du/2g.sh
+--- coreutils-8.22-orig/tests/du/2g.sh	2013-12-04 15:48:30.000000000 +0100
++++ coreutils-8.22/tests/du/2g.sh	2015-08-17 13:59:37.349088611 +0200
+@@ -3,7 +3,7 @@
+ # Before coreutils-5.93, on systems with a signed, 32-bit stat.st_blocks
+ # one of du's computations would overflow.
+ 
+-# Copyright (C) 2005-2013 Free Software Foundation, Inc.
++# Copyright (C) 2005-2015 Free Software Foundation, Inc.
+ 
+ # This program is free software: you can redistribute it and/or modify
+ # it under the terms of the GNU General Public License as published by
+@@ -24,13 +24,9 @@ print_ver_ du
+ # Creating a 2GB file counts as 'very expensive'.
+ very_expensive_
+ 
+-
+ # Get number of free kilobytes on current partition, so we can
+ # skip this test if there is insufficient free space.
+-
+-# This technique relies on the fact that the 'Available' kilobyte
+-# count is the number just before the one with a trailing '%'.
+-free_kb=$(df -kP .|tail -1|sed 's/ [0-9][0-9]*%.*//;s/ *$//;s/.* //')
++free_kb=$(df -k --output=avail . | tail -n1)
+ case "$free_kb" in
+   [0-9]*) ;;
+   *) skip_ "invalid size from df: $free_kb";;
+@@ -45,16 +41,22 @@ test $min_kb -lt $free_kb ||
+ }
+ 
+ big=big
+-rm -f $big
+-test -t 1 || printf 'creating a 2GB file...\n'
+-for i in $(seq 100); do
+-  # Note: 2147483648 == 2^31. Print floor(2^31/100) per iteration.
+-  printf %21474836s x >> $big || fail=1
+-  # On the final iteration, append the remaining 48 bytes.
+-  test $i = 100 && { printf %48s x >> $big || fail=1; }
+-  test -t 1 && printf 'creating a 2GB file: %d%% complete\r' $i
+-done
+-echo
++
++if ! fallocate -l2G $big; then
++  rm -f $big
++  {
++    is_local_dir_ . || skip 'Not writing 2GB data to remote'
++    for i in $(seq 100); do
++      # Note: 2147483648 == 2^31. Print floor(2^31/100) per iteration.
++      printf %21474836s x || fail=1
++    done
++    # After the final iteration, append the remaining 48 bytes.
++    printf %48s x || fail=1
++  } > $big || fail=1
++fi
++
++# The allocation may be done asynchronously (BTRFS for example)
++sync $big || framework_failure_
+ 
+ du -k $big > out1 || fail=1
+ rm -f $big
+diff -urNp coreutils-8.22-orig/tests/init.sh coreutils-8.22/tests/init.sh
+--- coreutils-8.22-orig/tests/init.sh	2013-12-04 15:48:30.000000000 +0100
++++ coreutils-8.22/tests/init.sh	2015-08-17 13:59:19.900948318 +0200
+@@ -93,6 +93,27 @@ skip_ () { warn_ "$ME_: skipped test: $@
+ fatal_ () { warn_ "$ME_: hard error: $@"; Exit 99; }
+ framework_failure_ () { warn_ "$ME_: set-up failure: $@"; Exit 99; }
+ 
++# This is used to simplify checking of the return value
++# which is useful when ensuring a command fails as desired.
++# I.e., just doing `command ... &&fail=1` will not catch
++# a segfault in command for example.  With this helper you
++# instead check an explicit exit code like
++#   returns_ 1 command ... || fail
++returns_ () {
++  # Disable tracing so it doesn't interfere with stderr of the wrapped command
++  { set +x; } 2>/dev/null
++
++  local exp_exit="$1"
++  shift
++  "$@"
++  test $? -eq $exp_exit && ret_=0 || ret_=1
++
++  if test "$VERBOSE" = yes && test "$gl_set_x_corrupts_stderr_" = false; then
++    set -x
++  fi
++  { return $ret_; } 2>/dev/null
++}
++
+ # Sanitize this shell to POSIX mode, if possible.
+ DUALCASE=1; export DUALCASE
+ if test -n "${ZSH_VERSION+set}" && (emulate sh) >/dev/null 2>&1; then
+diff -urNp coreutils-8.22-orig/tests/local.mk coreutils-8.22/tests/local.mk
+--- coreutils-8.22-orig/tests/local.mk	2015-08-17 12:44:49.343344148 +0200
++++ coreutils-8.22/tests/local.mk	2015-08-17 13:59:12.124885835 +0200
+@@ -121,7 +121,6 @@ all_root_tests =				\
+   tests/install/install-C-root.sh		\
+   tests/ls/capability.sh			\
+   tests/ls/nameless-uid.sh			\
+-  tests/misc/chcon.sh				\
+   tests/misc/chroot-credentials.sh		\
+   tests/misc/selinux.sh				\
+   tests/misc/truncate-owned-by-other.sh		\

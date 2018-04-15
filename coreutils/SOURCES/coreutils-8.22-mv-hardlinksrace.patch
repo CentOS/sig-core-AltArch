@@ -1,0 +1,365 @@
+diff -urNp coreutils-8.22-orig/src/copy.c coreutils-8.22/src/copy.c
+--- coreutils-8.22-orig/src/copy.c	2015-07-03 14:42:56.829772551 +0200
++++ coreutils-8.22/src/copy.c	2015-07-03 14:51:05.371383675 +0200
+@@ -1292,20 +1292,12 @@ close_src_desc:
+    copy a regular file onto a symlink that points to it.
+    Try to minimize the cost of this function in the common case.
+    Set *RETURN_NOW if we've determined that the caller has no more
+-   work to do and should return successfully, right away.
+-
+-   Set *UNLINK_SRC if we've determined that the caller wants to do
+-   'rename (a, b)' where 'a' and 'b' are distinct hard links to the same
+-   file. In that case, the caller should try to unlink 'a' and then return
+-   successfully.  Ideally, we wouldn't have to do that, and we'd be
+-   able to rely on rename to remove the source file.  However, POSIX
+-   mistakenly requires that such a rename call do *nothing* and return
+-   successfully.  */
++   work to do and should return successfully, right away.  */
+ 
+ static bool
+ same_file_ok (char const *src_name, struct stat const *src_sb,
+               char const *dst_name, struct stat const *dst_sb,
+-              const struct cp_options *x, bool *return_now, bool *unlink_src)
++              const struct cp_options *x, bool *return_now)
+ {
+   const struct stat *src_sb_link;
+   const struct stat *dst_sb_link;
+@@ -1316,7 +1308,6 @@ same_file_ok (char const *src_name, stru
+   bool same = SAME_INODE (*src_sb, *dst_sb);
+ 
+   *return_now = false;
+-  *unlink_src = false;
+ 
+   /* FIXME: this should (at the very least) be moved into the following
+      if-block.  More likely, it should be removed, because it inhibits
+@@ -1348,14 +1339,11 @@ same_file_ok (char const *src_name, stru
+               /* Here we have two symlinks that are hard-linked together,
+                  and we're not making backups.  In this unusual case, simply
+                  returning true would lead to mv calling "rename(A,B)",
+-                 which would do nothing and return 0.  I.e., A would
+-                 not be removed.  Hence, the solution is to tell the
+-                 caller that all it must do is unlink A and return.  */
++                 which would do nothing and return 0.  */
+               if (same_link)
+                 {
+-                  *unlink_src = true;
+                   *return_now = true;
+-                  return true;
++                  return ! x->move_mode;
+                 }
+             }
+ 
+@@ -1443,26 +1431,22 @@ same_file_ok (char const *src_name, stru
+     return true;
+ #endif
+ 
+-  /* They may refer to the same file if we're in move mode and the
+-     target is a symlink.  That is ok, since we remove any existing
+-     destination file before opening it -- via 'rename' if they're on
+-     the same file system, via 'unlink (DST_NAME)' otherwise.
+-     It's also ok if they're distinct hard links to the same file.  */
+   if (x->move_mode || x->unlink_dest_before_opening)
+     {
++     /* They may refer to the same file if we're in move mode and the
++        target is a symlink.  That is ok, since we remove any existing
++        destination file before opening it -- via 'rename' if they're on
++        the same file system, via 'unlink (DST_NAME)' otherwise.  */
+       if (S_ISLNK (dst_sb_link->st_mode))
+         return true;
+ 
++      /* It's not ok if they're distinct hard links to the same file as
++         this causes a race condition and we may lose data in this case.  */
+       if (same_link
+           && 1 < dst_sb_link->st_nlink
+           && ! same_name (src_name, dst_name))
+         {
+-          if (x->move_mode)
+-            {
+-              *unlink_src = true;
+-              *return_now = true;
+-            }
+-          return true;
++          return ! x->move_mode;
+         }
+     }
+ 
+@@ -1820,11 +1804,10 @@ copy_internal (char const *src_name, cha
+         { /* Here, we know that dst_name exists, at least to the point
+              that it is stat'able or lstat'able.  */
+           bool return_now;
+-          bool unlink_src;
+ 
+           have_dst_lstat = !use_stat;
+           if (! same_file_ok (src_name, &src_sb, dst_name, &dst_sb,
+-                              x, &return_now, &unlink_src))
++                              x, &return_now))
+             {
+               error (0, 0, _("%s and %s are the same file"),
+                      quote_n (0, src_name), quote_n (1, dst_name));
+@@ -1883,22 +1866,14 @@ copy_internal (char const *src_name, cha
+              cp and mv treat -i and -f differently.  */
+           if (x->move_mode)
+             {
+-              if (abandon_move (x, dst_name, &dst_sb)
+-                  || (unlink_src && unlink (src_name) == 0))
++              if (abandon_move (x, dst_name, &dst_sb))
+                 {
+                   /* Pretend the rename succeeded, so the caller (mv)
+                      doesn't end up removing the source file.  */
+                   if (rename_succeeded)
+                     *rename_succeeded = true;
+-                  if (unlink_src && x->verbose)
+-                    printf (_("removed %s\n"), quote (src_name));
+                   return true;
+                 }
+-              if (unlink_src)
+-                {
+-                  error (0, errno, _("cannot remove %s"), quote (src_name));
+-                  return false;
+-                }
+             }
+           else
+             {
+diff -urNp coreutils-8.22-orig/tests/cp/same-file.sh coreutils-8.22/tests/cp/same-file.sh
+--- coreutils-8.22-orig/tests/cp/same-file.sh	2013-12-04 15:48:30.000000000 +0100
++++ coreutils-8.22/tests/cp/same-file.sh	2015-07-03 14:54:12.539772880 +0200
+@@ -36,7 +36,7 @@ ln dangling-slink hard-link > /dev/null 2>&1 \
+ rm -f no-such dangling-slink hard-link
+ 
+ test $hard_link_to_symlink_does_the_deref = yes \
+-    && remove_these_sed='/^0 -[bf]*l .*sl1 ->/d' \
++    && remove_these_sed='/^0 -[bf]*l .*sl1 ->/d; /hlsl/d' \
+     || remove_these_sed='/^ELIDE NO TEST OUTPUT/d'
+ 
+ exec 3>&1 1> actual
+@@ -44,7 +44,8 @@ exec 3>&1 1> actual
+ # FIXME: This should be bigger: like more than 8k
+ contents=XYZ
+ 
+-for args in 'foo symlink' 'symlink foo' 'foo foo' 'sl1 sl2' 'foo hardlink'; do
++for args in 'foo symlink' 'symlink foo' 'foo foo' 'sl1 sl2' \
++  'foo hardlink' 'hlsl sl2'; do
+   for options in '' -d -f -df --rem -b -bd -bf -bdf \
+                  -l -dl -fl -dfl -bl -bdl -bfl -bdfl; do
+     case $args$options in
+@@ -76,6 +77,8 @@ for args in 'foo symlink' 'symlink foo'
+         continue ;;
+       'yes:sl1 sl2:-bfl')
+         continue ;;
++      yes:hlsl*)
++        continue ;;
+     esac
+ 
+     rm -rf dir
+@@ -86,6 +87,7 @@ for args in 'foo symlink' 'symlink foo'
+     case "$args" in *hardlink*) ln foo hardlink ;; esac
+     case "$args" in *sl1*) ln -s foo sl1;; esac
+     case "$args" in *sl2*) ln -s foo sl2;; esac
++    case "$args" in *hlsl*) ln sl2 hlsl;;esac
+     (
+       (
+         # echo 1>&2 cp $options $args
+@@ -211,6 +213,24 @@ cat <<\EOF | sed "$remove_these_sed" > e
+ 0 -bfl (foo hardlink)
+ 0 -bdfl (foo hardlink)
+ 
++1 [cp: 'hlsl' and 'sl2' are the same file] (foo hlsl -> foo sl2 -> foo)
++0 -d (foo hlsl -> foo sl2 -> foo)
++1 -f [cp: 'hlsl' and 'sl2' are the same file] (foo hlsl -> foo sl2 -> foo)
++0 -df (foo hlsl -> foo sl2 -> foo)
++0 --rem (foo hlsl -> foo sl2)
++0 -b (foo hlsl -> foo sl2 sl2.~1~ -> foo)
++0 -bd (foo hlsl -> foo sl2 -> foo sl2.~1~ -> foo)
++0 -bf (foo hlsl -> foo sl2 sl2.~1~ -> foo)
++0 -bdf (foo hlsl -> foo sl2 -> foo sl2.~1~ -> foo)
++1 -l [cp: cannot create hard link 'sl2' to 'hlsl'] (foo hlsl -> foo sl2 -> foo)
++0 -dl (foo hlsl -> foo sl2 -> foo)
++0 -fl (foo hlsl -> foo sl2)
++0 -dfl (foo hlsl -> foo sl2 -> foo)
++0 -bl (foo hlsl -> foo sl2 sl2.~1~ -> foo)
++0 -bdl (foo hlsl -> foo sl2 -> foo)
++0 -bfl (foo hlsl -> foo sl2 sl2.~1~ -> foo)
++0 -bdfl (foo hlsl -> foo sl2 -> foo)
++
+ EOF
+ 
+ exec 1>&3 3>&-
+diff -urNp coreutils-8.22-orig/tests/local.mk coreutils-8.22/tests/local.mk
+--- coreutils-8.22-orig/tests/local.mk	2015-07-03 14:42:56.820772485 +0200
++++ coreutils-8.22/tests/local.mk	2015-07-03 14:55:07.060176869 +0200
+@@ -591,7 +591,6 @@ all_tests =					\
+   tests/mv/hard-3.sh				\
+   tests/mv/hard-4.sh				\
+   tests/mv/hard-link-1.sh			\
+-  tests/mv/hard-verbose.sh			\
+   tests/mv/i-1.pl				\
+   tests/mv/i-2.sh				\
+   tests/mv/i-3.sh				\
+diff -urNp coreutils-8.22-orig/tests/mv/force.sh coreutils-8.22/tests/mv/force.sh
+--- coreutils-8.22-orig/tests/mv/force.sh	2013-12-04 15:48:30.000000000 +0100
++++ coreutils-8.22/tests/mv/force.sh	2015-07-03 14:56:42.840885931 +0200
+@@ -25,18 +25,19 @@ ff2=mvforce2
+ echo force-contents > $ff || framework_failure_
+ ln $ff $ff2 || framework_failure_
+ 
+-# This mv command should exit nonzero.
+-mv $ff $ff > out 2>&1 && fail=1
++# mv should fail for the same name, or separate hardlinks as in
++# both cases rename() will do nothing and return success.
++# One could unlink(src) in the hardlink case, but that would
++# introduce races with overlapping mv instances removing both hardlinks.
+ 
+-cat > exp <<EOF
+-mv: '$ff' and '$ff' are the same file
+-EOF
++for dest in $ff $ff2; do
++  # This mv command should exit nonzero.
++  mv $ff $dest > out 2>&1 && fail=1
+ 
+-compare exp out || fail=1
+-test $(cat $ff) = force-contents || fail=1
++  printf "mv: '$ff' and '$dest' are the same file\n" > exp
++  compare exp out || fail=1
+ 
+-# This should succeed, even though the source and destination
+-# device and inodes are the same.
+-mv $ff $ff2 || fail=1
++  test $(cat $ff) = force-contents || fail=1
++done
+ 
+ Exit $fail
+diff -urNp coreutils-8.22-orig/tests/mv/hard-4.sh coreutils-8.22/tests/mv/hard-4.sh
+--- coreutils-8.22-orig/tests/mv/hard-4.sh	2013-12-04 15:48:30.000000000 +0100
++++ coreutils-8.22/tests/mv/hard-4.sh	2015-07-03 14:58:31.179687188 +0200
+@@ -1,5 +1,5 @@
+ #!/bin/sh
+-# ensure that mv removes a in this case: touch a; ln a b; mv a b
++# ensure that mv maintains a in this case: touch a; ln a b; mv a b
+ 
+ # Copyright (C) 2003-2013 Free Software Foundation, Inc.
+ 
+@@ -21,15 +21,19 @@ print_ver_ mv
+ touch a || framework_failure_
+ ln a b || framework_failure_
+ 
++# Between coreutils-5.0 and coreutils-8.24, 'a' would be removed.
++# Before coreutils-5.0.1 the issue would not have been diagnosed.
++# We don't emulate the rename(a,b) with unlink(a) as that would
++# introduce races with overlapping mv instances removing both links.
++mv a b 2>err && fail=1
++printf "mv: 'a' and 'b' are the same file\n" > exp
++compare exp err || fail=1
+ 
+-mv a b || fail=1
+ 
+-# In coreutils-5.0 and earlier, a would not be removed.
+-test -r a && fail=1
++test -r a || fail=1
+ test -r b || fail=1
+ 
+-# Make sure it works also with --backup.
+-ln b a
++# Make sure it works with --backup.
+ mv --backup=simple a b || fail=1
+ test -r a && fail=1
+ test -r b || fail=1
+diff -urNp coreutils-8.22-orig/tests/mv/i-4.sh coreutils-8.22/tests/mv/i-4.sh
+--- coreutils-8.22-orig/tests/mv/i-4.sh	2013-12-04 15:48:30.000000000 +0100
++++ coreutils-8.22/tests/mv/i-4.sh	2015-07-03 15:00:39.533718254 +0200
+@@ -23,6 +23,7 @@ for i in a b; do
+   echo $i > $i || framework_failure_
+ done
+ echo y > y || framework_failure_
++echo n > n || framework_failure_
+ 
+ mv -i a b < y >/dev/null 2>&1 || fail=1
+ 
+@@ -32,18 +33,15 @@ case "$(cat b)" in
+   *) fail=1 ;;
+ esac
+ 
+-# Ensure that mv -i a b works properly with 'n' and 'y'
+-# responses, even when a and b are hard links to the same file.
+-# This 'n' test would fail (no prompt) for coreutils-5.0.1 through 5.3.0.
+-echo n > n
++# Ensure that mv -i a b works properly with 'n' and 'y' responses,
++# when a and b are hard links to the same file.
+ rm -f a b
+ echo a > a
+ ln a b
+-mv -i a b < n >/dev/null 2>&1 || fail=1
++mv -i a b < y 2>err && fail=1
+ test -r a || fail=1
+ test -r b || fail=1
+-mv -i a b < y >/dev/null 2>&1 || fail=1
+-test -r a && fail=1
+-test -r b || fail=1
++printf "mv: 'a' and 'b' are the same file\n" > exp
++compare exp err || fail=1
+ 
+ Exit $fail
+diff -urNp coreutils-8.22-orig/tests/mv/symlink-onto-hardlink-to-self.sh coreutils-8.22/tests/mv/symlink-onto-hardlink-to-self.sh
+--- coreutils-8.22-orig/tests/mv/symlink-onto-hardlink-to-self.sh	2013-12-04 15:48:30.000000000 +0100
++++ coreutils-8.22/tests/mv/symlink-onto-hardlink-to-self.sh	2015-07-03 15:01:39.209190741 +0200
+@@ -1,10 +1,10 @@
+ #!/bin/sh
+-# Demonstrate that when moving a symlink onto a hardlink-to-that-symlink, the
+-# source symlink is removed.  Depending on your kernel (e.g., Linux, Solaris,
++# Demonstrate that when moving a symlink onto a hardlink-to-that-symlink,
++# an error is presented.  Depending on your kernel (e.g., Linux, Solaris,
+ # but not NetBSD), prior to coreutils-8.16, the mv would successfully perform
+ # a no-op.  I.e., surprisingly, mv s1 s2 would succeed, yet fail to remove s1.
+ 
+-# Copyright (C) 2012-2013 Free Software Foundation, Inc.
++# Copyright (C) 2012-2014 Free Software Foundation, Inc.
+ 
+ # This program is free software: you can redistribute it and/or modify
+ # it under the terms of the GNU General Public License as published by
+@@ -26,27 +26,34 @@ print_ver_ mv
+ touch f || framework_failure_
+ ln -s f s2 || framework_failure_
+ 
+-for opt in '' --backup; do
++# Attempt to create a hard link to that symlink.
++# On some systems, it's not possible: they create a hard link to the referent.
++ln s2 s1 || framework_failure_
++
++# If s1 is not a symlink, skip this test.
++test -h s1 \
++  || skip_ your kernel or file system cannot create a hard link to a symlink
+ 
+-  # Attempt to create a hard link to that symlink.
+-  # On some systems, it's not possible: they create a hard link to the referent.
+-  ln s2 s1 || framework_failure_
+-
+-  # If s1 is not a symlink, skip this test.
+-  test -h s1 \
+-    || skip_ your kernel or file system cannot create a hard link to a symlink
++for opt in '' --backup; do
+ 
+-  mv $opt s1 s2 > out 2>&1 || fail=1
+-  compare /dev/null out || fail=1
++  if test "$opt" = --backup; then
++    mv $opt s1 s2 > out 2>&1 || fail=1
++    compare /dev/null out || fail=1
+ 
+-  # Ensure that s1 is gone.
+-  test -e s1 && fail=1
++    # Ensure that s1 is gone.
++    test -e s1 && fail=1
+ 
+-  if test "$opt" = --backup; then
+     # With --backup, ensure that the backup file was created.
+     ref=$(readlink s2~) || fail=1
+     test "$ref" = f || fail=1
+   else
++    echo "mv: 's1' and 's2' are the same file" > exp
++    mv $opt s1 s2 2>err && fail=1
++    compare exp err || fail=1
++
++    # Ensure that s1 is still present.
++    test -e s1 || fail=1
++
+     # Without --backup, ensure there is no backup file.
+     test -e s2~ && fail=1
+   fi

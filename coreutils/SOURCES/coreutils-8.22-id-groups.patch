@@ -1,0 +1,39 @@
+diff -urNp coreutils-8.4-orig/src/id.c coreutils-8.4/src/id.c
+--- coreutils-8.4-orig/src/id.c	2014-06-26 08:47:28.435047859 +0200
++++ coreutils-8.4/src/id.c	2014-06-26 08:55:28.352788022 +0200
+@@ -296,8 +296,12 @@ print_full_info (const char *username)
+     gid_t *groups;
+     int i;
+ 
+-    int n_groups = xgetgroups (username, (pwd ? pwd->pw_gid : -1),
+-                               &groups);
++    gid_t primary_group;
++    if (username)
++      primary_group = pwd ? pwd->pw_gid : -1;
++    else
++      primary_group = egid;
++    int n_groups = xgetgroups (username, primary_group, &groups);
+     if (n_groups < 0)
+       {
+         if (username)
+
+diff -urNp coreutils-8.22-orig/tests/id/setgid.sh coreutils-8.22/tests/id/setgid.sh
+--- coreutils-8.22-orig/tests/id/setgid.sh	2014-06-26 08:47:28.750053213 +0200
++++ coreutils-8.22/tests/id/setgid.sh	2014-06-26 08:51:02.536624404 +0200
+@@ -1,5 +1,5 @@
+ #!/bin/sh
+-# Verify that id -G prints the right group when run set-GID.
++# Verify that id [-G] prints the right group when run set-GID.
+ 
+ # Copyright (C) 2012-2013 Free Software Foundation, Inc.
+ 
+@@ -35,4 +35,9 @@ setuidgid -g $gp1 $NON_ROOT_USERNAME env
+ compare exp out || fail=1
+ # With coreutils-8.16 and earlier, id -G would print both: $gp1 $g
+ 
++# With coreutils-8.22 and earlier, id would erroneously print groups=$g
++chroot --user=$NON_ROOT_USERNAME:$gp1 --groups='' / env PATH="$PATH" \
++  id > out || fail=1
++grep -F "groups=$gp1" out || fail=1
++
+ Exit $fail

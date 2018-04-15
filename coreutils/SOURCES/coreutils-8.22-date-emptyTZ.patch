@@ -1,0 +1,46 @@
+From a10acfb1d2118f9a180181d3fed5399dbbe1df3c Mon Sep 17 00:00:00 2001
+From: Pádraig Brady <P@draigBrady.com>
+Date: Tue, 25 Feb 2014 10:58:48 +0000
+Subject: parse-datetime: fix crash or infloop in TZ="" parsing
+
+This was reported in http://bugs.gnu.org/16872
+from the coreutils command: date -d 'TZ="""'
+
+The infinite loop for this case was present since the
+initial TZ="" parsing support in commit de95bdc2 29-10-2004.
+This was changed to a crash or heap corruption depending
+on the platform with commit 2e3e4195 18-01-2010.
+
+* lib/parse-datetime.y (parse_datetime): Break out of the
+TZ="" parsing loop once the second significant " is found.
+Also skip over any subsequent whitespace to be consistent
+with the non TZ= case.
+---
+diff --git a/lib/parse-datetime.y b/lib/parse-datetime.y
+index 6ece765..0ba0a52 100644
+--- a/lib/parse-datetime.y
++++ b/lib/parse-datetime.y
+@@ -1303,8 +1303,6 @@ parse_datetime (struct timespec *result, char const *p,
+             char tz1buf[TZBUFSIZE];
+             bool large_tz = TZBUFSIZE < tzsize;
+             bool setenv_ok;
+-            /* Free tz0, in case this is the 2nd or subsequent time through. */
+-            free (tz0);
+             tz0 = get_tz (tz0buf);
+             z = tz1 = large_tz ? xmalloc (tzsize) : tz1buf;
+             for (s = tzbase; *s != '"'; s++)
+@@ -1316,7 +1314,12 @@ parse_datetime (struct timespec *result, char const *p,
+             if (!setenv_ok)
+               goto fail;
+             tz_was_altered = true;
++
+             p = s + 1;
++            while (c = *p, c_isspace (c))
++              p++;
++
++            break;
+           }
+     }
+ 
+--
+cgit v0.9.0.2

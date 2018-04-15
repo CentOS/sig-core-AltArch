@@ -1,0 +1,29 @@
+From: Pádraig Brady <pbrady@redhat.com>
+
+Avoid false failure due to speculative preallocation on XFS
+Avoid false failure due to delayed allocation on BTRFS
+
+diff -Naur coreutils-8.22.orig/tests/dd/sparse.sh coreutils-8.22/tests/dd/sparse.sh
+--- coreutils-8.22.orig/tests/dd/sparse.sh	2013-12-04 14:48:30.000000000 +0000
++++ coreutils-8.22/tests/dd/sparse.sh	2015-05-19 21:24:55.139941789 +0000
+@@ -58,11 +58,18 @@
+ 
+   # Ensure NUL blocks smaller than the block size are not made sparse.
+   # Here, with a 2MiB block size, dd's conv=sparse must *not* introduce a hole.
+-  dd if=file.in of=file.out bs=2M conv=sparse
++  dd if=file.in of=file.out bs=2M conv=sparse,fsync
+   test 2500 -lt $(kb_alloc file.out) || fail=1
+ 
++  # Note we recreate a sparse file first to avoid
++  # speculative preallocation seen in XFS, where a write() that
++  # extends a file can preallocate some extra space that
++  # a subsequent seek will not convert to a hole.
++  rm -f file.out
++  truncate --size=3M file.out
++
+   # Ensure that this 1MiB string of NULs *is* converted to a hole.
+-  dd if=file.in of=file.out bs=1M conv=sparse
++  dd if=file.in of=file.out bs=1M conv=sparse,notrunc,fsync
+   test $(kb_alloc file.out) -lt 2500 || fail=1
+ 
+ fi

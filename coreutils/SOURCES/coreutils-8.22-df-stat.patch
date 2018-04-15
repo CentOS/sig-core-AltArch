@@ -1,0 +1,72 @@
+From 9c4641f42bbecf63ec0a0e05caacbccd5332b831 Mon Sep 17 00:00:00 2001
+From: Philipp Thomas <pth@suse.de>
+Date: Sun, 26 Mar 2017 22:34:00 -0700
+Subject: [PATCH 1/2] df: avoid querying excluded file systems
+
+* src/df.c (filter_mount_list): Avoid stat() on
+explicitly excluded file systems, which is especially
+significant in cases like `-x nfs` which may hang.
+* NEWS: Mention the bug fix.
+
+Upstream-commit: 7c228bc55ed3fd6d56a6ad135438066de2f54a30
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ src/df.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/df.c b/src/df.c
+index 5b9e8fd..e0ebed7 100644
+--- a/src/df.c
++++ b/src/df.c
+@@ -632,9 +632,11 @@ filter_mount_list (bool devices_only)
+          On Linux we probably have me_dev populated from /proc/self/mountinfo,
+          however we still stat() in case another device was mounted later.  */
+       if ((me->me_remote && show_local_fs)
++          || (!selected_fstype (me->me_type) || excluded_fstype (me->me_type))
+           || -1 == stat (me->me_mountdir, &buf))
+         {
+-          /* If remote, and showing just local, add ME for filtering later.
++          /* If remote, and showing just local, or FS type is excluded,
++             add ME for filtering later.
+              If stat failed; add ME to be able to complain about it later.  */
+           buf.st_dev = me->me_dev;
+         }
+-- 
+2.13.6
+
+
+From a4a61effe74766cdf047d6af52cf63613057bd87 Mon Sep 17 00:00:00 2001
+From: Kamil Dudka <kdudka@redhat.com>
+Date: Thu, 23 Nov 2017 17:30:09 +0100
+Subject: [PATCH 2/2] df: limit the stat() call optimization for dummy file
+ systems only
+
+Otherwise 'df -t rootfs' mistakenly shows a dummy file system without
+using the -a option, because the dummy file system is shadowed by the
+actual root file system entry, for which we optimize out the stat()
+call.
+
+The problem fixed by this patch is not observable on Fedora because
+/proc/self/mountinfo (which we do not use on RHEL) does not contain
+the rootfs mount entry.
+---
+ src/df.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/df.c b/src/df.c
+index adade6d..4c6131e 100644
+--- a/src/df.c
++++ b/src/df.c
+@@ -632,7 +632,8 @@ filter_mount_list (bool devices_only)
+          On Linux we probably have me_dev populated from /proc/self/mountinfo,
+          however we still stat() in case another device was mounted later.  */
+       if ((me->me_remote && show_local_fs)
+-          || (!selected_fstype (me->me_type) || excluded_fstype (me->me_type))
++          || (me->me_dummy && (excluded_fstype (me->me_type)
++              || !selected_fstype (me->me_type)))
+           || -1 == stat (me->me_mountdir, &buf))
+         {
+           /* If remote, and showing just local, or FS type is excluded,
+-- 
+2.13.6
+

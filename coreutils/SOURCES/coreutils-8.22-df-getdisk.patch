@@ -1,0 +1,117 @@
+diff -urNp coreutils-8.22-orig/src/df.c coreutils-8.22/src/df.c
+--- coreutils-8.22-orig/src/df.c	2015-07-03 15:51:44.293116375 +0200
++++ coreutils-8.22/src/df.c	2015-07-03 16:02:48.743390691 +0200
+@@ -1057,6 +1057,33 @@ get_dev (char const *disk, char const *m
+   free (dev_name);
+ }
+ 
++/* Scan the mount list returning the _last_ device found for MOUNT.
++   NULL is returned if MOUNT not found.  The result is malloced.  */
++static char *
++last_device_for_mount (char const* mount)
++{
++  struct mount_entry const *me;
++  struct mount_entry const *le = NULL;
++
++  for (me = mount_list; me; me = me->me_next)
++    {
++      if (STREQ (me->me_mountdir, mount))
++        le = me;
++    }
++
++  if (le)
++    {
++      char *devname = le->me_devname;
++      char *canon_dev = canonicalize_file_name (devname);
++      if (canon_dev && IS_ABSOLUTE_FILE_NAME (canon_dev))
++        return canon_dev;
++      free (canon_dev);
++      return xstrdup (le->me_devname);
++    }
++  else
++    return NULL;
++}
++
+ /* If DISK corresponds to a mount point, show its usage
+    and return true.  Otherwise, return false.  */
+ static bool
+@@ -1064,27 +1091,57 @@ get_disk (char const *disk)
+ {
+   struct mount_entry const *me;
+   struct mount_entry const *best_match = NULL;
++  bool best_match_accessible = false;
++  bool eclipsed_device = false;
+   char const *file = disk;
+ 
+   char *resolved = canonicalize_file_name (disk);
+-  if (resolved && resolved[0] == '/')
++  if (resolved && IS_ABSOLUTE_FILE_NAME (resolved))
+     disk = resolved;
+ 
+   size_t best_match_len = SIZE_MAX;
+   for (me = mount_list; me; me = me->me_next)
+     {
+-      if (STREQ (disk, me->me_devname))
++      /* TODO: Should cache canon_dev in the mount_entry struct.  */
++      char *devname = me->me_devname;
++      char *canon_dev = canonicalize_file_name (me->me_devname);
++      if (canon_dev && IS_ABSOLUTE_FILE_NAME (canon_dev))
++        devname = canon_dev;
++
++      if (STREQ (disk, devname))
+         {
++          char *last_device = last_device_for_mount (me->me_mountdir);
++          eclipsed_device = last_device && ! STREQ (last_device, devname);
+           size_t len = strlen (me->me_mountdir);
+-          if (len < best_match_len)
++
++          if (! eclipsed_device
++              && (! best_match_accessible || len < best_match_len))
+             {
+-              best_match = me;
+-              if (len == 1) /* Traditional root.  */
+-                break;
+-              else
+-                best_match_len = len;
++              struct stat disk_stats;
++              bool this_match_accessible = false;
++
++              if (stat (me->me_mountdir, &disk_stats) == 0)
++                best_match_accessible = this_match_accessible = true;
++
++              if (this_match_accessible
++                  || (! best_match_accessible && len < best_match_len))
++                {
++                  best_match = me;
++                  if (len == 1) /* Traditional root.  */
++                    {
++                      free (last_device);
++                      free (canon_dev);
++                      break;
++                    }
++                  else
++                    best_match_len = len;
++                }
+             }
++
++          free (last_device);
+         }
++
++      free (canon_dev);
+     }
+ 
+   free (resolved);
+@@ -1096,6 +1153,13 @@ get_disk (char const *disk)
+                best_match->me_remote, NULL, false);
+       return true;
+     }
++  else if (eclipsed_device)
++    {
++      error (0, 0, _("cannot access %s: over-mounted by another device"),
++             quote (file));
++      exit_status = EXIT_FAILURE;
++      return true;
++    }
+ 
+   return false;
+ }

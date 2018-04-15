@@ -1,0 +1,529 @@
+diff -urNp coreutils-8.21-orig/init.cfg coreutils-8.21/init.cfg
+--- coreutils-8.21-orig/init.cfg	2013-01-31 01:46:24.000000000 +0100
++++ coreutils-8.21/init.cfg	2013-02-15 14:31:58.957469955 +0100
+@@ -308,8 +308,8 @@ require_selinux_()
+   # Independent of whether SELinux is enabled system-wide,
+   # the current file system may lack SELinux support.
+   # Also the current build may have SELinux support disabled.
+-  case $(ls -Zd .) in
+-    '? .'|'unlabeled .')
++  case $(ls -Zd . | cut -f4 -d" ") in
++    '?'|'unlabeled')
+       test -z "$CONFIG_HEADER" \
+         && framework_failure_ 'CONFIG_HEADER not defined'
+       grep '^#define HAVE_SELINUX_SELINUX_H 1' "$CONFIG_HEADER" > /dev/null \
+diff -urNp coreutils-8.21-orig/man/chcon.x coreutils-8.21/man/chcon.x
+--- coreutils-8.21-orig/man/chcon.x	2011-08-23 15:44:01.000000000 +0200
++++ coreutils-8.21/man/chcon.x	2013-02-15 14:31:58.937482694 +0100
+@@ -1,4 +1,4 @@
+ [NAME]
+-chcon \- change file security context
++chcon \- change file SELinux security context
+ [DESCRIPTION]
+ .\" Add any additional description here
+diff -urNp coreutils-8.21-orig/man/runcon.x coreutils-8.21/man/runcon.x
+--- coreutils-8.21-orig/man/runcon.x	2011-08-23 15:44:01.000000000 +0200
++++ coreutils-8.21/man/runcon.x	2013-02-15 14:31:58.938486496 +0100
+@@ -1,5 +1,5 @@
+ [NAME]
+-runcon \- run command with specified security context
++runcon \- run command with specified SELinux security context
+ [DESCRIPTION]
+ Run COMMAND with completely-specified CONTEXT, or with current or
+ transitioned security context modified by one or more of LEVEL,
+diff -urNp coreutils-8.21-orig/src/copy.c coreutils-8.21/src/copy.c
+--- coreutils-8.21-orig/src/copy.c	2013-02-07 10:37:05.000000000 +0100
++++ coreutils-8.21/src/copy.c	2013-02-15 14:31:58.941467872 +0100
+@@ -2410,6 +2410,17 @@ copy_internal (char const *src_name, cha
+       else
+         {
+           omitted_permissions = 0;
++
++          /* For directories, the process global context could be reset for
++             descendents, so use it to set the context for existing dirs here.
++             This will also give earlier indication of failure to set ctx.  */
++          if (x->set_security_context || x->preserve_security_context)
++            if (! set_file_security_ctx (dst_name, x->preserve_security_context,
++                                         false, x))
++              {
++                if (x->require_preserve_context)
++                  goto un_backup;
++              }
+         }
+ 
+       /* Decide whether to copy the contents of the directory.  */
+@@ -2415,6 +2426,8 @@ copy_internal (char const *src_name, cha
+         {
+           /* Here, we are crossing a file system boundary and cp's -x option
+              is in effect: so don't copy the contents of this directory. */
++        if (x->preserve_security_context)
++           restore_default_fscreatecon_or_die ();
+         }
+       else
+         {
+@@ -2602,7 +2613,7 @@ copy_internal (char const *src_name, cha
+ 
+   /* With -Z or --preserve=context, set the context for existing files.
+      Note this is done already for copy_reg() for reasons described therein.  */
+-  if (!new_dst && !x->copy_as_regular
++  if (!new_dst && !x->copy_as_regular && !S_ISDIR (src_mode)
+       && (x->set_security_context || x->preserve_security_context))
+     {
+       if (! set_file_security_ctx (dst_name, x->preserve_security_context,
+diff -urNp coreutils-8.21-orig/src/cp.c coreutils-8.21/src/cp.c
+--- coreutils-8.21-orig/src/cp.c	2013-02-07 10:37:05.000000000 +0100
++++ coreutils-8.21/src/cp.c	2013-02-15 14:31:58.945468929 +0100
+@@ -201,6 +202,9 @@ Copy SOURCE to DEST, or multiple SOURCE(
+                                  all\n\
+ "), stdout);
+       fputs (_("\
++  -c                           deprecated, same as --preserve=context\n\
++"), stdout);
++      fputs (_("\
+       --no-preserve=ATTR_LIST  don't preserve the specified attributes\n\
+       --parents                use full source file name under DIRECTORY\n\
+ "), stdout);
+@@ -933,7 +939,7 @@ main (int argc, char **argv)
+      we'll actually use backup_suffix_string.  */
+   backup_suffix_string = getenv ("SIMPLE_BACKUP_SUFFIX");
+ 
+-  while ((c = getopt_long (argc, argv, "abdfHilLnprst:uvxPRS:TZ",
++  while ((c = getopt_long (argc, argv, "abcdfHilLnprst:uvxPRS:TZ",
+                            long_opts, NULL))
+          != -1)
+     {
+@@ -981,6 +987,17 @@ main (int argc, char **argv)
+           copy_contents = true;
+           break;
+ 
++        case 'c':
++          fprintf (stderr, "%s: warning: option '-c' is deprecated, please use '--preserve=context' instead\n", argv[0]);
++          if ( x.set_security_context ) { 
++              (void) fprintf(stderr, "%s: cannot force target context and preserve it\n", argv[0]);
++             exit( 1 );
++           }
++           else if (selinux_enabled) {
++              x.preserve_security_context = true;
++              x.require_preserve_context = true;
++           }
++          break;
+         case 'd':
+           x.preserve_links = true;
+           x.dereference = DEREF_NEVER;
+diff -urNp coreutils-8.21-orig/src/id.c coreutils-8.21/src/id.c
+--- coreutils-8.21-orig/src/id.c	2013-01-31 01:46:24.000000000 +0100
++++ coreutils-8.21/src/id.c	2013-02-15 14:31:58.946469154 +0100
+@@ -106,7 +106,7 @@ int
+ main (int argc, char **argv)
+ {
+   int optc;
+-  int selinux_enabled = (is_selinux_enabled () > 0);
++  bool selinux_enabled = (is_selinux_enabled () > 0);
+   bool smack_enabled = is_smack_enabled ();
+   bool opt_zero = false;
+   char *pw_name = NULL;
+diff -urNp coreutils-8.21-orig/src/install.c coreutils-8.21/src/install.c
+--- coreutils-8.21-orig/src/install.c	2013-02-07 10:37:05.000000000 +0100
++++ coreutils-8.21/src/install.c	2013-02-15 14:31:58.948469440 +0100
+@@ -639,7 +640,7 @@ In the 4th form, create all components o
+   -v, --verbose       print the name of each directory as it is created\n\
+ "), stdout);
+       fputs (_("\
+-      --preserve-context  preserve SELinux security context\n\
++  -P, --preserve-context  preserve SELinux security context (-P deprecated)\n\
+   -Z, --context[=CTX]     set SELinux security context of destination file to\n\
+                             default type, or to CTX if specified\n\
+ "), stdout);
+@@ -782,7 +783,7 @@ main (int argc, char **argv)
+      we'll actually use backup_suffix_string.  */
+   backup_suffix_string = getenv ("SIMPLE_BACKUP_SUFFIX");
+ 
+-  while ((optc = getopt_long (argc, argv, "bcCsDdg:m:o:pt:TvS:Z", long_options,
++  while ((optc = getopt_long (argc, argv, "bcCsDdg:m:o:pPt:TvS:Z", long_options,
+                               NULL)) != -1)
+     {
+       switch (optc)
+@@ -853,6 +854,8 @@ main (int argc, char **argv)
+           no_target_directory = true;
+           break;
+ 
++        case 'P':
++          fprintf (stderr, "%s: warning: option '-P' is deprecated, please use '--preserve-context' instead\n", argv[0]);
+         case PRESERVE_CONTEXT_OPTION:
+           if (! selinux_enabled)
+             {
+@@ -860,6 +862,10 @@ main (int argc, char **argv)
+                              "this kernel is not SELinux-enabled"));
+               break;
+             }
++          if ( x.set_security_context ) {
++             (void) fprintf(stderr, "%s: cannot force target context and preserve it\n", argv[0]);
++             exit( 1 );
++          }
+           x.preserve_security_context = true;
+           use_default_selinux_context = false;
+           break;
+diff -urNp coreutils-8.21-orig/src/ls.c coreutils-8.21/src/ls.c
+--- coreutils-8.21-orig/src/ls.c	2013-02-03 04:24:02.000000000 +0100
++++ coreutils-8.21/src/ls.c	2013-02-15 14:31:58.953469008 +0100
+@@ -165,7 +165,8 @@ enum filetype
+     symbolic_link,
+     sock,
+     whiteout,
+-    arg_directory
++    arg_directory,
++    command_line
+   };
+ 
+ /* Display letters and indicators for each filetype.
+@@ -281,6 +282,7 @@ static void queue_directory (char const 
+                              bool command_line_arg);
+ static void sort_files (void);
+ static void parse_ls_color (void);
++static void print_scontext_format (const struct fileinfo *f);
+ 
+ /* Initial size of hash table.
+    Most hierarchies are likely to be shallower than this.  */
+@@ -350,7 +352,7 @@ static struct pending *pending_dirs;
+ 
+ static struct timespec current_time;
+ 
+-static bool print_scontext;
++static int print_scontext = 0;
+ static char UNKNOWN_SECURITY_CONTEXT[] = "?";
+ 
+ /* Whether any of the files has an ACL.  This affects the width of the
+@@ -390,7 +392,9 @@ enum format
+     one_per_line,		/* -1 */
+     many_per_line,		/* -C */
+     horizontal,			/* -x */
+-    with_commas			/* -m */
++    with_commas,			/* -m */
++    security_format, /* -Z */
++    invalid_format
+   };
+ 
+ static enum format format;
+@@ -793,6 +797,9 @@ enum
+   SHOW_CONTROL_CHARS_OPTION,
+   SI_OPTION,
+   SORT_OPTION,
++  CONTEXT_OPTION,
++  LCONTEXT_OPTION,
++  SCONTEXT_OPTION,
+   TIME_OPTION,
+   TIME_STYLE_OPTION
+ };
+@@ -839,7 +846,9 @@ static struct option const long_options[
+   {"time-style", required_argument, NULL, TIME_STYLE_OPTION},
+   {"color", optional_argument, NULL, COLOR_OPTION},
+   {"block-size", required_argument, NULL, BLOCK_SIZE_OPTION},
+-  {"context", no_argument, 0, 'Z'},
++  {"context", no_argument, 0, CONTEXT_OPTION},
++  {"lcontext", no_argument, 0, LCONTEXT_OPTION},
++  {"scontext", no_argument, 0, SCONTEXT_OPTION},
+   {"author", no_argument, NULL, AUTHOR_OPTION},
+   {GETOPT_HELP_OPTION_DECL},
+   {GETOPT_VERSION_OPTION_DECL},
+@@ -849,12 +858,12 @@ static struct option const long_options[
+ static char const *const format_args[] =
+ {
+   "verbose", "long", "commas", "horizontal", "across",
+-  "vertical", "single-column", NULL
++  "vertical", "single-column", "context", NULL
+ };
+ static enum format const format_types[] =
+ {
+   long_format, long_format, with_commas, horizontal, horizontal,
+-  many_per_line, one_per_line
++  many_per_line, one_per_line, security_format
+ };
+ ARGMATCH_VERIFY (format_args, format_types);
+ 
+@@ -1296,7 +1305,8 @@ main (int argc, char **argv)
+       /* Avoid following symbolic links when possible.  */
+       if (is_colored (C_ORPHAN)
+           || (is_colored (C_EXEC) && color_symlink_as_referent)
+-          || (is_colored (C_MISSING) && format == long_format))
++          || (is_colored (C_MISSING) && (format == long_format
++              || format == security_format)))
+         check_symlink_color = true;
+ 
+       /* If the standard output is a controlling terminal, watch out
+@@ -1343,7 +1353,7 @@ main (int argc, char **argv)
+   if (dereference == DEREF_UNDEFINED)
+     dereference = ((immediate_dirs
+                     || indicator_style == classify
+-                    || format == long_format)
++                    || format == long_format || format == security_format)
+                    ? DEREF_NEVER
+                    : DEREF_COMMAND_LINE_SYMLINK_TO_DIR);
+ 
+@@ -1363,7 +1373,7 @@ main (int argc, char **argv)
+ 
+   format_needs_stat = sort_type == sort_time || sort_type == sort_size
+     || format == long_format
+-    || print_scontext
++    || format == security_format || print_scontext
+     || print_block_size;
+   format_needs_type = (! format_needs_stat
+                        && (recursive
+@@ -1394,7 +1404,7 @@ main (int argc, char **argv)
+     }
+   else
+     do
+-      gobble_file (argv[i++], unknown, NOT_AN_INODE_NUMBER, true, "");
++      gobble_file (argv[i++], command_line, NOT_AN_INODE_NUMBER, true, "");
+     while (i < argc);
+ 
+   if (cwd_n_used)
+@@ -1565,7 +1575,7 @@ decode_switches (int argc, char **argv)
+   ignore_mode = IGNORE_DEFAULT;
+   ignore_patterns = NULL;
+   hide_patterns = NULL;
+-  print_scontext = false;
++  print_scontext = 0;
+ 
+   /* FIXME: put this in a function.  */
+   {
+@@ -1941,13 +1951,27 @@ decode_switches (int argc, char **argv)
+           break;
+ 
+         case 'Z':
+-          print_scontext = true;
++          print_scontext = 1;
++    format = security_format;
+           break;
+ 
+         case_GETOPT_HELP_CHAR;
+ 
+         case_GETOPT_VERSION_CHAR (PROGRAM_NAME, AUTHORS);
+ 
++  case CONTEXT_OPTION: /* default security context format */
++                print_scontext = 1;
++                format = security_format;
++                break;
++        case LCONTEXT_OPTION: /* long format plus security context */
++                print_scontext = 1;
++                format = long_format;
++                break;
++        case SCONTEXT_OPTION: /* short form of new security format */
++                print_scontext = 0;
++                format = security_format;
++                break;
++
+         default:
+           usage (LS_FAILURE);
+         }
+@@ -2883,6 +2907,7 @@ gobble_file (char const *name, enum file
+   memset (f, '\0', sizeof *f);
+   f->stat.st_ino = inode;
+   f->filetype = type;
++  f->scontext = NULL;
+ 
+   if (command_line_arg
+       || format_needs_stat
+@@ -2995,7 +3020,7 @@ gobble_file (char const *name, enum file
+           && print_with_color && is_colored (C_CAP))
+         f->has_capability = has_capability_cache (absolute_name, f);
+ 
+-      if (format == long_format || print_scontext)
++      if (format == long_format || format == security_format || print_scontext)
+         {
+           bool have_scontext = false;
+           bool have_acl = false;
+@@ -3016,7 +3041,7 @@ gobble_file (char const *name, enum file
+                 err = 0;
+             }
+ 
+-          if (err == 0 && format == long_format)
++          if (err == 0 && (format == long_format || format == security_format))
+             {
+               int n = file_has_acl_cache (absolute_name, f);
+               err = (n < 0);
+@@ -3035,7 +3060,8 @@ gobble_file (char const *name, enum file
+         }
+ 
+       if (S_ISLNK (f->stat.st_mode)
+-          && (format == long_format || check_symlink_color))
++          && (format == long_format || format == security_format
++              || check_symlink_color))
+         {
+           struct stat linkstats;
+ 
+@@ -3054,6 +3080,7 @@ gobble_file (char const *name, enum file
+                  command line are automatically traced if not being
+                  listed as files.  */
+               if (!command_line_arg || format == long_format
++                  || format == security_format
+                   || !S_ISDIR (linkstats.st_mode))
+                 {
+                   /* Get the linked-to file's mode for the filetype indicator
+@@ -3087,7 +3114,7 @@ gobble_file (char const *name, enum file
+             block_size_width = len;
+         }
+ 
+-      if (format == long_format)
++      if (format == long_format || format == security_format)
+         {
+           if (print_owner)
+             {
+@@ -3591,6 +3618,13 @@ print_current_files (void)
+           print_long_format (sorted_file[i]);
+           DIRED_PUTCHAR ('\n');
+         }
++     break;
++    case security_format:
++      for (i = 0; i < cwd_n_used; i++)
++      {
++        print_scontext_format (sorted_file[i]);
++        DIRED_PUTCHAR ('\n');
++      }
+       break;
+     }
+ }
+@@ -3753,6 +3787,67 @@ format_inode (char *buf, size_t buflen, 
+           : (char *) "?");
+ }
+ 
++/* Print info about f in scontext format */
++static void
++print_scontext_format (const struct fileinfo *f)
++{
++  char modebuf[12];
++
++  /* 7 fields that may require LONGEST_HUMAN_READABLE bytes,
++     1 10-byte mode string,
++     9 spaces, one following each of these fields, and
++     1 trailing NUL byte.  */
++
++  char init_bigbuf[7 * LONGEST_HUMAN_READABLE + 10  + 9 + 1];
++  char *buf = init_bigbuf;
++  char *p;
++
++  p = buf;
++
++  if ( print_scontext ) { /* zero means terse listing */
++    filemodestring (&f->stat, modebuf);
++    if (! any_has_acl)
++      modebuf[10] = '\0';
++    else if (f->acl_type == ACL_T_SELINUX_ONLY)
++      modebuf[10] = '.';
++    else if (f->acl_type == ACL_T_YES)
++      modebuf[10] = '+';
++    modebuf[11] = '\0';
++
++    /* print mode */
++
++    (void) sprintf (p, "%s ", modebuf);
++    p += strlen (p);
++
++    /* print standard user and group */
++
++    DIRED_FPUTS (buf, stdout, p - buf);
++    format_user (f->stat.st_uid, owner_width, f->stat_ok);
++    format_group (f->stat.st_gid, group_width, f->stat_ok);
++    p = buf;
++  }
++
++  (void) sprintf (p, "%-32s ", f->scontext ?: "");
++  p += strlen (p);
++
++  DIRED_INDENT ();
++  DIRED_FPUTS (buf, stdout, p - buf);
++  size_t w = print_name_with_quoting (f, false, &dired_obstack, p - buf);
++
++  if (f->filetype == symbolic_link) {
++      if (f->linkname) {
++          DIRED_FPUTS_LITERAL (" -> ", stdout);
++          print_name_with_quoting (f, true, NULL, (p - buf) + w + 4);
++          if (indicator_style != none)
++            print_type_indicator (f->stat_ok, f->linkmode, f->filetype);
++      }
++  }
++  else {
++    if (indicator_style != none)
++      print_type_indicator (f->stat_ok, f->stat.st_mode, f->filetype);
++  }
++}
++
+ /* Print information about F in long format.  */
+ static void
+ print_long_format (const struct fileinfo *f)
+@@ -3844,9 +3939,15 @@ print_long_format (const struct fileinfo
+      The latter is wrong when nlink_width is zero.  */
+   p += strlen (p);
+ 
++  if (print_scontext)
++    {
++      sprintf (p, "%-32s ", f->scontext ? f->scontext : "");
++      p += strlen (p);
++    }
++
+   DIRED_INDENT ();
+ 
+-  if (print_owner || print_group || print_author || print_scontext)
++  if (print_owner || print_group || print_author)
+     {
+       DIRED_FPUTS (buf, stdout, p - buf);
+ 
+@@ -3859,9 +3960,6 @@ print_long_format (const struct fileinfo
+       if (print_author)
+         format_user (f->stat.st_author, author_width, f->stat_ok);
+ 
+-      if (print_scontext)
+-        format_user_or_group (f->scontext, 0, scontext_width);
+-
+       p = buf;
+     }
+ 
+@@ -4207,9 +4305,6 @@ print_file_name_and_frills (const struct
+             : human_readable (ST_NBLOCKS (f->stat), buf, human_output_opts,
+                               ST_NBLOCKSIZE, output_block_size));
+ 
+-  if (print_scontext)
+-    printf ("%*s ", format == with_commas ? 0 : scontext_width, f->scontext);
+-
+   size_t width = print_name_with_quoting (f, false, NULL, start_col);
+ 
+   if (indicator_style != none)
+@@ -4417,9 +4512,6 @@ length_of_file_name_and_frills (const st
+                                             output_block_size))
+                 : block_size_width);
+ 
+-  if (print_scontext)
+-    len += 1 + (format == with_commas ? strlen (f->scontext) : scontext_width);
+-
+   quote_name (NULL, f->name, filename_quoting_options, &name_width);
+   len += name_width;
+ 
+@@ -4856,9 +4948,16 @@ Sort entries alphabetically if none of -
+   -w, --width=COLS           assume screen width instead of current value\n\
+   -x                         list entries by lines instead of by columns\n\
+   -X                         sort alphabetically by entry extension\n\
+-  -Z, --context              print any SELinux security context of each file\n\
+   -1                         list one file per line\n\
+ "), stdout);
++      fputs(_("\nSELinux options:\n\n\
++  --lcontext                 Display security context.   Enable -l. Lines\n\
++                             will probably be too wide for most displays.\n\
++  -Z, --context              Display security context so it fits on most\n\
++                             displays.  Displays only mode, user, group,\n\
++                             security context and file name.\n\
++  --scontext                 Display only security context and file name.\n\
++"), stdout);
+       fputs (HELP_OPTION_DESCRIPTION, stdout);
+       fputs (VERSION_OPTION_DESCRIPTION, stdout);
+       emit_size_note ();
+diff -urNp coreutils-8.21-orig/tests/misc/selinux.sh coreutils-8.21/tests/misc/selinux.sh
+--- coreutils-8.21-orig/tests/misc/selinux.sh	2013-01-31 01:46:24.000000000 +0100
++++ coreutils-8.21/tests/misc/selinux.sh	2013-02-15 14:31:58.957469955 +0100
+@@ -37,7 +37,7 @@ chcon $ctx f d p ||
+ 
+ # inspect that context with both ls -Z and stat.
+ for i in d f p; do
+-  c=$(ls -dogZ $i|cut -d' ' -f3); test x$c = x$ctx || fail=1
++  c=$(ls -dogZ $i|cut -d' ' -f4); test x$c = x$ctx || fail=1
+   c=$(stat --printf %C $i); test x$c = x$ctx || fail=1
+ done
+ 

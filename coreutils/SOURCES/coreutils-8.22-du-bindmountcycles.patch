@@ -1,0 +1,157 @@
+From dc1c0523a61932fb0c26a795b7e7391eadf2171a Mon Sep 17 00:00:00 2001
+From: Boris Ranto <branto@redhat.com>
+Date: Mon, 1 Dec 2014 09:24:14 +0100
+Subject: [PATCH 1/1] du: handle sub-bind-mount cycles gracefully
+
+This patch fixes the handling of sub-bind-mount cycles which are
+incorrectly detected as the file system errors.  If you bind mount the
+directory 'a' to its subdirectory 'a/b/c' and then run 'du a/b' you
+will get the circular dependency warning even though nothing is wrong
+with the file system.  This happens because the first directory that is
+traversed twice in this case is not a bind mount but a child of bind
+mount.  The solution is to traverse all the directories in the cycle
+that fts detected and check whether they are not a (bind) mount.
+
+* src/du.c (mount_point_in_fts_cycle): New function that checks whether
+any of the directories in the cycle that fts detected is a mount point.
+* src/du.c (process_file): Update the function to use the new function
+that looks up all the directories in the fts cycle instead of only the
+last one.
+* tests/du/bind-mount-dir-cycle-v2.sh: New test case that exhibits the
+described behavior.
+* tests/local.mk: Reference the new root test.
+---
+ src/du.c                            |   23 ++++++++++++++++++++-
+ tests/du/bind-mount-dir-cycle-v2.sh |   38 +++++++++++++++++++++++++++++++++++
+ tests/local.mk                      |    1 +
+ 3 files changed, 61 insertions(+), 1 deletions(-)
+ create mode 100755 tests/du/bind-mount-dir-cycle-v2.sh
+
+diff --git a/src/du.c b/src/du.c
+index ba20120..f5726c7 100644
+--- a/src/du.c
++++ b/src/du.c
+@@ -419,6 +419,27 @@ print_size (const struct duinfo *pdui, const char *string)
+   fflush (stdout);
+ }
+ 
++/* This function checks whether any of the directories in the cycle that
++   fts detected is a mount point.  */
++
++static bool
++mount_point_in_fts_cycle (FTSENT const *ent)
++{
++  FTSENT const *cycle_ent = ent->fts_cycle;
++
++  while (ent && ent != cycle_ent)
++    {
++      if (di_set_lookup (di_mnt, ent->fts_statp->st_dev,
++                         ent->fts_statp->st_ino) > 0)
++        {
++          return true;
++        }
++      ent = ent->fts_parent;
++    }
++
++  return false;
++}
++
+ /* This function is called once for every file system object that fts
+    encounters.  fts does a depth-first traversal.  This function knows
+    that and accumulates per-directory totals based on changes in
+@@ -514,15 +514,11 @@ process_file (FTS *fts, FTSENT *ent)
+           break;
+ 
+         case FTS_DC:
+-          if (cycle_warning_required (fts, ent))
++          /* If not following symlinks and not a (bind) mount point.  */
++          if (cycle_warning_required (fts, ent)
++              && ! mount_point_in_fts_cycle (ent))
+             {
+-              /* If this is a mount point, then diagnose it and avoid
+-                 the cycle.  */
+-              if (di_set_lookup (di_mnt, sb->st_dev, sb->st_ino))
+-                error (0, 0, _("mount point %s already traversed"),
+-                       quote (file));
+-              else
+-                emit_cycle_warning (file);
++              emit_cycle_warning (file);
+               return false;
+             }
+           return true;
+diff --git a/tests/du/bind-mount-dir-cycle-v2.sh b/tests/du/bind-mount-dir-cycle-v2.sh
+new file mode 100755
+index 0000000..08bfae2
+--- /dev/null
++++ b/tests/du/bind-mount-dir-cycle-v2.sh
+@@ -0,0 +1,38 @@
++#!/bin/sh
++# Check that du can handle sub-bind-mounts cycles as well.
++
++# Copyright (C) 2014 Free Software foundation, Inc.
++
++# This program is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++. "${srcdir=.}/tests/init.sh"; path_prepend_ ./src
++print_ver_ du
++require_root_
++
++cleanup_() { umount a/b/c; }
++
++mkdir -p a/b/c || framework_failure_
++mount --bind a a/b/c \
++  || skip_ 'This test requires mount with a working --bind option.'
++
++echo a/b/c > exp || framework_failure_
++echo a/b >> exp || framework_failure_
++
++du a/b > out 2> err || fail=1
++sed 's/^[0-9][0-9]*	//' out > k && mv k out
++
++compare /dev/null err || fail=1
++compare exp out || fail=1
++
++Exit $fail
+diff --git a/tests/local.mk b/tests/local.mk
+index 653c984..349e322 100644
+--- a/tests/local.mk
++++ b/tests/local.mk
+@@ -117,6 +117,7 @@ all_root_tests =				\
+   tests/dd/skip-seek-past-dev.sh		\
+   tests/df/problematic-chars.sh			\
+   tests/du/bind-mount-dir-cycle.sh		\
++  tests/du/bind-mount-dir-cycle-v2.sh		\
+   tests/id/setgid.sh				\
+   tests/install/install-C-root.sh		\
+   tests/ls/capability.sh			\
+-- 
+1.7.2.5
+diff -urNp coreutils-8.22-orig/tests/du/bind-mount-dir-cycle.sh coreutils-8.22/tests/du/bind-mount-dir-cycle.sh
+--- coreutils-8.22-orig/tests/du/bind-mount-dir-cycle.sh	2013-12-04 15:48:30.000000000 +0100
++++ coreutils-8.22/tests/du/bind-mount-dir-cycle.sh	2015-07-02 15:58:49.230632316 +0200
+@@ -27,12 +27,11 @@ mount --bind a a/b \
+   || skip_ "This test requires mount with a working --bind option."
+ 
+ echo a > exp || framework_failure_
+-echo "du: mount point 'a/b' already traversed" > exp-err || framework_failure_
+ 
+-du a > out 2> err && fail=1
++du a > out 2> err || fail=1
+ sed 's/^[0-9][0-9]*	//' out > k && mv k out
+ 
+-compare exp-err err || fail=1
++compare /dev/null err || fail=1
+ compare exp out || fail=1
+ 
+ Exit $fail
