@@ -96,6 +96,10 @@ Patch914: coreutils-8.22-failingtests.patch
 Patch950: coreutils-selinux.patch
 Patch951: coreutils-selinuxmanpages.patch
 
+#Disable duplicate files test for mock
+Patch1000: 0001-disable-test-for-mock-builds.patch
+
+
 Conflicts: filesystem < 3
 Provides: /bin/basename
 Provides: /bin/cat
@@ -215,6 +219,9 @@ the old GNU fileutils, sh-utils, and textutils packages.
 %patch950 -p1 -b .selinux
 %patch951 -p1 -b .selinuxman
 %patch5 -p1 -b .separate
+
+#aarch64/armhfp mock test
+%patch1000 -p1 -b .mock
 
 # patches added in RHEL-7.5
 %patch801 -p1
@@ -444,6 +451,9 @@ fi
 %{_sbindir}/chroot
 
 %changelog
+* Sun Apr 15 2018 Fabian Arrotin <arrfab@centos.org> - 8.22-21
+- add patch to disable skipduplicates test in mock
+
 * Mon Dec 04 2017 Kamil Dudka <kdudka@redhat.com> - 8.22-21
 - timeout: revert the last fix for a possible race (#1439465)
 
