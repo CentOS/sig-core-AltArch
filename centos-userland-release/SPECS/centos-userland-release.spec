@@ -14,7 +14,7 @@
 
 Name:           centos-userland-release
 Version:        %{base_release_version}
-Release:        %{centos_rel}%{?dist}.0.1
+Release:        %{centos_rel}%{?dist}.0.2
 Summary:        %{product_family} release file
 Group:          System Environment/Base
 License:        GPLv2
@@ -23,6 +23,7 @@ Provides:       centos-release(upstream) = %{upstream_rel}
 Provides:       redhat-release = %{upstream_rel_long}
 Provides:       system-release = %{upstream_rel_long}
 Provides:       system-release(releasever) = %{base_release_version}
+Requires:       coreutils, grep
 Source0:        centos-release-%{base_release_version}-%{centos_rel}.tar.gz
 Source1:        85-display-manager.preset
 Source2:        90-default.preset
