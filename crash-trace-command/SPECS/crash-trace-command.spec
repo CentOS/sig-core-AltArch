@@ -12,7 +12,7 @@ URL: http://people.redhat.com/anderson/extensions/%{name}-%{version}.tar.gz
 # Vendor: Fujitsu Limited
 # Packager: Qiao Nuohan <qiaonuohan@cn.fujitsu.com>
 ExclusiveOS: Linux
-ExclusiveArch: x86_64 %{ix86} ppc64 ia64 s390 s390x aarch64 ppc64le
+ExclusiveArch: x86_64 %{ix86} ppc64 ia64 s390 s390x aarch64 %{arm} ppc64le
 Buildroot: %{_tmppath}/%{name}-root
 BuildRequires: zlib-devel lzo-devel snappy-devel
 BuildRequires: crash-devel >= 7.2.0-2
@@ -29,6 +29,7 @@ Patch7: linux_4.2_support.patch
 Patch8: TRACE_EVENT_FL_TRACEPOINT_flag.patch
 Patch9: big_endian_nr_pages.patch
 Patch10: ppc64_ring_buffer_read.patch
+Patch1001: ARM32.patch
 
 %description
 Command for reading ftrace data from a dumpfile.
@@ -46,6 +47,7 @@ Command for reading ftrace data from a dumpfile.
 %patch8 -p1 -b TRACE_EVENT_FL_TRACEPOINT_flag.patch
 %patch9 -p1 -b big_endian_nr_pages.patch
 %patch10 -p1 -b ppc64_ring_buffer_read.patch
+%patch1001 -p1 -b ARM32.patch
 
 %build
 make
@@ -63,6 +65,9 @@ rm -rf %{buildroot}
 %doc COPYING
 
 %changelog
+* Mon Apr 16 2018 Pablo Greco <pablo@fliagreco.com.ar> - 2.0.13
+- Fix for armhfp
+
 * Wed Dec  6 2017 Dave Anderson <anderson@redhat.com> - 2.0.13
 - Build requires crash-devel-7.2.0-2 and usage requires crash-7.2.0-2
   because of load_module structure change.
