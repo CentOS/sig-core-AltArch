@@ -18,7 +18,7 @@
 %else
 %{!?with_dyninst: %global with_dyninst 0}
 %endif
-%ifarch aarch64
+%ifarch aarch64 %{arm}
 # aarch64 rhel7 kernel is new enough to have linux/bpf.h
 %{!?with_bpf: %global with_bpf 0%{?fedora} >= 22 || 0%{?rhel} >= 7}
 %else
@@ -1172,6 +1172,9 @@ done
 
 # PRERELEASE
 %changelog
+* Mon Apr 16 2018 Fabian Arrotin <arrfab@centos.org> - 3.2-7
+- added %{arm} for armhfp inclusion for "with_bpf" parameter
+
 * Mon Jan 29 2018 Frank Ch. Eigler <fche@redhat.com> - 3.2-4
 - rhbz1527809 (staprun detach with SIGQUIT)
 
