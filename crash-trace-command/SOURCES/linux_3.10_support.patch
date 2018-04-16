@@ -1,0 +1,152 @@
+--- crash-trace-command-2.0/trace.c.orig
++++ crash-trace-command-2.0/trace.c
+@@ -26,9 +26,21 @@ static int nr_cpu_ids;
+  */
+ static int lockless_ring_buffer;
+ static int per_cpu_buffer_sizes;
++/*
++ * global and encapsulated current_trace are both supported
++ */
++static int encapsulated_current_trace;
++/*
++ * trace_buffer is supported
++ */
++static int trace_buffer_available;
+ 
+ #define koffset(struct, member) struct##_##member##_offset
+ 
++static int koffset(trace_array, current_trace);
++static int koffset(trace_array, trace_buffer);
++static int koffset(trace_array, max_buffer);
++static int koffset(trace_buffer, buffer);
+ static int koffset(trace_array, buffer);
+ static int koffset(tracer, name);
+ 
+@@ -85,6 +97,8 @@ struct ring_buffer_per_cpu {
+ };
+ 
+ static ulong global_trace;
++static ulong global_trace_buffer;
++static ulong global_max_buffer;
+ static ulong global_ring_buffer;
+ static unsigned global_pages;
+ static struct ring_buffer_per_cpu *global_buffers;
+@@ -144,8 +158,16 @@ static int init_offsets(void)
+ 		}							\
+ 	} while (0)
+ 
++	if (encapsulated_current_trace)
++		init_offset(trace_array, current_trace);
+ 
+-	init_offset(trace_array, buffer);
++	if (trace_buffer_available) {
++		init_offset(trace_array, trace_buffer);
++		init_offset(trace_array, max_buffer);
++		init_offset(trace_buffer, buffer);
++	} else {
++		init_offset(trace_array, buffer);
++	}
+ 	init_offset(tracer, name);
+ 
+ 	if (MEMBER_EXISTS("ring_buffer_per_cpu", "nr_pages")) {
+@@ -400,8 +422,13 @@ out_fail:
+ 
+ static int ftrace_int_global_trace(void)
+ {
+-	read_value(global_ring_buffer, global_trace, trace_array, buffer);
+-	read_value(global_pages, global_ring_buffer, ring_buffer, pages);
++	if (trace_buffer_available) {
++		global_trace_buffer = global_trace + koffset(trace_array, trace_buffer);
++		read_value(global_ring_buffer, global_trace_buffer, trace_buffer, buffer);
++	} else {
++		read_value(global_ring_buffer, global_trace, trace_array, buffer);
++		read_value(global_pages, global_ring_buffer, ring_buffer, pages);
++	}
+ 
+ 	global_buffers = calloc(sizeof(*global_buffers), nr_cpu_ids);
+ 	if (global_buffers == NULL)
+@@ -420,12 +447,17 @@ out_fail:
+ 
+ static int ftrace_int_max_tr_trace(void)
+ {
+-	read_value(max_tr_ring_buffer, max_tr_trace, trace_array, buffer);
++	if (trace_buffer_available) {
++		global_max_buffer = global_trace + koffset(trace_array, max_buffer);
++		read_value(max_tr_ring_buffer, global_max_buffer, trace_buffer, buffer);
++	} else {
++		read_value(max_tr_ring_buffer, max_tr_trace, trace_array, buffer);
+ 
+-	if (!max_tr_ring_buffer)
+-		return 0;
++		if (!max_tr_ring_buffer)
++			return 0;
+ 
+-	read_value(max_tr_pages, max_tr_ring_buffer, ring_buffer, pages);
++		read_value(max_tr_pages, max_tr_ring_buffer, ring_buffer, pages);
++	}
+ 
+ 	max_tr_buffers = calloc(sizeof(*max_tr_buffers), nr_cpu_ids);
+ 	if (max_tr_buffers == NULL)
+@@ -449,7 +481,12 @@ static int ftrace_init_current_tracer(vo
+ 	char tmp[128];
+ 
+ 	/* Get current tracer name */
+-	read_value(addr, current_trace, POINTER_SYM, POINTER);
++	if (encapsulated_current_trace) {
++		read_value(addr, global_trace, trace_array, current_trace);
++	} else {
++		read_value(addr, current_trace, POINTER_SYM, POINTER);
++	}
++	
+ 	read_value(addr, addr, tracer, name);
+ 	read_string(addr, tmp, 128);
+ 
+@@ -471,19 +508,33 @@ static int ftrace_init(void)
+ 	struct syment *sym_current_trace;
+ 
+ 	sym_global_trace = symbol_search("global_trace");
+-	sym_max_tr_trace = symbol_search("max_tr");
+ 	sym_ftrace_events = symbol_search("ftrace_events");
+-	sym_current_trace = symbol_search("current_trace");
+ 
+-	if (sym_global_trace == NULL || sym_max_tr_trace == NULL
+-			|| sym_ftrace_events == NULL
+-			|| sym_current_trace == NULL)
++	if (sym_global_trace == NULL || sym_ftrace_events == NULL)
+ 		return -1;
+ 
+ 	global_trace = sym_global_trace->value;
+-	max_tr_trace = sym_max_tr_trace->value;
+ 	ftrace_events = sym_ftrace_events->value;
+-	current_trace = sym_current_trace->value;
++
++	if (MEMBER_EXISTS("trace_array", "current_trace")) {
++		encapsulated_current_trace = 1;
++	} else {
++		sym_current_trace = symbol_search("current_trace");
++		if (sym_current_trace == NULL)
++			return -1;
++
++		current_trace = sym_current_trace->value;
++	}
++
++	if (MEMBER_EXISTS("trace_array", "trace_buffer")) {
++		trace_buffer_available = 1;
++	} else {
++		sym_max_tr_trace = symbol_search("max_tr");
++		if (sym_max_tr_trace == NULL)
++			return -1;
++
++		max_tr_trace = sym_max_tr_trace->value;
++	}
+ 
+ 	if (!try_get_symbol_data("nr_cpu_ids", sizeof(int), &nr_cpu_ids))
+ 		nr_cpu_ids = 1;
+@@ -1453,6 +1504,7 @@ static void ftrace_show(int argc, char *
+ 	if ((file = popen(trace_cmd, "r"))) {
+ 		ret = fread(buf, 1, sizeof(buf), file);
+ 		buf[ret] = 0;
++		pclose(file);
+ 	}
+ 	if (!strstr(buf, "trace-cmd version")) {
+ 		if (env_trace_cmd)
