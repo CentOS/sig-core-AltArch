@@ -1,0 +1,114 @@
+From bca125ee785104fbffdcf487b22599e3c9980f06 Mon Sep 17 00:00:00 2001
+From: Tomas Jelinek <tojeline@redhat.com>
+Date: Tue, 5 Dec 2017 15:10:43 +0100
+Subject: [PATCH] gui: allow forcing resource|stonith create|update
+
+---
+ pcsd/pcsd.rb           |  3 +++
+ pcsd/public/js/pcsd.js | 39 +++++++++++++++++++++++++--------------
+ pcsd/remote.rb         |  2 +-
+ 3 files changed, 29 insertions(+), 15 deletions(-)
+
+diff --git a/pcsd/pcsd.rb b/pcsd/pcsd.rb
+index f97dabc..8f5ad81 100644
+--- a/pcsd/pcsd.rb
++++ b/pcsd/pcsd.rb
+@@ -211,6 +211,9 @@ helpers do
+       if param == "disabled"
+         meta_options << 'meta' << 'target-role=Stopped'
+       end
++      if param == "force" and val
++        param_line << "--force"
++      end
+     }
+     return param_line + meta_options
+   end
+diff --git a/pcsd/public/js/pcsd.js b/pcsd/public/js/pcsd.js
+index b7e9a7a..2956530 100644
+--- a/pcsd/public/js/pcsd.js
++++ b/pcsd/public/js/pcsd.js
+@@ -286,9 +286,24 @@ function create_node(form) {
+   });
+ }
+ 
++function create_resource_error_processing(error_message, form, update, stonith) {
++  var message = (
++    "Unable to " + (update ? "update " : "add ") + name + "\n" + error_message
++  );
++  if (message.indexOf('--force') == -1) {
++    alert(message);
++  }
++  else {
++    message = message.replace(', use --force to override', '');
++    if (confirm(message + "\n\nDo you want to force the operation?")) {
++      create_resource(form, update, stonith, true)
++    }
++  }
++}
++
+ // If update is set to true we update the resource instead of create it
+ // if stonith is set to true we update/create a stonith agent
+-function create_resource(form, update, stonith) {
++function create_resource(form, update, stonith, force) {
+   var data = {};
+   $($(form).serializeArray()).each(function(index, obj) {
+     data[obj.name] = obj.value;
+@@ -303,6 +318,9 @@ function create_resource(form, update, stonith) {
+   } else {
+     name = "resource";
+   }
++  if (force) {
++    data["force"] = force;
++  }
+ 
+   ajax_wrapper({
+     type: "POST",
+@@ -312,7 +330,9 @@ function create_resource(form, update, stonith) {
+     success: function(returnValue) {
+       $('input.apply_changes').show();
+       if (returnValue["error"] == "true") {
+-        alert(returnValue["stderr"]);
++        create_resource_error_processing(
++          returnValue["stderr"], form, update, stonith
++        );
+       } else {
+         Pcs.update();
+         if (!update) {
+@@ -326,18 +346,9 @@ function create_resource(form, update, stonith) {
+       }
+     },
+     error: function(xhr, status, error) {
+-      if (update) {
+-        alert(
+-          "Unable to update " + name + " "
+-          + ajax_simple_error(xhr, status, error)
+-        );
+-      }
+-      else {
+-        alert(
+-          "Unable to add " + name + " "
+-          + ajax_simple_error(xhr, status, error)
+-        );
+-      }
++      create_resource_error_processing(
++        ajax_simple_error(xhr, status, error), form, update, stonith
++      );
+       $('input.apply_changes').show();
+     }
+   });
+diff --git a/pcsd/remote.rb b/pcsd/remote.rb
+index e1e95a8..518e668 100644
+--- a/pcsd/remote.rb
++++ b/pcsd/remote.rb
+@@ -1494,7 +1494,7 @@ def update_resource (params, request, auth_user)
+       end
+       resource_group = params[:resource_group]
+     end
+-    if params[:resource_type] == "ocf:pacemaker:remote"
++    if params[:resource_type] == "ocf:pacemaker:remote" and not cmd.include?("--force")
+       # Workaround for Error: this command is not sufficient for create remote
+       # connection, use 'pcs cluster node add-remote', use --force to override.
+       # It is not possible to specify meta attributes so we don't need to take
+-- 
+1.8.3.1
+

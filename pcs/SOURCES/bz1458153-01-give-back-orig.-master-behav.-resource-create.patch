@@ -1,0 +1,571 @@
+From fe7151898fed1b6383a49db26426c3f23c5ff7f2 Mon Sep 17 00:00:00 2001
+From: Ivan Devat <idevat@redhat.com>
+Date: Mon, 5 Jun 2017 17:13:41 +0200
+Subject: [PATCH] give back orig. --master behav. (resource create)
+
+---
+ pcs/cli/common/parse_args.py           |   8 +-
+ pcs/cli/common/test/test_parse_args.py |  34 ++++++-
+ pcs/resource.py                        |  19 ++++
+ pcs/test/cib_resource/test_create.py   | 181 ++++++++++++++++++++++++++-------
+ pcs/test/test_constraints.py           |  28 ++---
+ pcs/test/test_resource.py              |  10 +-
+ pcs/utils.py                           |   7 ++
+ 7 files changed, 228 insertions(+), 59 deletions(-)
+
+diff --git a/pcs/cli/common/parse_args.py b/pcs/cli/common/parse_args.py
+index 70b926c0..d3151043 100644
+--- a/pcs/cli/common/parse_args.py
++++ b/pcs/cli/common/parse_args.py
+@@ -299,7 +299,13 @@ def upgrade_args(arg_list):
+             and
+             args_without_options[:2] == ["resource", "create"]
+         ):
+-            upgraded_args.append("master")
++            #upgraded_args.append("master")
++
++            #We do not replace flag --master with keyword "manster" here because
++            #we want to give grace period to openstack that uses original
++            #missbehaviour.
++            #see https://bugzilla.redhat.com/show_bug.cgi?id=1458153
++            upgraded_args.append(arg)
+         else:
+             upgraded_args.append(arg)
+     return upgraded_args
+diff --git a/pcs/cli/common/test/test_parse_args.py b/pcs/cli/common/test/test_parse_args.py
+index efe38d0e..900094c9 100644
+--- a/pcs/cli/common/test/test_parse_args.py
++++ b/pcs/cli/common/test/test_parse_args.py
+@@ -486,9 +486,21 @@ class UpgradeArgs(TestCase):
+             upgrade_args(["first", "--cloneopt=1", "second"])
+         )
+ 
+-    def test_upgrade_2dash_master_in_resource_create(self):
+-        self.assertEqual(
+-            ["resource", "create", "master", "second"],
++    # def test_upgrade_2dash_master_in_resource_create(self):
++    #     self.assertEqual(
++    #         ["resource", "create", "master", "second"],
++    #         upgrade_args(["resource", "create", "--master", "second"])
++    #     )
++
++    def test_do_not_upgrade_2dash_master_in_resource_create__original_behaviour(
++        self
++    ):
++        """
++        downstream temporary behaviour
++        fixes bz 1458153
++        """
++        self.assertEqual(
++            ["resource", "create", "--master", "second"],
+             upgrade_args(["resource", "create", "--master", "second"])
+         )
+ 
+@@ -498,10 +510,22 @@ class UpgradeArgs(TestCase):
+             upgrade_args(["first", "--master", "second"])
+         )
+ 
+-    def test_upgrade_2dash_master_in_resource_create_with_complications(self):
++    # def test_upgrade_2dash_master_in_resource_create_with_complications(self):
++    #     self.assertEqual(
++    #         [
++    #             "-f", "path/to/file", "resource", "-V", "create", "master",
++    #             "second"
++    #         ],
++    #         upgrade_args([
++    #             "-f", "path/to/file", "resource", "-V", "create", "--master",
++    #             "second"
++    #         ])
++    #     )
++
++    def test_no_upgrade_2dash_master_complications__original_behaviour(self):
+         self.assertEqual(
+             [
+-                "-f", "path/to/file", "resource", "-V", "create", "master",
++                "-f", "path/to/file", "resource", "-V", "create", "--master",
+                 "second"
+             ],
+             upgrade_args([
+diff --git a/pcs/resource.py b/pcs/resource.py
+index 082bd9d1..6637f806 100644
+--- a/pcs/resource.py
++++ b/pcs/resource.py
+@@ -384,6 +384,25 @@ def resource_create(lib, argv, modifiers):
+     ra_type = argv[1]
+ 
+     parts = parse_create_args(argv[2:])
++
++    if modifiers["master"] and "master" in parts:
++        raise error("you cannot specify both --master and master")
++
++    #This is for `pcs resource create`. Fix of the bug
++    #https://bugzilla.redhat.com/show_bug.cgi?id=1378107
++    #caused problems in openstack which uses `pcs resource create`
++    #see https://bugzilla.redhat.com/show_bug.cgi?id=1458153
++    #so we give back the original misbehavior of master here temporarily.
++    #When user uses `--master` she gets the original behaviour. With `master`
++    #she gets new behaviour.
++    if modifiers["master"]:
++        warn(
++            "flag '--master' is deprecated, use keyword 'master' instead (see"
++            " the usage)"
++        )
++        parts["master"] = parts["meta"]
++        parts["meta"] = {}
++
+     parts_sections = ["clone", "master", "bundle"]
+     defined_options = [opt for opt in parts_sections if opt in parts]
+     if modifiers["group"]:
+diff --git a/pcs/test/cib_resource/test_create.py b/pcs/test/cib_resource/test_create.py
+index cfb2e645..c554ec24 100644
+--- a/pcs/test/cib_resource/test_create.py
++++ b/pcs/test/cib_resource/test_create.py
+@@ -233,7 +233,7 @@ class Success(ResourceTest):
+     def test_with_master(self):
+         self.assert_effect(
+             [
+-                "resource create R ocf:heartbeat:Dummy --no-default-ops --master",
++                # "resource create R ocf:heartbeat:Dummy --no-default-ops --master",
+                 "resource create R ocf:heartbeat:Dummy --no-default-ops master",
+             ],
+             """<resources>
+@@ -654,7 +654,7 @@ class SuccessGroup(ResourceTest):
+ class SuccessMaster(ResourceTest):
+     def test_disable_is_on_master_element(self):
+         self.assert_effect(
+-            "resource create R ocf:heartbeat:Dummy --no-default-ops --disabled --master",
++            "resource create R ocf:heartbeat:Dummy --no-default-ops --disabled master",
+             """<resources>
+                 <master id="R-master">
+                     <meta_attributes id="R-master-meta_attributes">
+@@ -675,13 +675,55 @@ class SuccessMaster(ResourceTest):
+             </resources>"""
+         )
+ 
+-    def test_put_options_after_master_as_its_meta_fix_1(self):
++    # def test_put_options_after_master_as_its_meta_fix_1(self):
++    #     """
++    #     fixes bz 1378107 (do not use master options as primitive options)
++    #     """
++    #     self.assert_effect(
++    #         "resource create R ocf:heartbeat:Dummy state=a"
++    #             " --master is-managed=false --force"
++    #         ,
++    #         """<resources>
++    #             <master id="R-master">
++    #                 <primitive class="ocf" id="R" provider="heartbeat"
++    #                     type="Dummy"
++    #                 >
++    #                     <instance_attributes id="R-instance_attributes">
++    #                         <nvpair id="R-instance_attributes-state"
++    #                             name="state" value="a"
++    #                         />
++    #                     </instance_attributes>
++    #                     <operations>
++    #                         <op id="R-monitor-interval-10" interval="10"
++    #                             name="monitor" timeout="20"
++    #                         />
++    #                         <op id="R-start-interval-0s" interval="0s"
++    #                             name="start" timeout="20"
++    #                         />
++    #                         <op id="R-stop-interval-0s" interval="0s"
++    #                             name="stop" timeout="20"
++    #                         />
++    #                     </operations>
++    #                 </primitive>
++    #                 <meta_attributes id="R-master-meta_attributes">
++    #                     <nvpair id="R-master-meta_attributes-is-managed"
++    #                         name="is-managed" value="false"
++    #                 />
++    #                 </meta_attributes>
++    #             </master>
++    #         </resources>"""
++    #     )
++
++    def test_put_options_after_master_as_primitive_options__original_behaviour(
++        self
++    ):
+         """
+-        fixes bz 1378107 (do not use master options as primitive options)
++        downstream temporary behaviour
++        fixes bz 1458153
+         """
+         self.assert_effect(
+             "resource create R ocf:heartbeat:Dummy state=a"
+-                " --master is-managed=false --force"
++                " --master fake=false --force"
+             ,
+             """<resources>
+                 <master id="R-master">
+@@ -689,6 +731,9 @@ class SuccessMaster(ResourceTest):
+                         type="Dummy"
+                     >
+                         <instance_attributes id="R-instance_attributes">
++                            <nvpair id="R-instance_attributes-fake" name="fake"
++                                value="false"
++                            />
+                             <nvpair id="R-instance_attributes-state"
+                                 name="state" value="a"
+                             />
+@@ -714,22 +759,58 @@ class SuccessMaster(ResourceTest):
+                             />
+                         </operations>
+                     </primitive>
+-                    <meta_attributes id="R-master-meta_attributes">
+-                        <nvpair id="R-master-meta_attributes-is-managed"
+-                            name="is-managed" value="false"
+-                    />
+-                    </meta_attributes>
+                 </master>
+             </resources>"""
+-        )
+-
+-    def test_put_options_after_master_as_its_meta_fix_2(self):
++            ,
++            output="Warning: flag '--master' is deprecated, use keyword"
++                " 'master' instead (see the usage)\n"
++        )
++
++
++    # def test_put_options_after_master_as_its_meta_fix_2(self):
++    #     """
++    #     fixes bz 1378107 (do not use master options as operations)
++    #     """
++    #     self.assert_effect(
++    #         "resource create R ocf:heartbeat:Dummy state=a op monitor"
++    #             " interval=10s --master is-managed=false --force"
++    #             " --no-default-ops"
++    #         ,
++    #         """<resources>
++    #             <master id="R-master">
++    #                 <primitive class="ocf" id="R" provider="heartbeat"
++    #                     type="Dummy"
++    #                 >
++    #                     <instance_attributes id="R-instance_attributes">
++    #                         <nvpair id="R-instance_attributes-state"
++    #                             name="state" value="a"
++    #                         />
++    #                     </instance_attributes>
++    #                     <operations>
++    #                         <op id="R-monitor-interval-10s" interval="10s"
++    #                             name="monitor"
++    #                         />
++    #                     </operations>
++    #                 </primitive>
++    #                 <meta_attributes id="R-master-meta_attributes">
++    #                     <nvpair id="R-master-meta_attributes-is-managed"
++    #                         name="is-managed" value="false"
++    #                 />
++    #                 </meta_attributes>
++    #             </master>
++    #         </resources>"""
++    #     )
++
++    def test_put_options_after_master_as_operation_opts__original_behaviour(
++        self
++    ):
+         """
+-        fixes bz 1378107 (do not use master options as operations)
++        downstream temporary behaviour
++        fixes bz 1458153
+         """
+         self.assert_effect(
+             "resource create R ocf:heartbeat:Dummy state=a op monitor"
+-                " interval=10s --master is-managed=false --force"
++                " interval=10s --master timeout=3m --force"
+                 " --no-default-ops"
+             ,
+             """<resources>
+@@ -744,22 +825,53 @@ class SuccessMaster(ResourceTest):
+                         </instance_attributes>
+                         <operations>
+                             <op id="R-monitor-interval-10s" interval="10s"
+-                                name="monitor"
++                                name="monitor" timeout="3m"
+                             />
+                         </operations>
+                     </primitive>
+-                    <meta_attributes id="R-master-meta_attributes">
+-                        <nvpair id="R-master-meta_attributes-is-managed"
+-                            name="is-managed" value="false"
+-                    />
+-                    </meta_attributes>
+                 </master>
+             </resources>"""
+-        )
+-
+-    def test_do_not_steal_primitive_meta_options(self):
++            ,
++            output="Warning: flag '--master' is deprecated, use keyword"
++                " 'master' instead (see the usage)\n"
++        )
++
++    # def test_do_not_steal_primitive_meta_options(self):
++    #     """
++    #     fixes bz 1378107
++    #     """
++    #     self.assert_effect(
++    #         "resource create R ocf:heartbeat:Dummy meta a=b --master b=c"
++    #             " --no-default-ops"
++    #         ,
++    #         """<resources>
++    #             <master id="R-master">
++    #                 <primitive class="ocf" id="R" provider="heartbeat"
++    #                     type="Dummy"
++    #                 >
++    #                     <meta_attributes id="R-meta_attributes">
++    #                         <nvpair id="R-meta_attributes-a" name="a"
++    #                             value="b"
++    #                         />
++    #                     </meta_attributes>
++    #                     <operations>
++    #                         <op id="R-monitor-interval-10" interval="10"
++    #                             name="monitor" timeout="20"
++    #                         />
++    #                     </operations>
++    #                 </primitive>
++    #                 <meta_attributes id="R-master-meta_attributes">
++    #                     <nvpair id="R-master-meta_attributes-b" name="b"
++    #                         value="c"
++    #                     />
++    #                 </meta_attributes>
++    #             </master>
++    #         </resources>"""
++    #     )
++    def test_steals_primitive_meta_options__original_behaviour(self):
+         """
+-        fixes bz 1378107
++        downstream temporary behaviour
++        fixes bz 1458153
+         """
+         self.assert_effect(
+             "resource create R ocf:heartbeat:Dummy meta a=b --master b=c"
+@@ -770,11 +882,6 @@ class SuccessMaster(ResourceTest):
+                     <primitive class="ocf" id="R" provider="heartbeat"
+                         type="Dummy"
+                     >
+-                        <meta_attributes id="R-meta_attributes">
+-                            <nvpair id="R-meta_attributes-a" name="a"
+-                                value="b"
+-                            />
+-                        </meta_attributes>
+                         <operations>
+                             <op id="R-monitor-interval-10" interval="10"
+                                 name="monitor" timeout="20"
+@@ -782,18 +889,24 @@ class SuccessMaster(ResourceTest):
+                         </operations>
+                     </primitive>
+                     <meta_attributes id="R-master-meta_attributes">
++                        <nvpair id="R-master-meta_attributes-a" name="a"
++                            value="b"
++                        />
+                         <nvpair id="R-master-meta_attributes-b" name="b"
+                             value="c"
+                         />
+                     </meta_attributes>
+                 </master>
+             </resources>"""
++            ,
++            output="Warning: flag '--master' is deprecated, use keyword"
++                " 'master' instead (see the usage)\n"
+         )
+ 
+     def test_takes_master_meta_attributes(self):
+         self.assert_effect(
+             "resource create --no-default-ops R ocf:heartbeat:IPaddr2"
+-                " ip=192.168.0.99 --master cidr_netmask=32"
++                " ip=192.168.0.99 master cidr_netmask=32"
+             ,
+             """<resources>
+                 <master id="R-master">
+@@ -1041,7 +1154,7 @@ class FailOrWarn(ResourceTest):
+     def test_error_master_clone_combination(self):
+         self.assert_pcs_fail(
+             "resource create R ocf:heartbeat:Dummy --no-default-ops --clone"
+-                " --master"
++                " master"
+             ,
+             "Error: you can specify only one of clone, master, bundle or"
+                 " --group\n"
+@@ -1049,7 +1162,7 @@ class FailOrWarn(ResourceTest):
+ 
+     def test_error_master_group_combination(self):
+         self.assert_pcs_fail(
+-            "resource create R ocf:heartbeat:Dummy --no-default-ops --master"
++            "resource create R ocf:heartbeat:Dummy --no-default-ops master"
+                 " --group G"
+             ,
+             "Error: you can specify only one of clone, master, bundle or"
+@@ -1067,7 +1180,7 @@ class FailOrWarn(ResourceTest):
+ 
+     def test_error_bundle_master_combination(self):
+         self.assert_pcs_fail(
+-            "resource create R ocf:heartbeat:Dummy --no-default-ops --master"
++            "resource create R ocf:heartbeat:Dummy --no-default-ops master"
+                 " bundle bundle_id"
+             ,
+             "Error: you can specify only one of clone, master, bundle or"
+diff --git a/pcs/test/test_constraints.py b/pcs/test/test_constraints.py
+index 9f0bc5d6..f5973410 100644
+--- a/pcs/test/test_constraints.py
++++ b/pcs/test/test_constraints.py
+@@ -346,43 +346,43 @@ Ticket Constraints:
+ 
+     def testColocationConstraints(self):
+         # see also BundleColocation
+-        line = "resource create M1 ocf:heartbeat:Dummy --master"
++        line = "resource create M1 ocf:heartbeat:Dummy master"
+         output, returnVal = pcs(temp_cib, line)
+         assert returnVal == 0 and output == ""
+ 
+-        line = "resource create M2 ocf:heartbeat:Dummy --master"
++        line = "resource create M2 ocf:heartbeat:Dummy master"
+         output, returnVal = pcs(temp_cib, line)
+         assert returnVal == 0 and output == ""
+ 
+-        line = "resource create M3 ocf:heartbeat:Dummy --master"
++        line = "resource create M3 ocf:heartbeat:Dummy master"
+         output, returnVal = pcs(temp_cib, line)
+         assert returnVal == 0 and output == "",[returnVal, output]
+ 
+-        line = "resource create M4 ocf:heartbeat:Dummy --master"
++        line = "resource create M4 ocf:heartbeat:Dummy master"
+         output, returnVal = pcs(temp_cib, line)
+         assert returnVal == 0 and output == "",[returnVal, output]
+ 
+-        line = "resource create M5 ocf:heartbeat:Dummy --master"
++        line = "resource create M5 ocf:heartbeat:Dummy master"
+         output, returnVal = pcs(temp_cib, line)
+         assert returnVal == 0 and output == "",[returnVal, output]
+ 
+-        line = "resource create M6 ocf:heartbeat:Dummy --master"
++        line = "resource create M6 ocf:heartbeat:Dummy master"
+         output, returnVal = pcs(temp_cib, line)
+         assert returnVal == 0 and output == "",[returnVal, output]
+ 
+-        line = "resource create M7 ocf:heartbeat:Dummy --master"
++        line = "resource create M7 ocf:heartbeat:Dummy master"
+         output, returnVal = pcs(temp_cib, line)
+         assert returnVal == 0 and output == "",[returnVal, output]
+ 
+-        line = "resource create M8 ocf:heartbeat:Dummy --master"
++        line = "resource create M8 ocf:heartbeat:Dummy master"
+         output, returnVal = pcs(temp_cib, line)
+         assert returnVal == 0 and output == "",[returnVal, output]
+ 
+-        line = "resource create M9 ocf:heartbeat:Dummy --master"
++        line = "resource create M9 ocf:heartbeat:Dummy master"
+         output, returnVal = pcs(temp_cib, line)
+         assert returnVal == 0 and output == "",[returnVal, output]
+ 
+-        line = "resource create M10 ocf:heartbeat:Dummy --master"
++        line = "resource create M10 ocf:heartbeat:Dummy master"
+         output, returnVal = pcs(temp_cib, line)
+         assert returnVal == 0 and output == ""
+ 
+@@ -929,7 +929,7 @@ Ticket Constraints:
+         assert returnVal == 1
+ 
+     def testLocationBadRules(self):
+-        o,r = pcs("resource create stateful0 ocf:heartbeat:Dummy --master")
++        o,r = pcs("resource create stateful0 ocf:heartbeat:Dummy master")
+         ac(o,"")
+         assert r == 0
+ 
+@@ -950,7 +950,7 @@ Ticket Constraints:
+ """)
+         assert r == 0
+ 
+-        o,r = pcs("resource create stateful1 ocf:heartbeat:Dummy --master")
++        o,r = pcs("resource create stateful1 ocf:heartbeat:Dummy master")
+         ac(o,"")
+         assert r == 0
+ 
+@@ -989,7 +989,7 @@ Ticket Constraints:
+         ac(o,"")
+         assert r == 0
+ 
+-        o,r = pcs("resource create stateful1 ocf:pacemaker:Stateful --master")
++        o,r = pcs("resource create stateful1 ocf:pacemaker:Stateful master")
+         ac(o, """\
+ Warning: changing a monitor operation interval from 10 to 11 to make the operation unique
+ """)
+@@ -1110,7 +1110,7 @@ Ticket Constraints:
+         self.assertEqual(0, returnVal)
+ 
+         output, returnVal = pcs(
+-            "resource create stateful1 ocf:pacemaker:Stateful --master"
++            "resource create stateful1 ocf:pacemaker:Stateful master"
+         )
+         ac(output, """\
+ Warning: changing a monitor operation interval from 10 to 11 to make the operation unique
+diff --git a/pcs/test/test_resource.py b/pcs/test/test_resource.py
+index bd596f64..d8f68c12 100644
+--- a/pcs/test/test_resource.py
++++ b/pcs/test/test_resource.py
+@@ -2826,7 +2826,7 @@ Ticket Constraints:
+ 
+         output, returnVal  = pcs(
+             temp_cib,
+-            "resource create --no-default-ops D2 ocf:heartbeat:Dummy --master"
++            "resource create --no-default-ops D2 ocf:heartbeat:Dummy master"
+         )
+         assert returnVal == 0
+         assert output == "", [output]
+@@ -2919,7 +2919,7 @@ Warning: changing a monitor operation interval from 10 to 11 to make the operati
+         ac(o,"")
+         assert r == 0
+ 
+-        o,r = pcs("resource create D3 ocf:heartbeat:Dummy --master")
++        o,r = pcs("resource create D3 ocf:heartbeat:Dummy master")
+         ac(o,"")
+         assert r == 0
+ 
+@@ -3133,7 +3133,7 @@ Warning: changing a monitor operation interval from 10 to 11 to make the operati
+ 
+         output, returnVal = pcs(
+             temp_cib,
+-            "resource create --no-default-ops dummy ocf:heartbeat:Dummy --master"
++            "resource create --no-default-ops dummy ocf:heartbeat:Dummy master"
+         )
+         ac(output, "")
+         self.assertEqual(0, returnVal)
+@@ -3727,7 +3727,7 @@ Error: Cannot remove more than one resource from cloned group
+         # However those test the pcs library. I'm leaving these tests here to
+         # test the cli part for now.
+         self.assert_pcs_success(
+-            "resource create --no-default-ops dummy ocf:pacemaker:Stateful --master",
++            "resource create --no-default-ops dummy ocf:pacemaker:Stateful master",
+             "Warning: changing a monitor operation interval from 10 to 11 to make the operation unique\n"
+         )
+ 
+@@ -4761,7 +4761,7 @@ class CloneMasterUpdate(unittest.TestCase, AssertPcsMixin):
+ 
+     def test_no_op_allowed_in_master_update(self):
+         self.assert_pcs_success(
+-            "resource create dummy ocf:heartbeat:Dummy --master"
++            "resource create dummy ocf:heartbeat:Dummy master"
+         )
+         self.assert_pcs_success("resource show dummy-master", outdent(
+             """\
+diff --git a/pcs/utils.py b/pcs/utils.py
+index 5b608239..9b46810f 100644
+--- a/pcs/utils.py
++++ b/pcs/utils.py
+@@ -2861,6 +2861,13 @@ def get_modificators():
+         "start": "--start" in pcs_options,
+         "wait": pcs_options.get("--wait", False),
+         "watchdog": pcs_options.get("--watchdog", []),
++
++        #This is for `pcs resource create`. Fix of the bug
++        #https://bugzilla.redhat.com/show_bug.cgi?id=1378107
++        #caused problems in openstack which uses `pcs resource create`
++        #see https://bugzilla.redhat.com/show_bug.cgi?id=1458153
++        #so we give back the original misbehavior of master here temporarily.
++        "master": "--master" in pcs_options,
+     }
+ 
+ def exit_on_cmdline_input_errror(error, main_name, usage_name):
+-- 
+2.13.6
+

@@ -1,0 +1,524 @@
+From 663143e3abbf2798a3c780c691242511b64046a2 Mon Sep 17 00:00:00 2001
+From: Tomas Jelinek <tojeline@redhat.com>
+Date: Wed, 6 Dec 2017 17:38:15 +0100
+Subject: [PATCH] fix a crash when --wait is used in stonith create
+
+---
+ pcs/lib/commands/stonith.py                       |  19 ++-
+ pcs/lib/commands/test/test_stonith.py             | 188 ++++++++++++++++++++++
+ pcs/lib/resource_agent.py                         |   4 +
+ pcs/test/resources/stonith_agent_fence_simple.xml |  33 ++++
+ pcs/test/resources/stonithd_metadata.xml          | 156 ++++++++++++++++++
+ pcs/test/tools/command_env/config_runner_pcmk.py  |  36 +++++
+ 6 files changed, 430 insertions(+), 6 deletions(-)
+ create mode 100644 pcs/lib/commands/test/test_stonith.py
+ create mode 100644 pcs/test/resources/stonith_agent_fence_simple.xml
+ create mode 100644 pcs/test/resources/stonithd_metadata.xml
+
+diff --git a/pcs/lib/commands/stonith.py b/pcs/lib/commands/stonith.py
+index bb9fb98..584e1b2 100644
+--- a/pcs/lib/commands/stonith.py
++++ b/pcs/lib/commands/stonith.py
+@@ -4,11 +4,14 @@ from __future__ import (
+     print_function,
+ )
+ 
+-from pcs.lib.resource_agent import find_valid_stonith_agent_by_name as get_agent
+ from pcs.lib.cib import resource
+ from pcs.lib.cib.resource.common import are_meta_disabled
++from pcs.lib.commands.resource import (
++    _ensure_disabled_after_wait,
++    resource_environment
++)
+ from pcs.lib.pacemaker.values import validate_id
+-from pcs.lib.commands.resource import resource_environment
++from pcs.lib.resource_agent import find_valid_stonith_agent_by_name as get_agent
+ 
+ def create(
+     env, stonith_id, stonith_agent_name,
+@@ -55,8 +58,10 @@ def create(
+     with resource_environment(
+         env,
+         wait,
+-        stonith_id,
+-        ensure_disabled or are_meta_disabled(meta_attributes),
++        [stonith_id],
++        _ensure_disabled_after_wait(
++            ensure_disabled or are_meta_disabled(meta_attributes),
++        )
+     ) as resources_section:
+         stonith_element = resource.primitive.create(
+             env.report_processor,
+@@ -125,8 +130,10 @@ def create_in_group(
+     with resource_environment(
+         env,
+         wait,
+-        stonith_id,
+-        ensure_disabled or are_meta_disabled(meta_attributes),
++        [stonith_id],
++        _ensure_disabled_after_wait(
++            ensure_disabled or are_meta_disabled(meta_attributes),
++        )
+     ) as resources_section:
+         stonith_element = resource.primitive.create(
+             env.report_processor, resources_section,
+diff --git a/pcs/lib/commands/test/test_stonith.py b/pcs/lib/commands/test/test_stonith.py
+new file mode 100644
+index 0000000..912742f
+--- /dev/null
++++ b/pcs/lib/commands/test/test_stonith.py
+@@ -0,0 +1,188 @@
++from __future__ import (
++    absolute_import,
++    division,
++    print_function,
++)
++
++from pcs.common import report_codes
++from pcs.lib.commands import stonith
++from pcs.lib.resource_agent import StonithAgent
++from pcs.test.tools import fixture
++from pcs.test.tools.command_env import get_env_tools
++from pcs.test.tools.pcs_unittest import TestCase
++
++
++class Create(TestCase):
++    def setUp(self):
++        self.env_assist, self.config = get_env_tools(test_case=self)
++        self.agent_name = "test_simple"
++        self.instance_name = "stonith-test"
++        self.timeout = 10
++        self.expected_cib = """
++            <resources>
++                <primitive class="stonith" id="stonith-test" type="test_simple">
++                    <instance_attributes id="stonith-test-instance_attributes">
++                        <nvpair id="stonith-test-instance_attributes-must-set"
++                            name="must-set" value="value"
++                        />
++                    </instance_attributes>
++                    <operations>
++                        <op id="stonith-test-monitor-interval-60s"
++                            interval="60s" name="monitor"
++                        />
++                    </operations>
++                </primitive>
++            </resources>
++        """
++        self.expected_status = """
++            <resources>
++                <resource
++                    id="{id}"
++                    resource_agent="stonith:{agent}"
++                    role="Started"
++                    active="true"
++                    failed="false"
++                    nodes_running_on="1"
++                >
++                    <node name="node1" id="1" cached="false"/>
++                </resource>
++            </resources>
++            """.format(id=self.instance_name, agent=self.agent_name)
++        (self.config
++            .runner.pcmk.load_agent(
++                agent_name="stonith:{0}".format(self.agent_name),
++                agent_filename="stonith_agent_fence_simple.xml"
++            )
++            .runner.cib.load()
++            .runner.pcmk.load_stonithd_metadata()
++        )
++
++    def tearDown(self):
++        StonithAgent.clear_stonithd_metadata_cache()
++
++    def test_minimal_success(self):
++        self.config.env.push_cib(resources=self.expected_cib)
++        stonith.create(
++            self.env_assist.get_env(),
++            self.instance_name,
++            self.agent_name,
++            operations=[],
++            meta_attributes={},
++            instance_attributes={"must-set": "value"}
++        )
++
++    def test_minimal_wait_ok_run_ok(self):
++        (self.config
++            .runner.pcmk.can_wait(before="runner.cib.load")
++            .env.push_cib(
++                resources=self.expected_cib,
++                wait=self.timeout
++            )
++            .runner.pcmk.load_state(resources=self.expected_status)
++        )
++        stonith.create(
++            self.env_assist.get_env(),
++            self.instance_name,
++            self.agent_name,
++            operations=[],
++            meta_attributes={},
++            instance_attributes={"must-set": "value"},
++            wait=self.timeout
++        )
++        self.env_assist.assert_reports([
++            fixture.info(
++                report_codes.RESOURCE_RUNNING_ON_NODES,
++                roles_with_nodes={"Started": ["node1"]},
++                resource_id=self.instance_name,
++            ),
++        ])
++
++
++class CreateInGroup(TestCase):
++    def setUp(self):
++        self.env_assist, self.config = get_env_tools(test_case=self)
++        self.agent_name = "test_simple"
++        self.instance_name = "stonith-test"
++        self.timeout = 10
++        self.expected_cib = """
++            <resources>
++            <group id="my-group">
++                <primitive class="stonith" id="stonith-test" type="test_simple">
++                    <instance_attributes id="stonith-test-instance_attributes">
++                        <nvpair id="stonith-test-instance_attributes-must-set"
++                            name="must-set" value="value"
++                        />
++                    </instance_attributes>
++                    <operations>
++                        <op id="stonith-test-monitor-interval-60s"
++                            interval="60s" name="monitor"
++                        />
++                    </operations>
++                </primitive>
++            </group>
++            </resources>
++        """
++        self.expected_status = """
++            <resources>
++                <resource
++                    id="{id}"
++                    resource_agent="stonith:{agent}"
++                    role="Started"
++                    active="true"
++                    failed="false"
++                    nodes_running_on="1"
++                >
++                    <node name="node1" id="1" cached="false"/>
++                </resource>
++            </resources>
++            """.format(id=self.instance_name, agent=self.agent_name)
++        (self.config
++            .runner.pcmk.load_agent(
++                agent_name="stonith:{0}".format(self.agent_name),
++                agent_filename="stonith_agent_fence_simple.xml"
++            )
++            .runner.cib.load()
++            .runner.pcmk.load_stonithd_metadata()
++        )
++
++    def tearDown(self):
++        StonithAgent.clear_stonithd_metadata_cache()
++
++    def test_minimal_success(self):
++        self.config.env.push_cib(resources=self.expected_cib)
++        stonith.create_in_group(
++            self.env_assist.get_env(),
++            self.instance_name,
++            self.agent_name,
++            "my-group",
++            operations=[],
++            meta_attributes={},
++            instance_attributes={"must-set": "value"}
++        )
++
++    def test_minimal_wait_ok_run_ok(self):
++        (self.config
++            .runner.pcmk.can_wait(before="runner.cib.load")
++            .env.push_cib(
++                resources=self.expected_cib,
++                wait=self.timeout
++            )
++            .runner.pcmk.load_state(resources=self.expected_status)
++        )
++        stonith.create_in_group(
++            self.env_assist.get_env(),
++            self.instance_name,
++            self.agent_name,
++            "my-group",
++            operations=[],
++            meta_attributes={},
++            instance_attributes={"must-set": "value"},
++            wait=self.timeout
++        )
++        self.env_assist.assert_reports([
++            fixture.info(
++                report_codes.RESOURCE_RUNNING_ON_NODES,
++                roles_with_nodes={"Started": ["node1"]},
++                resource_id=self.instance_name,
++            ),
++        ])
+diff --git a/pcs/lib/resource_agent.py b/pcs/lib/resource_agent.py
+index 4639477..2f2686d 100644
+--- a/pcs/lib/resource_agent.py
++++ b/pcs/lib/resource_agent.py
+@@ -836,6 +836,10 @@ class StonithAgent(CrmAgent):
+     """
+     _stonithd_metadata = None
+ 
++    @classmethod
++    def clear_stonithd_metadata_cache(cls):
++        cls._stonithd_metadata = None
++
+     def _prepare_name_parts(self, name):
+         # pacemaker doesn't support stonith (nor resource) agents with : in type
+         if ":" in name:
+diff --git a/pcs/test/resources/stonith_agent_fence_simple.xml b/pcs/test/resources/stonith_agent_fence_simple.xml
+new file mode 100644
+index 0000000..bb86af2
+--- /dev/null
++++ b/pcs/test/resources/stonith_agent_fence_simple.xml
+@@ -0,0 +1,33 @@
++<?xml version="1.0" ?>
++<resource-agent
++  name="fence_simple"
++  shortdesc="Basic fence agent for pcs tests"
++>
++  <longdesc>
++    This is a testing fence agent. Its purpose is to provide a mock of a fence
++    agent which is always available no matter what is the configuration of a
++    system pcs test suite runs on.
++  </longdesc>
++  <vendor-url>https://github.com/ClusterLabs/pcs</vendor-url>
++  <parameters>
++    <parameter name="must-set" unique="0" required="1">
++      <content type="string" />
++      <shortdesc lang="en">An example of a required attribute</shortdesc>
++    </parameter>
++    <parameter name="may-set" unique="0" required="0">
++      <content type="string" />
++      <shortdesc lang="en">An example of an optional attribute</shortdesc>
++    </parameter>
++  </parameters>
++  <actions>
++    <action name="on" automatic="0"/>
++    <action name="off" />
++    <action name="reboot" />
++    <action name="status" />
++    <action name="list" />
++    <action name="list-status" />
++    <action name="monitor" />
++    <action name="metadata" />
++    <action name="validate-all" />
++  </actions>
++</resource-agent>
+diff --git a/pcs/test/resources/stonithd_metadata.xml b/pcs/test/resources/stonithd_metadata.xml
+new file mode 100644
+index 0000000..fc638a2
+--- /dev/null
++++ b/pcs/test/resources/stonithd_metadata.xml
+@@ -0,0 +1,156 @@
++<?xml version="1.0"?><!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
++<resource-agent name="stonithd">
++ <version>1.0</version>
++ <longdesc lang="en">This is a fake resource that details the instance attributes handled by stonithd.</longdesc>
++ <shortdesc lang="en">Options available for all stonith resources</shortdesc>
++ <parameters>
++  <parameter name="priority" unique="0">
++    <shortdesc lang="en">The priority of the stonith resource. Devices are tried in order of highest priority to lowest.</shortdesc>
++    <content type="integer" default="0"/>
++  </parameter>
++  <parameter name="pcmk_host_argument" unique="0">
++    <shortdesc lang="en">Advanced use only: An alternate parameter to supply instead of 'port'</shortdesc>
++    <longdesc lang="en">Some devices do not support the standard 'port' parameter or may provide additional ones.
++Use this to specify an alternate, device-specific, parameter that should indicate the machine to be fenced.
++A value of 'none' can be used to tell the cluster not to supply any additional parameters.
++     </longdesc>
++    <content type="string" default="port"/>
++  </parameter>
++  <parameter name="pcmk_host_map" unique="0">
++    <shortdesc lang="en">A mapping of host names to ports numbers for devices that do not support host names.</shortdesc>
++    <longdesc lang="en">Eg. node1:1;node2:2,3 would tell the cluster to use port 1 for node1 and ports 2 and 3 for node2</longdesc>
++    <content type="string" default=""/>
++  </parameter>
++  <parameter name="pcmk_host_list" unique="0">
++    <shortdesc lang="en">A list of machines controlled by this device (Optional unless pcmk_host_check=static-list).</shortdesc>
++    <content type="string" default=""/>
++  </parameter>
++  <parameter name="pcmk_host_check" unique="0">
++    <shortdesc lang="en">How to determine which machines are controlled by the device.</shortdesc>
++    <longdesc lang="en">Allowed values: dynamic-list (query the device), static-list (check the pcmk_host_list attribute), none (assume every device can fence every machine)</longdesc>
++    <content type="string" default="dynamic-list"/>
++  </parameter>
++  <parameter name="pcmk_delay_max" unique="0">
++    <shortdesc lang="en">Enable a random delay for stonith actions and specify the maximum of random delay.</shortdesc>
++    <longdesc lang="en">This prevents double fencing when using slow devices such as sbd.
++Use this to enable a random delay for stonith actions.
++The overall delay is derived from this random delay value adding a static delay so that the sum is kept below the maximum delay.</longdesc>
++    <content type="time" default="0s"/>
++  </parameter>
++  <parameter name="pcmk_delay_base" unique="0">
++    <shortdesc lang="en">Enable a base delay for stonith actions and specify base delay value.</shortdesc>
++    <longdesc lang="en">This prevents double fencing when different delays are configured on the nodes.
++Use this to enable a static delay for stonith actions.
++The overall delay is derived from a random delay value adding this static delay so that the sum is kept below the maximum delay.</longdesc>
++    <content type="time" default="0s"/>
++  </parameter>
++  <parameter name="pcmk_action_limit" unique="0">
++    <shortdesc lang="en">The maximum number of actions can be performed in parallel on this device</shortdesc>
++    <longdesc lang="en">Pengine property concurrent-fencing=true needs to be configured first.
++Then use this to specify the maximum number of actions can be performed in parallel on this device. -1 is unlimited.</longdesc>
++    <content type="integer" default="1"/>
++  </parameter>
++  <parameter name="pcmk_reboot_action" unique="0">
++    <shortdesc lang="en">Advanced use only: An alternate command to run instead of 'reboot'</shortdesc>
++    <longdesc lang="en">Some devices do not support the standard commands or may provide additional ones.
++Use this to specify an alternate, device-specific, command that implements the 'reboot' action.</longdesc>
++    <content type="string" default="reboot"/>
++  </parameter>
++  <parameter name="pcmk_reboot_timeout" unique="0">
++    <shortdesc lang="en">Advanced use only: Specify an alternate timeout to use for reboot actions instead of stonith-timeout</shortdesc>
++    <longdesc lang="en">Some devices need much more/less time to complete than normal.
++Use this to specify an alternate, device-specific, timeout for 'reboot' actions.</longdesc>
++    <content type="time" default="60s"/>
++  </parameter>
++  <parameter name="pcmk_reboot_retries" unique="0">
++    <shortdesc lang="en">Advanced use only: The maximum number of times to retry the 'reboot' command within the timeout period</shortdesc>
++    <longdesc lang="en">Some devices do not support multiple connections. Operations may 'fail' if the device is busy with another task so Pacemaker will automatically retry the operation, if there is time remaining. Use this option to alter the number of times Pacemaker retries 'reboot' actions before giving up.</longdesc>
++    <content type="integer" default="2"/>
++  </parameter>
++  <parameter name="pcmk_off_action" unique="0">
++    <shortdesc lang="en">Advanced use only: An alternate command to run instead of 'off'</shortdesc>
++    <longdesc lang="en">Some devices do not support the standard commands or may provide additional ones.
++Use this to specify an alternate, device-specific, command that implements the 'off' action.</longdesc>
++    <content type="string" default="off"/>
++  </parameter>
++  <parameter name="pcmk_off_timeout" unique="0">
++    <shortdesc lang="en">Advanced use only: Specify an alternate timeout to use for off actions instead of stonith-timeout</shortdesc>
++    <longdesc lang="en">Some devices need much more/less time to complete than normal.
++Use this to specify an alternate, device-specific, timeout for 'off' actions.</longdesc>
++    <content type="time" default="60s"/>
++  </parameter>
++  <parameter name="pcmk_off_retries" unique="0">
++    <shortdesc lang="en">Advanced use only: The maximum number of times to retry the 'off' command within the timeout period</shortdesc>
++    <longdesc lang="en">Some devices do not support multiple connections. Operations may 'fail' if the device is busy with another task so Pacemaker will automatically retry the operation, if there is time remaining. Use this option to alter the number of times Pacemaker retries 'off' actions before giving up.</longdesc>
++    <content type="integer" default="2"/>
++  </parameter>
++  <parameter name="pcmk_on_action" unique="0">
++    <shortdesc lang="en">Advanced use only: An alternate command to run instead of 'on'</shortdesc>
++    <longdesc lang="en">Some devices do not support the standard commands or may provide additional ones.
++Use this to specify an alternate, device-specific, command that implements the 'on' action.</longdesc>
++    <content type="string" default="on"/>
++  </parameter>
++  <parameter name="pcmk_on_timeout" unique="0">
++    <shortdesc lang="en">Advanced use only: Specify an alternate timeout to use for on actions instead of stonith-timeout</shortdesc>
++    <longdesc lang="en">Some devices need much more/less time to complete than normal.
++Use this to specify an alternate, device-specific, timeout for 'on' actions.</longdesc>
++    <content type="time" default="60s"/>
++  </parameter>
++  <parameter name="pcmk_on_retries" unique="0">
++    <shortdesc lang="en">Advanced use only: The maximum number of times to retry the 'on' command within the timeout period</shortdesc>
++    <longdesc lang="en">Some devices do not support multiple connections. Operations may 'fail' if the device is busy with another task so Pacemaker will automatically retry the operation, if there is time remaining. Use this option to alter the number of times Pacemaker retries 'on' actions before giving up.</longdesc>
++    <content type="integer" default="2"/>
++  </parameter>
++  <parameter name="pcmk_list_action" unique="0">
++    <shortdesc lang="en">Advanced use only: An alternate command to run instead of 'list'</shortdesc>
++    <longdesc lang="en">Some devices do not support the standard commands or may provide additional ones.
++Use this to specify an alternate, device-specific, command that implements the 'list' action.</longdesc>
++    <content type="string" default="list"/>
++  </parameter>
++  <parameter name="pcmk_list_timeout" unique="0">
++    <shortdesc lang="en">Advanced use only: Specify an alternate timeout to use for list actions instead of stonith-timeout</shortdesc>
++    <longdesc lang="en">Some devices need much more/less time to complete than normal.
++Use this to specify an alternate, device-specific, timeout for 'list' actions.</longdesc>
++    <content type="time" default="60s"/>
++  </parameter>
++  <parameter name="pcmk_list_retries" unique="0">
++    <shortdesc lang="en">Advanced use only: The maximum number of times to retry the 'list' command within the timeout period</shortdesc>
++    <longdesc lang="en">Some devices do not support multiple connections. Operations may 'fail' if the device is busy with another task so Pacemaker will automatically retry the operation, if there is time remaining. Use this option to alter the number of times Pacemaker retries 'list' actions before giving up.</longdesc>
++    <content type="integer" default="2"/>
++  </parameter>
++  <parameter name="pcmk_monitor_action" unique="0">
++    <shortdesc lang="en">Advanced use only: An alternate command to run instead of 'monitor'</shortdesc>
++    <longdesc lang="en">Some devices do not support the standard commands or may provide additional ones.
++Use this to specify an alternate, device-specific, command that implements the 'monitor' action.</longdesc>
++    <content type="string" default="monitor"/>
++  </parameter>
++  <parameter name="pcmk_monitor_timeout" unique="0">
++    <shortdesc lang="en">Advanced use only: Specify an alternate timeout to use for monitor actions instead of stonith-timeout</shortdesc>
++    <longdesc lang="en">Some devices need much more/less time to complete than normal.
++Use this to specify an alternate, device-specific, timeout for 'monitor' actions.</longdesc>
++    <content type="time" default="60s"/>
++  </parameter>
++  <parameter name="pcmk_monitor_retries" unique="0">
++    <shortdesc lang="en">Advanced use only: The maximum number of times to retry the 'monitor' command within the timeout period</shortdesc>
++    <longdesc lang="en">Some devices do not support multiple connections. Operations may 'fail' if the device is busy with another task so Pacemaker will automatically retry the operation, if there is time remaining. Use this option to alter the number of times Pacemaker retries 'monitor' actions before giving up.</longdesc>
++    <content type="integer" default="2"/>
++  </parameter>
++  <parameter name="pcmk_status_action" unique="0">
++    <shortdesc lang="en">Advanced use only: An alternate command to run instead of 'status'</shortdesc>
++    <longdesc lang="en">Some devices do not support the standard commands or may provide additional ones.
++Use this to specify an alternate, device-specific, command that implements the 'status' action.</longdesc>
++    <content type="string" default="status"/>
++  </parameter>
++  <parameter name="pcmk_status_timeout" unique="0">
++    <shortdesc lang="en">Advanced use only: Specify an alternate timeout to use for status actions instead of stonith-timeout</shortdesc>
++    <longdesc lang="en">Some devices need much more/less time to complete than normal.
++Use this to specify an alternate, device-specific, timeout for 'status' actions.</longdesc>
++    <content type="time" default="60s"/>
++  </parameter>
++  <parameter name="pcmk_status_retries" unique="0">
++    <shortdesc lang="en">Advanced use only: The maximum number of times to retry the 'status' command within the timeout period</shortdesc>
++    <longdesc lang="en">Some devices do not support multiple connections. Operations may 'fail' if the device is busy with another task so Pacemaker will automatically retry the operation, if there is time remaining. Use this option to alter the number of times Pacemaker retries 'status' actions before giving up.</longdesc>
++    <content type="integer" default="2"/>
++  </parameter>
++ </parameters>
++</resource-agent>
+diff --git a/pcs/test/tools/command_env/config_runner_pcmk.py b/pcs/test/tools/command_env/config_runner_pcmk.py
+index 6499ef8..059f3eb 100644
+--- a/pcs/test/tools/command_env/config_runner_pcmk.py
++++ b/pcs/test/tools/command_env/config_runner_pcmk.py
+@@ -70,6 +70,42 @@ class PcmkShortcuts(object):
+             instead=instead,
+         )
+ 
++    def load_stonithd_metadata(
++        self,
++        name="runner.pcmk.load_stonithd_metadata",
++        stdout=None,
++        stderr="",
++        returncode=0,
++        instead=None,
++        before=None,
++    ):
++        """
++        Create a call for loading stonithd metadata - additional fence options
++
++        string name -- the key of this call
++        string stdout -- stonithd stdout, default metadata if None
++        string stderr -- stonithd stderr
++        int returncode -- stonithd returncode
++        string instead -- the key of a call instead of which this new call is to
++            be placed
++        string before -- the key of a call before which this new call is to be
++            placed
++        """
++        self.__calls.place(
++            name,
++            RunnerCall(
++                "/usr/libexec/pacemaker/stonithd metadata",
++                stdout=(
++                    stdout if stdout is not None
++                    else open(rc("stonithd_metadata.xml")).read()
++                ),
++                stderr=stderr,
++                returncode=returncode
++            ),
++            before=before,
++            instead=instead,
++        )
++
+     def resource_cleanup(
+         self,
+         name="runner.pcmk.cleanup",
+-- 
+1.8.3.1
+

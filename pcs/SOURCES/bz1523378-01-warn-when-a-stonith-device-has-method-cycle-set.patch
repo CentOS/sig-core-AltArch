@@ -1,0 +1,261 @@
+From b3b7bf416724f424a280c63f94121fb47e7397e6 Mon Sep 17 00:00:00 2001
+From: Tomas Jelinek <tojeline@redhat.com>
+Date: Mon, 11 Dec 2017 08:54:26 +0100
+Subject: [PATCH] warn when a stonith device has method=cycle set
+
+---
+ pcs/status.py                    | 21 ++++++++++++++--
+ pcs/test/test_status.py          | 47 ++++++++++++++++++++++++-----------
+ pcsd/cluster_entity.rb           | 22 +++++++++++++++++
+ pcsd/test/cib1.xml               |  2 ++
+ pcsd/test/test_cluster_entity.rb | 53 ++++++++++++++++++++++++++++++++++++++++
+ 5 files changed, 129 insertions(+), 16 deletions(-)
+
+diff --git a/pcs/status.py b/pcs/status.py
+index ec10d61..8a517be 100644
+--- a/pcs/status.py
++++ b/pcs/status.py
+@@ -125,6 +125,7 @@ def status_stonith_check():
+     stonith_enabled = True
+     stonith_devices = []
+     stonith_devices_id_action = []
++    stonith_devices_id_method_cycle = []
+     sbd_running = False
+ 
+     cib = utils.get_cib_dom()
+@@ -155,6 +156,14 @@ def status_stonith_check():
+                             stonith_devices_id_action.append(
+                                 resource.getAttribute("id")
+                             )
++                        if (
++                            nvpair.getAttribute("name") == "method"
++                            and
++                            nvpair.getAttribute("value") == "cycle"
++                        ):
++                            stonith_devices_id_method_cycle.append(
++                                resource.getAttribute("id")
++                            )
+ 
+     if not utils.usefile:
+         # check if SBD daemon is running
+@@ -171,14 +180,22 @@ def status_stonith_check():
+ 
+     if stonith_devices_id_action:
+         print(
+-            "WARNING: following stonith devices have the 'action' attribute"
+-            " set, it is recommended to set {0} instead: {1}".format(
++            "WARNING: following stonith devices have the 'action' option set, "
++            "it is recommended to set {0} instead: {1}".format(
+                 ", ".join(
+                     ["'{0}'".format(x) for x in _STONITH_ACTION_REPLACED_BY]
+                 ),
+                 ", ".join(sorted(stonith_devices_id_action))
+             )
+         )
++    if stonith_devices_id_method_cycle:
++        print(
++            "WARNING: following stonith devices have the 'method' option set "
++            "to 'cycle' which is potentially dangerous, please consider using "
++            "'onoff': {0}".format(
++                ", ".join(sorted(stonith_devices_id_method_cycle))
++            )
++        )
+ 
+ # Parse crm_mon for status
+ def nodes_status(argv):
+diff --git a/pcs/test/test_status.py b/pcs/test/test_status.py
+index b412b91..1a4fb70 100644
+--- a/pcs/test/test_status.py
++++ b/pcs/test/test_status.py
+@@ -21,45 +21,64 @@ class StonithWarningTest(TestCase, AssertPcsMixin):
+         shutil.copy(self.empty_cib, self.temp_cib)
+         self.pcs_runner = PcsRunner(self.temp_cib)
+ 
+-    def fixture_stonith(self, action=False):
++    def fixture_stonith_action(self):
+         self.assert_pcs_success(
+-            "stonith create S fence_apc ipaddr=i login=l {0} --force".format(
+-                "action=reboot" if action else ""
+-            ),
++            "stonith create Sa fence_apc ipaddr=i login=l action=reboot --force",
+             "Warning: stonith option 'action' is deprecated and should not be"
+                 " used, use pcmk_off_action, pcmk_reboot_action instead\n"
+-            if action
+-            else ""
++        )
++
++    def fixture_stonith_cycle(self):
++        self.assert_pcs_success(
++            "stonith create Sc fence_ipmilan method=cycle"
+         )
+ 
+     def fixture_resource(self):
+         self.assert_pcs_success(
+-            "resource create dummy ocf:pacemaker:Dummy action=reboot --force",
+-            "Warning: invalid resource option 'action', allowed options are: "
+-                "envfile, fail_start_on, fake, op_sleep, passwd, state,"
+-                " trace_file, trace_ra\n"
++            "resource create dummy ocf:pacemaker:Dummy action=reboot "
++                "method=cycle --force"
++            ,
++            "Warning: invalid resource options: 'action', 'method', allowed "
++                "options are: envfile, fail_start_on, fake, op_sleep, passwd, "
++                "state, trace_file, trace_ra\n"
+         )
+ 
+     def test_warning_stonith_action(self):
+-        self.fixture_stonith(action=True)
++        self.fixture_stonith_action()
++        self.fixture_resource()
+         self.assert_pcs_success(
+             "status",
+             stdout_start=dedent("""\
+                 Cluster name: test99
+-                WARNING: following stonith devices have the 'action' attribute set, it is recommended to set 'pcmk_off_action', 'pcmk_reboot_action' instead: S
++                WARNING: following stonith devices have the 'action' option set, it is recommended to set 'pcmk_off_action', 'pcmk_reboot_action' instead: Sa
+                 Stack: unknown
+                 Current DC: NONE
+             """)
+         )
+ 
+-    def test_action_ignored_for_non_stonith_resources(self):
+-        self.fixture_stonith(action=False)
++    def test_warning_stonith_method_cycle(self):
++        self.fixture_stonith_cycle()
+         self.fixture_resource()
++        self.assert_pcs_success(
++            "status",
++            stdout_start=dedent("""\
++                Cluster name: test99
++                WARNING: following stonith devices have the 'method' option set to 'cycle' which is potentially dangerous, please consider using 'onoff': Sc
++                Stack: unknown
++                Current DC: NONE
++            """)
++        )
+ 
++    def test_stonith_warnings(self):
++        self.fixture_stonith_action()
++        self.fixture_stonith_cycle()
++        self.fixture_resource()
+         self.assert_pcs_success(
+             "status",
+             stdout_start=dedent("""\
+                 Cluster name: test99
++                WARNING: following stonith devices have the 'action' option set, it is recommended to set 'pcmk_off_action', 'pcmk_reboot_action' instead: Sa
++                WARNING: following stonith devices have the 'method' option set to 'cycle' which is potentially dangerous, please consider using 'onoff': Sc
+                 Stack: unknown
+                 Current DC: NONE
+             """)
+diff --git a/pcsd/cluster_entity.rb b/pcsd/cluster_entity.rb
+index 21092c5..3675719 100644
+--- a/pcsd/cluster_entity.rb
++++ b/pcsd/cluster_entity.rb
+@@ -516,6 +516,28 @@ module ClusterEntity
+           @utilization << ClusterEntity::NvPair.from_dom(e)
+         }
+         @stonith = @_class == 'stonith'
++        if @stonith
++          @instance_attr.each{ |attr|
++            if attr.name == 'action'
++              @warning_list << {
++                :message => (
++                  'This fence-device has the "action" option set, it is ' +
++                  'recommended to set "pcmk_off_action", "pcmk_reboot_action" ' +
++                  'instead'
++                )
++              }
++            end
++            if attr.name == 'method' and attr.value == 'cycle'
++              @warning_list << {
++                :message => (
++                  'This fence-device has the "method" option set to "cycle" ' +
++                  'which is potentially dangerous, please consider using ' +
++                  '"onoff"'
++                )
++              }
++            end
++          }
++        end
+         if @id and rsc_status
+           @crm_status = rsc_status[@id] || []
+         end
+diff --git a/pcsd/test/cib1.xml b/pcsd/test/cib1.xml
+index f603f24..03749ab 100644
+--- a/pcsd/test/cib1.xml
++++ b/pcsd/test/cib1.xml
+@@ -28,6 +28,8 @@
+       <primitive class="stonith" id="node2-stonith" type="fence_xvm">
+         <instance_attributes id="node2-stonith-instance_attributes">
+           <nvpair id="node2-stonith-instance_attributes-domain" name="domain" value="node2"/>
++          <nvpair id="node2-stonith-instance_attributes-action" name="action" value="monitor"/>
++          <nvpair id="node2-stonith-instance_attributes-method" name="method" value="cycle"/>
+         </instance_attributes>
+         <operations>
+           <op id="node2-stonith-monitor-interval-60s" interval="60s" name="monitor"/>
+diff --git a/pcsd/test/test_cluster_entity.rb b/pcsd/test/test_cluster_entity.rb
+index 2b67e19..60719ef 100644
+--- a/pcsd/test/test_cluster_entity.rb
++++ b/pcsd/test/test_cluster_entity.rb
+@@ -719,6 +719,59 @@ class TestPrimitive < Test::Unit::TestCase
+     assert(obj.operations.empty?)
+   end
+ 
++  def test_init_stonith_with_warnings
++    obj = ClusterEntity::Primitive.new(
++      @cib.elements["//primitive[@id='node2-stonith']"]
++    )
++    assert_nil(obj.parent)
++    assert_nil(obj.get_master)
++    assert_nil(obj.get_clone)
++    assert_nil(obj.get_group)
++    assert(obj.meta_attr.empty?)
++    assert_equal('node2-stonith', obj.id)
++    assert(obj.error_list.empty?)
++    assert_equal(
++      obj.warning_list,
++      [
++        {
++          :message => (
++            'This fence-device has the "action" option set, it is ' +
++            'recommended to set "pcmk_off_action", "pcmk_reboot_action" instead'
++          )
++        },
++        {
++          :message => (
++            'This fence-device has the "method" option set to "cycle" which ' +
++            'is potentially dangerous, please consider using "onoff"'
++          )
++        }
++      ]
++    )
++    assert_equal('stonith:fence_xvm', obj.agentname)
++    assert_equal('stonith', obj._class)
++    assert_nil(obj.provider)
++    assert_equal('fence_xvm', obj.type)
++    assert(obj.stonith)
++    instance_attr = ClusterEntity::NvSet.new << ClusterEntity::NvPair.new(
++      'node2-stonith-instance_attributes-domain',
++      'domain',
++      'node2'
++    )
++    instance_attr << ClusterEntity::NvPair.new(
++      'node2-stonith-instance_attributes-action',
++      'action',
++      'monitor'
++    )
++    instance_attr << ClusterEntity::NvPair.new(
++      'node2-stonith-instance_attributes-method',
++      'method',
++      'cycle'
++    )
++    assert_equal_NvSet(instance_attr, obj.instance_attr)
++    assert(obj.crm_status.empty?)
++    assert(obj.operations.empty?)
++  end
++
+   def test_init_stonith_with_crm
+     obj = ClusterEntity::Primitive.new(
+       @cib.elements["//primitive[@id='node1-stonith']"],
+-- 
+1.8.3.1
+

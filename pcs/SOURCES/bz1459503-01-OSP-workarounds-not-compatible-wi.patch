@@ -1,0 +1,162 @@
+From b5f98fed9903bc6c4e30056aa99f3be6fcb68917 Mon Sep 17 00:00:00 2001
+From: Ivan Devat <idevat@redhat.com>
+Date: Wed, 7 Jun 2017 14:36:05 +0200
+Subject: [PATCH] squash bz1459503 OSP workarounds not compatible wi
+
+reuse existing pcmk authkey during setup
+
+show only warn if `resource create` creates remote
+---
+ pcs/cluster.py                       | 10 +++++++++-
+ pcs/lib/commands/resource.py         |  6 ++++--
+ pcs/test/cib_resource/test_create.py | 13 ++++++-------
+ pcs/test/test_resource.py            | 24 ++++++++++++------------
+ 4 files changed, 31 insertions(+), 22 deletions(-)
+
+diff --git a/pcs/cluster.py b/pcs/cluster.py
+index b66bec78..a3cc74c6 100644
+--- a/pcs/cluster.py
++++ b/pcs/cluster.py
+@@ -501,13 +501,21 @@ def cluster_setup(argv):
+         print("Destroying cluster on nodes: {0}...".format(
+             ", ".join(primary_addr_list)
+         ))
++
++        try:
++            pcmk_authkey_content = (
++                open(settings.pacemaker_authkey_file, "rb").read()
++            )
++        except EnvironmentError as e:
++            pcmk_authkey_content = generate_key()
++
+         destroy_cluster(primary_addr_list)
+         print()
+ 
+         try:
+             file_definitions = {}
+             file_definitions.update(
+-                node_communication_format.pcmk_authkey_file(generate_key())
++                node_communication_format.pcmk_authkey_file(pcmk_authkey_content)
+             )
+             if modifiers["encryption"] == "1":
+                 file_definitions.update(
+diff --git a/pcs/lib/commands/resource.py b/pcs/lib/commands/resource.py
+index 8cda3102..cb45771f 100644
+--- a/pcs/lib/commands/resource.py
++++ b/pcs/lib/commands/resource.py
+@@ -67,7 +67,8 @@ def _validate_remote_connection(
+     report_list.append(
+         reports.get_problem_creator(
+             report_codes.FORCE_NOT_SUITABLE_COMMAND,
+-            allow_not_suitable_command
++            is_forced=True,
++            # allow_not_suitable_command
+         )(reports.use_command_node_add_remote)
+     )
+ 
+@@ -97,7 +98,8 @@ def _validate_guest_change(
+     report_list.append(
+         reports.get_problem_creator(
+             report_codes.FORCE_NOT_SUITABLE_COMMAND,
+-            allow_not_suitable_command
++            is_forced=True
++            # allow_not_suitable_command
+         )(create_report)
+     )
+ 
+diff --git a/pcs/test/cib_resource/test_create.py b/pcs/test/cib_resource/test_create.py
+index c554ec24..282ce1c5 100644
+--- a/pcs/test/cib_resource/test_create.py
++++ b/pcs/test/cib_resource/test_create.py
+@@ -1581,11 +1581,10 @@ class FailOrWarnGroup(ResourceTest):
+         )
+ 
+     def test_fail_when_on_pacemaker_remote_attempt(self):
+-        self.assert_pcs_fail(
++        self.assert_pcs_success(
+             "resource create R2 ocf:pacemaker:remote",
+-            "Error: this command is not sufficient for creating a remote"
+-                " connection, use 'pcs cluster node add-remote'"
+-                ", use --force to override\n"
++            "Warning: this command is not sufficient for creating a remote"
++                " connection, use 'pcs cluster node add-remote'\n"
+         )
+ 
+     def test_warn_when_on_pacemaker_remote_attempt(self):
+@@ -1685,10 +1684,10 @@ class FailOrWarnGroup(ResourceTest):
+         )
+ 
+     def test_fail_when_on_pacemaker_remote_guest_attempt(self):
+-        self.assert_pcs_fail(
++        self.assert_pcs_success(
+             "resource create R2 ocf:heartbeat:Dummy meta remote-node=HOST",
+-            "Error: this command is not sufficient for creating a guest node,"
+-            " use 'pcs cluster node add-guest', use --force to override\n"
++            "Warning: this command is not sufficient for creating a guest node,"
++            " use 'pcs cluster node add-guest'\n"
+         )
+ 
+     def test_warn_when_on_pacemaker_remote_guest_attempt(self):
+diff --git a/pcs/test/test_resource.py b/pcs/test/test_resource.py
+index d8f68c12..eac7eb04 100644
+--- a/pcs/test/test_resource.py
++++ b/pcs/test/test_resource.py
+@@ -5110,10 +5110,10 @@ class ResourceUpdateSpcialChecks(unittest.TestCase, AssertPcsMixin):
+         self.assert_pcs_success(
+             "resource create R ocf:heartbeat:Dummy",
+         )
+-        self.assert_pcs_fail(
++        self.assert_pcs_success(
+             "resource update R meta remote-node=HOST",
+-            "Error: this command is not sufficient for creating a guest node,"
+-            " use 'pcs cluster node add-guest', use --force to override\n"
++            "Warning: this command is not sufficient for creating a guest node,"
++            " use 'pcs cluster node add-guest'\n"
+         )
+     def test_update_warn_on_pacemaker_guest_attempt(self):
+         self.assert_pcs_success(
+@@ -5132,10 +5132,10 @@ class ResourceUpdateSpcialChecks(unittest.TestCase, AssertPcsMixin):
+             "Warning: this command is not sufficient for creating a guest node,"
+             " use 'pcs cluster node add-guest'\n"
+         )
+-        self.assert_pcs_fail(
++        self.assert_pcs_success(
+             "resource update R meta remote-node=",
+-            "Error: this command is not sufficient for removing a guest node,"
+-            " use 'pcs cluster node remove-guest', use --force to override\n"
++            "Warning: this command is not sufficient for removing a guest node,"
++            " use 'pcs cluster node remove-guest'\n"
+         )
+ 
+     def test_update_warn_on_pacemaker_guest_attempt_remove(self):
+@@ -5156,10 +5156,10 @@ class ResourceUpdateSpcialChecks(unittest.TestCase, AssertPcsMixin):
+         self.assert_pcs_success(
+             "resource create R ocf:heartbeat:Dummy",
+         )
+-        self.assert_pcs_fail(
++        self.assert_pcs_success(
+             "resource meta R remote-node=HOST",
+-            "Error: this command is not sufficient for creating a guest node,"
+-            " use 'pcs cluster node add-guest', use --force to override\n"
++            "Warning: this command is not sufficient for creating a guest node,"
++            " use 'pcs cluster node add-guest'\n"
+         )
+ 
+     def test_meta_warn_on_pacemaker_guest_attempt(self):
+@@ -5180,10 +5180,10 @@ class ResourceUpdateSpcialChecks(unittest.TestCase, AssertPcsMixin):
+             "Warning: this command is not sufficient for creating a guest node,"
+             " use 'pcs cluster node add-guest'\n"
+         )
+-        self.assert_pcs_fail(
++        self.assert_pcs_success(
+             "resource meta R remote-node=",
+-            "Error: this command is not sufficient for removing a guest node,"
+-            " use 'pcs cluster node remove-guest', use --force to override\n"
++            "Warning: this command is not sufficient for removing a guest node,"
++            " use 'pcs cluster node remove-guest'\n"
+         )
+ 
+     def test_meta_warn_on_pacemaker_guest_attempt_remove(self):
+-- 
+2.13.6
+
