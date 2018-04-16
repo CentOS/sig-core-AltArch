@@ -1,0 +1,325 @@
+commit b8d11c5e07aa1dcc8e7ec4ffff645d0589579dea
+Author: David Smith <dsmith@redhat.com>
+Date:   Fri Jan 26 09:24:51 2018 -0600
+
+    BZ1527809 - Fix detaching from modules using SIGQUIT.
+    
+    * staprun/mainloop.c: Put a "/* NOTREACHED */" comment after all calls to
+      cleanup_and_exit() to remind the reader that cleanup_and_exit() doesn't
+      return.
+      (stp_main_loop): If we've got a pending interrupt,
+      but 'load_only' is set, just detach instead of sending STP_EXIT to
+      the module. Otherwise using SIGQUIT to detach fails and unloads the
+      module.
+    * staprun/monitor.c: Put a "/* NOTREACHED */" comment after all calls to
+      cleanup_and_exit() to remind the reader that cleanup_and_exit() doesn't
+      return.
+    * testsuite/systemtap.base/attach_detach.exp: New test.
+
+diff --git a/staprun/mainloop.c b/staprun/mainloop.c
+index a60372e..63b72cc 100644
+--- a/staprun/mainloop.c
++++ b/staprun/mainloop.c
+@@ -648,6 +648,7 @@ int stp_main_loop(void)
+   if (rc != 0) {
+     perror ("Unable to send STP_READY");
+     cleanup_and_exit(0, rc);
++    /* NOTREACHED */
+   }
+ 
+   flags = fcntl(control_channel, F_GETFL);
+@@ -695,12 +696,28 @@ int stp_main_loop(void)
+ 
+     if (pending_interrupts) {
+          int btype = STP_EXIT;
+-         int rc = write(control_channel, &btype, sizeof(btype));
++         int rc;
++
++	 /* If 'load_only' is set, we don't want to send STP_EXIT,
++	  * which would cause any 'probe end' processing to be
++	  * done. Instead, we'll just detach by calling
++	  * cleanup_and_exit(). This should let the module continue to
++	  * run. */
++	 if (load_only)
++	   {
++	     cleanup_and_exit(load_only /* = detach */, 0);
++	     /* NOTREACHED */
++	   }
++
++         rc = write(control_channel, &btype, sizeof(btype));
+          dbug(2, "signal-triggered %d exit rc %d\n", pending_interrupts, rc);
+-         if (monitor || (pending_interrupts > 2)) /* user mashing on ^C multiple times */
+-                 cleanup_and_exit (load_only /* = detach */, 0);
++         if (monitor || (pending_interrupts > 2))
++	   { /* user mashing on ^C multiple times */
++	     cleanup_and_exit (load_only /* = detach */, 0);
++	     /* NOTREACHED */
++	   }
+          else
+-                 {} /* await STP_EXIT reply message to kill staprun */
++           {} /* await STP_EXIT reply message to kill staprun */
+     }
+ 
+     /* If the runtime does not implement select() on the command
+@@ -719,6 +736,7 @@ int stp_main_loop(void)
+       if (nb >= 0 || (errno != EINTR && errno != EAGAIN)) {
+         _perr(_("Unexpected EOF in read (nb=%ld)"), (long)nb);
+         cleanup_and_exit(0, 1);
++	/* NOTREACHED */
+       }
+ 
+       if (!select_supported) {
+@@ -736,6 +754,7 @@ int stp_main_loop(void)
+ 	  {
+ 	    _perr(_("Unexpected error in select"));
+ 	    cleanup_and_exit(0, 1);
++	    /* NOTREACHED */
+ 	  }
+       }
+       continue;
+@@ -750,6 +769,7 @@ int stp_main_loop(void)
+       if (write_realtime_data(recvbuf.payload.data, nb)) {
+         _perr(_("write error (nb=%ld)"), (long)nb);
+         cleanup_and_exit(0, 1);
++	/* NOTREACHED */
+       }
+       break;
+ #endif
+@@ -841,8 +861,10 @@ int stp_main_loop(void)
+         dbug(2, "got STP_EXIT\n");
+         if (monitor)
+                 monitor_exited();
+-        else
++        else {
+                 cleanup_and_exit(0, error_detected);
++		/* NOTREACHED */
++	}
+         /* monitor mode exit handled elsewhere, later. */
+         break;
+       }
+@@ -863,6 +885,7 @@ int stp_main_loop(void)
+           if (target_cmd)
+             kill(target_pid, SIGKILL);
+           cleanup_and_exit(0, 1);
++	  /* NOTREACHED */
+         } else if (target_cmd) {
+           dbug(1, "detaching pid %d\n", target_pid);
+ #if WORKAROUND_BZ467568
+@@ -878,6 +901,7 @@ int stp_main_loop(void)
+               if (target_cmd)
+                 kill(target_pid, SIGKILL);
+               cleanup_and_exit(0, 1);
++	      /* NOTREACHED */
+             }
+ #endif
+         }
+@@ -901,20 +925,24 @@ int stp_main_loop(void)
+         struct _stp_msg_start ts;
+         struct _stp_msg_ns_pid nspid;
+         if (use_old_transport) {
+-          if (init_oldrelayfs() < 0)
++	  if (init_oldrelayfs() < 0) {
+             cleanup_and_exit(0, 1);
++	    /* NOTREACHED */
++	  }
+         } else {
+           if (init_relayfs() < 0)
+             cleanup_and_exit(0, 1);
++	    /* NOTREACHED */
+         }
+ 
+         if (target_namespaces_pid > 0) {
+           nspid.target = target_namespaces_pid;
+           rc = send_request(STP_NAMESPACES_PID, &nspid, sizeof(nspid));
+           if (rc != 0) {
+-	          perror ("Unable to send STP_NAMESPACES_PID");
+-	          cleanup_and_exit (1, rc);
+-	        }
++	    perror ("Unable to send STP_NAMESPACES_PID");
++	    cleanup_and_exit (1, rc);
++	    /* NOTREACHED */
++	  }
+         }
+ 
+         ts.target = target_pid;
+@@ -922,9 +950,12 @@ int stp_main_loop(void)
+ 	if (rc != 0) {
+ 	  perror ("Unable to send STP_START");
+ 	  cleanup_and_exit(0, rc);
++	  /* NOTREACHED */
+ 	}
+-        if (load_only)
++        if (load_only) {
+           cleanup_and_exit(1, 0);
++	  /* NOTREACHED */
++	}
+         break;
+       }
+     default:
+diff --git a/staprun/monitor.c b/staprun/monitor.c
+index 6b8bb11..478634c 100644
+--- a/staprun/monitor.c
++++ b/staprun/monitor.c
+@@ -598,7 +598,10 @@ void monitor_input(void)
+               break;
+             case 'q':
+               if (monitor_state == exited)
+-                cleanup_and_exit(0, 0 /* error_detected unavailable here */ );
++	        {
++		  cleanup_and_exit(0, 0 /* error_detected unavailable here */ );
++		  /* NOTREACHED */
++		}
+               else
+                 write_command("quit");
+               break;
+diff --git a/testsuite/systemtap.base/attach_detach.exp b/testsuite/systemtap.base/attach_detach.exp
+new file mode 100644
+index 0000000..ef23615
+--- /dev/null
++++ b/testsuite/systemtap.base/attach_detach.exp
+@@ -0,0 +1,145 @@
++set test "attach_detach"
++if {![installtest_p]} { untested $test; return }
++
++set test_script { "
++    probe begin { printf(\"begin probe fired\\n\") }
++    probe timer.s(5) { printf(\"timer probe fired\\n\") }
++    probe end { printf(\"end probe fired\\n\") }
++" }
++
++# First, compile a module.
++stap_compile $test 1 $test_script -m attach_detach
++
++# stap_compile does pass/fail, but doesn't return a status. So, if
++# attach_detach.ko exists, it worked.
++if {! [file exists attach_detach.ko]} {
++    return
++}
++
++# Load the module and detach.
++set subtest "initial load"
++spawn staprun -L attach_detach.ko
++set fail 0
++set pass 0
++expect {
++    -timeout 120
++    -re "^begin probe fired\r\n" { incr fail; exp_continue }
++    -re "^\r\n" { exp_continue }
++    -re "^Disconnecting from systemtap module.\r\n" {
++	incr pass; exp_continue
++    }
++    -re "^To reconnect, type \"staprun -A attach_detach\"\r\n" {
++	incr pass
++    }
++    eof { fail "$test ($subtest) - EOF"; incr fail }
++    timeout { fail "$test ($subtest) - unexpected timeout"; incr fail }
++}
++catch {close}; catch {wait}
++
++if {$fail == 0 && $pass == 2} {
++    pass "$test ($subtest) - disconnect seen"
++} else {
++    fail "$test ($subtest) - begin seen ($fail $pass)"
++}
++
++# Make sure the module is still loaded.
++if {[catch { exec lsmod | grep attach_detach >/dev/null }]} {
++    fail "$test ($subtest) - module still present"
++    return
++}
++pass "$test ($subtest) - module still present"
++
++# Attach to the module, then use SIGQUIT to detach again.
++set subtest "attach and SIGQUIT"
++spawn staprun -A attach_detach
++set fail 0
++set pass 0
++set timer_probe_seen 0
++expect {
++    -timeout 120
++    -re "^begin probe fired\r\n" { incr pass; exp_continue }
++    -re "^end probe fired\r\n" { incr fail; exp_continue }
++    -re "^timer probe fired\r\n" {
++	if {!$timer_probe_seen} {
++	    set timer_probe_seen 1
++	    incr pass
++
++	    # Send our staprun process a SIGQUIT, to make it detach.
++	    kill SIGQUIT [exp_pid]
++	}
++	exp_continue
++    }
++    -re "^\r\n" { exp_continue }
++    -re "^Disconnecting from systemtap module.\r\n" {
++	incr pass; exp_continue
++    }
++    -re "^To reconnect, type \"staprun -A attach_detach\"\r\n" {
++	incr pass
++    }
++    eof { fail "$test ($subtest) - EOF"; incr fail }
++    timeout { fail "$test ($subtest) - unexpected timeout"; incr fail }
++}    
++catch {close}; catch {wait}
++
++if {$fail == 0 && $pass == 4} {
++    pass "$test ($subtest) - disconnect seen"
++} else {
++    fail "$test ($subtest) - no disconnect seen ($fail $pass)"
++}
++
++# Make sure the module is still loaded.
++if {[catch { exec lsmod | grep attach_detach >/dev/null}]} {
++    fail "$test ($subtest) - module still present"
++    return
++}
++pass "$test ($subtest) - module still present"
++
++# Attach one last time, then use SIGTERM to unload the module and quit.
++set subtest "attach and SIGTERM"
++spawn staprun -A attach_detach
++set fail 0
++set pass 0
++set timer_probe_seen 0
++expect {
++    -timeout 120
++    -re "^begin probe fired\r\n" { incr fail; exp_continue }
++    -re "^end probe fired\r\n" { incr pass }
++    -re "^timer probe fired\r\n" {
++	if {!$timer_probe_seen} {
++	    set timer_probe_seen 1
++	    incr pass
++
++	    # Send our staprun process a SIGTERM, to make it quit and
++	    # unload.
++	    kill SIGTERM [exp_pid]
++	}
++	exp_continue
++    }
++    -re "^\r\n" { exp_continue }
++    -re "^Disconnecting from systemtap module.\r\n" {
++	incr fail; exp_continue
++    }
++    -re "^To reconnect, type \"staprun -A attach_detach\"\r\n" {
++	incr fail; exp_continue
++    }
++    eof { fail "$test ($subtest) - EOF"; incr fail }
++    timeout { fail "$test ($subtest) - unexpected timeout"; incr fail }
++}    
++catch {close}; catch {wait}
++
++if {$fail == 0 && $pass == 2} {
++    pass "$test ($subtest) - quit seen"
++} else {
++    fail "$test ($subtest) - no quit seen ($fail $pass)"
++}
++
++# Make sure the module isn't still loaded.
++if {[catch { exec lsmod | grep attach_detach >/dev/null}]} {
++    pass "$test ($subtest) - module is gone"
++} else {
++    fail "$test ($subtest) - module is gone"
++
++    # If for some odd reason the module is still loaded, try to unload
++    # it.
++    catch { exec staprun -d attach_detach }
++}

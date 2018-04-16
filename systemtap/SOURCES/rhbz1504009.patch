@@ -1,0 +1,49 @@
+commit 9f81f10b0caf6dfc49c4b7ceb7902f45d37b532a (HEAD -> master, origin/master, origin/HEAD)
+Author: Frank Ch. Eigler <fche@redhat.com>
+Date:   Fri Oct 20 10:01:58 2017 -0400
+
+    rhbz1504009: let dtrace -G -o /dev/null run, as in autoconf
+    
+    commit c245153ca193c471a8c broke the ability of dtrace to be tested in
+    autoconf "-G -o /dev/null" usage, because its output file name was too
+    simple a function of the input name, and normal users can't write to
+    /dev/null.dtrace-temp.c .  Now we back down to mkstemp, like before,
+    upon a failure of the simple concatenated name.
+
+diff --git a/dtrace.in b/dtrace.in
+index 2e2e002a5c56..25efc253b708 100644
+--- a/dtrace.in
++++ b/dtrace.in
+@@ -410,8 +410,12 @@ from tempfile import mkstemp
+         else:
+             print("header: " + fname)
+ 
+-        fname = filename + ".dtrace-temp.c"
+-        fdesc = open(fname, mode='w')
++        try: # for reproducible-builds purposes, prefer a fixed path name pattern
++            fname = filename + ".dtrace-temp.c"
++            fdesc = open(fname, mode='w')
++        except: # but that doesn't work for  -o /dev/null - see rhbz1504009
++            (ignore,fname) = mkstemp(suffix=".c")
++            fdesc = open(fname, mode='w')
+         providers.semaphore_write(fdesc)
+         fdesc.close()
+         cc1 = os.environ.get("CC", "gcc")
+diff --git a/testsuite/systemtap.base/dtrace.exp b/testsuite/systemtap.base/dtrace.exp
+index fa6b3ec3f6d3..7c60f09d70b8 100644
+--- a/testsuite/systemtap.base/dtrace.exp
++++ b/testsuite/systemtap.base/dtrace.exp
+@@ -83,6 +83,13 @@ if {[file exists /tmp/XXX.o]} then {
+ }
+ exec rm -f /tmp/XXX.o
+ 
++verbose -log "$dtrace -G -s $dpath -o /dev/null"
++if [as_non_root "$python $dtrace -G -s $dpath -o /dev/null"] {
++    fail "$test -G -o /dev/null"
++} else {
++    pass "$test -G -o /dev/null"
++}
++
+ verbose -log "$dtrace -G -s $dpath -o /tmp/XXX"
+ catch {exec $python $dtrace -G -s $dpath -o /tmp/XXX} res
+ if {[file exists /tmp/XXX]} then {
