@@ -15,6 +15,7 @@ License:	GPLv2
 Group:		System Environment/Base
 URL:		http://ceph.com/
 Source0:	http://ceph.com/download/ceph-%{version}.tar.bz2
+Patch1:         0001-Disable-erasure_codelib-neon-build.patch
 Requires:	librbd1 = %{epoch}:%{version}-%{release}
 Requires:	librados2 = %{epoch}:%{version}-%{release}
 Requires:	python-rbd = %{epoch}:%{version}-%{release}
@@ -161,6 +162,7 @@ block device.
 #################################################################################
 %prep
 %setup -q -n ceph-%{version}
+%patch1 -p1
 
 %build
 ./autogen.sh
@@ -330,6 +332,9 @@ fi
 %{python_sitelib}/rbd.py*
 
 %changelog
+* Sun Apr 15 2018 Pablo Greco <pablo@fliagreco.com.ar> - 1:0.94.5-2
+- backport Fedora patch to fix fuild on armhfp
+
 * Tue Jun 20 2017 Boris Ranto <branto@redhat.com> - 1:0.94.5-2
 - drop the rebase
 
