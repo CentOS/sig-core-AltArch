@@ -8,6 +8,7 @@ License:        GPLv3+
 URL:            http://voikko.sourceforge.net/
 # The usual format of stable release URLs
 Source0:        http://downloads.sourceforge.net/voikko/%{name}-%{version}.tar.gz
+Patch0:         libreoffice-voikko-3.4-sal-throw.patch
 # The usual format of test release URLs
 #Source0:        http://www.puimula.org/htp/testing/%{name}-%{version}rc2.tar.gz
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
@@ -35,6 +36,7 @@ provided by the Voikko library.
 
 %prep
 %setup -q
+%patch0 -p1
 sed -i 's|-BUCR||g' Makefile
 
 %build
@@ -64,6 +66,9 @@ rm -rf $RPM_BUILD_ROOT
 
 
 %changelog
+* Fri Apr 20 2018 Pablo Greco <pablo@fliagreco.com.ar> - 3.4-4
+- Fix for current libreoffice release
+
 * Fri Jan 24 2014 Daniel Mach <dmach@redhat.com> - 3.4-4
 - Mass rebuild 2014-01-24
 
