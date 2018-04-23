@@ -1,0 +1,43 @@
+Based on https://bugzilla.osafoundation.org/attachment.cgi?id=5760
+by Sander Steffann <sander@steffann.nl>.
+
+diff -ur M2Crypto/M2Crypto/SSL/Connection.py M2Crypto-0.21.1/M2Crypto/SSL/Connection.py
+--- M2Crypto/M2Crypto/SSL/Connection.py	2013-12-17 02:01:49.843287273 +0100
++++ M2Crypto-0.21.1/M2Crypto/SSL/Connection.py	2013-12-17 02:28:28.357633159 +0100
+@@ -368,3 +368,7 @@
+ 
+     def set_post_connection_check_callback(self, postConnectionCheck):
+         self.postConnectionCheck = postConnectionCheck
++
++    def set_tlsext_host_name(self, name):
++        "Set the requested hostname for the SNI (Server Name Indication) extension"
++        m2.ssl_set_tlsext_host_name(self.ssl, name)
+diff -ur M2Crypto/SWIG/_ssl.i M2Crypto-0.21.1/SWIG/_ssl.i
+--- M2Crypto/SWIG/_ssl.i	2013-12-17 02:01:49.863287264 +0100
++++ M2Crypto-0.21.1/SWIG/_ssl.i	2013-12-17 02:39:28.138364398 +0100
+@@ -15,6 +15,7 @@
+ #include <openssl/bio.h>
+ #include <openssl/dh.h>
+ #include <openssl/ssl.h>
++#include <openssl/tls1.h>
+ #include <openssl/x509.h>
+ #include <poll.h>
+ #include <sys/time.h>
+@@ -398,6 +399,17 @@
+     return SSL_get_mode(ssl);
+ }
+ 
++int ssl_set_tlsext_host_name(SSL *ssl, const char *name) {
++    long l;
++
++    if (!(l = SSL_set_tlsext_host_name(ssl, name))) {
++        PyErr_SetString(_ssl_err, ERR_reason_error_string(ERR_get_error()));
++        return -1;
++    }
++    /* Return an "int" to match the 'typemap(out) int' in _lib.i */
++    return 1;
++}
++
+ void ssl_set_client_CA_list_from_file(SSL *ssl, const char *ca_file) {
+     SSL_set_client_CA_list(ssl, SSL_load_client_CA_file(ca_file));
+ }

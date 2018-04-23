@@ -1,0 +1,44 @@
+Koji, the Fedora build system, is apparently setting up the build
+processes to ignore SIGHUP by default, leading the helper processes
+used by test_ssl to never terminate.  We could override the SIGHUP
+handling, but sending SIGTERM is more correct anyway.
+
+diff -ur M2Crypto/tests/test_ssl.py M2Crypto-0.21.1/tests/test_ssl.py
+--- M2Crypto/tests/test_ssl.py	2013-12-18 02:08:42.411669114 +0100
++++ M2Crypto-0.21.1/tests/test_ssl.py	2013-12-18 02:10:57.877589271 +0100
+@@ -20,7 +20,7 @@
+ - ThreadingSSLServer
+ """
+ 
+-import os, socket, string, sys, tempfile, thread, time, unittest
++import os, signal, socket, string, sys, tempfile, thread, time, unittest
+ from M2Crypto import Rand, SSL, m2, Err
+ 
+ from fips import fips_mode
+@@ -95,7 +95,7 @@
+             return pid
+ 
+     def stop_server(self, pid):
+-        os.kill(pid, 1)
++        os.kill(pid, signal.SIGTERM)
+         os.waitpid(pid, 0)
+ 
+     def http_get(self, s):
+@@ -1039,7 +1039,7 @@
+             finally:
+                 self.stop_server(pid)
+         finally:
+-            os.kill(pipe_pid, 1)
++            os.kill(pipe_pid, signal.SIGTERM)
+             os.waitpid(pipe_pid, 0)
+             os.unlink('tests/' + FIFO_NAME)
+ 
+@@ -1154,7 +1154,7 @@
+         chunk = string.split(ps)
+         pid, cmd = chunk[0], chunk[4]
+         if cmd == s:
+-            os.kill(int(pid), 1)
++            os.kill(int(pid), signal.SIGTERM)
+     f.close()
+     os.unlink(fn)
+ 
