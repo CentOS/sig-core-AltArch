@@ -136,7 +136,9 @@ grep -rl '/usr/bin/env python' demo tests \
 rm tests/*.{pem,py}.* # Patch backup files
 
 %check
+%ifnarch %{arm}
 %{__python} setup.py test
+%endif
 
 %files
 %doc CHANGES LICENCE README demo
@@ -144,6 +146,9 @@ rm tests/*.{pem,py}.* # Patch backup files
 %{python_sitearch}/M2Crypto-*.egg-info
 
 %changelog
+* Mon Apr 23 2018 Pablo Greco <pablo@fliagreco.com.ar> - 0.21.1-17
+- Disable tests on arm
+
 * Tue Jul 7 2015 Miloslav Trmač <mitr@redhat.com> - 0.21.1-17
 - Fix spurious failures of test_cookie_str_changed_mac
   Resolves: #1073950
