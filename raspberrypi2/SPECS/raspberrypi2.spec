@@ -1,14 +1,14 @@
-%global commit_firmware_short 086a848
-%global commit_firmware_long  086a8488de0f485e8879ac14ff505ff1d922eeed
-%global commit_linux_short a00afce
-%global commit_linux_long  a00afce9b4231c120c8b007d2c48018547d0156f
+%global commit_firmware_short 25cf637
+%global commit_firmware_long  25cf637ccc90d7d2fa37277c807ab33b655bd0f4
+%global commit_linux_short 4d78845
+%global commit_linux_long  4d78845fd711bdd7c0f20aafb3c976073d86b4e3
 
 %define Arch arm
 %define local_version v7
 %define extra_version 1
 
 Name:           raspberrypi2
-Version:        4.9.80
+Version:        4.14.27
 Release:        %{local_version}.%{extra_version}%{?dist}
 Summary:        Specific kernel and bootcode for Raspberry Pi
 
@@ -54,14 +54,14 @@ This package provides kernel headers and makefiles sufficient to build modules
 against the kernel package.
 
 
-%package kernel-firmware
-Group:          Development/System
-Summary:        Firmware files used by the Linux kernel
-Provides:       kernel-firmware = %{version}-%{release}
+#%package kernel-firmware
+#Group:          Development/System
+#Summary:        Firmware files used by the Linux kernel
+#Provides:       kernel-firmware = %{version}-%{release}
 
-%description kernel-firmware
-Kernel-firmware includes firmware files required for some devices to
-operate.
+#%description kernel-firmware
+#Kernel-firmware includes firmware files required for some devices to
+#operate.
 
 
 %package firmware
@@ -130,7 +130,7 @@ ln -T -s build %{buildroot}/lib/modules/%{version}-%{release}/source --force
 
 # kernel-firmware
 #rm .config
-make INSTALL_FW_PATH=%{buildroot}/lib/firmware firmware_install
+#make INSTALL_FW_PATH=%{buildroot}/lib/firmware firmware_install
 
 # firmware
 #   precompiled GPU firmware and bootloader
@@ -171,9 +171,9 @@ cp $(ls -1d /usr/share/%{name}-kernel/*-*/|tail -1)/boot/overlays/*.dtb* /boot/o
 /usr/src/kernels/%{version}-%{release}
 
 
-%files kernel-firmware
-%defattr(-,root,root)
-/lib/firmware/*
+#%files kernel-firmware
+#%defattr(-,root,root)
+#/lib/firmware/*
 
 
 %files firmware
@@ -184,6 +184,9 @@ cp $(ls -1d /usr/share/%{name}-kernel/*-*/|tail -1)/boot/overlays/*.dtb* /boot/o
 %doc /boot/LICENCE.broadcom
 
 %changelog
+* Sun Mar 18 2018 Fabian Arrotin <arrfab@centos.org> - 4.14.27-v1.el7
+- Bumped to 4.14.x LTS branch (used now by rpi foundation too)
+
 * Thu Mar 15 2018 Fabian Arrotin <arrfab@centos.org> - 4.9.80-v1.el7
 - updated to 4.9.80 LTS
 - initial DTS support for rpi3 model B 
