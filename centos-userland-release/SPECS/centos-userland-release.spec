@@ -14,7 +14,7 @@
 
 Name:           centos-userland-release
 Version:        %{base_release_version}
-Release:        %{centos_rel}%{?dist}.0.5
+Release:        %{centos_rel}%{?dist}.0.6
 Summary:        %{product_family} release file
 Group:          System Environment/Base
 License:        GPLv2
