@@ -14,7 +14,7 @@
 
 Name:           centos-userland-release
 Version:        %{base_release_version}
-Release:        %{centos_rel}%{?dist}.0.6
+Release:        %{centos_rel}%{?dist}.0.7
 Summary:        %{product_family} release file
 Group:          System Environment/Base
 License:        GPLv2
@@ -24,6 +24,7 @@ Provides:       redhat-release = %{upstream_rel_long}
 Provides:       system-release = %{upstream_rel_long}
 Provides:       system-release(releasever) = %{base_release_version}
 Requires:       coreutils, grep
+Requires:       extlinux-bootloader
 Source0:        centos-release-%{base_release_version}-%{centos_rel}.tar.gz
 Source1:        85-display-manager.preset
 Source2:        90-default.preset
@@ -162,6 +163,9 @@ fi
 /usr/bin/uname -m | grep -q 'x86_64'  && echo 'centos' >/etc/yum/vars/contentdir || echo 'altarch' > /etc/yum/vars/contentdir
 
 %changelog
+* Fri May  4 2018 Pablo Greco <pablo@fliagreco.com.ar>
+- Require extlinux-bootloader now that update-boot was obsoleted
+
 * Thu Apr 12 2018 Fabian Arrotin <arrfab@centos.org>
 - Bump release for 7.5.1804
 
