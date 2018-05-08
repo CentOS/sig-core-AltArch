@@ -24,7 +24,7 @@
 Name: corosync
 Summary: The Corosync Cluster Engine and Application Programming Interfaces
 Version: 2.4.3
-Release: 2%{?gitver}%{?dist}
+Release: 2%{?gitver}%{?dist}.1
 License: BSD
 Group: System Environment/Base
 URL: http://corosync.github.io/corosync/
@@ -32,9 +32,10 @@ Source0: http://build.clusterlabs.org/corosync/releases/%{name}-%{version}%{?git
 
 Patch0: bz1536219-1-logging-Make-blackbox-configurable.patch
 Patch1: bz1536219-2-logging-Close-before-and-open-blackbox-after-fork.patch
+Patch2: bz1560467-1-totemcrypto-Check-length-of-the-packet.patch
 
 %if 0%{?rhel}
-ExclusiveArch: i686 x86_64 s390x ppc64le %{arm}
+ExclusiveArch: i686 x86_64 s390x ppc64le
 %endif
 
 # Runtime bits
@@ -91,6 +92,7 @@ BuildRoot: %(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
 %setup -q -n %{name}-%{version}%{?gittarver}
 %patch0 -p1 -b .bz1536219-1
 %patch1 -p1 -b .bz1536219-2
+%patch2 -p1 -b .bz1560467-1
 
 %build
 %if %{with runautogen}
@@ -522,8 +524,10 @@ fi
 %endif
 
 %changelog
-* Sat Apr 14 2018 Fabian Arrotin <arrfab@centos.org> 2.4.3-2
-- Added armhfp to supported arches (for centos userland)
+* Fri Apr 06 2018 Jan Friesse <jfriesse@redhat.com> 2.4.3-2.1
+- Resolves: rhbz#1560467
+
+- totemcrypto: Check length of the packet
 
 * Mon Feb 05 2018 Jan Friesse <jfriesse@redhat.com> 2.4.3-2
 - Resolves: rhbz#1536219
