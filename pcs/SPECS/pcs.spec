@@ -6,7 +6,7 @@ URL: https://github.com/ClusterLabs/pcs
 Group: System Environment/Base
 Summary: Pacemaker Configuration System
 #building only for architectures with pacemaker and corosync available
-ExclusiveArch: i686 x86_64 s390x ppc64le
+ExclusiveArch: i686 x86_64 s390x ppc64le %{arm}
 
 %global pcs_snmp_pkg_name  pcs-snmp
 %global pyagentx_version   0.4.pcs.1
@@ -429,6 +429,9 @@ run_all_tests
 %doc pyagentx_README.md
 
 %changelog
+* Mon Apr 16 2018 Fabian Arrotin <arrfab@centos.org> - 0.9.162-5.el7_5.1
+- Added %{arm} to ExclusiveArches to allow it to build for armhfp
+
 * Wed Apr 11 2018 Johnny Hughes <johnny@centos.org> - 0.9.162-5.el7_5.1
 - Manually Debranding
  
