@@ -35,7 +35,7 @@ Patch1: bz1536219-2-logging-Close-before-and-open-blackbox-after-fork.patch
 Patch2: bz1560467-1-totemcrypto-Check-length-of-the-packet.patch
 
 %if 0%{?rhel}
-ExclusiveArch: i686 x86_64 s390x ppc64le
+ExclusiveArch: i686 x86_64 s390x ppc64le %{arm}
 %endif
 
 # Runtime bits
@@ -524,6 +524,9 @@ fi
 %endif
 
 %changelog
+* Tue May  8 2018 Fabian Arrotin <arrfab@centos.org> 2.4.3-2.1
+- Added armhfp to supported arches (for centos userland)
+
 * Fri Apr 06 2018 Jan Friesse <jfriesse@redhat.com> 2.4.3-2.1
 - Resolves: rhbz#1560467
 
