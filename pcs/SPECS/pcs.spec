@@ -1,6 +1,6 @@
 Name: pcs
 Version: 0.9.162
-Release: 5%{?dist}
+Release: 5%{?dist}.1
 License: GPLv2
 URL: https://github.com/ClusterLabs/pcs
 Group: System Environment/Base
@@ -23,7 +23,7 @@ Source11: https://rubygems.org/downloads/backports-3.9.1.gem
 Source12: https://rubygems.org/downloads/multi_json-1.12.2.gem
 Source13: https://rubygems.org/downloads/open4-1.3.4.gem
 Source14: https://rubygems.org/downloads/orderedhash-0.0.6.gem
-Source15: https://rubygems.org/downloads/rack-protection-1.5.3.gem
+Source15: https://rubygems.org/downloads/rack-protection-1.5.5.gem
 Source16: https://rubygems.org/downloads/rack-test-0.7.0.gem
 Source17: https://rubygems.org/downloads/rack-1.6.4.gem
 Source18: https://rubygems.org/downloads/rpam-ruby19-1.2.1.gem
@@ -54,6 +54,9 @@ Patch100: rhel7.patch
 #rhel7 gui
 Patch101: change-cman-to-rhel6-in-messages.patch
 Patch102: show-only-warning-when-crm_mon-xml-is-invalid.patch
+Patch103: bz1557253-01-get-rid-of-debug-when-calling-local-pcsd.patch
+Patch104: bz1557253-02-sanitize-path-when-saving-booth-config-files.patch
+Patch105: bz1557253-03-use-rubygem-rack-protection-1.5.5.patch
 
 # git for patches
 BuildRequires: git
@@ -123,7 +126,7 @@ Provides: bundled(rubygem-multi_json) = 1.12.1
 Provides: bundled(rubygem-open4) = 1.3.4
 Provides: bundled(rubygem-orderedhash) = 0.0.6
 Provides: bundled(rubygem-rack) = 1.6.4
-Provides: bundled(rubygem-rack-protection) = 1.5.3
+Provides: bundled(rubygem-rack-protection) = 1.5.5
 Provides: bundled(rubygem-rack-test) = 0.6.3
 Provides: bundled(rubygem-rpam-ruby19) = 1.2.1
 Provides: bundled(rubygem-sinatra) = 1.4.8
@@ -187,6 +190,9 @@ UpdateTimestamps -p1 %{PATCH99}
 UpdateTimestamps -p1 %{PATCH100}
 UpdateTimestamps -p1 %{PATCH101}
 UpdateTimestamps -p1 %{PATCH102}
+UpdateTimestamps -p1 %{PATCH103}
+UpdateTimestamps -p1 %{PATCH104}
+UpdateTimestamps -p1 %{PATCH105}
 
 cp -f %SOURCE1 pcsd/public/images
 
@@ -423,11 +429,17 @@ run_all_tests
 %doc pyagentx_README.md
 
 %changelog
-* Mon Apr 16 2018 Fabian Arrotin <arrfab@centos.org> - 0.9.162-5
+* Mon Apr 16 2018 Fabian Arrotin <arrfab@centos.org> - 0.9.162-5.el7_5.1
 - Added %{arm} to ExclusiveArches to allow it to build for armhfp
 
-* Wed Apr 11 2018 Johnny Hughes <johnny@centos.org> - 0.9.162-5
-- Manual Debrand
+* Wed Apr 11 2018 Johnny Hughes <johnny@centos.org> - 0.9.162-5.el7_5.1
+- Manually Debranding
+ 
+* Wed Mar 21 2018 Ondrej Mular <omular@redhat.com> - 0.9.162-5.el7_5.1
+- Fixed CVE-2018-1086 pcs: Debug parameter removal bypass, allowing information disclosure
+- Fixed CVE-2018-1079 pcs: Privilege escalation via authorized user malicious REST call
+- Fixed CVE-2018-1000119 rack-protection: Timing attack in authenticity_token.rb
+- Resolves: rhbz#1557253
 
 * Mon Feb 05 2018 Ondrej Mular <omular@redhat.com> - 0.9.162-5
 - Fixed `pcs cluster auth` in a cluster when not authenticated and using a non-default port
