@@ -1,0 +1,93 @@
+diff -r eecfc14e66ee src/os/linux/vm/os_linux.cpp
+--- openjdk/hotspot/src/os/linux/vm/os_linux.cpp	Mon Jan 22 16:25:24 2018 +0000
++++ openjdk/hotspot/src/os/linux/vm/os_linux.cpp	Wed Feb 21 13:52:31 2018 +0000
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 1999, 2018, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -674,6 +674,10 @@
+   }
+ }
+ 
++void os::Linux::expand_stack_to(address bottom) {
++  _expand_stack_to(bottom);
++}
++
+ bool os::Linux::manually_expand_stack(JavaThread * t, address addr) {
+   assert(t!=NULL, "just checking");
+   assert(t->osthread()->expanding_stack(), "expand should be set");
+diff -r eecfc14e66ee src/os/linux/vm/os_linux.hpp
+--- openjdk/hotspot/src/os/linux/vm/os_linux.hpp	Mon Jan 22 16:25:24 2018 +0000
++++ openjdk/hotspot/src/os/linux/vm/os_linux.hpp	Wed Feb 21 13:52:31 2018 +0000
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 1999, 2013, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 1999, 2018, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -245,6 +245,8 @@
+   static int safe_cond_timedwait(pthread_cond_t *_cond, pthread_mutex_t *_mutex, const struct timespec *_abstime);
+ 
+ private:
++  static void expand_stack_to(address bottom);
++
+   typedef int (*sched_getcpu_func_t)(void);
+   typedef int (*numa_node_to_cpus_func_t)(int node, unsigned long *buffer, int bufferlen);
+   typedef int (*numa_max_node_func_t)(void);
+diff -r eecfc14e66ee src/os_cpu/linux_x86/vm/os_linux_x86.cpp
+--- openjdk/hotspot/src/os_cpu/linux_x86/vm/os_linux_x86.cpp	Mon Jan 22 16:25:24 2018 +0000
++++ openjdk/hotspot/src/os_cpu/linux_x86/vm/os_linux_x86.cpp	Wed Feb 21 13:52:31 2018 +0000
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 1999, 2018, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -892,6 +892,25 @@
+ void os::workaround_expand_exec_shield_cs_limit() {
+ #if defined(IA32)
+   size_t page_size = os::vm_page_size();
++
++  /*
++   * JDK-8197429
++   *
++   * Expand the stack mapping to the end of the initial stack before
++   * attempting to install the codebuf.  This is needed because newer
++   * Linux kernels impose a distance of a megabyte between stack
++   * memory and other memory regions.  If we try to install the
++   * codebuf before expanding the stack the installation will appear
++   * to succeed but we'll get a segfault later if we expand the stack
++   * in Java code.
++   *
++   */
++  if (os::Linux::is_initial_thread()) {
++    address limit = Linux::initial_thread_stack_bottom();
++    limit += (StackYellowPages + StackRedPages) * page_size;
++    os::Linux::expand_stack_to(limit);
++  }
++
+   /*
+    * Take the highest VA the OS will give us and exec
+    *
+@@ -910,6 +929,16 @@
+   char* hint = (char*) (Linux::initial_thread_stack_bottom() -
+                         ((StackYellowPages + StackRedPages + 1) * page_size));
+   char* codebuf = os::attempt_reserve_memory_at(page_size, hint);
++
++  if (codebuf == NULL) {
++    // JDK-8197429: There may be a stack gap of one megabyte between
++    // the limit of the stack and the nearest memory region: this is a
++    // Linux kernel workaround for CVE-2017-1000364.  If we failed to
++    // map our codebuf, try again at an address one megabyte lower.
++    hint -= 1 * M;
++    codebuf = os::attempt_reserve_memory_at(page_size, hint);
++  }
++
+   if ( (codebuf == NULL) || (!os::commit_memory(codebuf, page_size, true)) ) {
+     return; // No matter, we tried, best effort.
+   }

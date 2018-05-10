@@ -178,10 +178,10 @@
 # note, following three variables are sedded from update_sources if used correctly. Hardcode them rather there.
 %global project         aarch64-port
 %global repo            jdk8u
-%global revision        aarch64-jdk8u161-b14
+%global revision        aarch64-jdk8u171-b10
 %global shenandoah_project	aarch64-port
 %global shenandoah_repo		jdk8u-shenandoah
-%global shenandoah_revision    	aarch64-shenandoah-jdk8u161-b14
+%global shenandoah_revision    	aarch64-shenandoah-jdk8u171-b10
 
 # eg # jdk8u60-b27 -> jdk8u60 or # aarch64-jdk8u60-b27 -> aarch64-jdk8u60  (dont forget spec escape % by %%)
 %global whole_update    %(VERSION=%{revision}; echo ${VERSION%%-*})
@@ -794,7 +794,7 @@ Provides: java-%{javaver}-%{origin}-accessibility = %{epoch}:%{version}-%{releas
 
 Name:    java-%{javaver}-%{origin}
 Version: %{javaver}.%{updatever}
-Release: 2.%{buildver}%{?dist}
+Release: 7.%{buildver}%{?dist}
 # java-1.5.0-ibm from jpackage.org set Epoch to 1 for unknown reasons,
 # and this change was brought into RHEL-4.  java-1.5.0-ibm packages
 # also included the epoch in their virtual provides.  This created a
@@ -809,7 +809,17 @@ Epoch:   1
 Summary: OpenJDK Runtime Environment
 Group:   Development/Languages
 
-License:  ASL 1.1 and ASL 2.0 and GPL+ and GPLv2 and GPLv2 with exceptions and LGPL+ and LGPLv2 and MPLv1.0 and MPLv1.1 and Public Domain and W3C
+# HotSpot code is licensed under GPLv2
+# JDK library code is licensed under GPLv2 with the Classpath exception
+# The Apache license is used in code taken from Apache projects (primarily JAXP & JAXWS)
+# DOM levels 2 & 3 and the XML digital signature schemas are licensed under the W3C Software License
+# The JSR166 concurrency code is in the public domain
+# The BSD and MIT licenses are used for a number of third-party libraries (see THIRD_PARTY_README)
+# The OpenJDK source tree includes the JPEG library (IJG), zlib & libpng (zlib), giflib and LCMS (MIT)
+# The test code includes copies of NSS under the Mozilla Public License v2.0
+# The PCSClite headers are under a BSD with advertising license
+# The elliptic curve cryptography (ECC) source code is licensed under the LGPLv2.1 or any later version
+License:  ASL 1.1 and ASL 2.0 and BSD and BSD with advertising and GPL+ and GPLv2 and GPLv2 with exceptions and IJG and LGPLv2+ and MIT and MPLv2.0 and Public Domain and W3C and zlib
 URL:      http://openjdk.java.net/
 
 # aarch64-port now contains integration forest of both aarch64 and normal jdk
@@ -899,13 +909,15 @@ Patch509: rh1176206-root.patch
 Patch523: pr2974-rh1337583.patch
 # PR3083, RH1346460: Regression in SSL debug output without an ECC provider
 Patch528: pr3083-rh1346460.patch
+
+# Upstreamable debugging patches
 # Patches 204 and 205 stop the build adding .gnu_debuglink sections to unstripped files
 Patch204: hotspot-remove-debuglink.patch
 Patch205: dont-add-unnecessary-debug-links.patch
 # Enable debug information for assembly code files
 Patch206: hotspot-assembler-debuginfo.patch
-# 8188030, PR3459, RH1484079: AWT java apps fail to start when some minimal fonts are present
-Patch560: 8188030-pr3459-rh1484079.patch
+# 8200556, PR3566: AArch64 port crashes on slowdebug builds
+Patch207: 8200556-pr3566.patch
 
 # Arch-specific upstreamable patches
 # PR2415: JVM -Xmx requirement is too high on s390
@@ -914,6 +926,8 @@ Patch100: %{name}-s390-java-opts.patch
 Patch102: %{name}-size_t.patch
 # Use "%z" for size_t on s390 as size_t != intptr_t
 Patch103: s390-size_t_format_flags.patch
+# Fix more cases of missing return statements on AArch64
+Patch104: pr3458-rh1540242.patch
 
 # Patches which need backporting to 8u
 # S8073139, RH1191652; fix name of ppc64le architecture
@@ -938,21 +952,11 @@ Patch400: 8154313.patch
 Patch526: 6260348-pr3066.patch
 # 8061305, PR3335, RH1423421: Javadoc crashes when method name ends with "Property"
 Patch538: 8061305-pr3335-rh1423421.patch
+# 8188030, PR3459, RH1484079: AWT java apps fail to start when some minimal fonts are present
+Patch560: 8188030-pr3459-rh1484079.patch
+# 8197429, PR3456, RH153662{2,3}: 32 bit java app started via JNI crashes with larger stack sizes
+Patch561: 8197429-pr3456-rh1536622.patch
  
-# Patches upstream and appearing in 8u162
-# 8181055, PR3394, RH1448880: PPC64: "mbind: Invalid argument" still seen after 8175813
-Patch551: 8181055-pr3394-rh1448880.patch
-# 8181419, PR3413, RH1463144: Race in jdwp invoker handling may lead to crashes or invalid results
-Patch553: 8181419-pr3413-rh1463144.patch
-# 8145913, PR3466, RH1498309: PPC64: add Montgomery multiply intrinsic
-Patch556: 8145913-pr3466-rh1498309.patch
-# 8168318, PR3466, RH1498320: PPC64: Use cmpldi instead of li/cmpld
-Patch557: 8168318-pr3466-rh1498320.patch
-# 8170328, PR3466, RH1498321: PPC64: Use andis instead of lis/and
-Patch558: 8170328-pr3466-rh1498321.patch
-# 8181810, PR3466, RH1498319: PPC64: Leverage extrdi for bitfield extract
-Patch559: 8181810-pr3466-rh1498319.patch
-
 # Patches ineligible for 8u
 # 8043805: Allow using a system-installed libjpeg
 Patch201: system-libjpeg.patch
@@ -964,6 +968,10 @@ Patch525: pr1834-rh1022017.patch
 Patch534: always_assumemp.patch
 # PR2888: OpenJDK should check for system cacerts database (e.g. /etc/pki/java/cacerts)
 Patch539: pr2888.patch
+
+# Shenandoah fixes
+# PR3573: Fix TCK crash with Shenandoah
+Patch700: pr3573.patch
 
 # Non-OpenJDK fixes
 
@@ -1265,6 +1273,7 @@ sh %{SOURCE12}
 %patch204
 %patch205
 %patch206
+%patch207
 
 %patch1
 %patch3
@@ -1276,8 +1285,10 @@ sh %{SOURCE12}
 %patch102
 %patch103
 
-# ppc64le fixes
+# AArch64 fixes
+%patch104
 
+# ppc64le fixes
 %patch603
 %patch601
 %patch602
@@ -1305,15 +1316,8 @@ sh %{SOURCE12}
 %patch526
 %patch528
 %patch538
-%patch551
-%patch553
 %patch560
-
-# PPC64 updates
-%patch556
-%patch557
-%patch558
-%patch559
+%patch561
 
 # RPM-only fixes
 %patch525
@@ -1324,6 +1328,10 @@ sh %{SOURCE12}
 %patch534
 %endif
 
+# Shenandoah-only patches
+%if %{use_shenandoah_hotspot}
+%patch700
+%endif
 
 # Extract systemtap tapsets
 %if %{with_systemtap}
@@ -1536,8 +1544,6 @@ do
   fi
 done
 
-# Disabled on armhfp
-%ifnarch %{arm}
 # Make sure gdb can do a backtrace based on line numbers on libjvm.so
 gdb -q "$JAVA_HOME/bin/java" <<EOF | tee gdb.out
 handle SIGSEGV pass nostop noprint
@@ -1551,7 +1557,6 @@ end
 run -version
 EOF
 grep 'JavaCallWrapper::JavaCallWrapper' gdb.out
-%endif
 
 # Check src.zip has all sources. See RHBZ#1130490
 jar -tf $JAVA_HOME/src.zip | grep 'sun.misc.Unsafe'
@@ -1963,8 +1968,46 @@ require "copy_jdk_configs.lua"
 %endif
 
 %changelog
-* Fri Apr 13 2018 Fabian Arrotin <arrfab@centos.org>
-- disabled gdb test as segfaults on armhfp
+* Tue Apr 17 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.171-7.b10
+- Bump release number to be greater than RHEL 7.6 package to allow build with .el7 suffix
+- Resolves: rhbz#1559766
+
+* Tue Apr 17 2018 Jiri Vanek <jvanek@redhat.com> - 1:1.8.0.171-4.b10
+- Rebuilding due to bad nss-softokn brew-root build override
+- Resolves: rhbz#1559766
+
+* Thu Apr 12 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.171-3.b10
+- Fix jconsole.desktop.in subcategory, replacing "Monitor" with "Profiling" (PR3550)
+- Resolves: rhbz#1559766
+
+* Thu Apr 12 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.171-3.b10
+- Fix invalid license 'LGPL+' (should be LGPLv2+ for ECC code) and add misisng ones
+- Resolves: rhbz#1559766
+
+* Thu Apr 12 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.171-2.b10
+- Add fix for TCK crash on Shenandoah.
+- Resolves: rhbz#1559766
+
+* Mon Apr 02 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.171-1.b10
+- Cleanup from previous commit.
+- Remove unused upstream patch 8167200.hotspotAarch64.patch.
+- Resolves: rhbz#1559766
+
+* Thu Mar 29 2018 Jiri Vanek <jvanek@redhat.com> - 1:1.8.0.171-1.b10
+- Backported from fedora: aarch64BuildFailure.patch, rhbz_1536622-JDK8197429-jdk8.patch, rhbz_1540242.patch
+- Resolves: rhbz#1559766
+
+* Sat Mar 24 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.171-0.b10
+- Update to aarch64-jdk8u171-b10 and aarch64-shenandoah-jdk8u171-b10.
+- Resolves: rhbz#1559766
+
+* Wed Mar 21 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.162-0.b12
+- Update to aarch64-jdk8u162-b12 and aarch64-shenandoah-jdk8u162-b12.
+- Remove upstreamed patches for 8181055/PR3394/RH1448880,
+-  8181419/PR3413/RH1463144, 8145913/PR3466/RH1498309,
+-  8168318/PR3466/RH1498320, 8170328/PR3466/RR1498321 and
+-  8181810/PR3466/RH1498319.
+- Resolves: rhbz#1559766
 
 * Fri Jan 12 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.161-2.b14
 - Rebuild to fix temporary loss of RELRO on ppc64 and ppc64le
