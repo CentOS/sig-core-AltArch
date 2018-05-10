@@ -794,7 +794,7 @@ Provides: java-%{javaver}-%{origin}-accessibility = %{epoch}:%{version}-%{releas
 
 Name:    java-%{javaver}-%{origin}
 Version: %{javaver}.%{updatever}
-Release: 0.%{buildver}%{?dist}
+Release: 2.%{buildver}%{?dist}
 # java-1.5.0-ibm from jpackage.org set Epoch to 1 for unknown reasons,
 # and this change was brought into RHEL-4.  java-1.5.0-ibm packages
 # also included the epoch in their virtual provides.  This created a
@@ -938,7 +938,7 @@ Patch400: 8154313.patch
 Patch526: 6260348-pr3066.patch
 # 8061305, PR3335, RH1423421: Javadoc crashes when method name ends with "Property"
 Patch538: 8061305-pr3335-rh1423421.patch
-
+ 
 # Patches upstream and appearing in 8u162
 # 8181055, PR3394, RH1448880: PPC64: "mbind: Invalid argument" still seen after 8175813
 Patch551: 8181055-pr3394-rh1448880.patch
@@ -998,7 +998,7 @@ BuildRequires: zip
 # having to use the rhel-7.x-java-unsafe-candidate hack
 %if 0%{?rhel}
 # Require a boot JDK which doesn't fail due to RH1482244
-BuildRequires: java-1.7.0-openjdk-devel >= 1.7.0.161-2.6.12.0
+BuildRequires: java-1.7.0-openjdk-devel >= 1.7.0.151-2.6.11.3
 %else
 BuildRequires: java-1.8.0-openjdk-devel
 %endif
@@ -1324,6 +1324,7 @@ sh %{SOURCE12}
 %patch534
 %endif
 
+
 # Extract systemtap tapsets
 %if %{with_systemtap}
 tar -x -I xz -f %{SOURCE8}
@@ -1535,20 +1536,19 @@ do
   fi
 done
 
-# Disabled on armhfp 
 # Make sure gdb can do a backtrace based on line numbers on libjvm.so
-#gdb -q "$JAVA_HOME/bin/java" <<EOF | tee gdb.out
-#handle SIGSEGV pass nostop noprint
-#handle SIGILL pass nostop noprint
-#set breakpoint pending on
-#break javaCalls.cpp:1
-#commands 1
-#backtrace
-#quit
-#end
-#run -version
-#EOF
-#grep 'JavaCallWrapper::JavaCallWrapper' gdb.out
+gdb -q "$JAVA_HOME/bin/java" <<EOF | tee gdb.out
+handle SIGSEGV pass nostop noprint
+handle SIGILL pass nostop noprint
+set breakpoint pending on
+break javaCalls.cpp:1
+commands 1
+backtrace
+quit
+end
+run -version
+EOF
+grep 'JavaCallWrapper::JavaCallWrapper' gdb.out
 
 # Check src.zip has all sources. See RHBZ#1130490
 jar -tf $JAVA_HOME/src.zip | grep 'sun.misc.Unsafe'
@@ -1960,90 +1960,107 @@ require "copy_jdk_configs.lua"
 %endif
 
 %changelog
-* Thu Sep 07 2017 Fabian Arrotin <arrfab@centos.org>
-- disabled gdb test as segfaults on armhfp
+* Fri Jan 12 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.161-2.b14
+- Rebuild to fix temporary loss of RELRO on ppc64 and ppc64le
+- Resolves: rhbz#1528233
 
-* Wed Jan 10 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.161-0.b14
+* Wed Jan 10 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.161-1.b14
 - Update to b14 with updated Zero fix for 8174962 (S8194828)
 - Resolves: rhbz#1528233
 
-* Tue Jan 09 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.161-0.b13
+* Tue Jan 09 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.161-1.b13
 - Update to b13 including Zero fix for 8174962 (S8194739) and restoring tzdata2017c update
 - Resolves: rhbz#1528233
 
-* Mon Jan 08 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.161-0.b12
-- Add new file cmsalpha.c to %%{name}-remove-intree-libraries.sh
-- Resolves: rhbz#1528233
-
-* Mon Jan 08 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.161-0.b12
+* Mon Jan 08 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.161-1.b12
 - Replace tarballs with version including AArch64 fix for 8174962 (S8194686)
 - Resolves: rhbz#1528233
 
-* Mon Jan 08 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.161-0.b12
-- Switch bootstrap back to java-1.7.0-openjdk on all architectures, depending on RH1482244 fix
-- Resolves: rhbz#1528233
-
-* Tue Jan 02 2018 Jiri Vanek <jvanek@redhat.com> - 1:1.8.0.161-0.b12
+* Tue Jan 02 2018 Jiri Vanek <jvanek@redhat.com> - 1:1.8.0.161-1.b12
 - Update to aarch64-jdk8u161-b12 and aarch64-shenandoah-jdk8u161-b12 (mbalao)
 - Drop upstreamed patches for 8075484 (RH1490713), 8153711 (RH1284948),
   8162384 (RH1358661), 8164293 (RH1459641), 8173941, 8175813 (RH1448880),
   8175887 and 8180048 (RH1449870).(mbalao)
+- drop more of usptreamed patches 565,566,567,568
+  ( 8184673-pr3475-rh1487266.patch  8191840-pr3503-rh1512647.patch  8191137-pr3503-rh1512647.patch 8190258-pr3499-tzdata2017c.patch)
 - Resolves: rhbz#1528233
 
-* Mon Nov 20 2017 Jiri Vanek <jvanek@redhat.com> - 1:1.8.0.151-5.b12
-- Backport "8180048: Interned string and symbol table leak memory during parallel unlinking" (gnu_andrew)
-- Resolves: rhbz#1515212
+* Wed Dec 20 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.152-1.b16
+- Backport 8191137 and add updates to the translations (8191840 in OpenJDK 7)
+- Resolves: rhbz#1512647
 
-* Tue Oct 24 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-3.b12
-- Added 8164293-pr3412-rh1459641.patch backport from 8u development tree
-- Resolves: rhbz#1505692
+* Wed Dec 20 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.152-1.b16
+- Update to tzdata2017c (8190258/PR3499) to resolve TCK failure due to mismatch with system version.
+- Resolves: rhbz#1508017
 
-* Mon Oct 23 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-2.b12
-- Add back RH1482244 AArch64 workaround now RCM-23152 is fixed.
+* Wed Dec 20 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.152-1.b16
+- Update to aarch64-jdk8u152-b16 and aarch64-shenandoah-jdk8u152-b16.
+- Update 8145913/PR3466/RH1498309 patch following upstream addition of 8152172 (AES for PPC)
+- Add new file cmsalpha.c to %%{name}-remove-intree-libraries.sh
+- Remove upstreamed patches for 8153711/PR3313/RH1284948, 8162384/PR3122/RH1358661, 8173941/PR3226,
+-    8175813/PR3394/RH1448880, 8175887/PR3415, 8146086/PR3439/RH1478402, 8180048/PR3411/RH1449870 and
+-    8164293/PR3412/RH1459641
+- Resolves: rhbz#1508017
+
+* Wed Nov 15 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-5.b13
+- Update to aarch64-jdk8u151-b13 and aarch64-shenandoah-jdk8u151-b13.
+- Drop upstreamed patch for 8075484.
+- Resolves: rhbz#1508017
+
+* Mon Oct 30 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-4.b12
+- Bump release number so it remains higher than z-stream.
+- Resolves: rhbz#1459641
+
+* Thu Oct 26 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-3.b12
+- Add backport of 8184673/PR3475/RH1487266 patch.
+- Resolves: rhbz#1487266
+
+* Thu Oct 26 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-3.b12
+- Backport "8180048: Interned string and symbol table leak memory during parallel unlinking"
+- Resolves: rhbz#1490260
+
+* Thu Oct 26 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-3.b12
+- Add backport of 8146086/PR3439/RH1478402 JAXWS fix.
+- Resolves: rhbz#1478402
+
+* Thu Oct 26 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-3.b12
+- Switch bootstrap back to java-1.7.0-openjdk on all architectures, depending on RH1482244 fix
 - Resolves: rhbz#1499207
 
-* Wed Oct 18 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-1.b12
-- Reverting to java-1.7.0-openjdk on AArch64 as rhel-7.4-z-java-unsafe-candidate using wrong suffix.
-- Resolves: rhbz#1499207
-
-* Wed Oct 18 2017 Jiri Vanek <jvanek@redhat.com> - 1:1.8.0.151-1.b12
+* Wed Oct 18 2017 Jiri Vanek <jvanek@redhat.com> - 1:1.8.0.151-2.b12
 - repack policies adapted to new counts and paths
 - note that also c-j-c is needed to make this apply in next update
 - Resolves: rhbz#1499207
 
-* Wed Oct 18 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-0.b12
+* Wed Oct 18 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-1.b12
 - Update location of policy JAR files following 8157561.
 
-* Wed Oct 18 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-0.b12
+* Wed Oct 18 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-1.b12
 - 8188030 is not yet upstream, so it should be listed under upstreamable fixes.
 - 8181055, 8181419, 8145913, 8168318, 8170328 & 8181810 all now in 8u162.
 - Resolves: rhbz#1499207
 
-* Wed Oct 18 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-0.b12
+* Wed Oct 18 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-1.b12
 - Correct fix to RH1191652 root patch so existing COMMON_CCXXFLAGS_JDK is not lost.
 - Resolves: rhbz#1499207
 
-* Tue Oct 17 2017 Jiri Vanek <jvanek@redhat.com> - 1:1.8.0.151-0.b01
+* Tue Oct 17 2017 Jiri Vanek <jvanek@redhat.com> - 1:1.8.0.151-1.b01
 - Moving patch 560 out of ppc fixes
 - Resolves: rhbz#1499207
 
-* Tue Oct 17 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-0.b12
+* Tue Oct 17 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-1.b12
 - Update SystemTap tapsets to version in IcedTea 3.6.0pre02 to fix RH1492139.
 - Resolves: rhbz#1499207
 
-* Tue Oct 17 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-0.b12
+* Tue Oct 17 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-1.b12
 - Fix premature shutdown of NSS in SunEC provider.
 - Resolves: rhbz#1499207
 
-* Tue Oct 17 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-0.b12
+* Tue Oct 17 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-1.b12
 - Add 8075484/PR3473/RH1490713 which is listed as being in 8u151 but not supplied by Oracle.
 - Resolves: rhbz#1499207
 
-* Tue Oct 17 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-0.b12
-- Switch AArch64 to using java-1.8.0-openjdk to bootstrap until RH1482244 is fixed in bootstrap
-- Resolves: rhbz#1499207
-
-* Tue Oct 17 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-0.b12
+* Tue Oct 17 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.151-1.b12
 - Update to aarch64-jdk8u151-b12 and aarch64-shenandoah-jdk8u151-b12.
 - Update location of OpenJDK zlib system library source code in remove-intree-libraries.sh
 - Drop upstreamed patches for 8179084 and RH1367357 (part of 8183028).
@@ -2052,22 +2069,38 @@ require "copy_jdk_configs.lua"
 - Update RH1163501 to accomodate 8181048 (crypto refactoring)
 - Resolves: rhbz#1499207
 
-* Mon Oct 16 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.144-1.b01
-- Add IBM-supplied Montgomery backport, backport other ppc64 fixes & add CFF fix
-- Resolves: rhbz#1499207
-
-* Mon Oct 16 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.144-0.b01
+* Mon Oct 16 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.144-2.b01
 - Reverted completely unnecessary patch addition which broke the RPM build.
+- Resolves: rhbz#1484079
+
+* Wed Oct 11 2017 Jiri Vanek <jvanek@redhat.com> - 1:1.8.0.144-2.b01
+- smuggled patch540, bug1484079.patch
+- Resolves: rhbz#1484079
+
+* Wed Oct 11 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.144-2.b01
+- Switch AArch64 to using java-1.8.0-openjdk to bootstrap until RH1482244 is fixed in bootstrap
 - Resolves: rhbz#1499207
 
-* Wed Oct 11 2017 Jiri Vanek <jvanek@redhat.com> - 1:1.8.0.144-0.b01
- - smuggled patch540, bug1484079.patch
-- Resolves: rhbz#1499216
+* Wed Oct 11 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.144-2.b01
+- Switch to IBM-supplied Montgomery backport and add remaining ppc64 fixes & CFF fix
+- Resolves: rhbz#1498309
+- Resolves: rhbz#1498319
+- Resolves: rhbz#1498320
+- Resolves: rhbz#1498321
+- Resolves: rhbz#1484079
 
-* Tue Aug 15 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.144-0.b01
+* Tue Oct 10 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.144-2.b01
+- Backport Montgomery multiply intrinsic and dependencies for ppc64
+- Resolves: rhbz#1498309
+
+* Tue Aug 15 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.144-1.b01
 - Update to aarch64-jdk8u144-b01 and aarch64-shenandoah-jdk8u144-b01.
 - Exclude 8175887 from Shenandoah builds as it has been included in that repo.
-- Resolves: rhbz#1481947
+- Resolves: rhbz#1477855
+
+* Mon Aug 14 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.141-3.b16
+- Added 8164293-pr3412-rh1459641.patch backport from 8u development tree
+- Resolves: rhbz#1459641
 
 * Fri Jul 14 2017 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.141-2.b16
 - Update to aarch64-jdk8u141-b16 and aarch64-shenandoah-jdk8u141-b16.
