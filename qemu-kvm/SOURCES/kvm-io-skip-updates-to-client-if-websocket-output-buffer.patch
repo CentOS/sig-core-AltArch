@@ -1,0 +1,96 @@
+From 0ee28ebbde0313e54b0c8e0f316aa75f97c87169 Mon Sep 17 00:00:00 2001
+From: "Daniel P. Berrange" <berrange@redhat.com>
+Date: Thu, 8 Feb 2018 17:50:41 +0100
+Subject: [PATCH 27/27] io: skip updates to client if websocket output buffer
+ is non-zero
+
+RH-Author: Daniel P. Berrange <berrange@redhat.com>
+Message-id: <20180208175041.5634-28-berrange@redhat.com>
+Patchwork-id: 78959
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v1 27/27] io: skip updates to client if websocket output buffer is non-zero
+Bugzilla: 1518711
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: "Daniel P. Berrange" <berrange@redhat.com>
+
+When getting a framebuffer update from the guest, we first check
+to see if there's still any queued data in the VNC send buffer.
+If there is, we skip the update so that we avoid having the send
+buffer grow without bound. Unfortunately, the code is only
+monitoring the normal send buffer, and not the websockets send
+buffer which is separate.
+
+This flaw causes the websockets send buffer to grow without bound
+if the other end of the underlying data channel doesn't
+read data being sent. This can be seen with VNC if a client
+is on a slow WAN link and the guest OS is sending many screen
+updates. A malicious VNC client can act like it is on a slow
+link by playing a video in the guest and then reading data
+very slowly, causing QEMU host memory to expand arbitrarily.
+
+This issue is assigned CVE-2017-15268, publically reported in
+
+  https://bugs.launchpad.net/qemu/+bug/1718964
+
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Signed-off-by: Daniel P. Berrange <berrange@redhat.com>
+
+The corresponding upstream fix is present in commit
+a7b20a8efa28e5f22c26c06cd06c2f12bc863493, however, this
+patch is a complete re-implementation since the upstream
+code for websockets is completely different to that in
+QEMU 1.5.3. As such ignore the Reviewed-by tag above.
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ ui/vnc-ws.c | 10 ++++++++--
+ ui/vnc.c    |  3 +++
+ 2 files changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/ui/vnc-ws.c b/ui/vnc-ws.c
+index 7133be9..fbfadde 100644
+--- a/ui/vnc-ws.c
++++ b/ui/vnc-ws.c
+@@ -173,8 +173,13 @@ long vnc_client_write_ws(VncState *vs)
+     long ret;
+     VNC_DEBUG("Write WS: Pending output %p size %zd offset %zd\n",
+               vs->output.buffer, vs->output.capacity, vs->output.offset);
+-    vncws_encode_frame(&vs->ws_output, vs->output.buffer, vs->output.offset);
+-    buffer_reset(&vs->output);
++    /* We don't consume more from 'output' unless we've finished
++     * sending the previous websockets frame. This ensures that
++     * we still correctly throttle forced framebuffer updates */
++    if (vs->ws_output.offset == 0) {
++        vncws_encode_frame(&vs->ws_output, vs->output.buffer, vs->output.offset);
++        buffer_reset(&vs->output);
++    }
+     ret = vnc_client_write_buf(vs, vs->ws_output.buffer, vs->ws_output.offset);
+     if (!ret) {
+         return 0;
+@@ -183,6 +188,7 @@ long vnc_client_write_ws(VncState *vs)
+     buffer_advance(&vs->ws_output, ret);
+ 
+     if (vs->ws_output.offset == 0) {
++        vs->force_update_offset = 0;
+         qemu_set_fd_handler2(vs->csock, NULL, vnc_client_read, NULL, vs);
+     }
+ 
+diff --git a/ui/vnc.c b/ui/vnc.c
+index 2be87b8..99b1ab1 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -915,6 +915,9 @@ static bool vnc_should_update(VncState *vs)
+          * is completely idle.
+          */
+         if (vs->output.offset < vs->throttle_output_offset &&
++#ifdef CONFIG_VNC_WS
++            vs->ws_output.offset  < vs->throttle_output_offset &&
++#endif
+             vs->job_update == VNC_STATE_UPDATE_NONE) {
+             return true;
+         }
+-- 
+1.8.3.1
+

@@ -1,0 +1,93 @@
+From 082c19eeb7917a141bae4cf98d0ef941956adab6 Mon Sep 17 00:00:00 2001
+From: Xiao Wang <jasowang@redhat.com>
+Date: Mon, 27 Nov 2017 07:07:57 +0100
+Subject: [PATCH 6/9] slirp: fix clearing ifq_so from pending packets
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Xiao Wang <jasowang@redhat.com>
+Message-id: <1511766477-29559-5-git-send-email-jasowang@redhat.com>
+Patchwork-id: 77901
+O-Subject: [RHEL7.5 qemu-kvm PATCH 4/4] slirp: fix clearing ifq_so from pending packets
+Bugzilla: 1508745
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: wexu@redhat.com
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Samuel Thibault <samuel.thibault@ens-lyon.org>
+
+The if_fastq and if_batchq contain not only packets, but queues of packets
+for the same socket. When sofree frees a socket, it thus has to clear ifq_so
+from all the packets from the queues, not only the first.
+
+Signed-off-by: Samuel Thibault <samuel.thibault@ens-lyon.org>
+Reviewed-by: Philippe Mathieu-Daudé <f4bug@amsat.org>
+Cc: qemu-stable@nongnu.org
+Signed-off-by: Peter Maydell <peter.maydell@linaro.org>
+(cherry picked from commit 1201d308519f1e915866d7583d5136d03cc1d384)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ slirp/socket.c | 39 +++++++++++++++++++++++----------------
+ 1 file changed, 23 insertions(+), 16 deletions(-)
+
+diff --git a/slirp/socket.c b/slirp/socket.c
+index 09b5d3d..7837664 100644
+--- a/slirp/socket.c
++++ b/slirp/socket.c
+@@ -57,29 +57,36 @@ socreate(Slirp *slirp)
+ }
+ 
+ /*
++ * Remove references to so from the given message queue.
++ */
++static void
++soqfree(struct socket *so, struct quehead *qh)
++{
++    struct mbuf *ifq;
++
++    for (ifq = (struct mbuf *) qh->qh_link;
++             (struct quehead *) ifq != qh;
++             ifq = ifq->ifq_next) {
++        if (ifq->ifq_so == so) {
++            struct mbuf *ifm;
++            ifq->ifq_so = NULL;
++            for (ifm = ifq->ifs_next; ifm != ifq; ifm = ifm->ifs_next) {
++                ifm->ifq_so = NULL;
++            }
++        }
++    }
++}
++
++/*
+  * remque and free a socket, clobber cache
+  */
+ void
+ sofree(struct socket *so)
+ {
+   Slirp *slirp = so->slirp;
+-  struct mbuf *ifm;
+-
+-  for (ifm = (struct mbuf *) slirp->if_fastq.qh_link;
+-       (struct quehead *) ifm != &slirp->if_fastq;
+-       ifm = ifm->ifq_next) {
+-    if (ifm->ifq_so == so) {
+-      ifm->ifq_so = NULL;
+-    }
+-  }
+ 
+-  for (ifm = (struct mbuf *) slirp->if_batchq.qh_link;
+-       (struct quehead *) ifm != &slirp->if_batchq;
+-       ifm = ifm->ifq_next) {
+-    if (ifm->ifq_so == so) {
+-      ifm->ifq_so = NULL;
+-    }
+-  }
++  soqfree(so, &slirp->if_fastq);
++  soqfree(so, &slirp->if_batchq);
+ 
+   if (so->so_emu==EMU_RSH && so->extra) {
+ 	sofree(so->extra);
+-- 
+1.8.3.1
+

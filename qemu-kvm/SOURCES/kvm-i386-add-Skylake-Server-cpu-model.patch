@@ -1,0 +1,103 @@
+From 839a96660680e11ad494a02e5b14f64ebd9c8552 Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Tue, 17 Oct 2017 20:36:53 +0200
+Subject: [PATCH 27/27] i386: add Skylake-Server cpu model
+
+RH-Author: Eduardo Habkost <ehabkost@redhat.com>
+Message-id: <20171017203653.28578-3-ehabkost@redhat.com>
+Patchwork-id: 77351
+O-Subject: [RHEL-7.5 qemu-kvm PATCH 2/2] i386: add Skylake-Server cpu model
+Bugzilla: 1501510
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+
+From: "Boqun Feng (Intel)" <boqun.feng@gmail.com>
+
+Bugzilla: https://bugzilla.redhat.com/show_bug.cgi?id=1501510
+
+Introduce Skylake-Server cpu mode which inherits the features from
+Skylake-Client and supports some additional features that are: AVX512,
+CLWB and PGPE1GB.
+
+Backport notes:
+* ARAT feature not included, as it is not available in the
+  qemu-kvm-1.5.3 tree (and disabled by compat code in
+  pc-i440fx-rhel7.2.0 and older on qemu-kvm-rhev)
+
+Signed-off-by: Boqun Feng (Intel) <boqun.feng@gmail.com>
+Message-Id: <20170621052935.20715-1-boqun.feng@gmail.com>
+[ehabkost: copied comment about XSAVES from Skylake-Client]
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+(cherry picked from commit 53f9a6f45fb214540cb40af45efc11ac40ac454c)
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/cpu.c | 50 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 50 insertions(+)
+
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index e739647..539d659 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -1066,6 +1066,56 @@ static x86_def_t builtin_x86_defs[] = {
+         .model_id = "Intel Core Processor (Skylake)",
+     },
+     {
++        .name = "Skylake-Server",
++        .level = 0xd,
++        .vendor = CPUID_VENDOR_INTEL,
++        .family = 6,
++        .model = 85,
++        .stepping = 4,
++        .features[FEAT_1_EDX] =
++            CPUID_VME | CPUID_SSE2 | CPUID_SSE | CPUID_FXSR | CPUID_MMX |
++            CPUID_CLFLUSH | CPUID_PSE36 | CPUID_PAT | CPUID_CMOV | CPUID_MCA |
++            CPUID_PGE | CPUID_MTRR | CPUID_SEP | CPUID_APIC | CPUID_CX8 |
++            CPUID_MCE | CPUID_PAE | CPUID_MSR | CPUID_TSC | CPUID_PSE |
++            CPUID_DE | CPUID_FP87,
++        .features[FEAT_1_ECX] =
++            CPUID_EXT_AVX | CPUID_EXT_XSAVE | CPUID_EXT_AES |
++            CPUID_EXT_POPCNT | CPUID_EXT_X2APIC | CPUID_EXT_SSE42 |
++            CPUID_EXT_SSE41 | CPUID_EXT_CX16 | CPUID_EXT_SSSE3 |
++            CPUID_EXT_PCLMULQDQ | CPUID_EXT_SSE3 |
++            CPUID_EXT_TSC_DEADLINE_TIMER | CPUID_EXT_FMA | CPUID_EXT_MOVBE |
++            CPUID_EXT_PCID | CPUID_EXT_F16C | CPUID_EXT_RDRAND,
++        .features[FEAT_8000_0001_EDX] =
++            CPUID_EXT2_LM | CPUID_EXT2_PDPE1GB | CPUID_EXT2_RDTSCP |
++            CPUID_EXT2_NX | CPUID_EXT2_SYSCALL,
++        .features[FEAT_8000_0001_ECX] =
++            CPUID_EXT3_ABM | CPUID_EXT3_LAHF_LM | CPUID_EXT3_3DNOWPREFETCH,
++        .features[FEAT_7_0_EBX] =
++            CPUID_7_0_EBX_FSGSBASE | CPUID_7_0_EBX_BMI1 |
++            CPUID_7_0_EBX_HLE | CPUID_7_0_EBX_AVX2 | CPUID_7_0_EBX_SMEP |
++            CPUID_7_0_EBX_BMI2 | CPUID_7_0_EBX_ERMS | CPUID_7_0_EBX_INVPCID |
++            CPUID_7_0_EBX_RTM | CPUID_7_0_EBX_RDSEED | CPUID_7_0_EBX_ADX |
++            CPUID_7_0_EBX_SMAP | CPUID_7_0_EBX_MPX | CPUID_7_0_EBX_CLWB |
++            CPUID_7_0_EBX_AVX512F | CPUID_7_0_EBX_AVX512DQ |
++            CPUID_7_0_EBX_AVX512BW | CPUID_7_0_EBX_AVX512CD |
++            CPUID_7_0_EBX_AVX512VL,
++        /* Missing: XSAVES (not supported by some Linux versions,
++         * including v4.1 to v4.12).
++         * KVM doesn't yet expose any XSAVES state save component,
++         * and the only one defined in Skylake (processor tracing)
++         * probably will block migration anyway.
++         */
++        .features[FEAT_XSAVE] =
++            CPUID_XSAVE_XSAVEOPT | CPUID_XSAVE_XSAVEC |
++            CPUID_XSAVE_XGETBV1,
++        /* Missing: ARAT. not available in the qemu-kvm-1.5.3 tree (and
++         * disabled by compat code in pc-i440fx-rhel7.2.0 and older on
++         * qemu-kvm-rhev)
++         */
++        .xlevel = 0x80000008,
++        .model_id = "Intel Xeon Processor (Skylake)",
++    },
++    {
+         .name = "Opteron_G1",
+         .level = 5,
+         .vendor = CPUID_VENDOR_AMD,
+-- 
+1.8.3.1
+

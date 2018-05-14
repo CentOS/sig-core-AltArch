@@ -1,0 +1,248 @@
+From fba60972ebac4bd02238c9ecb101b24b1e7a8a51 Mon Sep 17 00:00:00 2001
+From: Xiao Wang <jasowang@redhat.com>
+Date: Mon, 27 Nov 2017 07:07:55 +0100
+Subject: [PATCH 4/9] Avoid embedding struct mbuf in other structures
+
+RH-Author: Xiao Wang <jasowang@redhat.com>
+Message-id: <1511766477-29559-3-git-send-email-jasowang@redhat.com>
+Patchwork-id: 77900
+O-Subject: [RHEL7.5 qemu-kvm PATCH 2/4] Avoid embedding struct mbuf in other structures
+Bugzilla: 1508745
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: wexu@redhat.com
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Samuel Thibault <samuel.thibault@ens-lyon.org>
+
+struct mbuf uses a C99 open char array to allow inlining data. Inlining
+this in another structure is however a GNU extension. The inlines used
+so far in struct Slirp were actually only needed as head of struct
+mbuf lists. This replaces these inline with mere struct quehead,
+and use casts as appropriate.
+
+Signed-off-by: Samuel Thibault <samuel.thibault@ens-lyon.org>
+Reviewed-by: Peter Maydell <peter.maydell@linaro.org>
+(cherry picked from commit 67e3eee45460129cbc5a90fb9f74eb52594281cd)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ slirp/if.c    | 27 ++++++++++++++-------------
+ slirp/mbuf.c  | 19 ++++++++++---------
+ slirp/misc.c  |  5 -----
+ slirp/misc.h  |  5 +++++
+ slirp/slirp.h |  8 +++++---
+ 5 files changed, 34 insertions(+), 30 deletions(-)
+
+diff --git a/slirp/if.c b/slirp/if.c
+index dcd5faf..5e14761 100644
+--- a/slirp/if.c
++++ b/slirp/if.c
+@@ -27,9 +27,9 @@ ifs_remque(struct mbuf *ifm)
+ void
+ if_init(Slirp *slirp)
+ {
+-    slirp->if_fastq.ifq_next = slirp->if_fastq.ifq_prev = &slirp->if_fastq;
+-    slirp->if_batchq.ifq_next = slirp->if_batchq.ifq_prev = &slirp->if_batchq;
+-    slirp->next_m = &slirp->if_batchq;
++    slirp->if_fastq.qh_link = slirp->if_fastq.qh_rlink = &slirp->if_fastq;
++    slirp->if_batchq.qh_link = slirp->if_batchq.qh_rlink = &slirp->if_batchq;
++    slirp->next_m = (struct mbuf *) &slirp->if_batchq;
+ }
+ 
+ /*
+@@ -73,7 +73,8 @@ if_output(struct socket *so, struct mbuf *ifm)
+ 	 * We mustn't put this packet back on the fastq (or we'll send it out of order)
+ 	 * XXX add cache here?
+ 	 */
+-	for (ifq = slirp->if_batchq.ifq_prev; ifq != &slirp->if_batchq;
++	for (ifq = (struct mbuf *) slirp->if_batchq.qh_rlink;
++	     (struct quehead *) ifq != &slirp->if_batchq;
+ 	     ifq = ifq->ifq_prev) {
+ 		if (so == ifq->ifq_so) {
+ 			/* A match! */
+@@ -85,7 +86,7 @@ if_output(struct socket *so, struct mbuf *ifm)
+ 
+ 	/* No match, check which queue to put it on */
+ 	if (so && (so->so_iptos & IPTOS_LOWDELAY)) {
+-		ifq = slirp->if_fastq.ifq_prev;
++		ifq = (struct mbuf *) slirp->if_fastq.qh_rlink;
+ 		on_fastq = 1;
+ 		/*
+ 		 * Check if this packet is a part of the last
+@@ -97,9 +98,9 @@ if_output(struct socket *so, struct mbuf *ifm)
+ 			goto diddit;
+ 		}
+         } else {
+-		ifq = slirp->if_batchq.ifq_prev;
++		ifq = (struct mbuf *) slirp->if_batchq.qh_rlink;
+                 /* Set next_m if the queue was empty so far */
+-                if (slirp->next_m == &slirp->if_batchq) {
++                if ((struct quehead *) slirp->next_m == &slirp->if_batchq) {
+                     slirp->next_m = ifm;
+                 }
+         }
+@@ -165,10 +166,10 @@ void if_start(Slirp *slirp)
+     }
+     slirp->if_start_busy = true;
+ 
+-    if (slirp->if_fastq.ifq_next != &slirp->if_fastq) {
+-        ifm_next = slirp->if_fastq.ifq_next;
++    if (slirp->if_fastq.qh_link != &slirp->if_fastq) {
++        ifm_next = (struct mbuf *) slirp->if_fastq.qh_link;
+         next_from_batchq = false;
+-    } else if (slirp->next_m != &slirp->if_batchq) {
++    } else if ((struct quehead *) slirp->next_m != &slirp->if_batchq) {
+         /* Nothing on fastq, pick up from batchq via next_m */
+         ifm_next = slirp->next_m;
+         next_from_batchq = true;
+@@ -181,12 +182,12 @@ void if_start(Slirp *slirp)
+         from_batchq = next_from_batchq;
+ 
+         ifm_next = ifm->ifq_next;
+-        if (ifm_next == &slirp->if_fastq) {
++        if ((struct quehead *) ifm_next == &slirp->if_fastq) {
+             /* No more packets in fastq, switch to batchq */
+             ifm_next = slirp->next_m;
+             next_from_batchq = true;
+         }
+-        if (ifm_next == &slirp->if_batchq) {
++        if ((struct quehead *) ifm_next == &slirp->if_batchq) {
+             /* end of batchq */
+             ifm_next = NULL;
+         }
+@@ -217,7 +218,7 @@ void if_start(Slirp *slirp)
+                 /* Next packet in fastq is from the same session */
+                 ifm_next = next;
+                 next_from_batchq = false;
+-            } else if (slirp->next_m == &slirp->if_batchq) {
++            } else if ((struct quehead *) slirp->next_m == &slirp->if_batchq) {
+                 /* Set next_m and ifm_next if the session packet is now the
+                  * only one on batchq */
+                 slirp->next_m = ifm_next = next;
+diff --git a/slirp/mbuf.c b/slirp/mbuf.c
+index 4fefb04..5565fd1 100644
+--- a/slirp/mbuf.c
++++ b/slirp/mbuf.c
+@@ -28,16 +28,16 @@
+ void
+ m_init(Slirp *slirp)
+ {
+-    slirp->m_freelist.m_next = slirp->m_freelist.m_prev = &slirp->m_freelist;
+-    slirp->m_usedlist.m_next = slirp->m_usedlist.m_prev = &slirp->m_usedlist;
++    slirp->m_freelist.qh_link = slirp->m_freelist.qh_rlink = &slirp->m_freelist;
++    slirp->m_usedlist.qh_link = slirp->m_usedlist.qh_rlink = &slirp->m_usedlist;
+ }
+ 
+ void m_cleanup(Slirp *slirp)
+ {
+     struct mbuf *m, *next;
+ 
+-    m = slirp->m_usedlist.m_next;
+-    while (m != &slirp->m_usedlist) {
++    m = (struct mbuf *) slirp->m_usedlist.qh_link;
++    while ((struct quehead *) m != &slirp->m_usedlist) {
+         next = m->m_next;
+         if (m->m_flags & M_EXT) {
+             free(m->m_ext);
+@@ -45,8 +45,8 @@ void m_cleanup(Slirp *slirp)
+         free(m);
+         m = next;
+     }
+-    m = slirp->m_freelist.m_next;
+-    while (m != &slirp->m_freelist) {
++    m = (struct mbuf *) slirp->m_freelist.qh_link;
++    while ((struct quehead *) m != &slirp->m_freelist) {
+         next = m->m_next;
+         free(m);
+         m = next;
+@@ -69,7 +69,7 @@ m_get(Slirp *slirp)
+ 
+ 	DEBUG_CALL("m_get");
+ 
+-	if (slirp->m_freelist.m_next == &slirp->m_freelist) {
++	if (slirp->m_freelist.qh_link == &slirp->m_freelist) {
+ 		m = (struct mbuf *)malloc(SLIRP_MSIZE);
+ 		if (m == NULL) goto end_error;
+ 		slirp->mbuf_alloced++;
+@@ -77,7 +77,7 @@ m_get(Slirp *slirp)
+ 			flags = M_DOFREE;
+ 		m->slirp = slirp;
+ 	} else {
+-		m = slirp->m_freelist.m_next;
++		m = (struct mbuf *) slirp->m_freelist.qh_link;
+ 		remque(m);
+ 	}
+ 
+@@ -224,7 +224,8 @@ dtom(Slirp *slirp, void *dat)
+ 	DEBUG_ARG("dat = %lx", (long )dat);
+ 
+ 	/* bug corrected for M_EXT buffers */
+-	for (m = slirp->m_usedlist.m_next; m != &slirp->m_usedlist;
++	for (m = (struct mbuf *) slirp->m_usedlist.qh_link;
++	     (struct quehead *) m != &slirp->m_usedlist;
+ 	     m = m->m_next) {
+ 	  if (m->m_flags & M_EXT) {
+ 	    if( (char *)dat>=m->m_ext && (char *)dat<(m->m_ext + m->m_size) )
+diff --git a/slirp/misc.c b/slirp/misc.c
+index 8ecced5..d353d08 100644
+--- a/slirp/misc.c
++++ b/slirp/misc.c
+@@ -14,11 +14,6 @@
+ int slirp_debug = DBG_CALL|DBG_MISC|DBG_ERROR;
+ #endif
+ 
+-struct quehead {
+-	struct quehead *qh_link;
+-	struct quehead *qh_rlink;
+-};
+-
+ inline void
+ insque(void *a, void *b)
+ {
+diff --git a/slirp/misc.h b/slirp/misc.h
+index ba8beb1..eb451c4 100644
+--- a/slirp/misc.h
++++ b/slirp/misc.h
+@@ -49,6 +49,11 @@ struct emu_t {
+     struct emu_t *next;
+ };
+ 
++struct slirp_quehead {
++    struct slirp_quehead *qh_link;
++    struct slirp_quehead *qh_rlink;
++};
++
+ void slirp_insque(void *, void *);
+ void slirp_remque(void *);
+ int add_exec(struct ex_list **, int, char *, struct in_addr, int);
+diff --git a/slirp/slirp.h b/slirp/slirp.h
+index fe0e65d..d050ede 100644
+--- a/slirp/slirp.h
++++ b/slirp/slirp.h
+@@ -126,6 +126,7 @@ void free(void *ptr);
+    have different prototypes. */
+ #define insque slirp_insque
+ #define remque slirp_remque
++#define quehead slirp_quehead
+ 
+ #ifdef HAVE_SYS_STROPTS_H
+ #include <sys/stropts.h>
+@@ -218,12 +219,13 @@ struct Slirp {
+     struct ex_list *exec_list;
+ 
+     /* mbuf states */
+-    struct mbuf m_freelist, m_usedlist;
++    struct quehead m_freelist;
++    struct quehead m_usedlist;
+     int mbuf_alloced;
+ 
+     /* if states */
+-    struct mbuf if_fastq;   /* fast queue (for interactive data) */
+-    struct mbuf if_batchq;  /* queue for non-interactive data */
++    struct quehead if_fastq;   /* fast queue (for interactive data) */
++    struct quehead if_batchq;  /* queue for non-interactive data */
+     struct mbuf *next_m;    /* pointer to next mbuf to output */
+     bool if_start_busy;     /* avoid if_start recursion */
+ 
+-- 
+1.8.3.1
+

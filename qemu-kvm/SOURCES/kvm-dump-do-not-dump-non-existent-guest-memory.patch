@@ -1,0 +1,67 @@
+From 725ecdf6e40eaebbfa8e5328a5ff96163b61637f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:39:00 +0100
+Subject: [PATCH 29/41] dump: do not dump non-existent guest memory
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-30-marcandre.lureau@redhat.com>
+Patchwork-id: 78379
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 29/41] dump: do not dump non-existent guest memory
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Cornelia Huck <cohuck@redhat.com>
+
+It does not really make sense to dump memory that is not there.
+
+Moreover, that fixes a segmentation fault when calling dump-guest-memory
+with no filter for a machine with no memory defined.
+
+New behaviour is:
+
+(qemu) dump-guest-memory /dev/null
+dump: no guest memory to dump
+(qemu) dump-guest-memory /dev/null 0 4096
+dump: no guest memory to dump
+
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>
+Tested-by: Laurent Vivier <lvivier@redhat.com>
+Reviewed-by: Laurent Vivier <lvivier@redhat.com>
+Reviewed-by: Greg Kurz <groug@kaod.org>
+Reviewed-by: Peter Xu <peterx@redhat.com>
+Message-Id: <20170913142036.2469-4-lvivier@redhat.com>
+Signed-off-by: Laurent Vivier <lvivier@redhat.com>
+Signed-off-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+
+(cherry picked from commit d1e6994abcd12c7f54aa73ff848fb6215c783898)
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/dump.c b/dump.c
+index 008a722..d629c8d 100644
+--- a/dump.c
++++ b/dump.c
+@@ -1536,6 +1536,12 @@ static void dump_init(DumpState *s, int fd, bool has_format,
+     fprintf(stderr, "DUMP: total memory to dump: %lu\n", s->total_size);
+ #endif
+ 
++    /* it does not make sense to dump non-existent memory */
++    if (!s->total_size) {
++        error_setg(errp, "dump: no guest memory to dump");
++        goto cleanup;
++    }
++
+     s->start = get_start_block(s);
+     if (s->start == -1) {
+         error_set(errp, QERR_INVALID_PARAMETER, "begin");
+-- 
+1.8.3.1
+

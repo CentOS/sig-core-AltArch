@@ -1,0 +1,223 @@
+From bbd8cc516329f84b70d38a75820f36f2ecd0abda Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Fri, 29 Sep 2017 21:46:14 +0200
+Subject: [PATCH 15/27] vfio: Enable sparse mmap capability
+
+RH-Author: Alex Williamson <alex.williamson@redhat.com>
+Message-id: <20170929214614.16765.48627.stgit@gimli.home>
+Patchwork-id: 76773
+O-Subject: [RHEL-7.5 qemu-kvm PATCH 15/16] vfio: Enable sparse mmap capability
+Bugzilla: 1494181
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Auger Eric <eric.auger@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Upstream: b53b0f696b10828f6393155f44a352c019e673fd
+RHEL: Roll in required linux-headers update
+
+The sparse mmap capability in a vfio region info allows vfio to tell
+us which sub-areas of a region may be mmap'd.  Thus rather than
+assuming a single mmap covers the entire region and later frobbing it
+ourselves for things like the PCI MSI-X vector table, we can read that
+directly from vfio.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+Reviewed-by: Gerd Hoffmann <kraxel@redhat.com>
+Tested-by: Gerd Hoffmann <kraxel@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c             | 67 +++++++++++++++++++++++++++++++++++++++++++---
+ linux-headers/linux/vfio.h | 53 +++++++++++++++++++++++++++++++++++-
+ trace-events               |  2 ++
+ 3 files changed, 117 insertions(+), 5 deletions(-)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index d634531..a27698b 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -2602,6 +2602,54 @@ static void vfio_unmap_bar(VFIOPCIDevice *vdev, int nr)
+     vfio_region_finalize(&bar->region);
+ }
+ 
++static struct vfio_info_cap_header *
++vfio_get_region_info_cap(struct vfio_region_info *info, uint16_t id)
++{
++    struct vfio_info_cap_header *hdr;
++    void *ptr = info;
++
++    if (!(info->flags & VFIO_REGION_INFO_FLAG_CAPS)) {
++        return NULL;
++    }
++
++    for (hdr = ptr + info->cap_offset; hdr != ptr; hdr = ptr + hdr->next) {
++        if (hdr->id == id) {
++            return hdr;
++        }
++    }
++
++    return NULL;
++}
++
++static void vfio_setup_region_sparse_mmaps(VFIORegion *region,
++                                           struct vfio_region_info *info)
++{
++    struct vfio_info_cap_header *hdr;
++    struct vfio_region_info_cap_sparse_mmap *sparse;
++    int i;
++
++    hdr = vfio_get_region_info_cap(info, VFIO_REGION_INFO_CAP_SPARSE_MMAP);
++    if (!hdr) {
++        return;
++    }
++
++    sparse = container_of(hdr, struct vfio_region_info_cap_sparse_mmap, header);
++
++    trace_vfio_region_sparse_mmap_header(region->vbasedev->name,
++                                         region->nr, sparse->nr_areas);
++
++    region->nr_mmaps = sparse->nr_areas;
++    region->mmaps = g_new0(VFIOMmap, region->nr_mmaps);
++
++    for (i = 0; i < region->nr_mmaps; i++) {
++        region->mmaps[i].offset = sparse->areas[i].offset;
++        region->mmaps[i].size = sparse->areas[i].size;
++        trace_vfio_region_sparse_mmap_entry(i, region->mmaps[i].offset,
++                                            region->mmaps[i].offset +
++                                            region->mmaps[i].size);
++    }
++}
++
+ static int vfio_region_setup(Object *obj, VFIODevice *vbasedev,
+                              VFIORegion *region, int index, const char *name)
+ {
+@@ -2628,11 +2676,14 @@ static int vfio_region_setup(Object *obj, VFIODevice *vbasedev,
+             region->flags & VFIO_REGION_INFO_FLAG_MMAP &&
+             !(region->size & ~TARGET_PAGE_MASK)) {
+ 
+-            region->nr_mmaps = 1;
+-            region->mmaps = g_new0(VFIOMmap, region->nr_mmaps);
++            vfio_setup_region_sparse_mmaps(region, info);
+ 
+-            region->mmaps[0].offset = 0;
+-            region->mmaps[0].size = region->size;
++            if (!region->nr_mmaps) {
++                region->nr_mmaps = 1;
++                region->mmaps = g_new0(VFIOMmap, region->nr_mmaps);
++                region->mmaps[0].offset = 0;
++                region->mmaps[0].size = region->size;
++            }
+         }
+     }
+ 
+@@ -3796,6 +3847,7 @@ static int vfio_get_region_info(VFIODevice *vbasedev, int index,
+     *info = g_malloc0(argsz);
+ 
+     (*info)->index = index;
++retry:
+     (*info)->argsz = argsz;
+ 
+     if (ioctl(vbasedev->fd, VFIO_DEVICE_GET_REGION_INFO, *info)) {
+@@ -3803,6 +3855,13 @@ static int vfio_get_region_info(VFIODevice *vbasedev, int index,
+         return -errno;
+     }
+ 
++    if ((*info)->argsz > argsz) {
++        argsz = (*info)->argsz;
++        *info = g_realloc(*info, argsz);
++
++        goto retry;
++    }
++
+     return 0;
+ }
+ 
+diff --git a/linux-headers/linux/vfio.h b/linux-headers/linux/vfio.h
+index d197fd4..8995a34 100644
+--- a/linux-headers/linux/vfio.h
++++ b/linux-headers/linux/vfio.h
+@@ -38,6 +38,33 @@
+ #define VFIO_TYPE	(';')
+ #define VFIO_BASE	100
+ 
++/*
++ * For extension of INFO ioctls, VFIO makes use of a capability chain
++ * designed after PCI/e capabilities.  A flag bit indicates whether
++ * this capability chain is supported and a field defined in the fixed
++ * structure defines the offset of the first capability in the chain.
++ * This field is only valid when the corresponding bit in the flags
++ * bitmap is set.  This offset field is relative to the start of the
++ * INFO buffer, as is the next field within each capability header.
++ * The id within the header is a shared address space per INFO ioctl,
++ * while the version field is specific to the capability id.  The
++ * contents following the header are specific to the capability id.
++ */
++struct vfio_info_cap_header {
++	__u16	id;		/* Identifies capability */
++	__u16	version;	/* Version specific to the capability ID */
++	__u32	next;		/* Offset of next capability */
++};
++
++/*
++ * Callers of INFO ioctls passing insufficiently sized buffers will see
++ * the capability chain flag bit set, a zero value for the first capability
++ * offset (if available within the provided argsz), and argsz will be
++ * updated to report the necessary buffer size.  For compatibility, the
++ * INFO ioctl will not report error in this case, but the capability chain
++ * will not be available.
++ */
++
+ /* -------- IOCTLs for VFIO file descriptor (/dev/vfio/vfio) -------- */
+ 
+ /**
+@@ -171,13 +198,37 @@ struct vfio_region_info {
+ #define VFIO_REGION_INFO_FLAG_READ	(1 << 0) /* Region supports read */
+ #define VFIO_REGION_INFO_FLAG_WRITE	(1 << 1) /* Region supports write */
+ #define VFIO_REGION_INFO_FLAG_MMAP	(1 << 2) /* Region supports mmap */
++#define VFIO_REGION_INFO_FLAG_CAPS	(1 << 3) /* Info supports caps */
+ 	__u32	index;		/* Region index */
+-	__u32	resv;		/* Reserved for alignment */
++	__u32	cap_offset;	/* Offset within info struct of first cap */
+ 	__u64	size;		/* Region size (bytes) */
+ 	__u64	offset;		/* Region offset from start of device fd */
+ };
+ #define VFIO_DEVICE_GET_REGION_INFO	_IO(VFIO_TYPE, VFIO_BASE + 8)
+ 
++/*
++ * The sparse mmap capability allows finer granularity of specifying areas
++ * within a region with mmap support.  When specified, the user should only
++ * mmap the offset ranges specified by the areas array.  mmaps outside of the
++ * areas specified may fail (such as the range covering a PCI MSI-X table) or
++ * may result in improper device behavior.
++ *
++ * The structures below define version 1 of this capability.
++ */
++#define VFIO_REGION_INFO_CAP_SPARSE_MMAP        1
++
++struct vfio_region_sparse_mmap_area {
++	__u64	offset;	/* Offset of mmap'able area within region */
++	__u64	size;	/* Size of mmap'able area */
++};
++
++struct vfio_region_info_cap_sparse_mmap {
++	struct vfio_info_cap_header header;
++	__u32	nr_areas;
++	__u32	reserved;
++	struct vfio_region_sparse_mmap_area areas[];
++};
++
+ /**
+  * VFIO_DEVICE_GET_IRQ_INFO - _IOWR(VFIO_TYPE, VFIO_BASE + 9,
+  *				    struct vfio_irq_info)
+diff --git a/trace-events b/trace-events
+index cc62b0b..fa2618d 100644
+--- a/trace-events
++++ b/trace-events
+@@ -1164,3 +1164,5 @@ vfio_region_mmap(const char *name, unsigned long offset, unsigned long end) "Reg
+ vfio_region_exit(const char *name, int index) "Device %s, region %d"
+ vfio_region_finalize(const char *name, int index) "Device %s, region %d"
+ vfio_region_mmaps_set_enabled(const char *name, bool enabled) "Region %s mmaps enabled: %d"
++vfio_region_sparse_mmap_header(const char *name, int index, int nr_areas) "Device %s region %d: %d sparse mmap entries"
++vfio_region_sparse_mmap_entry(int i, unsigned long start, unsigned long end) "sparse entry %d [0x%lx - 0x%lx]"
+-- 
+1.8.3.1
+

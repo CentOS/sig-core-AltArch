@@ -1,0 +1,63 @@
+From 4adaef467772d0131b96e6dc2533b13afd8254a9 Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Fri, 29 Sep 2017 21:44:01 +0200
+Subject: [PATCH 01/27] vfio: pass device to vfio_mmap_bar and use it to set
+ owner
+
+RH-Author: Alex Williamson <alex.williamson@redhat.com>
+Message-id: <20170929214401.16765.56856.stgit@gimli.home>
+Patchwork-id: 76759
+O-Subject: [RHEL-7.5 qemu-kvm PATCH 01/16] vfio: pass device to vfio_mmap_bar and use it to set owner
+Bugzilla: 1494181
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Auger Eric <eric.auger@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+Upstream: 5cb022a1bfaa0c15a13d3266bc6d683cc1f44d7f
+RHEL: Update vfio_mmap_bar() parameters, but RHEL memory API doesn't
+      support an owner, this makes later patches apply more cleanly.
+
+Cc: Alex Williamson <alex.williamson@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index 4fdc09a..363c646 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -2570,7 +2570,8 @@ static void vfio_unmap_bar(VFIODevice *vdev, int nr)
+     memory_region_destroy(&bar->mem);
+ }
+ 
+-static int vfio_mmap_bar(VFIOBAR *bar, MemoryRegion *mem, MemoryRegion *submem,
++static int vfio_mmap_bar(VFIODevice *vdev, VFIOBAR *bar,
++                         MemoryRegion *mem, MemoryRegion *submem,
+                          void **map, size_t size, off_t offset,
+                          const char *name)
+ {
+@@ -2654,7 +2655,7 @@ static void vfio_map_bar(VFIODevice *vdev, int nr)
+     }
+ 
+     strncat(name, " mmap", sizeof(name) - strlen(name) - 1);
+-    if (vfio_mmap_bar(bar, &bar->mem,
++    if (vfio_mmap_bar(vdev, bar, &bar->mem,
+                       &bar->mmap_mem, &bar->mmap, size, 0, name)) {
+         error_report("%s unsupported. Performance may be slow", name);
+     }
+@@ -2668,7 +2669,7 @@ static void vfio_map_bar(VFIODevice *vdev, int nr)
+         size = start < bar->size ? bar->size - start : 0;
+         strncat(name, " msix-hi", sizeof(name) - strlen(name) - 1);
+         /* VFIOMSIXInfo contains another MemoryRegion for this mapping */
+-        if (vfio_mmap_bar(bar, &bar->mem, &vdev->msix->mmap_mem,
++        if (vfio_mmap_bar(vdev, bar, &bar->mem, &vdev->msix->mmap_mem,
+                           &vdev->msix->mmap, size, start, name)) {
+             error_report("%s unsupported. Performance may be slow", name);
+         }
+-- 
+1.8.3.1
+

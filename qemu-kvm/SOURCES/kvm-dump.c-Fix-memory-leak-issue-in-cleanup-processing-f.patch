@@ -1,0 +1,97 @@
+From c3bae9746b9d3995369ba2fa315b42b3faf0efe3 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:38:48 +0100
+Subject: [PATCH 17/41] dump.c: Fix memory leak issue in cleanup processing for
+ dump_init()
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-18-marcandre.lureau@redhat.com>
+Patchwork-id: 78369
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 17/41] dump.c: Fix memory leak issue in cleanup processing for dump_init()
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Chen Gang <gang.chen.5i5j@gmail.com>
+
+In dump_init(), when failure occurs, need notice about 'fd' and memory
+mapping. So call dump_cleanup() for it (need let all initializations at
+front).
+
+Also simplify dump_cleanup(): remove redundant 'ret' and redundant 'fd'
+checking.
+
+Signed-off-by: Chen Gang <gang.chen.5i5j@gmail.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Luiz Capitulino <lcapitulino@redhat.com>
+
+(cherry picked from commit 2928207ac1bb2751a1554ea0f9a9641179f51488)
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c | 18 +++++-------------
+ 1 file changed, 5 insertions(+), 13 deletions(-)
+
+diff --git a/dump.c b/dump.c
+index c902944..c709fc2 100644
+--- a/dump.c
++++ b/dump.c
+@@ -71,18 +71,14 @@ uint64_t cpu_to_dump64(DumpState *s, uint64_t val)
+ 
+ static int dump_cleanup(DumpState *s)
+ {
+-    int ret = 0;
+-
+     guest_phys_blocks_free(&s->guest_phys_blocks);
+     memory_mapping_list_free(&s->list);
+-    if (s->fd != -1) {
+-        close(s->fd);
+-    }
++    close(s->fd);
+     if (s->resume) {
+         vm_start();
+     }
+ 
+-    return ret;
++    return 0;
+ }
+ 
+ static void dump_error(DumpState *s, const char *reason)
+@@ -1505,6 +1501,8 @@ static int dump_init(DumpState *s, int fd, bool has_format,
+     s->begin = begin;
+     s->length = length;
+ 
++    memory_mapping_list_init(&s->list);
++
+     guest_phys_blocks_init(&s->guest_phys_blocks);
+     guest_phys_blocks_append(&s->guest_phys_blocks);
+ 
+@@ -1532,7 +1530,6 @@ static int dump_init(DumpState *s, int fd, bool has_format,
+     }
+ 
+     /* get memory mapping */
+-    memory_mapping_list_init(&s->list);
+     if (paging) {
+         qemu_get_guest_memory_mapping(&s->list, &s->guest_phys_blocks, &err);
+         if (err != NULL) {
+@@ -1628,12 +1625,7 @@ static int dump_init(DumpState *s, int fd, bool has_format,
+     return 0;
+ 
+ cleanup:
+-    guest_phys_blocks_free(&s->guest_phys_blocks);
+-
+-    if (s->resume) {
+-        vm_start();
+-    }
+-
++    dump_cleanup(s);
+     return -1;
+ }
+ 
+-- 
+1.8.3.1
+

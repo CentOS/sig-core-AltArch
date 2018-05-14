@@ -1,0 +1,320 @@
+From f81cc30fefd469f19b2f4550d4453a8aaff3239a Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Fri, 29 Sep 2017 21:44:49 +0200
+Subject: [PATCH 06/27] hw/vfio/pci: handle reset at VFIODevice
+
+RH-Author: Alex Williamson <alex.williamson@redhat.com>
+Message-id: <20170929214449.16765.43500.stgit@gimli.home>
+Patchwork-id: 76764
+O-Subject: [RHEL-7.5 qemu-kvm PATCH 06/16] hw/vfio/pci: handle reset at VFIODevice
+Bugzilla: 1494181
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Auger Eric <eric.auger@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Eric Auger <eric.auger@linaro.org>
+
+Upstream: b47d8efa9f430c332bf96ce6eede169eb48422ad
+
+Since we can potentially have both PCI and platform devices in
+the same VFIO group, this latter now owns a list of VFIODevices.
+A unified reset handler, vfio_reset_handler, is registered, looping
+through this VFIODevice list. 2 specialized operations are introduced
+(vfio_compute_needs_reset and vfio_hot_reset_multi): they allow to
+implement type specific behavior. also reset_works and needs_reset
+VFIOPCIDevice fields are moved into VFIODevice.
+
+Signed-off-by: Eric Auger <eric.auger@linaro.org>
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c | 95 +++++++++++++++++++++++++++++++++++++++-------------------
+ 1 file changed, 64 insertions(+), 31 deletions(-)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index cc151e2..3e559ed 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -178,13 +178,24 @@ typedef struct VFIOMSIXInfo {
+     void *mmap;
+ } VFIOMSIXInfo;
+ 
++typedef struct VFIODeviceOps VFIODeviceOps;
++
+ typedef struct VFIODevice {
++    QLIST_ENTRY(VFIODevice) next;
+     struct VFIOGroup *group;
+     char *name;
+     int fd;
+     int type;
++    bool reset_works;
++    bool needs_reset;
++    VFIODeviceOps *ops;
+ } VFIODevice;
+ 
++struct VFIODeviceOps {
++    void (*vfio_compute_needs_reset)(VFIODevice *vdev);
++    int (*vfio_hot_reset_multi)(VFIODevice *vdev);
++};
++
+ typedef struct VFIOPCIDevice {
+     PCIDevice pdev;
+     VFIODevice vbasedev;
+@@ -203,7 +214,6 @@ typedef struct VFIOPCIDevice {
+     VFIOBAR bars[PCI_NUM_REGIONS - 1]; /* No ROM */
+     VFIOVGA vga; /* 0xa0000, 0x3b0, 0x3c0 */
+     PCIHostDeviceAddress host;
+-    QLIST_ENTRY(VFIOPCIDevice) next;
+     EventNotifier err_notifier;
+     EventNotifier req_notifier;
+     uint32_t features;
+@@ -213,13 +223,11 @@ typedef struct VFIOPCIDevice {
+ #define VFIO_FEATURE_ENABLE_REQ (1 << VFIO_FEATURE_ENABLE_REQ_BIT)
+     int32_t bootindex;
+     uint8_t pm_cap;
+-    bool reset_works;
+     bool has_vga;
+     bool pci_aer;
+     bool req_enabled;
+     bool has_flr;
+     bool has_pm_reset;
+-    bool needs_reset;
+     bool rom_read_failed;
+ } VFIOPCIDevice;
+ 
+@@ -227,7 +235,7 @@ typedef struct VFIOGroup {
+     int fd;
+     int groupid;
+     VFIOContainer *container;
+-    QLIST_HEAD(, VFIOPCIDevice) device_list;
++    QLIST_HEAD(, VFIODevice) device_list;
+     QLIST_ENTRY(VFIOGroup) next;
+     QLIST_ENTRY(VFIOGroup) container_next;
+ } VFIOGroup;
+@@ -3064,7 +3072,7 @@ static int vfio_pci_hot_reset(VFIOPCIDevice *vdev, bool single)
+             single ? "one" : "multi");
+ 
+     vfio_pci_pre_reset(vdev);
+-    vdev->needs_reset = false;
++    vdev->vbasedev.needs_reset = false;
+ 
+     info = g_malloc0(sizeof(*info));
+     info->argsz = sizeof(*info);
+@@ -3100,6 +3108,7 @@ static int vfio_pci_hot_reset(VFIOPCIDevice *vdev, bool single)
+     for (i = 0; i < info->count; i++) {
+         PCIHostDeviceAddress host;
+         VFIOPCIDevice *tmp;
++        VFIODevice *vbasedev_iter;
+ 
+         host.domain = devices[i].segment;
+         host.bus = devices[i].bus;
+@@ -3131,7 +3140,11 @@ static int vfio_pci_hot_reset(VFIOPCIDevice *vdev, bool single)
+         }
+ 
+         /* Prep dependent devices for reset and clear our marker. */
+-        QLIST_FOREACH(tmp, &group->device_list, next) {
++        QLIST_FOREACH(vbasedev_iter, &group->device_list, next) {
++            if (vbasedev_iter->type != VFIO_DEVICE_TYPE_PCI) {
++                continue;
++            }
++            tmp = container_of(vbasedev_iter, VFIOPCIDevice, vbasedev);
+             if (vfio_pci_host_match(&host, &tmp->host)) {
+                 if (single) {
+                     DPRINTF("vfio: found another in-use device "
+@@ -3141,7 +3154,7 @@ static int vfio_pci_hot_reset(VFIOPCIDevice *vdev, bool single)
+                     goto out_single;
+                 }
+                 vfio_pci_pre_reset(tmp);
+-                tmp->needs_reset = false;
++                tmp->vbasedev.needs_reset = false;
+                 multi = true;
+                 break;
+             }
+@@ -3192,6 +3205,7 @@ out:
+     for (i = 0; i < info->count; i++) {
+         PCIHostDeviceAddress host;
+         VFIOPCIDevice *tmp;
++        VFIODevice *vbasedev_iter;
+ 
+         host.domain = devices[i].segment;
+         host.bus = devices[i].bus;
+@@ -3212,7 +3226,11 @@ out:
+             break;
+         }
+ 
+-        QLIST_FOREACH(tmp, &group->device_list, next) {
++        QLIST_FOREACH(vbasedev_iter, &group->device_list, next) {
++            if (vbasedev_iter->type != VFIO_DEVICE_TYPE_PCI) {
++                continue;
++            }
++            tmp = container_of(vbasedev_iter, VFIOPCIDevice, vbasedev);
+             if (vfio_pci_host_match(&host, &tmp->host)) {
+                 vfio_pci_post_reset(tmp);
+                 break;
+@@ -3246,28 +3264,40 @@ static int vfio_pci_hot_reset_one(VFIOPCIDevice *vdev)
+     return vfio_pci_hot_reset(vdev, true);
+ }
+ 
+-static int vfio_pci_hot_reset_multi(VFIOPCIDevice *vdev)
++static int vfio_pci_hot_reset_multi(VFIODevice *vbasedev)
+ {
++    VFIOPCIDevice *vdev = container_of(vbasedev, VFIOPCIDevice, vbasedev);
+     return vfio_pci_hot_reset(vdev, false);
+ }
+ 
+-static void vfio_pci_reset_handler(void *opaque)
++static void vfio_pci_compute_needs_reset(VFIODevice *vbasedev)
++{
++    VFIOPCIDevice *vdev = container_of(vbasedev, VFIOPCIDevice, vbasedev);
++    if (!vbasedev->reset_works || (!vdev->has_flr && vdev->has_pm_reset)) {
++        vbasedev->needs_reset = true;
++    }
++}
++
++static VFIODeviceOps vfio_pci_ops = {
++    .vfio_compute_needs_reset = vfio_pci_compute_needs_reset,
++    .vfio_hot_reset_multi = vfio_pci_hot_reset_multi,
++};
++
++static void vfio_reset_handler(void *opaque)
+ {
+     VFIOGroup *group;
+-    VFIOPCIDevice *vdev;
++    VFIODevice *vbasedev;
+ 
+     QLIST_FOREACH(group, &group_list, next) {
+-        QLIST_FOREACH(vdev, &group->device_list, next) {
+-            if (!vdev->reset_works || (!vdev->has_flr && vdev->has_pm_reset)) {
+-                vdev->needs_reset = true;
+-            }
++        QLIST_FOREACH(vbasedev, &group->device_list, next) {
++            vbasedev->ops->vfio_compute_needs_reset(vbasedev);
+         }
+     }
+ 
+     QLIST_FOREACH(group, &group_list, next) {
+-        QLIST_FOREACH(vdev, &group->device_list, next) {
+-            if (vdev->needs_reset) {
+-                vfio_pci_hot_reset_multi(vdev);
++        QLIST_FOREACH(vbasedev, &group->device_list, next) {
++            if (vbasedev->needs_reset) {
++                vbasedev->ops->vfio_hot_reset_multi(vbasedev);
+             }
+         }
+     }
+@@ -3486,7 +3516,7 @@ static VFIOGroup *vfio_get_group(int groupid)
+     }
+ 
+     if (QLIST_EMPTY(&group_list)) {
+-        qemu_register_reset(vfio_pci_reset_handler, NULL);
++        qemu_register_reset(vfio_reset_handler, NULL);
+     }
+ 
+     QLIST_INSERT_HEAD(&group_list, group, next);
+@@ -3510,7 +3540,7 @@ static void vfio_put_group(VFIOGroup *group)
+     g_free(group);
+ 
+     if (QLIST_EMPTY(&group_list)) {
+-        qemu_unregister_reset(vfio_pci_reset_handler, NULL);
++        qemu_unregister_reset(vfio_reset_handler, NULL);
+     }
+ }
+ 
+@@ -3533,7 +3563,7 @@ static int vfio_get_device(VFIOGroup *group, const char *name,
+ 
+     vdev->vbasedev.fd = ret;
+     vdev->vbasedev.group = group;
+-    QLIST_INSERT_HEAD(&group->device_list, vdev, next);
++    QLIST_INSERT_HEAD(&group->device_list, &vdev->vbasedev, next);
+ 
+     /* Sanity check device */
+     ret = ioctl(vdev->vbasedev.fd, VFIO_DEVICE_GET_INFO, &dev_info);
+@@ -3550,7 +3580,7 @@ static int vfio_get_device(VFIOGroup *group, const char *name,
+         goto error;
+     }
+ 
+-    vdev->reset_works = !!(dev_info.flags & VFIO_DEVICE_FLAGS_RESET);
++    vdev->vbasedev.reset_works = !!(dev_info.flags & VFIO_DEVICE_FLAGS_RESET);
+ 
+     if (dev_info.num_regions < VFIO_PCI_CONFIG_REGION_INDEX + 1) {
+         error_report("vfio: unexpected number of io regions %u",
+@@ -3663,7 +3693,7 @@ static int vfio_get_device(VFIOGroup *group, const char *name,
+ 
+ error:
+     if (ret) {
+-        QLIST_REMOVE(vdev, next);
++        QLIST_REMOVE(&vdev->vbasedev, next);
+         vdev->vbasedev.group = NULL;
+         close(vdev->vbasedev.fd);
+     }
+@@ -3672,7 +3702,7 @@ error:
+ 
+ static void vfio_put_device(VFIOPCIDevice *vdev)
+ {
+-    QLIST_REMOVE(vdev, next);
++    QLIST_REMOVE(&vdev->vbasedev, next);
+     vdev->vbasedev.group = NULL;
+     DPRINTF("vfio_put_device: close vdev->vbasedev.fd\n");
+     close(vdev->vbasedev.fd);
+@@ -3881,7 +3911,8 @@ static void vfio_unregister_req_notifier(VFIOPCIDevice *vdev)
+ 
+ static int vfio_initfn(PCIDevice *pdev)
+ {
+-    VFIOPCIDevice *pvdev, *vdev = DO_UPCAST(VFIOPCIDevice, pdev, pdev);
++    VFIOPCIDevice *vdev = DO_UPCAST(VFIOPCIDevice, pdev, pdev);
++    VFIODevice *vbasedev_iter;
+     VFIOGroup *group;
+     char path[PATH_MAX], iommu_group_path[PATH_MAX], *group_name;
+     ssize_t len;
+@@ -3890,7 +3921,7 @@ static int vfio_initfn(PCIDevice *pdev)
+     int ret, i = 0;
+ 
+     QLIST_FOREACH(group, &group_list, next) {
+-        QLIST_FOREACH(pvdev, &group->device_list, next) {
++        QLIST_FOREACH(vbasedev_iter, &group->device_list, next) {
+             i++;
+         }
+     }
+@@ -3911,6 +3942,8 @@ static int vfio_initfn(PCIDevice *pdev)
+         return -errno;
+     }
+ 
++    vdev->vbasedev.ops = &vfio_pci_ops;
++
+     vdev->vbasedev.type = VFIO_DEVICE_TYPE_PCI;
+     vdev->vbasedev.name = g_strdup_printf("%04x:%02x:%02x.%01x",
+                                           vdev->host.domain, vdev->host.bus,
+@@ -3945,9 +3978,8 @@ static int vfio_initfn(PCIDevice *pdev)
+             vdev->host.domain, vdev->host.bus, vdev->host.slot,
+             vdev->host.function);
+ 
+-    QLIST_FOREACH(pvdev, &group->device_list, next) {
+-        if (strcmp(pvdev->vbasedev.name, vdev->vbasedev.name) == 0) {
+-
++    QLIST_FOREACH(vbasedev_iter, &group->device_list, next) {
++        if (strcmp(vbasedev_iter->name, vdev->vbasedev.name) == 0) {
+             error_report("vfio: error: device %s is already attached", path);
+             vfio_put_group(group);
+             return -EBUSY;
+@@ -4078,7 +4110,8 @@ static void vfio_pci_reset(DeviceState *dev)
+ 
+     vfio_pci_pre_reset(vdev);
+ 
+-    if (vdev->reset_works && (vdev->has_flr || !vdev->has_pm_reset) &&
++    if (vdev->vbasedev.reset_works &&
++        (vdev->has_flr || !vdev->has_pm_reset) &&
+         !ioctl(vdev->vbasedev.fd, VFIO_DEVICE_RESET)) {
+         DPRINTF("%04x:%02x:%02x.%x FLR/VFIO_DEVICE_RESET\n", vdev->host.domain,
+             vdev->host.bus, vdev->host.slot, vdev->host.function);
+@@ -4091,7 +4124,7 @@ static void vfio_pci_reset(DeviceState *dev)
+     }
+ 
+     /* If nothing else works and the device supports PM reset, use it */
+-    if (vdev->reset_works && vdev->has_pm_reset &&
++    if (vdev->vbasedev.reset_works && vdev->has_pm_reset &&
+         !ioctl(vdev->vbasedev.fd, VFIO_DEVICE_RESET)) {
+         DPRINTF("%04x:%02x:%02x.%x PCI PM Reset\n", vdev->host.domain,
+             vdev->host.bus, vdev->host.slot, vdev->host.function);
+-- 
+1.8.3.1
+

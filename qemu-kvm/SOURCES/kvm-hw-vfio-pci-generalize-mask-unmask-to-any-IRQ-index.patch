@@ -1,0 +1,123 @@
+From c7e1a8da5c3576d962c10c7afc11b0146f6b9adc Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Fri, 29 Sep 2017 21:44:24 +0200
+Subject: [PATCH 03/27] hw/vfio/pci: generalize mask/unmask to any IRQ index
+
+RH-Author: Alex Williamson <alex.williamson@redhat.com>
+Message-id: <20170929214424.16765.25345.stgit@gimli.home>
+Patchwork-id: 76761
+O-Subject: [RHEL-7.5 qemu-kvm PATCH 03/16] hw/vfio/pci: generalize mask/unmask to any IRQ index
+Bugzilla: 1494181
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Auger Eric <eric.auger@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Eric Auger <eric.auger@linaro.org>
+
+Upstream: 079eb19cbb3079536788dfd58832824804815e48
+
+To prepare for platform device introduction, rename vfio_mask_intx
+and vfio_unmask_intx into vfio_mask_single_irqindex and respectively
+unmask_single_irqindex. Also use a nex index parameter.
+
+With that name and prototype the function will be usable for other
+indexes than VFIO_PCI_INTX_IRQ_INDEX.
+
+Signed-off-by: Eric Auger <eric.auger@linaro.org>
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c | 20 ++++++++++----------
+ 1 file changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index a1ca883..ed9b8c4 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -288,12 +288,12 @@ static void vfio_disable_irqindex(VFIOPCIDevice *vdev, int index)
+ /*
+  * INTx
+  */
+-static void vfio_unmask_intx(VFIOPCIDevice *vdev)
++static void vfio_unmask_single_irqindex(VFIOPCIDevice *vdev, int index)
+ {
+     struct vfio_irq_set irq_set = {
+         .argsz = sizeof(irq_set),
+         .flags = VFIO_IRQ_SET_DATA_NONE | VFIO_IRQ_SET_ACTION_UNMASK,
+-        .index = VFIO_PCI_INTX_IRQ_INDEX,
++        .index = index,
+         .start = 0,
+         .count = 1,
+     };
+@@ -302,12 +302,12 @@ static void vfio_unmask_intx(VFIOPCIDevice *vdev)
+ }
+ 
+ #ifdef CONFIG_KVM /* Unused outside of CONFIG_KVM code */
+-static void vfio_mask_intx(VFIOPCIDevice *vdev)
++static void vfio_mask_single_irqindex(VFIOPCIDevice *vdev, int index)
+ {
+     struct vfio_irq_set irq_set = {
+         .argsz = sizeof(irq_set),
+         .flags = VFIO_IRQ_SET_DATA_NONE | VFIO_IRQ_SET_ACTION_MASK,
+-        .index = VFIO_PCI_INTX_IRQ_INDEX,
++        .index = index,
+         .start = 0,
+         .count = 1,
+     };
+@@ -376,7 +376,7 @@ static void vfio_eoi(VFIOPCIDevice *vdev)
+ 
+     vdev->intx.pending = false;
+     qemu_set_irq(vdev->pdev.irq[vdev->intx.pin], 0);
+-    vfio_unmask_intx(vdev);
++    vfio_unmask_single_irqindex(vdev, VFIO_PCI_INTX_IRQ_INDEX);
+ }
+ 
+ static void vfio_enable_intx_kvm(VFIOPCIDevice *vdev)
+@@ -399,7 +399,7 @@ static void vfio_enable_intx_kvm(VFIOPCIDevice *vdev)
+ 
+     /* Get to a known interrupt state */
+     qemu_set_fd_handler(irqfd.fd, NULL, NULL, vdev);
+-    vfio_mask_intx(vdev);
++    vfio_mask_single_irqindex(vdev, VFIO_PCI_INTX_IRQ_INDEX);
+     vdev->intx.pending = false;
+     qemu_set_irq(vdev->pdev.irq[vdev->intx.pin], 0);
+ 
+@@ -437,7 +437,7 @@ static void vfio_enable_intx_kvm(VFIOPCIDevice *vdev)
+     }
+ 
+     /* Let'em rip */
+-    vfio_unmask_intx(vdev);
++    vfio_unmask_single_irqindex(vdev, VFIO_PCI_INTX_IRQ_INDEX);
+ 
+     vdev->intx.kvm_accel = true;
+ 
+@@ -454,7 +454,7 @@ fail_irqfd:
+     event_notifier_cleanup(&vdev->intx.unmask);
+ fail:
+     qemu_set_fd_handler(irqfd.fd, vfio_intx_interrupt, NULL, vdev);
+-    vfio_unmask_intx(vdev);
++    vfio_unmask_single_irqindex(vdev, VFIO_PCI_INTX_IRQ_INDEX);
+ #endif
+ }
+ 
+@@ -475,7 +475,7 @@ static void vfio_disable_intx_kvm(VFIOPCIDevice *vdev)
+      * Get to a known state, hardware masked, QEMU ready to accept new
+      * interrupts, QEMU IRQ de-asserted.
+      */
+-    vfio_mask_intx(vdev);
++    vfio_mask_single_irqindex(vdev, VFIO_PCI_INTX_IRQ_INDEX);
+     vdev->intx.pending = false;
+     qemu_set_irq(vdev->pdev.irq[vdev->intx.pin], 0);
+ 
+@@ -493,7 +493,7 @@ static void vfio_disable_intx_kvm(VFIOPCIDevice *vdev)
+     vdev->intx.kvm_accel = false;
+ 
+     /* If we've missed an event, let it re-fire through QEMU */
+-    vfio_unmask_intx(vdev);
++    vfio_unmask_single_irqindex(vdev, VFIO_PCI_INTX_IRQ_INDEX);
+ 
+     DPRINTF("%s(%04x:%02x:%02x.%x) KVM INTx accel disabled\n",
+             __func__, vdev->host.domain, vdev->host.bus,
+-- 
+1.8.3.1
+

@@ -1,0 +1,101 @@
+From 88b94264928e180cad4067a55cb328fe594985b9 Mon Sep 17 00:00:00 2001
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+Date: Fri, 26 Jan 2018 18:53:14 +0100
+Subject: [PATCH 3/4] savevm: Improve error message for blocked migration
+
+RH-Author: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Message-id: <20180126185315.2342-2-dgilbert@redhat.com>
+Patchwork-id: 78730
+O-Subject: [RHEL7.5 qemu-kvm PATCH 1/2] savevm: Improve error message for blocked migration
+Bugzilla: 1536883
+RH-Acked-by: Peter Xu <peterx@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Kevin Wolf <kwolf@redhat.com>
+
+If an internal snapshot can't be saved because migration is blocked
+(most commonly probably because of AHCI), we had a really bad error
+message:
+
+$ echo -e "savevm foo\nquit" | qemu -M q35 /tmp/test.qcow2 -monitor stdio
+QEMU 2.2.50 monitor - type 'help' for more information
+(qemu) savevm foo
+Error -22 while writing VM
+(qemu) quit
+
+This patch converts qemu_savevm_state() to the Error infrastructure so
+that a useful error pointing to the problematic device is produced now:
+
+$ echo -e "savevm foo\nquit" | qemu -M q35 /tmp/test.qcow2 -monitor stdio
+QEMU 2.2.50 monitor - type 'help' for more information
+(qemu) savevm foo
+State blocked by non-migratable device '0000:00:1f.2/ich9_ahci'
+(qemu) quit
+
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Message-id: 1423574702-23072-1-git-send-email-kwolf@redhat.com
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit 5d80448c3fc566e505adfa2b566ec8074442c8e1)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ savevm.c | 11 +++++++----
+ 1 file changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/savevm.c b/savevm.c
+index 731d5c0..d34004e 100644
+--- a/savevm.c
++++ b/savevm.c
+@@ -2199,7 +2199,7 @@ void qemu_savevm_state_cancel(void)
+     }
+ }
+ 
+-static int qemu_savevm_state(QEMUFile *f)
++static int qemu_savevm_state(QEMUFile *f, Error **errp)
+ {
+     int ret;
+     MigrationParams params = {
+@@ -2207,7 +2207,7 @@ static int qemu_savevm_state(QEMUFile *f)
+         .shared = 0
+     };
+ 
+-    if (qemu_savevm_state_blocked(NULL)) {
++    if (qemu_savevm_state_blocked(errp)) {
+         return -EINVAL;
+     }
+ 
+@@ -2228,6 +2228,7 @@ static int qemu_savevm_state(QEMUFile *f)
+     }
+     if (ret != 0) {
+         qemu_savevm_state_cancel();
++        error_setg_errno(errp, -ret, "Error while writing VM state");
+     }
+     return ret;
+ }
+@@ -2603,6 +2604,7 @@ void do_savevm(Monitor *mon, const QDict *qdict)
+     qemu_timeval tv;
+     struct tm tm;
+     const char *name = qdict_get_try_str(qdict, "name");
++    Error *local_err = NULL;
+ 
+     /* Verify if there is a device that doesn't support snapshots and is writable */
+     bs = NULL;
+@@ -2661,11 +2663,12 @@ void do_savevm(Monitor *mon, const QDict *qdict)
+         monitor_printf(mon, "Could not open VM state file\n");
+         goto the_end;
+     }
+-    ret = qemu_savevm_state(f);
++    ret = qemu_savevm_state(f, &local_err);
+     vm_state_size = qemu_ftell(f);
+     qemu_fclose(f);
+     if (ret < 0) {
+-        monitor_printf(mon, "Error %d while writing VM\n", ret);
++        monitor_printf(mon, "%s\n", error_get_pretty(local_err));
++        error_free(local_err);
+         goto the_end;
+     }
+ 
+-- 
+1.8.3.1
+

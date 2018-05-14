@@ -1,0 +1,118 @@
+From 68ed14180549185ab27c37baacd47843ae45511c Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:38:56 +0100
+Subject: [PATCH 25/41] dump-guest-memory: add dump_in_progress() helper
+ function
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-26-marcandre.lureau@redhat.com>
+Patchwork-id: 78376
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 25/41] dump-guest-memory: add dump_in_progress() helper function
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Peter Xu <peterx@redhat.com>
+
+For now, it has no effect. It will be used in dump detach support.
+
+Signed-off-by: Peter Xu <peterx@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Message-Id: <1455772616-8668-5-git-send-email-peterx@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+
+(cherry picked from commit 65d64f362326a57b590b8b76e3422030a2aa5c44)
+
+RHEL: minor conflict in function declaration area.
+
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c                | 13 +++++++++++++
+ include/qemu-common.h |  4 ++++
+ qmp.c                 | 14 ++++++++++++++
+ 3 files changed, 31 insertions(+)
+
+diff --git a/dump.c b/dump.c
+index 254c0ba..639d52a 100644
+--- a/dump.c
++++ b/dump.c
+@@ -1455,6 +1455,12 @@ static void dump_state_prepare(DumpState *s)
+     *s = (DumpState) { .status = DUMP_STATUS_ACTIVE };
+ }
+ 
++bool dump_in_progress(void)
++{
++    DumpState *state = &dump_state_global;
++    return (state->status == DUMP_STATUS_ACTIVE);
++}
++
+ static void dump_init(DumpState *s, int fd, bool has_format,
+                       DumpGuestMemoryFormat format, bool paging, bool has_filter,
+                       int64_t begin, int64_t length, Error **errp)
+@@ -1632,6 +1638,13 @@ void qmp_dump_guest_memory(bool paging, const char *file, bool has_begin,
+     DumpState *s;
+     Error *local_err = NULL;
+ 
++    /* if there is a dump in background, we should wait until the dump
++     * finished */
++    if (dump_in_progress()) {
++        error_setg(errp, "There is a dump in process, please wait.");
++        return;
++    }
++
+     /*
+      * kdump-compressed format need the whole memory dumped, so paging or
+      * filter is not supported here.
+diff --git a/include/qemu-common.h b/include/qemu-common.h
+index 8c1132c..4569d52 100644
+--- a/include/qemu-common.h
++++ b/include/qemu-common.h
+@@ -481,4 +481,8 @@ size_t buffer_find_nonzero_offset(const void *buf, size_t len);
+  */
+ int parse_debug_env(const char *name, int max, int initial);
+ 
++/* returns non-zero if dump is in progress, otherwise zero is
++ * returned. */
++bool dump_in_progress(void);
++
+ #endif
+diff --git a/qmp.c b/qmp.c
+index 4c149b3..5996056 100644
+--- a/qmp.c
++++ b/qmp.c
+@@ -87,6 +87,13 @@ void qmp_quit(Error **err)
+ 
+ void qmp_stop(Error **errp)
+ {
++    /* if there is a dump in background, we should wait until the dump
++     * finished */
++    if (dump_in_progress()) {
++        error_setg(errp, "There is a dump in process, please wait.");
++        return;
++    }
++
+     if (runstate_check(RUN_STATE_INMIGRATE)) {
+         autostart = 0;
+     } else {
+@@ -159,6 +166,13 @@ void qmp_cont(Error **errp)
+ {
+     Error *local_err = NULL;
+ 
++    /* if there is a dump in background, we should wait until the dump
++     * finished */
++    if (dump_in_progress()) {
++        error_setg(errp, "There is a dump in process, please wait.");
++        return;
++    }
++
+     if (runstate_needs_reset()) {
+         error_set(errp, QERR_RESET_REQUIRED);
+         return;
+-- 
+1.8.3.1
+

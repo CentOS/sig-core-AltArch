@@ -1,0 +1,62 @@
+From 8c490d636f5dbe289b43cd0c34413aca3e62e2a9 Mon Sep 17 00:00:00 2001
+From: Xiao Wang <jasowang@redhat.com>
+Date: Mon, 27 Nov 2017 07:07:56 +0100
+Subject: [PATCH 5/9] slirp: Fix access to freed memory
+
+RH-Author: Xiao Wang <jasowang@redhat.com>
+Message-id: <1511766477-29559-4-git-send-email-jasowang@redhat.com>
+Patchwork-id: 77898
+O-Subject: [RHEL7.5 qemu-kvm PATCH 3/4] slirp: Fix access to freed memory
+Bugzilla: 1508745
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: wexu@redhat.com
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Samuel Thibault <samuel.thibault@ens-lyon.org>
+
+if_start() goes through the slirp->if_fastq and slirp->if_batchq
+list of pending messages, and accesses ifm->ifq_so->so_nqueued of its
+elements if ifm->ifq_so != NULL.  When freeing a socket, we thus need
+to make sure that any pending message for this socket does not refer
+to the socket any more.
+
+Signed-off-by: Samuel Thibault <samuel.thibault@ens-lyon.org>
+Tested-by: Brian Candler <b.candler@pobox.com>
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit ea64d5f08817b5e79e17135dce516c7583107f91)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ slirp/socket.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/slirp/socket.c b/slirp/socket.c
+index 8e8819c..09b5d3d 100644
+--- a/slirp/socket.c
++++ b/slirp/socket.c
+@@ -63,6 +63,23 @@ void
+ sofree(struct socket *so)
+ {
+   Slirp *slirp = so->slirp;
++  struct mbuf *ifm;
++
++  for (ifm = (struct mbuf *) slirp->if_fastq.qh_link;
++       (struct quehead *) ifm != &slirp->if_fastq;
++       ifm = ifm->ifq_next) {
++    if (ifm->ifq_so == so) {
++      ifm->ifq_so = NULL;
++    }
++  }
++
++  for (ifm = (struct mbuf *) slirp->if_batchq.qh_link;
++       (struct quehead *) ifm != &slirp->if_batchq;
++       ifm = ifm->ifq_next) {
++    if (ifm->ifq_so == so) {
++      ifm->ifq_so = NULL;
++    }
++  }
+ 
+   if (so->so_emu==EMU_RSH && so->extra) {
+ 	sofree(so->extra);
+-- 
+1.8.3.1
+

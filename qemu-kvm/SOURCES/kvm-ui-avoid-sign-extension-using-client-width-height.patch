@@ -1,0 +1,115 @@
+From 023a741e196fd99b532f69df9560730425b174a0 Mon Sep 17 00:00:00 2001
+From: "Daniel P. Berrange" <berrange@redhat.com>
+Date: Thu, 8 Feb 2018 17:50:39 +0100
+Subject: [PATCH 25/27] ui: avoid sign extension using client width/height
+
+RH-Author: Daniel P. Berrange <berrange@redhat.com>
+Message-id: <20180208175041.5634-26-berrange@redhat.com>
+Patchwork-id: 78960
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v1 25/27] ui: avoid sign extension using client width/height
+Bugzilla: 1527405
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: "Daniel P. Berrange" <berrange@redhat.com>
+
+Pixman returns a signed int for the image width/height, but the VNC
+protocol only permits a unsigned int16. Effective framebuffer size
+is determined by the guest, limited by the video RAM size, so the
+dimensions are unlikely to exceed the range of an unsigned int16,
+but this is not currently validated.
+
+With the current use of 'int' for client width/height, the calculation
+of offsets in vnc_update_throttle_offset() suffers from integer size
+promotion and sign extension, causing coverity warnings
+
+*** CID 1385147:  Integer handling issues  (SIGN_EXTENSION)
+/ui/vnc.c: 979 in vnc_update_throttle_offset()
+973      * than that the client would already suffering awful audio
+974      * glitches, so dropping samples is no worse really).
+975      */
+976     static void vnc_update_throttle_offset(VncState *vs)
+977     {
+978         size_t offset =
+>>>     CID 1385147:  Integer handling issues  (SIGN_EXTENSION)
+>>>     Suspicious implicit sign extension:
+    "vs->client_pf.bytes_per_pixel" with type "unsigned char" (8 bits,
+    unsigned) is promoted in "vs->client_width * vs->client_height *
+    vs->client_pf.bytes_per_pixel" to type "int" (32 bits, signed), then
+    sign-extended to type "unsigned long" (64 bits, unsigned).  If
+    "vs->client_width * vs->client_height * vs->client_pf.bytes_per_pixel"
+    is greater than 0x7FFFFFFF, the upper bits of the result will all be 1.
+979             vs->client_width * vs->client_height * vs->client_pf.bytes_per_pixel;
+
+Change client_width / client_height to be a size_t to avoid sign
+extension and integer promotion. Then validate that dimensions are in
+range wrt the RFB protocol u16 limits.
+
+Signed-off-by: Daniel P. Berrange <berrange@redhat.com>
+Message-id: 20180118155254.17053-1-berrange@redhat.com
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 4c956bd81e2e16afd19d38d1fdeba6d9faa8a1ae)
+
+ Conflicts:
+	ui/vnc.c
+	ui/vnc.h - context differences
+
+RHEL-7 note: The context difference in VncState is because downstream
+lacks commit 14768eba46e4 ("input: mouse: switch vnc ui to new core",
+2014-03-05), part of v2.0.0. The context difference in
+protocol_client_init() is because downstream lacks e5f34cdd2da5 ("vnc:
+track & limit connections", 2015-01-22), part of v2.3.0. Neither
+upstream commit is necessary for this backport.
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ ui/vnc.c | 9 +++++++++
+ ui/vnc.h | 4 ++--
+ 2 files changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/ui/vnc.c b/ui/vnc.c
+index 61fbec2..2be87b8 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -570,6 +570,11 @@ static void vnc_desktop_resize(VncState *vs)
+         vs->client_height == pixman_image_get_height(vs->vd->server)) {
+         return;
+     }
++
++    assert(pixman_image_get_width(vs->vd->server) < 65536 &&
++           pixman_image_get_width(vs->vd->server) >= 0);
++    assert(pixman_image_get_height(vs->vd->server) < 65536 &&
++           pixman_image_get_height(vs->vd->server) >= 0);
+     vs->client_width = pixman_image_get_width(vs->vd->server);
+     vs->client_height = pixman_image_get_height(vs->vd->server);
+     vnc_lock_output(vs);
+@@ -2387,6 +2392,10 @@ static int protocol_client_init(VncState *vs, uint8_t *data, size_t len)
+     }
+     vnc_set_share_mode(vs, mode);
+ 
++    assert(pixman_image_get_width(vs->vd->server) < 65536 &&
++           pixman_image_get_width(vs->vd->server) >= 0);
++    assert(pixman_image_get_height(vs->vd->server) < 65536 &&
++           pixman_image_get_height(vs->vd->server) >= 0);
+     vs->client_width = pixman_image_get_width(vs->vd->server);
+     vs->client_height = pixman_image_get_height(vs->vd->server);
+     vnc_write_u16(vs, vs->client_width);
+diff --git a/ui/vnc.h b/ui/vnc.h
+index 70316ba..f9c5f89 100644
+--- a/ui/vnc.h
++++ b/ui/vnc.h
+@@ -274,8 +274,8 @@ struct VncState
+     int absolute;
+     int last_x;
+     int last_y;
+-    int client_width;
+-    int client_height;
++    size_t client_width; /* limited to u16 by RFB proto */
++    size_t client_height; /* limited to u16 by RFB proto */
+     VncShareMode share_mode;
+ 
+     uint32_t vnc_encoding;
+-- 
+1.8.3.1
+

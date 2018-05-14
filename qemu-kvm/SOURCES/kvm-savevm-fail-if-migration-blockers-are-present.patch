@@ -1,0 +1,117 @@
+From 51568d18bbfef1adce26d8cd33f3f4a4c12b1e78 Mon Sep 17 00:00:00 2001
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+Date: Fri, 26 Jan 2018 18:53:15 +0100
+Subject: [PATCH 4/4] savevm: fail if migration blockers are present
+
+RH-Author: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Message-id: <20180126185315.2342-3-dgilbert@redhat.com>
+Patchwork-id: 78732
+O-Subject: [RHEL7.5 qemu-kvm PATCH 2/2] savevm: fail if migration blockers are present
+Bugzilla: 1536883
+RH-Acked-by: Peter Xu <peterx@redhat.com>
+RH-Acked-by: Kevin Wolf <kwolf@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Greg Kurz <gkurz@linux.vnet.ibm.com>
+
+QEMU has currently two ways to prevent migration to occur:
+- migration blocker when it depends on runtime state
+- VMStateDescription.unmigratable when migration is not supported at all
+
+This patch gathers all the logic into a single function to be called from
+both the savevm and the migrate paths.
+
+This fixes a bug with 9p, at least, where savevm would succeed and the
+following would happen in the guest after loadvm:
+
+$ ls /host
+ls: cannot access /host: Protocol error
+
+With this patch:
+
+(qemu) savevm foo
+Migration is disabled when VirtFS export path '/' is mounted in the guest
+using mount_tag 'host'
+
+Signed-off-by: Greg Kurz <gkurz@linux.vnet.ibm.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+Message-Id: <146239057139.11271.9011797645454781543.stgit@bahia.huguette.org>
+[Update subject according to Paolo's suggestion - Amit]
+(cherry picked from commit 24f3902b088cd4f2dbebfd90527b5d81d6a050e9)
+  dgilbert: Manual merge
+
+Signed-off-by: Amit Shah <amit.shah@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ include/migration/migration.h |  1 +
+ migration.c                   | 21 +++++++++++++++------
+ savevm.c                      |  2 +-
+ 3 files changed, 17 insertions(+), 7 deletions(-)
+
+diff --git a/include/migration/migration.h b/include/migration/migration.h
+index c99a67c..0760984 100644
+--- a/include/migration/migration.h
++++ b/include/migration/migration.h
+@@ -90,6 +90,7 @@ int migrate_fd_close(MigrationState *s);
+ 
+ void add_migration_state_change_notifier(Notifier *notify);
+ void remove_migration_state_change_notifier(Notifier *notify);
++bool migration_is_blocked(Error **errp);
+ bool migration_in_setup(MigrationState *);
+ bool migration_has_finished(MigrationState *);
+ bool migration_has_failed(MigrationState *);
+diff --git a/migration.c b/migration.c
+index e8c5939..5591601 100644
+--- a/migration.c
++++ b/migration.c
+@@ -417,6 +417,20 @@ void migrate_del_blocker(Error *reason)
+     migration_blockers = g_slist_remove(migration_blockers, reason);
+ }
+ 
++bool migration_is_blocked(Error **errp)
++{
++    if (qemu_savevm_state_blocked(errp)) {
++        return true;
++    }
++
++    if (migration_blockers) {
++        *errp = error_copy(migration_blockers->data);
++        return true;
++    }
++
++    return false;
++}
++
+ void qmp_migrate(const char *uri, bool has_blk, bool blk,
+                  bool has_inc, bool inc, bool has_detach, bool detach,
+                  Error **errp)
+@@ -447,12 +461,7 @@ void qmp_migrate(const char *uri, bool has_blk, bool blk,
+         return;
+     }
+ 
+-    if (qemu_savevm_state_blocked(errp)) {
+-        return;
+-    }
+-
+-    if (migration_blockers) {
+-        *errp = error_copy(migration_blockers->data);
++    if (migration_is_blocked(errp)) {
+         return;
+     }
+ 
+diff --git a/savevm.c b/savevm.c
+index d34004e..0216df2 100644
+--- a/savevm.c
++++ b/savevm.c
+@@ -2207,7 +2207,7 @@ static int qemu_savevm_state(QEMUFile *f, Error **errp)
+         .shared = 0
+     };
+ 
+-    if (qemu_savevm_state_blocked(errp)) {
++    if (migration_is_blocked(errp)) {
+         return -EINVAL;
+     }
+ 
+-- 
+1.8.3.1
+

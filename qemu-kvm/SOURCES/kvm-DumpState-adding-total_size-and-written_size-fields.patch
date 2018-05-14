@@ -1,0 +1,131 @@
+From 60e8f031af3ca219ac6344c6028fe009eddf8c19 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:38:59 +0100
+Subject: [PATCH 28/41] DumpState: adding total_size and written_size fields
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-29-marcandre.lureau@redhat.com>
+Patchwork-id: 78382
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 28/41] DumpState: adding total_size and written_size fields
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Peter Xu <peterx@redhat.com>
+
+Here, total_size is the size in bytes to be dumped (raw data, which
+means before compression), while written_size are bytes handled (raw
+size too).
+
+Signed-off-by: Peter Xu <peterx@redhat.com>
+Message-Id: <1455772616-8668-9-git-send-email-peterx@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+
+(cherry picked from commit 2264c2c96e0a1f0913412da73e9bcaf9f8fa4427)
+
+RHEL: minor conflict due to "detach" mode not being backported.
+
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c                | 32 ++++++++++++++++++++++++++++++++
+ include/sysemu/dump.h |  8 ++++++++
+ 2 files changed, 40 insertions(+)
+
+diff --git a/dump.c b/dump.c
+index 8618230..008a722 100644
+--- a/dump.c
++++ b/dump.c
+@@ -336,6 +336,8 @@ static void write_data(DumpState *s, void *buf, int length, Error **errp)
+     ret = fd_write_vmcore(buf, length, s);
+     if (ret < 0) {
+         error_setg(errp, "dump: failed to save memory");
++    } else {
++        s->written_size += length;
+     }
+ }
+ 
+@@ -1329,6 +1331,7 @@ static void write_dump_pages(DumpState *s, Error **errp)
+                 goto out;
+             }
+         }
++        s->written_size += s->dump_info.page_size;
+     }
+ 
+     ret = write_cache(&page_desc, NULL, 0, true);
+@@ -1461,6 +1464,30 @@ bool dump_in_progress(void)
+     return (state->status == DUMP_STATUS_ACTIVE);
+ }
+ 
++/* calculate total size of memory to be dumped (taking filter into
++ * acoount.) */
++static int64_t dump_calculate_size(DumpState *s)
++{
++    GuestPhysBlock *block;
++    int64_t size = 0, total = 0, left = 0, right = 0;
++
++    QTAILQ_FOREACH(block, &s->guest_phys_blocks.head, next) {
++        if (s->has_filter) {
++            /* calculate the overlapped region. */
++            left = MAX(s->begin, block->target_start);
++            right = MIN(s->begin + s->length, block->target_end);
++            size = right - left;
++            size = size > 0 ? size : 0;
++        } else {
++            /* count the whole region in */
++            size = (block->target_end - block->target_start);
++        }
++        total += size;
++    }
++
++    return total;
++}
++
+ static void dump_init(DumpState *s, int fd, bool has_format,
+                       DumpGuestMemoryFormat format, bool paging, bool has_filter,
+                       int64_t begin, int64_t length, Error **errp)
+@@ -1472,6 +1499,7 @@ static void dump_init(DumpState *s, int fd, bool has_format,
+ 
+     s->has_format = has_format;
+     s->format = format;
++    s->written_size = 0;
+ 
+     /* kdump-compressed is conflict with paging and filter */
+     if (has_format && format != DUMP_GUEST_MEMORY_FORMAT_ELF) {
+@@ -1503,6 +1531,10 @@ static void dump_init(DumpState *s, int fd, bool has_format,
+ 
+     guest_phys_blocks_init(&s->guest_phys_blocks);
+     guest_phys_blocks_append(&s->guest_phys_blocks);
++    s->total_size = dump_calculate_size(s);
++#ifdef DEBUG_DUMP_GUEST_MEMORY
++    fprintf(stderr, "DUMP: total memory to dump: %lu\n", s->total_size);
++#endif
+ 
+     s->start = get_start_block(s);
+     if (s->start == -1) {
+diff --git a/include/sysemu/dump.h b/include/sysemu/dump.h
+index 1da3ddb..b5ebb0a 100644
+--- a/include/sysemu/dump.h
++++ b/include/sysemu/dump.h
+@@ -181,6 +181,14 @@ typedef struct DumpState {
+ 
+     bool has_format;              /* whether format is provided */
+     DumpGuestMemoryFormat format; /* valid only if has_format == true */
++    int64_t total_size;          /* total memory size (in bytes) to
++                                  * be dumped. When filter is
++                                  * enabled, this will only count
++                                  * those to be written. */
++    int64_t written_size;        /* written memory size (in bytes),
++                                  * this could be used to calculate
++                                  * how much work we have
++                                  * finished. */
+ } DumpState;
+ 
+ uint16_t cpu_to_dump16(DumpState *s, uint16_t val);
+-- 
+1.8.3.1
+

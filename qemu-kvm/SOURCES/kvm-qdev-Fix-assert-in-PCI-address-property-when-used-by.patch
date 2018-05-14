@@ -1,0 +1,65 @@
+From f8553be3140a1f77ab3c4e218ecc79437534d1ea Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Fri, 26 Jan 2018 02:21:25 +0100
+Subject: [PATCH 1/4] qdev: Fix assert in PCI address property when used by
+ vfio-pci
+
+RH-Author: Alex Williamson <alex.williamson@redhat.com>
+Message-id: <20180126021938.25889.98354.stgit@gimli.home>
+Patchwork-id: 78707
+O-Subject: [RHEL-7.5 qemu-kvm PATCH] qdev: Fix assert in PCI address property when used by vfio-pci
+Bugzilla: 1538866
+RH-Acked-by: Auger Eric <eric.auger@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+
+From: Daniel Oram <daniel.oram@gmail.com>
+
+Allow the PCIHostDeviceAddress structure to work as the host property
+in vfio-pci when it has it's default value of all fields set to ~0. In
+this form the property indicates a non-existant device but given the
+field bit sizes gets asserted as excess (and invalid) precision
+overflows the string buffer. The BDF of an invalid device
+"FFFF:FF:FF.F" is returned instead.
+
+Signed-off-by: Daniel Oram <daniel.oram@gmail.com>
+Reviewed-by: Alex Williamson <alex.williamson@redhat.com>
+Message-Id: <71f06765c4ba16dcd71cbf78e877619948f04ed9.1478777270.git.daniel.oram@gmail.com>
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+(cherry picked from commit 00b8702581f312aa46f797a8b3153d9b2892d967)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/core/qdev-properties.c | 14 ++++++++++----
+ 1 file changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/hw/core/qdev-properties.c b/hw/core/qdev-properties.c
+index dc8ae69..a61250e 100644
+--- a/hw/core/qdev-properties.c
++++ b/hw/core/qdev-properties.c
+@@ -728,13 +728,19 @@ static void get_pci_host_devaddr(Object *obj, Visitor *v, void *opaque,
+     DeviceState *dev = DEVICE(obj);
+     Property *prop = opaque;
+     PCIHostDeviceAddress *addr = qdev_get_prop_ptr(dev, prop);
+-    char buffer[] = "xxxx:xx:xx.x";
++    char buffer[] = "ffff:ff:ff.f";
+     char *p = buffer;
+     int rc = 0;
+ 
+-    rc = snprintf(buffer, sizeof(buffer), "%04x:%02x:%02x.%d",
+-                  addr->domain, addr->bus, addr->slot, addr->function);
+-    assert(rc == sizeof(buffer) - 1);
++    /*
++     * Catch "invalid" device reference from vfio-pci and allow the
++     * default buffer representing the non-existant device to be used.
++     */
++    if (~addr->domain || ~addr->bus || ~addr->slot || ~addr->function) {
++        rc = snprintf(buffer, sizeof(buffer), "%04x:%02x:%02x.%0d",
++                      addr->domain, addr->bus, addr->slot, addr->function);
++        assert(rc == sizeof(buffer) - 1);
++    }
+ 
+     visit_type_str(v, &p, name, errp);
+ }
+-- 
+1.8.3.1
+

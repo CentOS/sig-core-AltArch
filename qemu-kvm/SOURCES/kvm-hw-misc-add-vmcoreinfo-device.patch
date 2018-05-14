@@ -1,0 +1,262 @@
+From 8d7f958d14fa739c64436d0926bc712eaa63fe14 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:38:43 +0100
+Subject: [PATCH 12/41] hw/misc: add vmcoreinfo device
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-13-marcandre.lureau@redhat.com>
+Patchwork-id: 78362
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 12/41] hw/misc: add vmcoreinfo device
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+See docs/specs/vmcoreinfo.txt for details.
+
+"etc/vmcoreinfo" fw_cfg entry is added when using "-device vmcoreinfo".
+
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+
+(cherry picked from commit 6e43353f10c6688060af0bc26bdfdd4cf9c96ea2)
+
+RHEL: adapted to qemu 1.5 API.
+
+FWCfgState is not exposed, use object_property_get_bool() instead.
+
+DeviceClass.hotpluggable doesn't exist. Not important since libvirt
+shouldn't allow or do 'device_add vmcoreinfo'.
+
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ docs/specs/vmcoreinfo.txt    | 41 +++++++++++++++++++
+ hw/misc/Makefile.objs        |  1 +
+ hw/misc/vmcoreinfo.c         | 96 ++++++++++++++++++++++++++++++++++++++++++++
+ include/hw/misc/vmcoreinfo.h | 46 +++++++++++++++++++++
+ 4 files changed, 184 insertions(+)
+ create mode 100644 docs/specs/vmcoreinfo.txt
+ create mode 100644 hw/misc/vmcoreinfo.c
+ create mode 100644 include/hw/misc/vmcoreinfo.h
+
+diff --git a/docs/specs/vmcoreinfo.txt b/docs/specs/vmcoreinfo.txt
+new file mode 100644
+index 0000000..2868a77
+--- /dev/null
++++ b/docs/specs/vmcoreinfo.txt
+@@ -0,0 +1,41 @@
++=================
++VMCoreInfo device
++=================
++
++The `-device vmcoreinfo` will create a fw_cfg entry for a guest to
++store dump details.
++
++etc/vmcoreinfo
++**************
++
++A guest may use this fw_cfg entry to add information details to qemu
++dumps.
++
++The entry of 16 bytes has the following layout, in little-endian::
++
++#define VMCOREINFO_FORMAT_NONE 0x0
++#define VMCOREINFO_FORMAT_ELF 0x1
++
++    struct FWCfgVMCoreInfo {
++        uint16_t host_format;  /* formats host supports */
++        uint16_t guest_format; /* format guest supplies */
++        uint32_t size;         /* size of vmcoreinfo region */
++        uint64_t paddr;        /* physical address of vmcoreinfo region */
++    };
++
++Only full write (of 16 bytes) are considered valid for further
++processing of entry values.
++
++A write of 0 in guest_format will disable further processing of
++vmcoreinfo entry values & content.
++
++Format & content
++****************
++
++As of qemu 2.11, only VMCOREINFO_FORMAT_ELF is supported.
++
++The entry gives location and size of an ELF note that is appended in
++qemu dumps.
++
++The note format/class must be of the target bitness and the size must
++be less than 1Mb.
+diff --git a/hw/misc/Makefile.objs b/hw/misc/Makefile.objs
+index cd3123b..39b6593 100644
+--- a/hw/misc/Makefile.objs
++++ b/hw/misc/Makefile.objs
+@@ -5,6 +5,7 @@ common-obj-$(CONFIG_ISA_DEBUG) += debugexit.o
+ common-obj-$(CONFIG_SGA) += sga.o
+ common-obj-$(CONFIG_ISA_TESTDEV) += pc-testdev.o
+ common-obj-$(CONFIG_PCI_TESTDEV) += pci-testdev.o
++common-obj-y += vmcoreinfo.o
+ 
+ obj-$(CONFIG_VMPORT) += vmport.o
+ 
+diff --git a/hw/misc/vmcoreinfo.c b/hw/misc/vmcoreinfo.c
+new file mode 100644
+index 0000000..1bf6735
+--- /dev/null
++++ b/hw/misc/vmcoreinfo.c
+@@ -0,0 +1,96 @@
++/*
++ * Virtual Machine coreinfo device
++ *
++ * Copyright (C) 2017 Red Hat, Inc.
++ *
++ * Authors: Marc-André Lureau <marcandre.lureau@redhat.com>
++ *
++ * This work is licensed under the terms of the GNU GPL, version 2 or later.
++ * See the COPYING file in the top-level directory.
++ *
++ */
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "hw/nvram/fw_cfg.h"
++#include "hw/misc/vmcoreinfo.h"
++
++static void fw_cfg_vmci_write(void *dev, off_t offset, size_t len)
++{
++    VMCoreInfoState *s = VMCOREINFO(dev);
++
++    s->has_vmcoreinfo = offset == 0 && len == sizeof(s->vmcoreinfo)
++        && s->vmcoreinfo.guest_format != VMCOREINFO_FORMAT_NONE;
++}
++
++static void vmcoreinfo_reset(void *dev)
++{
++    VMCoreInfoState *s = VMCOREINFO(dev);
++
++    s->has_vmcoreinfo = false;
++    memset(&s->vmcoreinfo, 0, sizeof(s->vmcoreinfo));
++    s->vmcoreinfo.host_format = cpu_to_le16(VMCOREINFO_FORMAT_ELF);
++}
++
++static void vmcoreinfo_realize(DeviceState *dev, Error **errp)
++{
++    VMCoreInfoState *s = VMCOREINFO(dev);
++    FWCfgState *fw_cfg = fw_cfg_find();
++
++    /* Given that this function is executing, there is at least one VMCOREINFO
++     * device. Check if there are several.
++     */
++    if (!vmcoreinfo_find()) {
++        error_setg(errp, "at most one %s device is permitted",
++                   VMCOREINFO_DEVICE);
++        return;
++    }
++
++    if (!fw_cfg || !object_property_get_bool(OBJECT(fw_cfg), "dma_enabled", NULL)) {
++        error_setg(errp, "%s device requires fw_cfg with DMA",
++                   VMCOREINFO_DEVICE);
++        return;
++    }
++
++    fw_cfg_add_file_callback(fw_cfg, "etc/vmcoreinfo",
++                             NULL, fw_cfg_vmci_write, s,
++                             &s->vmcoreinfo, sizeof(s->vmcoreinfo),
++                             false);
++
++    qemu_register_reset(vmcoreinfo_reset, dev);
++}
++
++static const VMStateDescription vmstate_vmcoreinfo = {
++    .name = "vmcoreinfo",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (VMStateField[]) {
++        VMSTATE_BOOL(has_vmcoreinfo, VMCoreInfoState),
++        VMSTATE_UINT16(vmcoreinfo.host_format, VMCoreInfoState),
++        VMSTATE_UINT16(vmcoreinfo.guest_format, VMCoreInfoState),
++        VMSTATE_UINT32(vmcoreinfo.size, VMCoreInfoState),
++        VMSTATE_UINT64(vmcoreinfo.paddr, VMCoreInfoState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void vmcoreinfo_device_class_init(ObjectClass *klass, void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    dc->vmsd = &vmstate_vmcoreinfo;
++    dc->realize = vmcoreinfo_realize;
++}
++
++static const TypeInfo vmcoreinfo_device_info = {
++    .name          = VMCOREINFO_DEVICE,
++    .parent        = TYPE_DEVICE,
++    .instance_size = sizeof(VMCoreInfoState),
++    .class_init    = vmcoreinfo_device_class_init,
++};
++
++static void vmcoreinfo_register_types(void)
++{
++    type_register_static(&vmcoreinfo_device_info);
++}
++
++type_init(vmcoreinfo_register_types)
+diff --git a/include/hw/misc/vmcoreinfo.h b/include/hw/misc/vmcoreinfo.h
+new file mode 100644
+index 0000000..c3aa856
+--- /dev/null
++++ b/include/hw/misc/vmcoreinfo.h
+@@ -0,0 +1,46 @@
++/*
++ * Virtual Machine coreinfo device
++ *
++ * Copyright (C) 2017 Red Hat, Inc.
++ *
++ * Authors: Marc-André Lureau <marcandre.lureau@redhat.com>
++ *
++ * This work is licensed under the terms of the GNU GPL, version 2 or later.
++ * See the COPYING file in the top-level directory.
++ *
++ */
++#ifndef VMCOREINFO_H
++#define VMCOREINFO_H
++
++#include "hw/qdev.h"
++
++#define VMCOREINFO_DEVICE "vmcoreinfo"
++#define VMCOREINFO(obj) OBJECT_CHECK(VMCoreInfoState, (obj), VMCOREINFO_DEVICE)
++
++#define VMCOREINFO_FORMAT_NONE 0x0
++#define VMCOREINFO_FORMAT_ELF 0x1
++
++/* all fields are little-endian */
++typedef struct FWCfgVMCoreInfo {
++    uint16_t host_format; /* set on reset */
++    uint16_t guest_format;
++    uint32_t size;
++    uint64_t paddr;
++} QEMU_PACKED FWCfgVMCoreInfo;
++
++typedef struct VMCoreInfoState {
++    DeviceClass parent_obj;
++
++    bool has_vmcoreinfo;
++    FWCfgVMCoreInfo vmcoreinfo;
++} VMCoreInfoState;
++
++/* returns NULL unless there is exactly one device */
++static inline VMCoreInfoState *vmcoreinfo_find(void)
++{
++    Object *o = object_resolve_path_type("", VMCOREINFO_DEVICE, NULL);
++
++    return o ? VMCOREINFO(o) : NULL;
++}
++
++#endif
+-- 
+1.8.3.1
+

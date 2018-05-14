@@ -1,0 +1,74 @@
+From 1d05047c15ca1d8e29dcb0892e449987739682b4 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:38:40 +0100
+Subject: [PATCH 09/41] fw_cfg: unbreak migration compatibility
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-10-marcandre.lureau@redhat.com>
+Patchwork-id: 78359
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 09/41] fw_cfg: unbreak migration compatibility
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Laszlo Ersek <lersek@redhat.com>
+
+Upstream-status: RHEL only
+
+fw_cfg DMA shouldn't be enabled by default on x86, or it will break
+migration from new (DMA) to old (non-DMA) qemu.
+
+Thus we must maintain DMA disabled by default. Since we don't
+introduce a new machine, only if requested explicitely with -global
+fw_cfg.dma_enabled=on, or -device vmcoreinfo (see upcoming RHEL-only
+patch) should DMA be enabled.
+
+(this is somewhat similar to upstream commit
+e6915b5f3a874a467a9a65f7ec1d6ef8d251a51a, except that we can't enable
+DMA by default on RHEL qemu)
+
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/nvram/fw_cfg.c | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/hw/nvram/fw_cfg.c b/hw/nvram/fw_cfg.c
+index 1789487..a7bc98e 100644
+--- a/hw/nvram/fw_cfg.c
++++ b/hw/nvram/fw_cfg.c
+@@ -677,13 +677,16 @@ fw_cfg_init_dma(uint32_t ctl_port, uint32_t data_port,
+     SysBusDevice *d;
+     FWCfgState *s;
+     uint32_t version = FW_CFG_VERSION;
+-    bool dma_enabled = dma_port && dma_as;
++    bool dma_requested = dma_port && dma_as;
+ 
+     dev = qdev_create(NULL, "fw_cfg");
+     qdev_prop_set_uint32(dev, "ctl_iobase", ctl_port);
+     qdev_prop_set_uint32(dev, "data_iobase", data_port);
+     qdev_prop_set_uint32(dev, "dma_iobase", dma_port);
+-    qdev_prop_set_bit(dev, "dma_enabled", dma_enabled);
++
++    if (!dma_requested) {
++        qdev_prop_set_bit(dev, "dma_enabled", false);
++    }
+ 
+     d = SYS_BUS_DEVICE(dev);
+ 
+@@ -702,7 +705,7 @@ fw_cfg_init_dma(uint32_t ctl_port, uint32_t data_port,
+     if (data_addr) {
+         sysbus_mmio_map(d, 1, data_addr);
+     }
+-    if (dma_enabled) {
++    if (s->dma_enabled) {
+         /* 64 bits for the address field */
+         s->dma = &dma_context_memory;
+         s->dma_addr = 0;
+-- 
+1.8.3.1
+

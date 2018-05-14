@@ -1,0 +1,88 @@
+From 3be810287878138e5f72568d1ba1160b5bad22f8 Mon Sep 17 00:00:00 2001
+From: "Daniel P. Berrange" <berrange@redhat.com>
+Date: Thu, 8 Feb 2018 17:50:32 +0100
+Subject: [PATCH 18/27] ui: track how much decoded data we consumed when doing
+ SASL encoding
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Daniel P. Berrange <berrange@redhat.com>
+Message-id: <20180208175041.5634-19-berrange@redhat.com>
+Patchwork-id: 78951
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v1 18/27] ui: track how much decoded data we consumed when doing SASL encoding
+Bugzilla: 1527405
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: "Daniel P. Berrange" <berrange@redhat.com>
+
+When we encode data for writing with SASL, we encode the entire pending output
+buffer. The subsequent write, however, may not be able to send the full encoded
+data in one go though, particularly with a slow network. So we delay setting the
+output buffer offset back to zero until all the SASL encoded data is sent.
+
+Between encoding the data and completing sending of the SASL encoded data,
+however, more data might have been placed on the pending output buffer. So it
+is not valid to set offset back to zero. Instead we must keep track of how much
+data we consumed during encoding and subtract only that amount.
+
+With the current bug we would be throwing away some pending data without having
+sent it at all. By sheer luck this did not previously cause any serious problem
+because appending data to the send buffer is always an atomic action, so we
+only ever throw away complete RFB protocol messages. In the case of frame buffer
+updates we'd catch up fairly quickly, so no obvious problem was visible.
+
+RHEL-7 note: context difference in the last argument to
+vnc_client_io_error() due to downstream lacking commit 04d2529da27d
+("ui: convert VNC server to use QIOChannelSocket", 2015-12-18).
+
+Signed-off-by: Daniel P. Berrange <berrange@redhat.com>
+Reviewed-by: Darren Kenny <darren.kenny@oracle.com>
+Reviewed-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: 20171218191228.31018-6-berrange@redhat.com
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 8f61f1c5a6bc06438a1172efa80bc7606594fa07)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ ui/vnc-auth-sasl.c | 3 ++-
+ ui/vnc-auth-sasl.h | 1 +
+ 2 files changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/ui/vnc-auth-sasl.c b/ui/vnc-auth-sasl.c
+index f3ad75d..804b8e7 100644
+--- a/ui/vnc-auth-sasl.c
++++ b/ui/vnc-auth-sasl.c
+@@ -64,6 +64,7 @@ long vnc_client_write_sasl(VncState *vs)
+         if (err != SASL_OK)
+             return vnc_client_io_error(vs, -1, EIO);
+ 
++        vs->sasl.encodedRawLength = vs->output.offset;
+         vs->sasl.encodedOffset = 0;
+     }
+ 
+@@ -75,7 +76,7 @@ long vnc_client_write_sasl(VncState *vs)
+ 
+     vs->sasl.encodedOffset += ret;
+     if (vs->sasl.encodedOffset == vs->sasl.encodedLength) {
+-        vs->output.offset = 0;
++        vs->output.offset -= vs->sasl.encodedRawLength;
+         vs->sasl.encoded = NULL;
+         vs->sasl.encodedOffset = vs->sasl.encodedLength = 0;
+     }
+diff --git a/ui/vnc-auth-sasl.h b/ui/vnc-auth-sasl.h
+index 8091d68..4ec6fb5 100644
+--- a/ui/vnc-auth-sasl.h
++++ b/ui/vnc-auth-sasl.h
+@@ -54,6 +54,7 @@ struct VncStateSASL {
+      */
+     const uint8_t *encoded;
+     unsigned int encodedLength;
++    unsigned int encodedRawLength;
+     unsigned int encodedOffset;
+     char *username;
+     char *mechlist;
+-- 
+1.8.3.1
+

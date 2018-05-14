@@ -1,0 +1,112 @@
+From 52fe55e2bf9df408ebe127a670ee698642d3fcb4 Mon Sep 17 00:00:00 2001
+From: "Daniel P. Berrange" <berrange@redhat.com>
+Date: Thu, 8 Feb 2018 17:50:38 +0100
+Subject: [PATCH 24/27] ui: place a hard cap on VNC server output buffer size
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Daniel P. Berrange <berrange@redhat.com>
+Message-id: <20180208175041.5634-25-berrange@redhat.com>
+Patchwork-id: 78957
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v1 24/27] ui: place a hard cap on VNC server output buffer size
+Bugzilla: 1527405
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: "Daniel P. Berrange" <berrange@redhat.com>
+
+The previous patches fix problems with throttling of forced framebuffer updates
+and audio data capture that would cause the QEMU output buffer size to grow
+without bound. Those fixes are graceful in that once the client catches up with
+reading data from the server, everything continues operating normally.
+
+There is some data which the server sends to the client that is impractical to
+throttle. Specifically there are various pseudo framebuffer update encodings to
+inform the client of things like desktop resizes, pointer changes, audio
+playback start/stop, LED state and so on. These generally only involve sending
+a very small amount of data to the client, but a malicious guest might be able
+to do things that trigger these changes at a very high rate. Throttling them is
+not practical as missed or delayed events would cause broken behaviour for the
+client.
+
+This patch thus takes a more forceful approach of setting an absolute upper
+bound on the amount of data we permit to be present in the output buffer at
+any time. The previous patch set a threshold for throttling the output buffer
+by allowing an amount of data equivalent to one complete framebuffer update and
+one seconds worth of audio data. On top of this it allowed for one further
+forced framebuffer update to be queued.
+
+To be conservative, we thus take that throttling threshold and multiply it by
+5 to form an absolute upper bound. If this bound is hit during vnc_write() we
+forceably disconnect the client, refusing to queue further data. This limit is
+high enough that it should never be hit unless a malicious client is trying to
+exploit the sever, or the network is completely saturated preventing any sending
+of data on the socket.
+
+This completes the fix for CVE-2017-15124 started in the previous patches.
+
+Signed-off-by: Daniel P. Berrange <berrange@redhat.com>
+Reviewed-by: Darren Kenny <darren.kenny@oracle.com>
+Reviewed-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: 20171218191228.31018-12-berrange@redhat.com
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit f887cf165db20f405cb8805c716bd363aaadf815)
+
+ Conflicts:
+	ui/vnc.c - context differences and no 'vs->disconnecting' flag.
+	Using share_mode as a better check for the disconnecting state
+	than csock == -1, because the worker thread calls vnc_write()
+	with a fake VncState that has csock == -1.
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ ui/vnc.c | 29 +++++++++++++++++++++++++++++
+ 1 file changed, 29 insertions(+)
+
+diff --git a/ui/vnc.c b/ui/vnc.c
+index 96b6caf..61fbec2 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -1460,8 +1460,37 @@ void vnc_client_read(void *opaque)
+     }
+ }
+ 
++/*
++ * Scale factor to apply to vs->throttle_output_offset when checking for
++ * hard limit. Worst case normal usage could be x2, if we have a complete
++ * incremental update and complete forced update in the output buffer.
++ * So x3 should be good enough, but we pick x5 to be conservative and thus
++ * (hopefully) never trigger incorrectly.
++ */
++#define VNC_THROTTLE_OUTPUT_LIMIT_SCALE 5
++
+ void vnc_write(VncState *vs, const void *data, size_t len)
+ {
++    if (vs->share_mode == VNC_SHARE_MODE_DISCONNECTED) {
++        return;
++    }
++    /* Protection against malicious client/guest to prevent our output
++     * buffer growing without bound if client stops reading data. This
++     * should rarely trigger, because we have earlier throttling code
++     * which stops issuing framebuffer updates and drops audio data
++     * if the throttle_output_offset value is exceeded. So we only reach
++     * this higher level if a huge number of pseudo-encodings get
++     * triggered while data can't be sent on the socket.
++     *
++     * NB throttle_output_offset can be zero during early protocol
++     * handshake, or from the job thread's VncState clone
++     */
++    if (vs->throttle_output_offset != 0 &&
++        vs->output.offset > (vs->throttle_output_offset *
++                             VNC_THROTTLE_OUTPUT_LIMIT_SCALE)) {
++        vnc_disconnect_start(vs);
++        return;
++    }
+     buffer_reserve(&vs->output, len);
+ 
+     if (vs->csock != -1 && buffer_empty(&vs->output)) {
+-- 
+1.8.3.1
+

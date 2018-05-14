@@ -1,0 +1,149 @@
+From 0dbf3617c8b4dda06460190d4017a5bc605f79d9 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:38:35 +0100
+Subject: [PATCH 04/41] fw_cfg: factor out initialization of FW_CFG_ID (rev.
+ number)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-5-marcandre.lureau@redhat.com>
+Patchwork-id: 78354
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 04/41] fw_cfg: factor out initialization of FW_CFG_ID (rev. number)
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: "Gabriel L. Somlo" <somlo@cmu.edu>
+
+The fw_cfg documentation says this of the revision key (0x0001, FW_CFG_ID):
+
+> A 32-bit little-endian unsigned int, this item is used as an interface
+> revision number, and is currently set to 1 by all QEMU architectures
+> which expose a fw_cfg device.
+
+arm/virt doesn't.  It could be argued that that's an error in
+"hw/arm/virt.c"; on the other hand, all of the other fw_cfg providing
+boards set the interface version to 1 manually, despite the device
+coming from the same, shared implementation. Therefore, instead of
+adding
+
+    fw_cfg_add_i32(fw_cfg, FW_CFG_ID, 1);
+
+to arm/virt, consolidate all such existing calls in the fw_cfg
+initialization code.
+
+Signed-off-by: Gabriel Somlo <somlo@cmu.edu>
+Message-Id: <1426789244-26318-1-git-send-email-somlo@cmu.edu>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+
+(cherry picked from commit 3a5c76baf312d83cb77c8faa72c5f7a477effed0)
+
+RHEL: Remove a few extra calls that got removed in upstream
+      commit 6a4e17711442849bf2cc731ccddef5a2a2d92d29.
+
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/pc.c          | 1 -
+ hw/nvram/fw_cfg.c     | 1 +
+ hw/ppc/mac_newworld.c | 1 -
+ hw/ppc/mac_oldworld.c | 1 -
+ hw/sparc/sun4m.c      | 3 ---
+ hw/sparc64/sun4u.c    | 1 -
+ 6 files changed, 1 insertion(+), 7 deletions(-)
+
+diff --git a/hw/i386/pc.c b/hw/i386/pc.c
+index 1468d50..29d6588 100644
+--- a/hw/i386/pc.c
++++ b/hw/i386/pc.c
+@@ -625,7 +625,6 @@ static FWCfgState *bochs_bios_init(void)
+      *     the APIC ID, not the "CPU index"
+      */
+     fw_cfg_add_i16(fw_cfg, FW_CFG_MAX_CPUS, (uint16_t)apic_id_limit);
+-    fw_cfg_add_i32(fw_cfg, FW_CFG_ID, 1);
+     fw_cfg_add_i64(fw_cfg, FW_CFG_RAM_SIZE, (uint64_t)ram_size);
+     fw_cfg_add_bytes(fw_cfg, FW_CFG_ACPI_TABLES,
+                      acpi_tables, acpi_tables_len);
+diff --git a/hw/nvram/fw_cfg.c b/hw/nvram/fw_cfg.c
+index a33e861..01d4566 100644
+--- a/hw/nvram/fw_cfg.c
++++ b/hw/nvram/fw_cfg.c
+@@ -506,6 +506,7 @@ FWCfgState *fw_cfg_init(uint32_t ctl_port, uint32_t data_port,
+         sysbus_mmio_map(d, 1, data_addr);
+     }
+     fw_cfg_add_bytes(s, FW_CFG_SIGNATURE, (char *)"QEMU", 4);
++    fw_cfg_add_i32(s, FW_CFG_ID, 1);
+     fw_cfg_add_bytes(s, FW_CFG_UUID, qemu_uuid, 16);
+     fw_cfg_add_i16(s, FW_CFG_NOGRAPHIC, (uint16_t)(display_type == DT_NOGRAPHIC));
+     fw_cfg_add_i16(s, FW_CFG_NB_CPUS, (uint16_t)smp_cpus);
+diff --git a/hw/ppc/mac_newworld.c b/hw/ppc/mac_newworld.c
+index ce44e95..77446d7 100644
+--- a/hw/ppc/mac_newworld.c
++++ b/hw/ppc/mac_newworld.c
+@@ -416,7 +416,6 @@ static void ppc_core99_init(QEMUMachineInitArgs *args)
+ 
+     fw_cfg = fw_cfg_init(0, 0, CFG_ADDR, CFG_ADDR + 2);
+     fw_cfg_add_i16(fw_cfg, FW_CFG_MAX_CPUS, (uint16_t)max_cpus);
+-    fw_cfg_add_i32(fw_cfg, FW_CFG_ID, 1);
+     fw_cfg_add_i64(fw_cfg, FW_CFG_RAM_SIZE, (uint64_t)ram_size);
+     fw_cfg_add_i16(fw_cfg, FW_CFG_MACHINE_ID, machine_arch);
+     fw_cfg_add_i32(fw_cfg, FW_CFG_KERNEL_ADDR, kernel_base);
+diff --git a/hw/ppc/mac_oldworld.c b/hw/ppc/mac_oldworld.c
+index 3acca94..d52a110 100644
+--- a/hw/ppc/mac_oldworld.c
++++ b/hw/ppc/mac_oldworld.c
+@@ -300,7 +300,6 @@ static void ppc_heathrow_init(QEMUMachineInitArgs *args)
+ 
+     fw_cfg = fw_cfg_init(0, 0, CFG_ADDR, CFG_ADDR + 2);
+     fw_cfg_add_i16(fw_cfg, FW_CFG_MAX_CPUS, (uint16_t)max_cpus);
+-    fw_cfg_add_i32(fw_cfg, FW_CFG_ID, 1);
+     fw_cfg_add_i64(fw_cfg, FW_CFG_RAM_SIZE, (uint64_t)ram_size);
+     fw_cfg_add_i16(fw_cfg, FW_CFG_MACHINE_ID, ARCH_HEATHROW);
+     fw_cfg_add_i32(fw_cfg, FW_CFG_KERNEL_ADDR, kernel_base);
+diff --git a/hw/sparc/sun4m.c b/hw/sparc/sun4m.c
+index 7c5b8e7..3c126e0 100644
+--- a/hw/sparc/sun4m.c
++++ b/hw/sparc/sun4m.c
+@@ -1029,7 +1029,6 @@ static void sun4m_hw_init(const struct sun4m_hwdef *hwdef, ram_addr_t RAM_size,
+ 
+     fw_cfg = fw_cfg_init(0, 0, CFG_ADDR, CFG_ADDR + 2);
+     fw_cfg_add_i16(fw_cfg, FW_CFG_MAX_CPUS, (uint16_t)max_cpus);
+-    fw_cfg_add_i32(fw_cfg, FW_CFG_ID, 1);
+     fw_cfg_add_i64(fw_cfg, FW_CFG_RAM_SIZE, (uint64_t)ram_size);
+     fw_cfg_add_i16(fw_cfg, FW_CFG_MACHINE_ID, hwdef->machine_id);
+     fw_cfg_add_i16(fw_cfg, FW_CFG_SUN4M_DEPTH, graphic_depth);
+@@ -1674,7 +1673,6 @@ static void sun4d_hw_init(const struct sun4d_hwdef *hwdef, ram_addr_t RAM_size,
+ 
+     fw_cfg = fw_cfg_init(0, 0, CFG_ADDR, CFG_ADDR + 2);
+     fw_cfg_add_i16(fw_cfg, FW_CFG_MAX_CPUS, (uint16_t)max_cpus);
+-    fw_cfg_add_i32(fw_cfg, FW_CFG_ID, 1);
+     fw_cfg_add_i64(fw_cfg, FW_CFG_RAM_SIZE, (uint64_t)ram_size);
+     fw_cfg_add_i16(fw_cfg, FW_CFG_MACHINE_ID, hwdef->machine_id);
+     fw_cfg_add_i16(fw_cfg, FW_CFG_SUN4M_DEPTH, graphic_depth);
+@@ -1875,7 +1873,6 @@ static void sun4c_hw_init(const struct sun4c_hwdef *hwdef, ram_addr_t RAM_size,
+ 
+     fw_cfg = fw_cfg_init(0, 0, CFG_ADDR, CFG_ADDR + 2);
+     fw_cfg_add_i16(fw_cfg, FW_CFG_MAX_CPUS, (uint16_t)max_cpus);
+-    fw_cfg_add_i32(fw_cfg, FW_CFG_ID, 1);
+     fw_cfg_add_i64(fw_cfg, FW_CFG_RAM_SIZE, (uint64_t)ram_size);
+     fw_cfg_add_i16(fw_cfg, FW_CFG_MACHINE_ID, hwdef->machine_id);
+     fw_cfg_add_i16(fw_cfg, FW_CFG_SUN4M_DEPTH, graphic_depth);
+diff --git a/hw/sparc64/sun4u.c b/hw/sparc64/sun4u.c
+index 5ce5ed6..63447fc 100644
+--- a/hw/sparc64/sun4u.c
++++ b/hw/sparc64/sun4u.c
+@@ -885,7 +885,6 @@ static void sun4uv_init(MemoryRegion *address_space_mem,
+ 
+     fw_cfg = fw_cfg_init(BIOS_CFG_IOPORT, BIOS_CFG_IOPORT + 1, 0, 0);
+     fw_cfg_add_i16(fw_cfg, FW_CFG_MAX_CPUS, (uint16_t)max_cpus);
+-    fw_cfg_add_i32(fw_cfg, FW_CFG_ID, 1);
+     fw_cfg_add_i64(fw_cfg, FW_CFG_RAM_SIZE, (uint64_t)ram_size);
+     fw_cfg_add_i16(fw_cfg, FW_CFG_MACHINE_ID, hwdef->machine_id);
+     fw_cfg_add_i64(fw_cfg, FW_CFG_KERNEL_ADDR, kernel_entry);
+-- 
+1.8.3.1
+

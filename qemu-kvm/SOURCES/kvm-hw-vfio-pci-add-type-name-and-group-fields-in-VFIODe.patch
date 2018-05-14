@@ -1,0 +1,136 @@
+From dde4b959d6722bc2ebc5cd247b4e21055d2f0abd Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Fri, 29 Sep 2017 21:44:35 +0200
+Subject: [PATCH 05/27] hw/vfio/pci: add type, name and group fields in
+ VFIODevice
+
+RH-Author: Alex Williamson <alex.williamson@redhat.com>
+Message-id: <20170929214435.16765.27045.stgit@gimli.home>
+Patchwork-id: 76763
+O-Subject: [RHEL-7.5 qemu-kvm PATCH 05/16] hw/vfio/pci: add type, name and group fields in VFIODevice
+Bugzilla: 1494181
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Auger Eric <eric.auger@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Eric Auger <eric.auger@linaro.org>
+
+Upstream: 462037c9e85b27149e71d7f5c7f41375ca6e47d5
+
+Add 3 new fields in the VFIODevice struct. Type is set to
+VFIO_DEVICE_TYPE_PCI. The type enum value will later be used
+to discriminate between VFIO PCI and platform devices. The name is
+set to domain:bus:slot:function. Currently used to test whether
+the device already is attached to the group. Later on, the name
+will be used to simplify all traces. The group is simply moved
+from VFIOPCIDevice to VFIODevice.
+
+Signed-off-by: Eric Auger <eric.auger@linaro.org>
+[Fix g_strdup_printf() usage]
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c | 27 ++++++++++++++++++---------
+ 1 file changed, 18 insertions(+), 9 deletions(-)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index 340d967..cc151e2 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -55,6 +55,10 @@
+ #define VFIO_ALLOW_KVM_MSI 1
+ #define VFIO_ALLOW_KVM_MSIX 1
+ 
++enum {
++    VFIO_DEVICE_TYPE_PCI = 0,
++};
++
+ struct VFIOPCIDevice;
+ 
+ typedef struct VFIOQuirk {
+@@ -175,7 +179,10 @@ typedef struct VFIOMSIXInfo {
+ } VFIOMSIXInfo;
+ 
+ typedef struct VFIODevice {
++    struct VFIOGroup *group;
++    char *name;
+     int fd;
++    int type;
+ } VFIODevice;
+ 
+ typedef struct VFIOPCIDevice {
+@@ -197,7 +204,6 @@ typedef struct VFIOPCIDevice {
+     VFIOVGA vga; /* 0xa0000, 0x3b0, 0x3c0 */
+     PCIHostDeviceAddress host;
+     QLIST_ENTRY(VFIOPCIDevice) next;
+-    struct VFIOGroup *group;
+     EventNotifier err_notifier;
+     EventNotifier req_notifier;
+     uint32_t features;
+@@ -3526,7 +3532,7 @@ static int vfio_get_device(VFIOGroup *group, const char *name,
+     }
+ 
+     vdev->vbasedev.fd = ret;
+-    vdev->group = group;
++    vdev->vbasedev.group = group;
+     QLIST_INSERT_HEAD(&group->device_list, vdev, next);
+ 
+     /* Sanity check device */
+@@ -3658,7 +3664,7 @@ static int vfio_get_device(VFIOGroup *group, const char *name,
+ error:
+     if (ret) {
+         QLIST_REMOVE(vdev, next);
+-        vdev->group = NULL;
++        vdev->vbasedev.group = NULL;
+         close(vdev->vbasedev.fd);
+     }
+     return ret;
+@@ -3667,9 +3673,10 @@ error:
+ static void vfio_put_device(VFIOPCIDevice *vdev)
+ {
+     QLIST_REMOVE(vdev, next);
+-    vdev->group = NULL;
++    vdev->vbasedev.group = NULL;
+     DPRINTF("vfio_put_device: close vdev->vbasedev.fd\n");
+     close(vdev->vbasedev.fd);
++    g_free(vdev->vbasedev.name);
+     if (vdev->msix) {
+         g_free(vdev->msix);
+         vdev->msix = NULL;
+@@ -3904,6 +3911,11 @@ static int vfio_initfn(PCIDevice *pdev)
+         return -errno;
+     }
+ 
++    vdev->vbasedev.type = VFIO_DEVICE_TYPE_PCI;
++    vdev->vbasedev.name = g_strdup_printf("%04x:%02x:%02x.%01x",
++                                          vdev->host.domain, vdev->host.bus,
++                                          vdev->host.slot, vdev->host.function);
++
+     strncat(path, "iommu_group", sizeof(path) - strlen(path) - 1);
+ 
+     len = readlink(path, iommu_group_path, sizeof(path));
+@@ -3934,10 +3946,7 @@ static int vfio_initfn(PCIDevice *pdev)
+             vdev->host.function);
+ 
+     QLIST_FOREACH(pvdev, &group->device_list, next) {
+-        if (pvdev->host.domain == vdev->host.domain &&
+-            pvdev->host.bus == vdev->host.bus &&
+-            pvdev->host.slot == vdev->host.slot &&
+-            pvdev->host.function == vdev->host.function) {
++        if (strcmp(pvdev->vbasedev.name, vdev->vbasedev.name) == 0) {
+ 
+             error_report("vfio: error: device %s is already attached", path);
+             vfio_put_group(group);
+@@ -4042,7 +4051,7 @@ out_put:
+ static void vfio_exitfn(PCIDevice *pdev)
+ {
+     VFIOPCIDevice *vdev = DO_UPCAST(VFIOPCIDevice, pdev, pdev);
+-    VFIOGroup *group = vdev->group;
++    VFIOGroup *group = vdev->vbasedev.group;
+ 
+     vfio_unregister_req_notifier(vdev);
+     vfio_unregister_err_notifier(vdev);
+-- 
+1.8.3.1
+

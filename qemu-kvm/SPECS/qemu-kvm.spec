@@ -14,7 +14,7 @@
     %global have_usbredir 0
 %endif
 
-%ifnarch s390 s390x %{arm}
+%ifnarch s390 s390x
     %global have_librdma 1
     %global have_tcmalloc 1
 %endif
@@ -40,9 +40,6 @@
 %endif
 %ifarch aarch64
     %global kvm_target    aarch64
-%endif
-%ifarch %{arm}
-    %global kvm_target    arm
 %endif
 
 #Versions of various parts:
@@ -79,13 +76,13 @@ Obsoletes: %1 < %{obsoletes_version}                                      \
 Summary: QEMU is a machine emulator and virtualizer
 Name: %{pkgname}%{?pkgsuffix}
 Version: 1.5.3
-Release: 141%{?dist}.5
+Release: 156%{?dist}.1
 # Epoch because we pushed a qemu-1.0 package. AIUI this can't ever be dropped
 Epoch: 10
 License: GPLv2+ and LGPLv2+ and BSD
 Group: Development/Tools
 URL: http://www.qemu.org/
-ExclusiveArch: x86_64 %{power64} aarch64 s390x %{arm}
+ExclusiveArch: x86_64
 Requires: seabios-bin >= 1.7.2.2-5
 Requires: sgabios-bin
 Requires: seavgabios-bin
@@ -3597,38 +3594,281 @@ Patch1768: kvm-serial-reinstate-watch-after-migration.patch
 Patch1769: kvm-nbd-Fully-initialize-client-in-case-of-failed-negoti.patch
 # For bz#1451614 - CVE-2017-9524 qemu-kvm: segment fault when private user nmap qemu-nbd server [rhel-7.4]
 Patch1770: kvm-nbd-Fix-regression-on-resiliency-to-port-scan.patch
-# For bz#1468107 - CVE-2017-10664 qemu-kvm: Qemu: qemu-nbd: server breaks with SIGPIPE upon client abort [rhel-7.4.z]
-Patch1771: kvm-qemu-nbd-Ignore-SIGPIPE.patch
-# For bz#1482468 - KVM: windows guest migration from EL6 to EL7 fails. [rhel-7.4.z]
+# For bz#1435352 - qemu started with "-vnc none,..." doesn't support any VNC authentication
+Patch1771: kvm-vnc-allow-to-connect-with-add_client-when-vnc-none.patch
+# For bz#1480428 - KVM: windows guest migration from EL6 to EL7 fails.
 Patch1772: kvm-virtio-net-dynamic-network-offloads-configuration.patch
-# For bz#1482468 - KVM: windows guest migration from EL6 to EL7 fails. [rhel-7.4.z]
+# For bz#1480428 - KVM: windows guest migration from EL6 to EL7 fails.
 Patch1773: kvm-Workaround-rhel6-ctrl_guest_offloads-machine-type-mi.patch
-# For bz#1501294 - CVE-2017-15289 qemu-kvm: Qemu: cirrus: OOB access issue in  mode4and5 write functions [rhel-7.4.z]
-Patch1774: kvm-bswap.h-Remove-cpu_to_32wu.patch
-# For bz#1501294 - CVE-2017-15289 qemu-kvm: Qemu: cirrus: OOB access issue in  mode4and5 write functions [rhel-7.4.z]
-Patch1775: kvm-hw-use-ld_p-st_p-instead-of-ld_raw-st_raw.patch
-# For bz#1501294 - CVE-2017-15289 qemu-kvm: Qemu: cirrus: OOB access issue in  mode4and5 write functions [rhel-7.4.z]
-Patch1776: kvm-vga-Start-cutting-out-non-32bpp-conversion-support.patch
-# For bz#1501294 - CVE-2017-15289 qemu-kvm: Qemu: cirrus: OOB access issue in  mode4and5 write functions [rhel-7.4.z]
-Patch1777: kvm-vga-Remove-remainder-of-old-conversion-cruft.patch
-# For bz#1501294 - CVE-2017-15289 qemu-kvm: Qemu: cirrus: OOB access issue in  mode4and5 write functions [rhel-7.4.z]
-Patch1778: kvm-vga-Separate-LE-and-BE-conversion-functions.patch
-# For bz#1501294 - CVE-2017-15289 qemu-kvm: Qemu: cirrus: OOB access issue in  mode4and5 write functions [rhel-7.4.z]
-Patch1779: kvm-vga-Rename-vga_template.h-to-vga-helpers.h.patch
-# For bz#1501294 - CVE-2017-15289 qemu-kvm: Qemu: cirrus: OOB access issue in  mode4and5 write functions [rhel-7.4.z]
-Patch1780: kvm-vga-stop-passing-pointers-to-vga_draw_line-functions.patch
-# For bz#1501294 - CVE-2017-15289 qemu-kvm: Qemu: cirrus: OOB access issue in  mode4and5 write functions [rhel-7.4.z]
-Patch1781: kvm-vga-drop-line_offset-variable.patch
-# For bz#1501294 - CVE-2017-15289 qemu-kvm: Qemu: cirrus: OOB access issue in  mode4and5 write functions [rhel-7.4.z]
-Patch1782: kvm-vga-Add-mechanism-to-force-the-use-of-a-shadow-surfa.patch
-# For bz#1501294 - CVE-2017-15289 qemu-kvm: Qemu: cirrus: OOB access issue in  mode4and5 write functions [rhel-7.4.z]
-Patch1783: kvm-vga-handle-cirrus-vbe-mode-wraparounds.patch
-# For bz#1501294 - CVE-2017-15289 qemu-kvm: Qemu: cirrus: OOB access issue in  mode4and5 write functions [rhel-7.4.z]
-Patch1784: kvm-cirrus-fix-oob-access-in-mode4and5-write-functions.patch
-# For bz#1501120 - CVE-2017-14167 qemu-kvm: Qemu: i386: multiboot OOB access while loading kernel image [rhel-7.4.z]
-Patch1785: kvm-multiboot-validate-multiboot-header-address-values.patch
-# For bz#1515110 - Regression in QEMU handling for sub-page MMIO BARs for vfio-pci devices [rhel-7.4.z]
-Patch1786: kvm-vfio-pci-Only-mmap-TARGET_PAGE_SIZE-regions.patch
+# For bz#1387648 - [Intel 7.5 FEAT] Memory Protection Keys for qemu-kvm
+Patch1774: kvm-target-i386-Add-PKU-and-and-OSPKE-support.patch
+# For bz#1492559 - virtio-blk mutiwrite merge causes too big IO
+Patch1775: kvm-block-Limit-multiwrite-merge-downstream-only.patch
+# For bz#1466463 - CVE-2017-10664 qemu-kvm: Qemu: qemu-nbd: server breaks with SIGPIPE upon client abort [rhel-7.5]
+Patch1776: kvm-qemu-nbd-Ignore-SIGPIPE.patch
+# For bz#1476641 - ui/vnc_keysym.h is very out of date and does not correctly support many Eastern European keyboards
+Patch1777: kvm-qemu-char-add-Czech-characters-to-VNC-keysyms.patch
+# For bz#1476641 - ui/vnc_keysym.h is very out of date and does not correctly support many Eastern European keyboards
+Patch1778: kvm-qemu-char-add-missing-characters-used-in-keymaps.patch
+# For bz#1476641 - ui/vnc_keysym.h is very out of date and does not correctly support many Eastern European keyboards
+Patch1779: kvm-qemu-char-add-cyrillic-characters-numerosign-to-VNC-.patch
+# For bz#1461672 - qemu-img core dumped when create external snapshot through ssh protocol without specifying image size
+Patch1780: kvm-block-ssh-Use-QemuOpts-for-runtime-options.patch
+# For bz#1494181 - Backport vGPU support to qemu-kvm
+Patch1781: kvm-vfio-pass-device-to-vfio_mmap_bar-and-use-it-to-set-.patch
+# For bz#1494181 - Backport vGPU support to qemu-kvm
+Patch1782: kvm-hw-vfio-pci-Rename-VFIODevice-into-VFIOPCIDevice.patch
+# For bz#1494181 - Backport vGPU support to qemu-kvm
+Patch1783: kvm-hw-vfio-pci-generalize-mask-unmask-to-any-IRQ-index.patch
+# For bz#1494181 - Backport vGPU support to qemu-kvm
+Patch1784: kvm-hw-vfio-pci-introduce-minimalist-VFIODevice-with-fd.patch
+# For bz#1494181 - Backport vGPU support to qemu-kvm
+Patch1785: kvm-hw-vfio-pci-add-type-name-and-group-fields-in-VFIODe.patch
+# For bz#1494181 - Backport vGPU support to qemu-kvm
+Patch1786: kvm-hw-vfio-pci-handle-reset-at-VFIODevice.patch
+# For bz#1494181 - Backport vGPU support to qemu-kvm
+Patch1787: kvm-hw-vfio-pci-Introduce-VFIORegion.patch
+# For bz#1494181 - Backport vGPU support to qemu-kvm
+Patch1788: kvm-hw-vfio-pci-use-name-field-in-format-strings.patch
+# For bz#1494181 - Backport vGPU support to qemu-kvm
+Patch1789: kvm-vfio-Add-sysfsdev-property-for-pci-platform.patch
+# For bz#1494181 - Backport vGPU support to qemu-kvm
+Patch1790: kvm-vfio-remove-bootindex-property-from-qdev-to-qom.patch
+# For bz#1494181 - Backport vGPU support to qemu-kvm
+Patch1791: kvm-vfio-pci-Handle-host-oversight.patch
+# For bz#1494181 - Backport vGPU support to qemu-kvm
+Patch1792: kvm-vfio-pci-Fix-incorrect-error-message.patch
+# For bz#1494181 - Backport vGPU support to qemu-kvm
+Patch1793: kvm-vfio-Wrap-VFIO_DEVICE_GET_REGION_INFO.patch
+# For bz#1494181 - Backport vGPU support to qemu-kvm
+Patch1794: kvm-vfio-Generalize-region-support.patch
+# For bz#1494181 - Backport vGPU support to qemu-kvm
+Patch1795: kvm-vfio-Enable-sparse-mmap-capability.patch
+# For bz#1494181 - Backport vGPU support to qemu-kvm
+Patch1796: kvm-vfio-Handle-zero-length-sparse-mmap-ranges.patch
+# For bz#1486642 - CVE-2017-13672 qemu-kvm: Qemu: vga: OOB read access during display update [rhel-7.5]
+Patch1797: kvm-bswap.h-Remove-cpu_to_32wu.patch
+# For bz#1486642 - CVE-2017-13672 qemu-kvm: Qemu: vga: OOB read access during display update [rhel-7.5]
+Patch1798: kvm-hw-use-ld_p-st_p-instead-of-ld_raw-st_raw.patch
+# For bz#1486642 - CVE-2017-13672 qemu-kvm: Qemu: vga: OOB read access during display update [rhel-7.5]
+Patch1799: kvm-vga-Start-cutting-out-non-32bpp-conversion-support.patch
+# For bz#1486642 - CVE-2017-13672 qemu-kvm: Qemu: vga: OOB read access during display update [rhel-7.5]
+Patch1800: kvm-vga-Remove-remainder-of-old-conversion-cruft.patch
+# For bz#1486642 - CVE-2017-13672 qemu-kvm: Qemu: vga: OOB read access during display update [rhel-7.5]
+Patch1801: kvm-vga-Separate-LE-and-BE-conversion-functions.patch
+# For bz#1486642 - CVE-2017-13672 qemu-kvm: Qemu: vga: OOB read access during display update [rhel-7.5]
+Patch1802: kvm-vga-Rename-vga_template.h-to-vga-helpers.h.patch
+# For bz#1486642 - CVE-2017-13672 qemu-kvm: Qemu: vga: OOB read access during display update [rhel-7.5]
+Patch1803: kvm-vga-stop-passing-pointers-to-vga_draw_line-functions.patch
+# For bz#1450396 - Add support for AMD EPYC processors
+Patch1804: kvm-target-i386-Add-Intel-SHA_NI-instruction-support.patch
+# For bz#1450396 - Add support for AMD EPYC processors
+Patch1805: kvm-target-i386-cpu-Add-new-EPYC-CPU-model.patch
+# For bz#1501510 - Add Skylake-Server CPU model (qemu-kvm)
+Patch1806: kvm-target-i386-Enable-clflushopt-clwb-pcommit-instructi.patch
+# For bz#1501510 - Add Skylake-Server CPU model (qemu-kvm)
+Patch1807: kvm-i386-add-Skylake-Server-cpu-model.patch
+# For bz#1501295 - CVE-2017-15289 qemu-kvm: Qemu: cirrus: OOB access issue in  mode4and5 write functions [rhel-7.5]
+Patch1808: kvm-vga-drop-line_offset-variable.patch
+# For bz#1501295 - CVE-2017-15289 qemu-kvm: Qemu: cirrus: OOB access issue in  mode4and5 write functions [rhel-7.5]
+Patch1809: kvm-vga-Add-mechanism-to-force-the-use-of-a-shadow-surfa.patch
+# For bz#1501295 - CVE-2017-15289 qemu-kvm: Qemu: cirrus: OOB access issue in  mode4and5 write functions [rhel-7.5]
+Patch1810: kvm-vga-handle-cirrus-vbe-mode-wraparounds.patch
+# For bz#1501295 - CVE-2017-15289 qemu-kvm: Qemu: cirrus: OOB access issue in  mode4and5 write functions [rhel-7.5]
+Patch1811: kvm-cirrus-fix-oob-access-in-mode4and5-write-functions.patch
+# For bz#1470244 - reboot leads to shutoff of qemu-kvm-vm if i6300esb-watchdog set to poweroff
+Patch1812: kvm-i6300esb-Fix-signed-integer-overflow.patch
+# For bz#1470244 - reboot leads to shutoff of qemu-kvm-vm if i6300esb-watchdog set to poweroff
+Patch1813: kvm-i6300esb-fix-timer-overflow.patch
+# For bz#1470244 - reboot leads to shutoff of qemu-kvm-vm if i6300esb-watchdog set to poweroff
+Patch1814: kvm-i6300esb-remove-muldiv64.patch
+# For bz#1501121 - CVE-2017-14167 qemu-kvm: Qemu: i386: multiboot OOB access while loading kernel image [rhel-7.5]
+Patch1815: kvm-multiboot-validate-multiboot-header-address-values.patch
+# For bz#1417864 - Qemu-kvm starts with unspecified port
+Patch1816: kvm-qemu-option-reject-empty-number-value.patch
+# For bz#1491434 - KVM leaks file descriptors when attaching and detaching virtio-scsi block devices
+Patch1817: kvm-block-linux-aio-fix-memory-and-fd-leak.patch
+# For bz#1491434 - KVM leaks file descriptors when attaching and detaching virtio-scsi block devices
+Patch1818: kvm-linux-aio-Fix-laio-resource-leak.patch
+# For bz#1508745 - CVE-2017-13711 qemu-kvm: Qemu: Slirp: use-after-free when sending response [rhel-7.5]
+Patch1819: kvm-slirp-cleanup-leftovers-from-misc.h.patch
+# For bz#1508745 - CVE-2017-13711 qemu-kvm: Qemu: Slirp: use-after-free when sending response [rhel-7.5]
+Patch1820: kvm-Avoid-embedding-struct-mbuf-in-other-structures.patch
+# For bz#1508745 - CVE-2017-13711 qemu-kvm: Qemu: Slirp: use-after-free when sending response [rhel-7.5]
+Patch1821: kvm-slirp-Fix-access-to-freed-memory.patch
+# For bz#1508745 - CVE-2017-13711 qemu-kvm: Qemu: Slirp: use-after-free when sending response [rhel-7.5]
+Patch1822: kvm-slirp-fix-clearing-ifq_so-from-pending-packets.patch
+# For bz#1459714 - Throw error if qemu-img rebasing backing file is too long or provide way to fix a "too long" backing file.
+Patch1823: kvm-qcow2-Prevent-backing-file-names-longer-than-1023.patch
+# For bz#1459725 - Prevent qemu-img resize from causing "Active L1 table too large"
+Patch1824: kvm-qemu-img-Use-strerror-for-generic-resize-error.patch
+# For bz#1459725 - Prevent qemu-img resize from causing "Active L1 table too large"
+Patch1825: kvm-qcow2-Avoid-making-the-L1-table-too-big.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1826: kvm-fw_cfg-remove-support-for-guest-side-data-writes.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1827: kvm-fw_cfg-prevent-selector-key-conflict.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1828: kvm-fw_cfg-prohibit-insertion-of-duplicate-fw_cfg-file-n.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1829: kvm-fw_cfg-factor-out-initialization-of-FW_CFG_ID-rev.-n.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1830: kvm-Implement-fw_cfg-DMA-interface.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1831: kvm-fw_cfg-avoid-calculating-invalid-current-entry-point.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1832: kvm-fw-cfg-support-writeable-blobs.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1833: kvm-Enable-fw_cfg-DMA-interface-for-x86.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1834: kvm-fw_cfg-unbreak-migration-compatibility.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1835: kvm-i386-expose-fw_cfg-QEMU0002-in-SSDT.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1836: kvm-fw_cfg-add-write-callback.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1837: kvm-hw-misc-add-vmcoreinfo-device.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1838: kvm-vmcoreinfo-put-it-in-the-misc-device-category.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1839: kvm-fw_cfg-enable-DMA-if-device-vmcoreinfo.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1840: kvm-build-sys-restrict-vmcoreinfo-to-fw_cfg-dma-capable-.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1841: kvm-dump-Make-DumpState-and-endian-conversion-routines-a.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1842: kvm-dump.c-Fix-memory-leak-issue-in-cleanup-processing-f.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1843: kvm-dump-Propagate-errors-into-qmp_dump_guest_memory.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1844: kvm-dump-Turn-some-functions-to-void-to-make-code-cleane.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1845: kvm-dump-Fix-dump-guest-memory-termination-and-use-after.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1846: kvm-dump-allow-target-to-set-the-page-size.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1847: kvm-dump-allow-target-to-set-the-physical-base.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1848: kvm-dump-guest-memory-cleanup-removing-dump_-error-clean.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1849: kvm-dump-guest-memory-using-static-DumpState-add-DumpSta.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1850: kvm-dump-guest-memory-add-dump_in_progress-helper-functi.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1851: kvm-dump-guest-memory-introduce-dump_process-helper-func.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1852: kvm-dump-guest-memory-disable-dump-when-in-INMIGRATE-sta.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1853: kvm-DumpState-adding-total_size-and-written_size-fields.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1854: kvm-dump-do-not-dump-non-existent-guest-memory.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1855: kvm-dump-add-guest-ELF-note.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1856: kvm-dump-update-phys_base-header-field-based-on-VMCOREIN.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1857: kvm-kdump-set-vmcoreinfo-location.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1858: kvm-scripts-dump-guest-memory.py-Move-constants-to-the-t.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1859: kvm-scripts-dump-guest-memory.py-Make-methods-functions.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1860: kvm-scripts-dump-guest-memory.py-Improve-python-3-compat.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1861: kvm-scripts-dump-guest-memory.py-Cleanup-functions.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1862: kvm-scripts-dump-guest-memory.py-Introduce-multi-arch-su.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1863: kvm-Fix-typo-in-variable-name-found-and-fixed-by-codespe.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1864: kvm-scripts-dump-guest-memory.py-add-vmcoreinfo.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1865: kvm-dump-guest-memory.py-fix-No-symbol-vmcoreinfo_find.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1866: kvm-dump-guest-memory.py-fix-You-can-t-do-that-without-a.patch
+# For bz#CVE-2017-5715 
+Patch1867: kvm-target-i386-cpu-add-new-CPUID-bits-for-indirect-bran.patch
+# For bz#CVE-2017-5715 
+Patch1868: kvm-target-i386-add-support-for-SPEC_CTRL-MSR.patch
+# For bz#CVE-2017-5715 
+Patch1869: kvm-target-i386-cpu-add-new-CPU-models-for-indirect-bran.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1870: kvm-i386-update-ssdt-misc.hex.generated.patch
+# For bz#1435432 - Emulated ISA serial port hangs randomly when sending lots of data from guest -> host
+# For bz#1473536 - Hangs in serial console under qemu
+Patch1871: kvm-main-loop-Acquire-main_context-lock-around-os_host_m.patch
+# For bz#1460872 - Aborted(core dumped) when booting guest with "-netdev tap....vhost=on,queues=32"
+Patch1872: kvm-virtio-net-validate-backend-queue-numbers-against-bu.patch
+# For bz#1411490 - [RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm)
+Patch1873: kvm-dump-guest-memory.py-fix-python-2-support.patch
+# For bz#1536883 - [abrt] [faf] qemu-kvm: unknown function(): /usr/libexec/qemu-kvm killed by 6
+Patch1874: kvm-qxl-add-migration-blocker-to-avoid-pre-save-assert.patch
+# For bz#1538866 - qemu will coredump after executing info qtree
+Patch1875: kvm-qdev-Fix-assert-in-PCI-address-property-when-used-by.patch
+# For bz#1534691 - CVE-2018-5683 qemu-kvm: Qemu: Out-of-bounds read in vga_draw_text routine [rhel-7.5]
+Patch1876: kvm-vga-check-the-validation-of-memory-addr-when-draw-te.patch
+# For bz#1536883 - [abrt] [faf] qemu-kvm: unknown function(): /usr/libexec/qemu-kvm killed by 6
+Patch1877: kvm-savevm-Improve-error-message-for-blocked-migration.patch
+# For bz#1536883 - [abrt] [faf] qemu-kvm: unknown function(): /usr/libexec/qemu-kvm killed by 6
+Patch1878: kvm-savevm-fail-if-migration-blockers-are-present.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1879: kvm-vnc-Fix-qemu-crashed-when-vnc-client-disconnect-sudd.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1880: kvm-fix-full-frame-updates-for-VNC-clients.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1881: kvm-vnc-update-fix.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1882: kvm-vnc-return-directly-if-no-vnc-client-connected.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1883: kvm-buffer-add-buffer_move_empty.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1884: kvm-buffer-add-buffer_move.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1885: kvm-vnc-kill-jobs-queue-buffer.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1886: kvm-vnc-jobs-move-buffer-reset-use-new-buffer-move.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1887: kvm-vnc-zap-dead-code.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1888: kvm-vnc-add-vnc_width-vnc_height-helpers.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1889: kvm-vnc-factor-out-vnc_update_server_surface.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1890: kvm-vnc-use-vnc_-width-height-in-vnc_set_area_dirty.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1891: kvm-vnc-only-alloc-server-surface-with-clients-connected.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1892: kvm-ui-fix-refresh-of-VNC-server-surface.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1893: kvm-ui-move-disconnecting-check-to-start-of-vnc_update_c.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1894: kvm-ui-remove-redundant-indentation-in-vnc_client_update.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1895: kvm-ui-avoid-pointless-VNC-updates-if-framebuffer-isn-t-.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1896: kvm-ui-track-how-much-decoded-data-we-consumed-when-doin.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1897: kvm-ui-introduce-enum-to-track-VNC-client-framebuffer-up.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1898: kvm-ui-correctly-reset-framebuffer-update-state-after-pr.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1899: kvm-ui-refactor-code-for-determining-if-an-update-should.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1900: kvm-ui-fix-VNC-client-throttling-when-audio-capture-is-a.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1901: kvm-ui-fix-VNC-client-throttling-when-forced-update-is-r.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1902: kvm-ui-place-a-hard-cap-on-VNC-server-output-buffer-size.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1903: kvm-ui-avoid-sign-extension-using-client-width-height.patch
+# For bz#1527405 - CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5]
+Patch1904: kvm-ui-correctly-advance-output-buffer-when-writing-SASL.patch
+# For bz#1518711 - CVE-2017-15268 qemu-kvm: Qemu: I/O: potential memory exhaustion via websock connection to VNC [rhel-7.5]
+Patch1905: kvm-io-skip-updates-to-client-if-websocket-output-buffer.patch
+# For bz#1567913 - CVE-2018-7858 qemu-kvm: Qemu: cirrus: OOB access when updating vga display [rhel-7] [rhel-7.5.z]
+Patch1906: kvm-vga-add-ram_addr_t-cast.patch
+# For bz#1567913 - CVE-2018-7858 qemu-kvm: Qemu: cirrus: OOB access when updating vga display [rhel-7] [rhel-7.5.z]
+Patch1907: kvm-vga-fix-region-calculation.patch
 
 
 BuildRequires: zlib-devel
@@ -5593,6 +5833,127 @@ tar -xf %{SOURCE21}
 %patch1784 -p1
 %patch1785 -p1
 %patch1786 -p1
+%patch1787 -p1
+%patch1788 -p1
+%patch1789 -p1
+%patch1790 -p1
+%patch1791 -p1
+%patch1792 -p1
+%patch1793 -p1
+%patch1794 -p1
+%patch1795 -p1
+%patch1796 -p1
+%patch1797 -p1
+%patch1798 -p1
+%patch1799 -p1
+%patch1800 -p1
+%patch1801 -p1
+%patch1802 -p1
+%patch1803 -p1
+%patch1804 -p1
+%patch1805 -p1
+%patch1806 -p1
+%patch1807 -p1
+%patch1808 -p1
+%patch1809 -p1
+%patch1810 -p1
+%patch1811 -p1
+%patch1812 -p1
+%patch1813 -p1
+%patch1814 -p1
+%patch1815 -p1
+%patch1816 -p1
+%patch1817 -p1
+%patch1818 -p1
+%patch1819 -p1
+%patch1820 -p1
+%patch1821 -p1
+%patch1822 -p1
+%patch1823 -p1
+%patch1824 -p1
+%patch1825 -p1
+%patch1826 -p1
+%patch1827 -p1
+%patch1828 -p1
+%patch1829 -p1
+%patch1830 -p1
+%patch1831 -p1
+%patch1832 -p1
+%patch1833 -p1
+%patch1834 -p1
+%patch1835 -p1
+%patch1836 -p1
+%patch1837 -p1
+%patch1838 -p1
+%patch1839 -p1
+%patch1840 -p1
+%patch1841 -p1
+%patch1842 -p1
+%patch1843 -p1
+%patch1844 -p1
+%patch1845 -p1
+%patch1846 -p1
+%patch1847 -p1
+%patch1848 -p1
+%patch1849 -p1
+%patch1850 -p1
+%patch1851 -p1
+%patch1852 -p1
+%patch1853 -p1
+%patch1854 -p1
+%patch1855 -p1
+%patch1856 -p1
+%patch1857 -p1
+%patch1858 -p1
+%patch1859 -p1
+%patch1860 -p1
+%patch1861 -p1
+%patch1862 -p1
+%patch1863 -p1
+%patch1864 -p1
+%patch1865 -p1
+%patch1866 -p1
+%patch1867 -p1
+%patch1868 -p1
+%patch1869 -p1
+%patch1870 -p1
+%patch1871 -p1
+%patch1872 -p1
+%patch1873 -p1
+%patch1874 -p1
+%patch1875 -p1
+%patch1876 -p1
+%patch1877 -p1
+%patch1878 -p1
+%patch1879 -p1
+%patch1880 -p1
+%patch1881 -p1
+%patch1882 -p1
+%patch1883 -p1
+%patch1884 -p1
+%patch1885 -p1
+%patch1886 -p1
+%patch1887 -p1
+%patch1888 -p1
+%patch1889 -p1
+%patch1890 -p1
+%patch1891 -p1
+%patch1892 -p1
+%patch1893 -p1
+%patch1894 -p1
+%patch1895 -p1
+%patch1896 -p1
+%patch1897 -p1
+%patch1898 -p1
+%patch1899 -p1
+%patch1900 -p1
+%patch1901 -p1
+%patch1902 -p1
+%patch1903 -p1
+%patch1904 -p1
+%patch1905 -p1
+%patch1906 -p1
+%patch1907 -p1
 
 %build
 buildarch="%{kvm_target}-softmmu"
@@ -6038,44 +6399,241 @@ sh %{_sysconfdir}/sysconfig/modules/kvm.modules &> /dev/null || :
 %{_mandir}/man8/qemu-nbd.8*
 
 %changelog
-* Sat Mar 03 2018 Fabian Arrotin <arrfab@centos.org> - - 1.5.3-141.el7_4.5
-- Added kvm_target arm (Jacco@redsleeve.org)
+* Mon Apr 16 2018 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-156.el7_5.1
+- kvm-vga-add-ram_addr_t-cast.patch [bz#1567913]
+- kvm-vga-fix-region-calculation.patch [bz#1567913]
+- Resolves: bz#1567913
+  (CVE-2018-7858 qemu-kvm: Qemu: cirrus: OOB access when updating vga display [rhel-7] [rhel-7.5.z])
 
-* Wed Nov 29 2017 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-141.el7_4.5
-- kvm-vfio-pci-Only-mmap-TARGET_PAGE_SIZE-regions.patch [bz#1515110]
-- Resolves: bz#1515110
-  (Regression in QEMU handling for sub-page MMIO BARs for vfio-pci devices [rhel-7.4.z])
+* Tue Feb 20 2018 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-156.el7
+- kvm-vnc-Fix-qemu-crashed-when-vnc-client-disconnect-sudd.patch [bz#1527405]
+- kvm-fix-full-frame-updates-for-VNC-clients.patch [bz#1527405]
+- kvm-vnc-update-fix.patch [bz#1527405]
+- kvm-vnc-return-directly-if-no-vnc-client-connected.patch [bz#1527405]
+- kvm-buffer-add-buffer_move_empty.patch [bz#1527405]
+- kvm-buffer-add-buffer_move.patch [bz#1527405]
+- kvm-vnc-kill-jobs-queue-buffer.patch [bz#1527405]
+- kvm-vnc-jobs-move-buffer-reset-use-new-buffer-move.patch [bz#1527405]
+- kvm-vnc-zap-dead-code.patch [bz#1527405]
+- kvm-vnc-add-vnc_width-vnc_height-helpers.patch [bz#1527405]
+- kvm-vnc-factor-out-vnc_update_server_surface.patch [bz#1527405]
+- kvm-vnc-use-vnc_-width-height-in-vnc_set_area_dirty.patch [bz#1527405]
+- kvm-vnc-only-alloc-server-surface-with-clients-connected.patch [bz#1527405]
+- kvm-ui-fix-refresh-of-VNC-server-surface.patch [bz#1527405]
+- kvm-ui-move-disconnecting-check-to-start-of-vnc_update_c.patch [bz#1527405]
+- kvm-ui-remove-redundant-indentation-in-vnc_client_update.patch [bz#1527405]
+- kvm-ui-avoid-pointless-VNC-updates-if-framebuffer-isn-t-.patch [bz#1527405]
+- kvm-ui-track-how-much-decoded-data-we-consumed-when-doin.patch [bz#1527405]
+- kvm-ui-introduce-enum-to-track-VNC-client-framebuffer-up.patch [bz#1527405]
+- kvm-ui-correctly-reset-framebuffer-update-state-after-pr.patch [bz#1527405]
+- kvm-ui-refactor-code-for-determining-if-an-update-should.patch [bz#1527405]
+- kvm-ui-fix-VNC-client-throttling-when-audio-capture-is-a.patch [bz#1527405]
+- kvm-ui-fix-VNC-client-throttling-when-forced-update-is-r.patch [bz#1527405]
+- kvm-ui-place-a-hard-cap-on-VNC-server-output-buffer-size.patch [bz#1527405]
+- kvm-ui-avoid-sign-extension-using-client-width-height.patch [bz#1527405]
+- kvm-ui-correctly-advance-output-buffer-when-writing-SASL.patch [bz#1527405]
+- kvm-io-skip-updates-to-client-if-websocket-output-buffer.patch [bz#1518711]
+- Resolves: bz#1518711
+  (CVE-2017-15268 qemu-kvm: Qemu: I/O: potential memory exhaustion via websock connection to VNC [rhel-7.5])
+- Resolves: bz#1527405
+  (CVE-2017-15124 qemu-kvm: Qemu: memory exhaustion through framebuffer update request message in VNC server [rhel-7.5])
 
-* Fri Nov 10 2017 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-141.el7_4.4
-- kvm-multiboot-validate-multiboot-header-address-values.patch [bz#1501120]
-- Resolves: bz#1501120
-  (CVE-2017-14167 qemu-kvm: Qemu: i386: multiboot OOB access while loading kernel image [rhel-7.4.z])
+* Tue Jan 30 2018 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-155.el7
+- kvm-qdev-Fix-assert-in-PCI-address-property-when-used-by.patch [bz#1538866]
+- kvm-vga-check-the-validation-of-memory-addr-when-draw-te.patch [bz#1534691]
+- kvm-savevm-Improve-error-message-for-blocked-migration.patch [bz#1536883]
+- kvm-savevm-fail-if-migration-blockers-are-present.patch [bz#1536883]
+- Resolves: bz#1534691
+  (CVE-2018-5683 qemu-kvm: Qemu: Out-of-bounds read in vga_draw_text routine [rhel-7.5])
+- Resolves: bz#1536883
+  ([abrt] [faf] qemu-kvm: unknown function(): /usr/libexec/qemu-kvm killed by 6)
+- Resolves: bz#1538866
+  (qemu will coredump after executing info qtree)
 
-* Tue Nov 07 2017 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-141.el7_4.3
-- kvm-bswap.h-Remove-cpu_to_32wu.patch [bz#1501294]
-- kvm-hw-use-ld_p-st_p-instead-of-ld_raw-st_raw.patch [bz#1501294]
-- kvm-vga-Start-cutting-out-non-32bpp-conversion-support.patch [bz#1501294]
-- kvm-vga-Remove-remainder-of-old-conversion-cruft.patch [bz#1501294]
-- kvm-vga-Separate-LE-and-BE-conversion-functions.patch [bz#1501294]
-- kvm-vga-Rename-vga_template.h-to-vga-helpers.h.patch [bz#1501294]
-- kvm-vga-stop-passing-pointers-to-vga_draw_line-functions.patch [bz#1501294]
-- kvm-vga-drop-line_offset-variable.patch [bz#1501294]
-- kvm-vga-Add-mechanism-to-force-the-use-of-a-shadow-surfa.patch [bz#1501294]
-- kvm-vga-handle-cirrus-vbe-mode-wraparounds.patch [bz#1501294]
-- kvm-cirrus-fix-oob-access-in-mode4and5-write-functions.patch [bz#1501294]
-- Resolves: bz#1501294
-  (CVE-2017-15289 qemu-kvm: Qemu: cirrus: OOB access issue in  mode4and5 write functions [rhel-7.4.z])
+* Wed Jan 24 2018 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-154.el7
+- kvm-virtio-net-validate-backend-queue-numbers-against-bu.patch [bz#1460872]
+- kvm-dump-guest-memory.py-fix-python-2-support.patch [bz#1411490]
+- kvm-qxl-add-migration-blocker-to-avoid-pre-save-assert.patch [bz#1536883]
+- Resolves: bz#1411490
+  ([RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm))
+- Resolves: bz#1460872
+  (Aborted(core dumped) when booting guest with "-netdev tap....vhost=on,queues=32")
+- Resolves: bz#1536883
+  ([abrt] [faf] qemu-kvm: unknown function(): /usr/libexec/qemu-kvm killed by 6)
 
-* Mon Aug 21 2017 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-141.el7_4.2
-- kvm-virtio-net-dynamic-network-offloads-configuration.patch [bz#1482468]
-- kvm-Workaround-rhel6-ctrl_guest_offloads-machine-type-mi.patch [bz#1482468]
-- Resolves: bz#1482468
-  (KVM: windows guest migration from EL6 to EL7 fails. [rhel-7.4.z])
+* Fri Jan 12 2018 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-153.el7
+- kvm-i386-update-ssdt-misc.hex.generated.patch [bz#1411490]
+- kvm-main-loop-Acquire-main_context-lock-around-os_host_m.patch [bz#1435432 bz#1473536]
+- Resolves: bz#1411490
+  ([RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm))
+- Resolves: bz#1435432
+  (Emulated ISA serial port hangs randomly when sending lots of data from guest -> host)
+- Resolves: bz#1473536
+  (Hangs in serial console under qemu)
 
-* Tue Jul 11 2017 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-141.el7_4.1
-- kvm-qemu-nbd-Ignore-SIGPIPE.patch [bz#1468107]
-- Resolves: bz#1468107
-  (CVE-2017-10664 qemu-kvm: Qemu: qemu-nbd: server breaks with SIGPIPE upon client abort [rhel-7.4.z])
+* Thu Jan 04 2018 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-152.el7
+- kvm-target-i386-cpu-add-new-CPUID-bits-for-indirect-bran.patch [CVE-2017-5715]
+- kvm-target-i386-add-support-for-SPEC_CTRL-MSR.patch [CVE-2017-5715]
+- kvm-target-i386-cpu-add-new-CPU-models-for-indirect-bran.patch [CVE-2017-5715]
+
+* Tue Dec 19 2017 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-151.el7
+- kvm-fw_cfg-remove-support-for-guest-side-data-writes.patch [bz#1411490]
+- kvm-fw_cfg-prevent-selector-key-conflict.patch [bz#1411490]
+- kvm-fw_cfg-prohibit-insertion-of-duplicate-fw_cfg-file-n.patch [bz#1411490]
+- kvm-fw_cfg-factor-out-initialization-of-FW_CFG_ID-rev.-n.patch [bz#1411490]
+- kvm-Implement-fw_cfg-DMA-interface.patch [bz#1411490]
+- kvm-fw_cfg-avoid-calculating-invalid-current-entry-point.patch [bz#1411490]
+- kvm-fw-cfg-support-writeable-blobs.patch [bz#1411490]
+- kvm-Enable-fw_cfg-DMA-interface-for-x86.patch [bz#1411490]
+- kvm-fw_cfg-unbreak-migration-compatibility.patch [bz#1411490]
+- kvm-i386-expose-fw_cfg-QEMU0002-in-SSDT.patch [bz#1411490]
+- kvm-fw_cfg-add-write-callback.patch [bz#1411490]
+- kvm-hw-misc-add-vmcoreinfo-device.patch [bz#1411490]
+- kvm-vmcoreinfo-put-it-in-the-misc-device-category.patch [bz#1411490]
+- kvm-fw_cfg-enable-DMA-if-device-vmcoreinfo.patch [bz#1411490]
+- kvm-build-sys-restrict-vmcoreinfo-to-fw_cfg-dma-capable-.patch [bz#1411490]
+- kvm-dump-Make-DumpState-and-endian-conversion-routines-a.patch [bz#1411490]
+- kvm-dump.c-Fix-memory-leak-issue-in-cleanup-processing-f.patch [bz#1411490]
+- kvm-dump-Propagate-errors-into-qmp_dump_guest_memory.patch [bz#1411490]
+- kvm-dump-Turn-some-functions-to-void-to-make-code-cleane.patch [bz#1411490]
+- kvm-dump-Fix-dump-guest-memory-termination-and-use-after.patch [bz#1411490]
+- kvm-dump-allow-target-to-set-the-page-size.patch [bz#1411490]
+- kvm-dump-allow-target-to-set-the-physical-base.patch [bz#1411490]
+- kvm-dump-guest-memory-cleanup-removing-dump_-error-clean.patch [bz#1411490]
+- kvm-dump-guest-memory-using-static-DumpState-add-DumpSta.patch [bz#1411490]
+- kvm-dump-guest-memory-add-dump_in_progress-helper-functi.patch [bz#1411490]
+- kvm-dump-guest-memory-introduce-dump_process-helper-func.patch [bz#1411490]
+- kvm-dump-guest-memory-disable-dump-when-in-INMIGRATE-sta.patch [bz#1411490]
+- kvm-DumpState-adding-total_size-and-written_size-fields.patch [bz#1411490]
+- kvm-dump-do-not-dump-non-existent-guest-memory.patch [bz#1411490]
+- kvm-dump-add-guest-ELF-note.patch [bz#1411490]
+- kvm-dump-update-phys_base-header-field-based-on-VMCOREIN.patch [bz#1411490]
+- kvm-kdump-set-vmcoreinfo-location.patch [bz#1411490]
+- kvm-scripts-dump-guest-memory.py-Move-constants-to-the-t.patch [bz#1411490]
+- kvm-scripts-dump-guest-memory.py-Make-methods-functions.patch [bz#1411490]
+- kvm-scripts-dump-guest-memory.py-Improve-python-3-compat.patch [bz#1411490]
+- kvm-scripts-dump-guest-memory.py-Cleanup-functions.patch [bz#1411490]
+- kvm-scripts-dump-guest-memory.py-Introduce-multi-arch-su.patch [bz#1411490]
+- kvm-Fix-typo-in-variable-name-found-and-fixed-by-codespe.patch [bz#1411490]
+- kvm-scripts-dump-guest-memory.py-add-vmcoreinfo.patch [bz#1411490]
+- kvm-dump-guest-memory.py-fix-No-symbol-vmcoreinfo_find.patch [bz#1411490]
+- kvm-dump-guest-memory.py-fix-You-can-t-do-that-without-a.patch [bz#1411490]
+- Resolves: bz#1411490
+  ([RFE] Kernel address space layout randomization [KASLR] support (qemu-kvm))
+
+* Tue Dec 12 2017 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-150.el7
+- kvm-Build-only-x86_64-packages.patch [bz#1520793]
+- Resolves: bz#1520793
+  (Do not build non-x86_64 subpackages)
+
+* Wed Nov 29 2017 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-149.el7
+- kvm-block-linux-aio-fix-memory-and-fd-leak.patch [bz#1491434]
+- kvm-linux-aio-Fix-laio-resource-leak.patch [bz#1491434]
+- kvm-slirp-cleanup-leftovers-from-misc.h.patch [bz#1508745]
+- kvm-Avoid-embedding-struct-mbuf-in-other-structures.patch [bz#1508745]
+- kvm-slirp-Fix-access-to-freed-memory.patch [bz#1508745]
+- kvm-slirp-fix-clearing-ifq_so-from-pending-packets.patch [bz#1508745]
+- kvm-qcow2-Prevent-backing-file-names-longer-than-1023.patch [bz#1459714]
+- kvm-qemu-img-Use-strerror-for-generic-resize-error.patch [bz#1459725]
+- kvm-qcow2-Avoid-making-the-L1-table-too-big.patch [bz#1459725]
+- Resolves: bz#1459714
+  (Throw error if qemu-img rebasing backing file is too long or provide way to fix a "too long" backing file.)
+- Resolves: bz#1459725
+  (Prevent qemu-img resize from causing "Active L1 table too large")
+- Resolves: bz#1491434
+  (KVM leaks file descriptors when attaching and detaching virtio-scsi block devices)
+- Resolves: bz#1508745
+  (CVE-2017-13711 qemu-kvm: Qemu: Slirp: use-after-free when sending response [rhel-7.5])
+
+* Fri Nov 10 2017 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-148.el7
+- kvm-multiboot-validate-multiboot-header-address-values.patch [bz#1501121]
+- kvm-qemu-option-reject-empty-number-value.patch [bz#1417864]
+- Resolves: bz#1417864
+  (Qemu-kvm starts with unspecified port)
+- Resolves: bz#1501121
+  (CVE-2017-14167 qemu-kvm: Qemu: i386: multiboot OOB access while loading kernel image [rhel-7.5])
+
+* Fri Nov 03 2017 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-147.el7
+- kvm-vga-drop-line_offset-variable.patch [bz#1501295]
+- kvm-vga-Add-mechanism-to-force-the-use-of-a-shadow-surfa.patch [bz#1501295]
+- kvm-vga-handle-cirrus-vbe-mode-wraparounds.patch [bz#1501295]
+- kvm-cirrus-fix-oob-access-in-mode4and5-write-functions.patch [bz#1501295]
+- kvm-i6300esb-Fix-signed-integer-overflow.patch [bz#1470244]
+- kvm-i6300esb-fix-timer-overflow.patch [bz#1470244]
+- kvm-i6300esb-remove-muldiv64.patch [bz#1470244]
+- Resolves: bz#1470244
+  (reboot leads to shutoff of qemu-kvm-vm if i6300esb-watchdog set to poweroff)
+- Resolves: bz#1501295
+  (CVE-2017-15289 qemu-kvm: Qemu: cirrus: OOB access issue in  mode4and5 write functions [rhel-7.5])
+
+* Tue Oct 24 2017 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-146.el7
+- kvm-vfio-pass-device-to-vfio_mmap_bar-and-use-it-to-set-.patch [bz#1494181]
+- kvm-hw-vfio-pci-Rename-VFIODevice-into-VFIOPCIDevice.patch [bz#1494181]
+- kvm-hw-vfio-pci-generalize-mask-unmask-to-any-IRQ-index.patch [bz#1494181]
+- kvm-hw-vfio-pci-introduce-minimalist-VFIODevice-with-fd.patch [bz#1494181]
+- kvm-hw-vfio-pci-add-type-name-and-group-fields-in-VFIODe.patch [bz#1494181]
+- kvm-hw-vfio-pci-handle-reset-at-VFIODevice.patch [bz#1494181]
+- kvm-hw-vfio-pci-Introduce-VFIORegion.patch [bz#1494181]
+- kvm-hw-vfio-pci-use-name-field-in-format-strings.patch [bz#1494181]
+- kvm-vfio-Add-sysfsdev-property-for-pci-platform.patch [bz#1494181]
+- kvm-vfio-remove-bootindex-property-from-qdev-to-qom.patch [bz#1494181]
+- kvm-vfio-pci-Handle-host-oversight.patch [bz#1494181]
+- kvm-vfio-pci-Fix-incorrect-error-message.patch [bz#1494181]
+- kvm-vfio-Wrap-VFIO_DEVICE_GET_REGION_INFO.patch [bz#1494181]
+- kvm-vfio-Generalize-region-support.patch [bz#1494181]
+- kvm-vfio-Enable-sparse-mmap-capability.patch [bz#1494181]
+- kvm-vfio-Handle-zero-length-sparse-mmap-ranges.patch [bz#1494181]
+- kvm-bswap.h-Remove-cpu_to_32wu.patch [bz#1486642]
+- kvm-hw-use-ld_p-st_p-instead-of-ld_raw-st_raw.patch [bz#1486642]
+- kvm-vga-Start-cutting-out-non-32bpp-conversion-support.patch [bz#1486642]
+- kvm-vga-Remove-remainder-of-old-conversion-cruft.patch [bz#1486642]
+- kvm-vga-Separate-LE-and-BE-conversion-functions.patch [bz#1486642]
+- kvm-vga-Rename-vga_template.h-to-vga-helpers.h.patch [bz#1486642]
+- kvm-vga-stop-passing-pointers-to-vga_draw_line-functions.patch [bz#1486642]
+- kvm-target-i386-Add-Intel-SHA_NI-instruction-support.patch [bz#1450396]
+- kvm-target-i386-cpu-Add-new-EPYC-CPU-model.patch [bz#1450396]
+- kvm-target-i386-Enable-clflushopt-clwb-pcommit-instructi.patch [bz#1501510]
+- kvm-i386-add-Skylake-Server-cpu-model.patch [bz#1501510]
+- Resolves: bz#1450396
+  (Add support for AMD EPYC processors)
+- Resolves: bz#1486642
+  (CVE-2017-13672 qemu-kvm: Qemu: vga: OOB read access during display update [rhel-7.5])
+- Resolves: bz#1494181
+  (Backport vGPU support to qemu-kvm)
+- Resolves: bz#1501510
+  (Add Skylake-Server CPU model (qemu-kvm))
+
+* Fri Oct 06 2017 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-145.el7
+- kvm-qemu-char-add-Czech-characters-to-VNC-keysyms.patch [bz#1476641]
+- kvm-qemu-char-add-missing-characters-used-in-keymaps.patch [bz#1476641]
+- kvm-qemu-char-add-cyrillic-characters-numerosign-to-VNC-.patch [bz#1476641]
+- kvm-block-ssh-Use-QemuOpts-for-runtime-options.patch [bz#1461672]
+- Resolves: bz#1461672
+  (qemu-img core dumped when create external snapshot through ssh protocol without specifying image size)
+- Resolves: bz#1476641
+  (ui/vnc_keysym.h is very out of date and does not correctly support many Eastern European keyboards)
+
+* Mon Oct 02 2017 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-144.el7
+- kvm-qemu-nbd-Ignore-SIGPIPE.patch [bz#1466463]
+- Resolves: bz#1466463
+  (CVE-2017-10664 qemu-kvm: Qemu: qemu-nbd: server breaks with SIGPIPE upon client abort [rhel-7.5])
+
+* Thu Sep 28 2017 Wainer dos Santos Moschetta <wainersm@redhat.com> - 1.5.3-143.el7
+- kvm-block-Limit-multiwrite-merge-downstream-only.patch [bz#1492559]
+- Resolves: bz#1492559
+  (virtio-blk mutiwrite merge causes too big IO)
+
+* Wed Sep 20 2017 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-142.el7
+- kvm-vnc-allow-to-connect-with-add_client-when-vnc-none.patch [bz#1435352]
+- kvm-virtio-net-dynamic-network-offloads-configuration.patch [bz#1480428]
+- kvm-Workaround-rhel6-ctrl_guest_offloads-machine-type-mi.patch [bz#1480428]
+- kvm-target-i386-Add-PKU-and-and-OSPKE-support.patch [bz#1387648]
+- Resolves: bz#1387648
+  ([Intel 7.5 FEAT] Memory Protection Keys for qemu-kvm)
+- Resolves: bz#1435352
+  (qemu started with "-vnc none,..." doesn't support any VNC authentication)
+- Resolves: bz#1480428
+  (KVM: windows guest migration from EL6 to EL7 fails.)
 
 * Tue Jun 13 2017 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-141.el7
 - kvm-Fix-memory-slot-page-alignment-logic-bug-1455745.patch [bz#1455745]

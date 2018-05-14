@@ -1,0 +1,89 @@
+From 7adcfacf9057c216beb99286e5f233e868865eae Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Tue, 21 Nov 2017 03:21:44 +0100
+Subject: [PATCH 1/9] block/linux-aio: fix memory and fd leak
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <20171121032145.5681-2-famz@redhat.com>
+Patchwork-id: 77766
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v2 1/2] block/linux-aio: fix memory and fd leak
+Bugzilla: 1491434
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+
+From: Stefan Hajnoczi <stefanha@redhat.com>
+
+Hot unplugging -drive aio=native,file=test.img,format=raw images leaves
+the Linux AIO event notifier and struct qemu_laio_state allocated.
+Luckily nothing will use the event notifier after the BlockDriverState
+has been closed so the handler function is never called.
+
+It's still worth fixing this resource leak.
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit abd269b7cf1f084a067731acb8f3272c193cb5f0)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	block/linux-aio.c
+* Context is different: downstream we don't have raw_detach_aio_context()
+  in raw_close().
+* Downstream uses eventfd(2) instead of EventNotifier, so do close()
+  directly here as well.
+---
+ block/linux-aio.c | 9 +++++++++
+ block/raw-aio.h   | 1 +
+ block/raw-posix.c | 6 ++++++
+ 3 files changed, 16 insertions(+)
+
+diff --git a/block/linux-aio.c b/block/linux-aio.c
+index 40041d1..43f14f3 100644
+--- a/block/linux-aio.c
++++ b/block/linux-aio.c
+@@ -225,3 +225,12 @@ out_free_state:
+     g_free(s);
+     return NULL;
+ }
++
++void laio_cleanup(void *s_)
++{
++    struct qemu_laio_state *s = s_;
++
++    qemu_aio_set_fd_handler(s->efd, NULL, NULL, NULL, NULL);
++    close(s->efd);
++    g_free(s);
++}
+diff --git a/block/raw-aio.h b/block/raw-aio.h
+index 7ad0a8a..2dba2c6 100644
+--- a/block/raw-aio.h
++++ b/block/raw-aio.h
+@@ -34,6 +34,7 @@
+ /* linux-aio.c - Linux native implementation */
+ #ifdef CONFIG_LINUX_AIO
+ void *laio_init(void);
++void laio_cleanup(void *s);
+ BlockDriverAIOCB *laio_submit(BlockDriverState *bs, void *aio_ctx, int fd,
+         int64_t sector_num, QEMUIOVector *qiov, int nb_sectors,
+         BlockDriverCompletionFunc *cb, void *opaque, int type);
+diff --git a/block/raw-posix.c b/block/raw-posix.c
+index ed97bd4..c2b1be2 100644
+--- a/block/raw-posix.c
++++ b/block/raw-posix.c
+@@ -1081,6 +1081,12 @@ static BlockDriverAIOCB *raw_aio_flush(BlockDriverState *bs,
+ static void raw_close(BlockDriverState *bs)
+ {
+     BDRVRawState *s = bs->opaque;
++
++#ifdef CONFIG_LINUX_AIO
++    if (s->use_aio) {
++        laio_cleanup(s->aio_ctx);
++    }
++#endif
+     if (s->fd >= 0) {
+         qemu_close(s->fd);
+         s->fd = -1;
+-- 
+1.8.3.1
+

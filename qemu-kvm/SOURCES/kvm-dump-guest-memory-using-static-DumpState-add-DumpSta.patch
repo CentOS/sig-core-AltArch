@@ -1,0 +1,143 @@
+From 7924dd9493c5b90bb1a10b3b9ec486fa10d87304 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:38:55 +0100
+Subject: [PATCH 24/41] dump-guest-memory: using static DumpState, add
+ DumpStatus
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-25-marcandre.lureau@redhat.com>
+Patchwork-id: 78373
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 24/41] dump-guest-memory: using static DumpState, add DumpStatus
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Peter Xu <peterx@redhat.com>
+
+Instead of malloc/free each time for DumpState, make it
+static. Added DumpStatus to show status for dump.
+
+This is to be used for detached dump.
+
+Signed-off-by: Peter Xu <peterx@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Message-Id: <1455772616-8668-4-git-send-email-peterx@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+
+(cherry picked from commit baf28f57e2dec63eebfcd3c00f8d4dea9fcde21e)
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c                | 21 ++++++++++++++++-----
+ include/sysemu/dump.h |  2 ++
+ qapi-schema.json      | 18 ++++++++++++++++++
+ 3 files changed, 36 insertions(+), 5 deletions(-)
+
+diff --git a/dump.c b/dump.c
+index 790bfe4..254c0ba 100644
+--- a/dump.c
++++ b/dump.c
+@@ -1447,6 +1447,14 @@ static void get_max_mapnr(DumpState *s)
+     s->max_mapnr = dump_paddr_to_pfn(s, last_block->target_end);
+ }
+ 
++static DumpState dump_state_global = { .status = DUMP_STATUS_NONE };
++
++static void dump_state_prepare(DumpState *s)
++{
++    /* zero the struct, setting status to active */
++    *s = (DumpState) { .status = DUMP_STATUS_ACTIVE };
++}
++
+ static void dump_init(DumpState *s, int fd, bool has_format,
+                       DumpGuestMemoryFormat format, bool paging, bool has_filter,
+                       int64_t begin, int64_t length, Error **errp)
+@@ -1680,24 +1688,27 @@ void qmp_dump_guest_memory(bool paging, const char *file, bool has_begin,
+         return;
+     }
+ 
+-    s = g_malloc0(sizeof(DumpState));
++    s = &dump_state_global;
++    dump_state_prepare(s);
+ 
+     dump_init(s, fd, has_format, format, paging, has_begin,
+               begin, length, &local_err);
+     if (local_err) {
+-        g_free(s);
+         error_propagate(errp, local_err);
++        s->status = DUMP_STATUS_FAILED;
+         return;
+     }
+ 
+     if (has_format && format != DUMP_GUEST_MEMORY_FORMAT_ELF) {
+-        create_kdump_vmcore(s, errp);
++        create_kdump_vmcore(s, &local_err);
+     } else {
+-        create_vmcore(s, errp);
++        create_vmcore(s, &local_err);
+     }
+ 
++    s->status = (local_err ? DUMP_STATUS_FAILED : DUMP_STATUS_COMPLETED);
++    error_propagate(errp, local_err);
++
+     dump_cleanup(s);
+-    g_free(s);
+ }
+ 
+ DumpGuestMemoryCapability *qmp_query_dump_guest_memory_capability(Error **errp)
+diff --git a/include/sysemu/dump.h b/include/sysemu/dump.h
+index 2f04b24..21fc02d 100644
+--- a/include/sysemu/dump.h
++++ b/include/sysemu/dump.h
+@@ -38,6 +38,7 @@
+ 
+ #include "sysemu/dump-arch.h"
+ #include "sysemu/memory_mapping.h"
++#include "qapi-types.h"
+ 
+ typedef struct QEMU_PACKED MakedumpfileHeader {
+     char signature[16];     /* = "makedumpfile" */
+@@ -176,6 +177,7 @@ typedef struct DumpState {
+     off_t offset_page;          /* offset of page part in vmcore */
+     size_t num_dumpable;        /* number of page that can be dumped */
+     uint32_t flag_compress;     /* indicate the compression format */
++    DumpStatus status;          /* current dump status */
+ } DumpState;
+ 
+ uint16_t cpu_to_dump16(DumpState *s, uint16_t val);
+diff --git a/qapi-schema.json b/qapi-schema.json
+index 5138ed9..7988ae5 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -2646,6 +2646,24 @@
+             '*length': 'int', '*format': 'DumpGuestMemoryFormat' } }
+ 
+ ##
++# @DumpStatus
++#
++# Describe the status of a long-running background guest memory dump.
++#
++# @none: no dump-guest-memory has started yet.
++#
++# @active: there is one dump running in background.
++#
++# @completed: the last dump has finished successfully.
++#
++# @failed: the last dump has failed.
++#
++# Since 2.6
++##
++{ 'enum': 'DumpStatus',
++  'data': [ 'none', 'active', 'completed', 'failed' ] }
++
++##
+ # @DumpGuestMemoryCapability:
+ #
+ # A list of the available formats for dump-guest-memory
+-- 
+1.8.3.1
+

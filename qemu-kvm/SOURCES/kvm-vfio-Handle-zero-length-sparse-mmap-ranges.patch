@@ -1,0 +1,110 @@
+From 9291ea1d33e70d9c01558da25ac6744ff2ef77ec Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Fri, 29 Sep 2017 21:46:24 +0200
+Subject: [PATCH 16/27] vfio: Handle zero-length sparse mmap ranges
+
+RH-Author: Alex Williamson <alex.williamson@redhat.com>
+Message-id: <20170929214624.16765.84023.stgit@gimli.home>
+Patchwork-id: 76774
+O-Subject: [RHEL-7.5 qemu-kvm PATCH 16/16] vfio: Handle zero-length sparse mmap ranges
+Bugzilla: 1494181
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Auger Eric <eric.auger@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Upstream: 24acf72b9a291cebfd05f2ecdf3a982ac01e6291
+
+As reported in the link below, user has a PCI device with a 4KB BAR
+which contains the MSI-X table.  This seems to hit a corner case in
+the kernel where the region reports being mmap capable, but the sparse
+mmap information reports a zero sized range.  It's not entirely clear
+that the kernel is incorrect in doing this, but regardless, we need
+to handle it.  To do this, fill our mmap array only with non-zero
+sized sparse mmap entries and add an error return from the function
+so we can tell the difference between nr_mmaps being zero based on
+sparse mmap info vs lack of sparse mmap info.
+
+NB, this doesn't actually change the behavior of the device, it only
+removes the scary "Failed to mmap ... Performance may be slow" error
+message.  We cannot currently create an mmap over the MSI-X table.
+
+Link: http://lists.nongnu.org/archive/html/qemu-discuss/2016-10/msg00009.html
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c | 36 ++++++++++++++++++++++--------------
+ 1 file changed, 22 insertions(+), 14 deletions(-)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index a27698b..68ff949 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -2621,16 +2621,16 @@ vfio_get_region_info_cap(struct vfio_region_info *info, uint16_t id)
+     return NULL;
+ }
+ 
+-static void vfio_setup_region_sparse_mmaps(VFIORegion *region,
+-                                           struct vfio_region_info *info)
++static int vfio_setup_region_sparse_mmaps(VFIORegion *region,
++                                          struct vfio_region_info *info)
+ {
+     struct vfio_info_cap_header *hdr;
+     struct vfio_region_info_cap_sparse_mmap *sparse;
+-    int i;
++    int i, j;
+ 
+     hdr = vfio_get_region_info_cap(info, VFIO_REGION_INFO_CAP_SPARSE_MMAP);
+     if (!hdr) {
+-        return;
++        return -ENODEV;
+     }
+ 
+     sparse = container_of(hdr, struct vfio_region_info_cap_sparse_mmap, header);
+@@ -2638,16 +2638,24 @@ static void vfio_setup_region_sparse_mmaps(VFIORegion *region,
+     trace_vfio_region_sparse_mmap_header(region->vbasedev->name,
+                                          region->nr, sparse->nr_areas);
+ 
+-    region->nr_mmaps = sparse->nr_areas;
+-    region->mmaps = g_new0(VFIOMmap, region->nr_mmaps);
++    region->mmaps = g_new0(VFIOMmap, sparse->nr_areas);
+ 
+-    for (i = 0; i < region->nr_mmaps; i++) {
+-        region->mmaps[i].offset = sparse->areas[i].offset;
+-        region->mmaps[i].size = sparse->areas[i].size;
+-        trace_vfio_region_sparse_mmap_entry(i, region->mmaps[i].offset,
+-                                            region->mmaps[i].offset +
+-                                            region->mmaps[i].size);
++    for (i = 0, j = 0; i < sparse->nr_areas; i++) {
++        trace_vfio_region_sparse_mmap_entry(i, sparse->areas[i].offset,
++                                            sparse->areas[i].offset +
++                                            sparse->areas[i].size);
++
++        if (sparse->areas[i].size) {
++            region->mmaps[j].offset = sparse->areas[i].offset;
++            region->mmaps[j].size = sparse->areas[i].size;
++            j++;
++        }
+     }
++
++    region->nr_mmaps = j;
++    region->mmaps = g_realloc(region->mmaps, j * sizeof(VFIOMmap));
++
++    return 0;
+ }
+ 
+ static int vfio_region_setup(Object *obj, VFIODevice *vbasedev,
+@@ -2676,9 +2684,9 @@ static int vfio_region_setup(Object *obj, VFIODevice *vbasedev,
+             region->flags & VFIO_REGION_INFO_FLAG_MMAP &&
+             !(region->size & ~TARGET_PAGE_MASK)) {
+ 
+-            vfio_setup_region_sparse_mmaps(region, info);
++            ret = vfio_setup_region_sparse_mmaps(region, info);
+ 
+-            if (!region->nr_mmaps) {
++            if (ret) {
+                 region->nr_mmaps = 1;
+                 region->mmaps = g_new0(VFIOMmap, region->nr_mmaps);
+                 region->mmaps[0].offset = 0;
+-- 
+1.8.3.1
+

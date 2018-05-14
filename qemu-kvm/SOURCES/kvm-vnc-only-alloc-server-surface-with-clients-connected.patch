@@ -1,0 +1,86 @@
+From e7fa743d920c9c201bcf1e42e2c0058249a5c1e5 Mon Sep 17 00:00:00 2001
+From: "Daniel P. Berrange" <berrange@redhat.com>
+Date: Thu, 8 Feb 2018 17:50:27 +0100
+Subject: [PATCH 13/27] vnc: only alloc server surface with clients connected
+
+RH-Author: Daniel P. Berrange <berrange@redhat.com>
+Message-id: <20180208175041.5634-14-berrange@redhat.com>
+Patchwork-id: 78956
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v1 13/27] vnc: only alloc server surface with clients connected
+Bugzilla: 1527405
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Gerd Hoffmann <kraxel@redhat.com>
+
+RHEL-7 note: (a) the "graphic_hw_update(NULL)" call is different in the
+upstream context due to commit 1d0d59fe2919 ("vnc: allow binding servers
+to qemu consoles", 2015-01-22). That commit talks about "multiseat" and
+is part of v2.3.0, so out of scope for this backport. (b) The
+QTAILQ_INSERT_HEAD() macro invocation is QTAILQ_INSERT_TAIL() in the
+upstream context, due to commit e5f34cdd2da5 ("vnc: track &
+limit connections", 2015-01-22), part of v2.3.0. That commit is also
+irrelevant for this backport.
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+Reviewed-by: Peter Lieven <pl@kamp.de>
+Reviewed-by: Daniel P. Berrange <berrange@redhat.com>
+Message-id: 1446203414-4013-15-git-send-email-kraxel@redhat.com
+(cherry picked from commit c7628bff4138ce906a3620d12e0820c1cf6c140d)
+
+ Conflicts:
+	ui/vnc.c - context differences
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ ui/vnc.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/ui/vnc.c b/ui/vnc.c
+index df081a5..dc09089 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -620,6 +620,10 @@ static void vnc_update_server_surface(VncDisplay *vd)
+     qemu_pixman_image_unref(vd->server);
+     vd->server = NULL;
+ 
++    if (QTAILQ_EMPTY(&vd->clients)) {
++        return;
++    }
++
+     vd->server = pixman_image_create_bits(VNC_SERVER_FB_FORMAT,
+                                           vnc_width(vd),
+                                           vnc_height(vd),
+@@ -1019,6 +1023,10 @@ void vnc_disconnect_finish(VncState *vs)
+     if (vs->initialized) {
+         QTAILQ_REMOVE(&vs->vd->clients, vs, next);
+         qemu_remove_mouse_mode_change_notifier(&vs->mouse_mode_notifier);
++        if (QTAILQ_EMPTY(&vs->vd->clients)) {
++            /* last client gone */
++            vnc_update_server_surface(vs->vd);
++        }
+     }
+ 
+     if (vs->vd->lock_key_sync)
+@@ -2819,6 +2827,7 @@ void vnc_init_state(VncState *vs)
+ {
+     vs->initialized = true;
+     VncDisplay *vd = vs->vd;
++    bool first_client = QTAILQ_EMPTY(&vd->clients);
+ 
+     vs->last_x = -1;
+     vs->last_y = -1;
+@@ -2832,6 +2841,9 @@ void vnc_init_state(VncState *vs)
+     vs->bh = qemu_bh_new(vnc_jobs_bh, vs);
+ 
+     QTAILQ_INSERT_HEAD(&vd->clients, vs, next);
++    if (first_client) {
++        vnc_update_server_surface(vd);
++    }
+ 
+     graphic_hw_update(NULL);
+ 
+-- 
+1.8.3.1
+

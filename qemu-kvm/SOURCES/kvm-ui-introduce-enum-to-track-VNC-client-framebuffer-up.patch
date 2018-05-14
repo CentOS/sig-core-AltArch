@@ -1,0 +1,121 @@
+From bb6e65d667f1bbc28cfab0ba2626880cee8e7741 Mon Sep 17 00:00:00 2001
+From: "Daniel P. Berrange" <berrange@redhat.com>
+Date: Thu, 8 Feb 2018 17:50:33 +0100
+Subject: [PATCH 19/27] ui: introduce enum to track VNC client framebuffer
+ update request state
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Daniel P. Berrange <berrange@redhat.com>
+Message-id: <20180208175041.5634-20-berrange@redhat.com>
+Patchwork-id: 78953
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v1 19/27] ui: introduce enum to track VNC client framebuffer update request state
+Bugzilla: 1527405
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: "Daniel P. Berrange" <berrange@redhat.com>
+
+Currently the VNC servers tracks whether a client has requested an incremental
+or forced update with two boolean flags. There are only really 3 distinct
+states to track, so create an enum to more accurately reflect permitted states.
+
+Signed-off-by: Daniel P. Berrange <berrange@redhat.com>
+Reviewed-by: Darren Kenny <darren.kenny@oracle.com>
+Reviewed-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: 20171218191228.31018-7-berrange@redhat.com
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit fef1bbadfb2c3027208eb3d14b43e1bdb51166ca)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ ui/vnc.c | 21 +++++++++++----------
+ ui/vnc.h |  9 +++++++--
+ 2 files changed, 18 insertions(+), 12 deletions(-)
+
+diff --git a/ui/vnc.c b/ui/vnc.c
+index eea5702..7239602 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -860,16 +860,17 @@ static int vnc_update_client(VncState *vs, int has_dirty)
+     }
+ 
+     vs->has_dirty += has_dirty;
+-    if (!vs->need_update) {
++    if (vs->update == VNC_STATE_UPDATE_NONE) {
+         return 0;
+     }
+ 
+-    if (vs->output.offset && !vs->audio_cap && !vs->force_update) {
++    if (vs->output.offset && !vs->audio_cap &&
++        vs->update != VNC_STATE_UPDATE_FORCE) {
+         /* kernel send buffers are full -> drop frames to throttle */
+         return 0;
+     }
+ 
+-    if (!vs->has_dirty && !vs->force_update) {
++    if (!vs->has_dirty && vs->update != VNC_STATE_UPDATE_FORCE) {
+         return 0;
+     }
+ 
+@@ -909,7 +910,7 @@ static int vnc_update_client(VncState *vs, int has_dirty)
+     }
+ 
+     vnc_job_push(job);
+-    vs->force_update = 0;
++    vs->update = VNC_STATE_UPDATE_INCREMENTAL;
+     vs->has_dirty = 0;
+     return n;
+ }
+@@ -1832,14 +1833,14 @@ static void ext_key_event(VncState *vs, int down,
+ static void framebuffer_update_request(VncState *vs, int incremental,
+                                        int x, int y, int w, int h)
+ {
+-    vs->need_update = 1;
+-
+     if (incremental) {
+-        return;
++        if (vs->update != VNC_STATE_UPDATE_FORCE) {
++            vs->update = VNC_STATE_UPDATE_INCREMENTAL;
++        }
++    } else {
++        vs->update = VNC_STATE_UPDATE_FORCE;
++        vnc_set_area_dirty(vs->dirty, vs->vd, x, y, w, h);
+     }
+-
+-    vs->force_update = 1;
+-    vnc_set_area_dirty(vs->dirty, vs->vd, x, y, w, h);
+ }
+ 
+ static void send_ext_key_event_ack(VncState *vs)
+diff --git a/ui/vnc.h b/ui/vnc.h
+index d8465ba..f19fd0a 100644
+--- a/ui/vnc.h
++++ b/ui/vnc.h
+@@ -252,6 +252,12 @@ struct VncJob
+     QTAILQ_ENTRY(VncJob) next;
+ };
+ 
++typedef enum {
++    VNC_STATE_UPDATE_NONE,
++    VNC_STATE_UPDATE_INCREMENTAL,
++    VNC_STATE_UPDATE_FORCE,
++} VncStateUpdate;
++
+ struct VncState
+ {
+     int csock;
+@@ -261,8 +267,7 @@ struct VncState
+                            * vnc-jobs-async.c */
+ 
+     VncDisplay *vd;
+-    int need_update;
+-    int force_update;
++    VncStateUpdate update; /* Most recent pending request from client */
+     int has_dirty;
+     uint32_t features;
+     int absolute;
+-- 
+1.8.3.1
+

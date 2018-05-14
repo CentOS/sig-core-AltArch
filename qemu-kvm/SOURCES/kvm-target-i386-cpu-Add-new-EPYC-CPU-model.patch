@@ -1,0 +1,104 @@
+From 15c5cb87402b646349a6cc535cc74cefd01dbf1e Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Thu, 5 Oct 2017 22:39:08 +0200
+Subject: [PATCH 25/27] target-i386/cpu: Add new EPYC CPU model
+
+RH-Author: Eduardo Habkost <ehabkost@redhat.com>
+Message-id: <20171005223908.431-3-ehabkost@redhat.com>
+Patchwork-id: 76833
+O-Subject: [RHEL-7.5 qemu-kvm PATCH 2/2] target-i386/cpu: Add new EPYC CPU model
+Bugzilla: 1450396
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+
+From: Brijesh Singh <brijesh.singh@amd.com>
+
+Add a new base CPU model called 'EPYC' to model processors from AMD EPYC
+family (which includes EPYC 76xx,75xx,74xx, 73xx and 72xx).
+
+The following features bits have been added/removed compare to Opteron_G5
+
+Added: monitor, movbe, rdrand, mmxext, ffxsr, rdtscp, cr8legacy, osvw,
+       fsgsbase, bmi1, avx2, smep, bmi2, rdseed, adx, smap, clfshopt, sha
+       xsaveopt, xsavec, xgetbv1, arat
+
+Removed: xop, fma4, tbm
+
+Backport notes:
+* ARAT feature removed.  It is already disabled by the rhel7.2.0
+  compat code in qemu-kvm-rhev, so it keeps migration compatibility
+  with qemu-kvm-rhev.
+
+Signed-off-by: Brijesh Singh <brijesh.singh@amd.com>
+Message-Id: <20170815170051.127257-1-brijesh.singh@amd.com>
+Reviewed-by: Eduardo Habkost <ehabkost@redhat.com>
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+(cherry picked from commit 2e2efc7dbe2b0adc1200b5aa286cdbed729f6751)
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/cpu.c | 47 +++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 47 insertions(+)
+
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index e0749c0..914fc66 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -1218,6 +1218,53 @@ static x86_def_t builtin_x86_defs[] = {
+         .xlevel = 0x8000001A,
+         .model_id = "AMD Opteron 63xx class CPU",
+     },
++    {
++        .name = "EPYC",
++        .level = 0xd,
++        .vendor = CPUID_VENDOR_AMD,
++        .family = 23,
++        .model = 1,
++        .stepping = 2,
++        .features[FEAT_1_EDX] =
++            CPUID_SSE2 | CPUID_SSE | CPUID_FXSR | CPUID_MMX | CPUID_CLFLUSH |
++            CPUID_PSE36 | CPUID_PAT | CPUID_CMOV | CPUID_MCA | CPUID_PGE |
++            CPUID_MTRR | CPUID_SEP | CPUID_APIC | CPUID_CX8 | CPUID_MCE |
++            CPUID_PAE | CPUID_MSR | CPUID_TSC | CPUID_PSE | CPUID_DE |
++            CPUID_VME | CPUID_FP87,
++        .features[FEAT_1_ECX] =
++            CPUID_EXT_RDRAND | CPUID_EXT_F16C | CPUID_EXT_AVX |
++            CPUID_EXT_XSAVE | CPUID_EXT_AES |  CPUID_EXT_POPCNT |
++            CPUID_EXT_MOVBE | CPUID_EXT_SSE42 | CPUID_EXT_SSE41 |
++            CPUID_EXT_CX16 | CPUID_EXT_FMA | CPUID_EXT_SSSE3 |
++            CPUID_EXT_MONITOR | CPUID_EXT_PCLMULQDQ | CPUID_EXT_SSE3,
++        .features[FEAT_8000_0001_EDX] =
++            CPUID_EXT2_LM | CPUID_EXT2_RDTSCP | CPUID_EXT2_PDPE1GB |
++            CPUID_EXT2_FFXSR | CPUID_EXT2_MMXEXT | CPUID_EXT2_NX |
++            CPUID_EXT2_SYSCALL,
++        .features[FEAT_8000_0001_ECX] =
++            CPUID_EXT3_OSVW | CPUID_EXT3_3DNOWPREFETCH |
++            CPUID_EXT3_MISALIGNSSE | CPUID_EXT3_SSE4A | CPUID_EXT3_ABM |
++            CPUID_EXT3_CR8LEG | CPUID_EXT3_SVM | CPUID_EXT3_LAHF_LM,
++        .features[FEAT_7_0_EBX] =
++            CPUID_7_0_EBX_FSGSBASE | CPUID_7_0_EBX_BMI1 | CPUID_7_0_EBX_AVX2 |
++            CPUID_7_0_EBX_SMEP | CPUID_7_0_EBX_BMI2 | CPUID_7_0_EBX_RDSEED |
++            CPUID_7_0_EBX_ADX | CPUID_7_0_EBX_SMAP | CPUID_7_0_EBX_CLFLUSHOPT |
++            CPUID_7_0_EBX_SHA_NI,
++        /* Missing: XSAVES (not supported by some Linux versions,
++         * including v4.1 to v4.12).
++         * KVM doesn't yet expose any XSAVES state save component.
++         */
++        .features[FEAT_XSAVE] =
++            CPUID_XSAVE_XSAVEOPT | CPUID_XSAVE_XSAVEC |
++            CPUID_XSAVE_XGETBV1,
++        /* Missing: ARAT (not supported by QEMU 1.5.3) */
++#if 0
++        .features[FEAT_6_EAX] =
++            CPUID_6_EAX_ARAT,
++#endif
++        .xlevel = 0x8000000A,
++        .model_id = "AMD EPYC Processor",
++    },
+ };
+ 
+ /**
+-- 
+1.8.3.1
+
