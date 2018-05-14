@@ -14,7 +14,7 @@
     %global have_usbredir 0
 %endif
 
-%ifnarch s390 s390x
+%ifnarch s390 s390x %{arm}
     %global have_librdma 1
     %global have_tcmalloc 1
 %endif
@@ -40,6 +40,9 @@
 %endif
 %ifarch aarch64
     %global kvm_target    aarch64
+%endif
+%ifarch %{arm}
+    %global kvm_target    arm
 %endif
 
 #Versions of various parts:
@@ -82,7 +85,7 @@ Epoch: 10
 License: GPLv2+ and LGPLv2+ and BSD
 Group: Development/Tools
 URL: http://www.qemu.org/
-ExclusiveArch: x86_64
+ExclusiveArch: x86_64 %{arm}
 Requires: seabios-bin >= 1.7.2.2-5
 Requires: sgabios-bin
 Requires: seavgabios-bin
@@ -6399,6 +6402,9 @@ sh %{_sysconfdir}/sysconfig/modules/kvm.modules &> /dev/null || :
 %{_mandir}/man8/qemu-nbd.8*
 
 %changelog
+* Mon May 14 2018 Fabian Arrotin <arrfab@centos.org> - 1.5.3-156.el7_5.1
+- Added kvm_target arm (Jacco@redsleeve.org)
+
 * Mon Apr 16 2018 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-156.el7_5.1
 - kvm-vga-add-ram_addr_t-cast.patch [bz#1567913]
 - kvm-vga-fix-region-calculation.patch [bz#1567913]
