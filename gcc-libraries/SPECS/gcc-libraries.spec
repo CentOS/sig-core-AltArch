@@ -60,7 +60,7 @@ Provides: libatomic libitm libcilkrts libgfortran4
 Obsoletes: libitm
 
 Version: %{gcc_version}
-Release: %{gcc_release}.1.1%{?dist}
+Release: %{gcc_release}.2.1%{?dist}
 # libgcc, libgfortran, libmudflap, libgomp, libstdc++ and crtstuff have
 # GCC Runtime Exception.
 License: GPLv3+ and GPLv3+ with exceptions and GPLv2+ with exceptions and LGPLv2+ and BSD
@@ -143,7 +143,7 @@ BuildRequires: libmpc-devel >= 0.8.1
 %endif
 Requires(post): /sbin/install-info
 Requires(preun): /sbin/install-info
-ExclusiveArch: %{ix86} x86_64 ppc ppc64 ppc64le s390 s390x aarch64 %{arm}
+ExclusiveArch: %{ix86} x86_64 ppc ppc64 ppc64le s390 s390x aarch64
 
 %global oformat %{nil}
 %global oformat2 %{nil}
@@ -175,9 +175,6 @@ ExclusiveArch: %{ix86} x86_64 ppc ppc64 ppc64le s390 s390x aarch64 %{arm}
 %ifarch ppc64le
 %global oformat OUTPUT_FORMAT(elf64-powerpcle)
 %endif
-%ifarch %{arm}
-%global oformat OUTPUT_FORMAT(elf32-littlearm)
-%endif
 
 Patch0: gcc7-hack.patch
 Patch1: gcc7-ppc32-retaddr.patch
@@ -196,15 +193,18 @@ Patch1002: gcc7-alt-compat-test.patch
 Patch1005: gcc7-rh1118870.patch
 Patch1100: gcc7-htm-in-asm.patch
 
+# Support for more DEC extensions in libgfortran runtime
+# BZ1554429
+Patch2000: 0000-infrastructure.patch
+Patch2001: 0022-Default-values-for-certain-field-descriptors-in-form.patch
+
 %if 0%{?rhel} >= 7
 %global nonsharedver 48
 %else
 %global nonsharedver 44
 %endif
 
-%ifnarch %{arm}
 %global _gnu %{nil}
-%endif
 %ifarch sparcv9
 %global gcc_target_platform sparc64-%{_vendor}-%{_target_os}%{?_gnu}
 %endif
@@ -303,6 +303,9 @@ sed -i -e 's/ -Wl,-z,nodlopen//g' gcc/ada/gcc-interface/Makefile.in
 
 %patch1005 -p0 -b .rh1118870~
 %patch1100 -p0 -b .gcc6-htm-in-asm~
+
+%patch2000 -p1 -b .dec-extensions~
+%patch2001 -p1 -b .dec-extensions-2~
 
 %if 0%{?rhel} == 6
 # Default to -gdwarf-3 rather than -gdwarf-4
@@ -458,10 +461,6 @@ CC="$CC" CXX="$CXX" CFLAGS="$OPT_FLAGS" \
 %endif
 %ifarch s390 s390x
 	--with-arch=z9-109 --with-tune=z10 --enable-decimal-float \
-%endif
-%ifarch armv7hl
-	--with-tune=cortex-a8 --with-arch=armv7-a \
-	--with-float=hard --with-fpu=vfpv3-d16 --with-abi=aapcs-linux \
 %endif
 %ifnarch sparc sparcv9 ppc
 	--build=%{gcc_target_platform}
@@ -688,8 +687,8 @@ fi
 %doc gcc/COPYING3 COPYING.RUNTIME rpm.doc/gfortran/*
 
 %changelog
-* Fri Apr 13 2018 Pablo Greco <pablo@fliagreco.com.ar> 7.2.1-1.1.1
-- Update to build on armv7hl
+* Thu Apr  5 2018 Marek Polacek <polacek@redhat.com> 7.2.1-1.2.1
+- Add support for DEC formatting extensions (#1564043)
 
 * Thu Oct 19 2017 Marek Polacek <polacek@redhat.com> 7.2.1-1.1.1
 - update from gcc-7.2.1-1 (#1477224)
