@@ -213,7 +213,7 @@ Provides:      pcmk-cluster-manager
 
 %{?systemd_requires}
 
-ExclusiveArch: i686 x86_64 ppc64le s390x
+ExclusiveArch: i686 x86_64 ppc64le s390x %{arm}
 
 # Pacemaker targets compatibility with python 2.6+ and 3.2+
 Requires:      python >= 2.6
@@ -868,6 +868,9 @@ exit 0
 %attr(0644,root,root) %{_datadir}/pacemaker/nagios/plugins-metadata/*
 
 %changelog
+* Mon May 14 2018 Johnny Hughes <jhughes@centos.org> - 1.1.18-11.2
+- Added armv7hl to supported arches (centos userland)
+
 * Fri Apr 20 2018 Ken Gaillot <kgaillot@redhat.com> - 1.1.18-11.2
 - Do not record pending notify actions as completed
 - Resolves: rhbz#1570618
