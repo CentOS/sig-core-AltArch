@@ -55,7 +55,7 @@ Obsoletes: rdma-ndd < %{version}-%{release}
 Conflicts: infiniband-diags <= 1.6.5
 Requires: pciutils
 # 32-bit arm is missing required arch-specific memory barriers,
-ExcludeArch: %{arm}
+#ExcludeArch: %{arm}
 
 # Since we recommend developers use Ninja, so should packagers, for consistency.
 %define CMAKE_FLAGS %{nil}
@@ -394,7 +394,7 @@ rm -rf %{buildroot}/%{_initrddir}/
 %doc %{_docdir}/%{name}-%{version}/udev.md
 %config(noreplace) %{_sysconfdir}/rdma/*
 %config(noreplace) %{_sysconfdir}/udev/rules.d/*
-%ifnarch s390
+%ifnarch s390 %{arm}
 %config(noreplace) %{_sysconfdir}/modprobe.d/mlx4.conf
 %endif
 %config(noreplace) %{_sysconfdir}/modprobe.d/truescale.conf
@@ -426,7 +426,7 @@ rm -rf %{buildroot}/%{_initrddir}/
 %{_mandir}/man3/rdma*
 %{_mandir}/man3/umad*
 %{_mandir}/man3/*_to_ibv_rate.*
-%ifnarch s390
+%ifnarch s390 %{arm}
 %{_mandir}/man3/mlx4dv*
 %{_mandir}/man3/mlx5dv*
 %endif
@@ -437,7 +437,7 @@ rm -rf %{buildroot}/%{_initrddir}/
 %dir %{_libdir}/libibverbs
 %{_libdir}/libibverbs*.so.*
 %{_libdir}/libibverbs/*.so
-%ifnarch s390
+%ifnarch s390 %{arm}
 %{_libdir}/libmlx4.so.*
 %{_libdir}/libmlx5.so.*
 %endif
@@ -446,7 +446,7 @@ rm -rf %{buildroot}/%{_initrddir}/
 %doc %{_docdir}/%{name}-%{version}/rxe.md
 %{_bindir}/rxe_cfg
 %{_mandir}/man7/rxe*
-%ifnarch s390
+%ifnarch s390 %{arm}
 %{_mandir}/man7/mlx4dv*
 %{_mandir}/man7/mlx5dv*
 %endif
@@ -535,6 +535,9 @@ rm -rf %{buildroot}/%{_initrddir}/
 %doc %{_docdir}/%{name}-%{version}/ibsrpdm.md
 
 %changelog
+* Mon May 14 2018 Pablo Greco <pablo@fliagreco.com.ar> 15-7
+- Update to build on armv7hl
+
 * Tue Feb 27 2018 Jarod Wilson <jarod@redhat.com> 15-7
 - i40iw: revoke systemd udev rules auto-load on i40e hardware, due to
   causing problems with suspend and resume, and fall back to load via
