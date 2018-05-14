@@ -1,6 +1,6 @@
 Name: rdma-core
 Version: 15
-Release: 6%{?dist}
+Release: 7%{?dist}
 Summary: RDMA core userspace libraries and daemons
 
 # Almost everything is licensed under the OFA dual GPLv2, 2 Clause BSD license
@@ -25,6 +25,7 @@ Patch12: 0003-mlx5-Allow-creation-of-a-Multi-Packet-RQ-using-direc.patch
 Patch13: mlx4-add-a-report-of-rss-cap.patch
 Patch14: 0001-iwpmd-fix-double-mutex-unlock.patch
 Patch15: libbnxt_re_fix_lat_test_failure_in_event_mode.patch
+Patch16: i40iw-autoload-breaks-suspend.patch
 
 BuildRequires: binutils
 BuildRequires: cmake >= 2.8.11
@@ -54,7 +55,7 @@ Obsoletes: rdma-ndd < %{version}-%{release}
 Conflicts: infiniband-diags <= 1.6.5
 Requires: pciutils
 # 32-bit arm is missing required arch-specific memory barriers,
-#ExcludeArch: %{arm}
+ExcludeArch: %{arm}
 
 # Since we recommend developers use Ninja, so should packagers, for consistency.
 %define CMAKE_FLAGS %{nil}
@@ -286,6 +287,7 @@ discover and use SCSI devices via the SCSI RDMA Protocol over InfiniBand.
 %patch13 -p1
 %patch14 -p1
 %patch15 -p1
+%patch16 -p1
 
 %build
 
@@ -392,7 +394,7 @@ rm -rf %{buildroot}/%{_initrddir}/
 %doc %{_docdir}/%{name}-%{version}/udev.md
 %config(noreplace) %{_sysconfdir}/rdma/*
 %config(noreplace) %{_sysconfdir}/udev/rules.d/*
-%ifnarch s390 %{arm}
+%ifnarch s390
 %config(noreplace) %{_sysconfdir}/modprobe.d/mlx4.conf
 %endif
 %config(noreplace) %{_sysconfdir}/modprobe.d/truescale.conf
@@ -424,7 +426,7 @@ rm -rf %{buildroot}/%{_initrddir}/
 %{_mandir}/man3/rdma*
 %{_mandir}/man3/umad*
 %{_mandir}/man3/*_to_ibv_rate.*
-%ifnarch s390 %{arm}
+%ifnarch s390
 %{_mandir}/man3/mlx4dv*
 %{_mandir}/man3/mlx5dv*
 %endif
@@ -435,7 +437,7 @@ rm -rf %{buildroot}/%{_initrddir}/
 %dir %{_libdir}/libibverbs
 %{_libdir}/libibverbs*.so.*
 %{_libdir}/libibverbs/*.so
-%ifnarch s390 %{arm}
+%ifnarch s390
 %{_libdir}/libmlx4.so.*
 %{_libdir}/libmlx5.so.*
 %endif
@@ -444,7 +446,7 @@ rm -rf %{buildroot}/%{_initrddir}/
 %doc %{_docdir}/%{name}-%{version}/rxe.md
 %{_bindir}/rxe_cfg
 %{_mandir}/man7/rxe*
-%ifnarch s390 %{arm}
+%ifnarch s390
 %{_mandir}/man7/mlx4dv*
 %{_mandir}/man7/mlx5dv*
 %endif
@@ -533,8 +535,11 @@ rm -rf %{buildroot}/%{_initrddir}/
 %doc %{_docdir}/%{name}-%{version}/ibsrpdm.md
 
 %changelog
-* Fri Apr 13 2018 Pablo Greco <pablo@fliagreco.com.ar> 15-6
-- Update to build on armv7hl
+* Tue Feb 27 2018 Jarod Wilson <jarod@redhat.com> 15-7
+- i40iw: revoke systemd udev rules auto-load on i40e hardware, due to
+  causing problems with suspend and resume, and fall back to load via
+  systemd rdma initscript.
+- Resolves: rhbz#1568325
 
 * Mon Feb 19 2018 Jarod Wilson <jarod@redhat.com> 15-6
 - libbnxt_re: fix lat test failure in event mode
