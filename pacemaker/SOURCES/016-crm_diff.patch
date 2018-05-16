@@ -1,0 +1,105 @@
+From a5c0782c0012b812ad0939a4aec5842f05dc1129 Mon Sep 17 00:00:00 2001
+From: Andrew Beekhof <andrew@beekhof.net>
+Date: Sun, 15 Apr 2018 20:41:01 +1000
+Subject: [PATCH] Fix: crm_diff: rhbz#1561617 - Ignore attribute placement when
+ comparing in 'cib' mode
+
+---
+ include/crm/common/xml.h |  1 +
+ lib/common/xml.c         | 28 ++++++++++++++++++++++++----
+ tools/crm_diff.c         |  6 +++++-
+ 3 files changed, 30 insertions(+), 5 deletions(-)
+
+diff --git a/include/crm/common/xml.h b/include/crm/common/xml.h
+index 8297bb2..69ad4bd 100644
+--- a/include/crm/common/xml.h
++++ b/include/crm/common/xml.h
+@@ -380,6 +380,7 @@ bool xml_tracking_changes(xmlNode * xml);
+ bool xml_document_dirty(xmlNode *xml);
+ void xml_track_changes(xmlNode * xml, const char *user, xmlNode *acl_source, bool enforce_acls);
+ void xml_calculate_changes(xmlNode * old, xmlNode * new); /* For comparing two documents after the fact */
++void xml_calculate_significant_changes(xmlNode *old_xml, xmlNode *new_xml);
+ void xml_accept_changes(xmlNode * xml);
+ void xml_log_changes(uint8_t level, const char *function, xmlNode *xml);
+ void xml_log_patchset(uint8_t level, const char *function, xmlNode *xml);
+diff --git a/lib/common/xml.c b/lib/common/xml.c
+index 947ddfe..8fd4778 100644
+--- a/lib/common/xml.c
++++ b/lib/common/xml.c
+@@ -72,6 +72,7 @@ enum xml_private_flags {
+ 
+      xpf_acl_create  = 0x1000,
+      xpf_acl_denied  = 0x2000,
++     xpf_lazy        = 0x4000,
+ };
+ 
+ typedef struct xml_private_s 
+@@ -115,10 +116,22 @@ static inline bool TRACKING_CHANGES(xmlNode *xml)
+ {
+     if(xml == NULL || xml->doc == NULL || xml->doc->_private == NULL) {
+         return FALSE;
+-    } else if(is_set(((xml_private_t *)xml->doc->_private)->flags, xpf_tracking)) {
+-        return TRUE;
++    } else if(is_not_set(((xml_private_t *)xml->doc->_private)->flags, xpf_tracking)) {
++        return FALSE;
+     }
+-    return FALSE;
++    return TRUE;
++}
++
++static inline bool TRACKING_CHANGES_LAZY(xmlNode *xml)
++{
++    if(xml == NULL || xml->doc == NULL || xml->doc->_private == NULL) {
++        return FALSE;
++    } else if(is_not_set(((xml_private_t *)xml->doc->_private)->flags, xpf_tracking)) {
++        return FALSE;
++    } else if(is_not_set(((xml_private_t *)xml->doc->_private)->flags, xpf_lazy)) {
++        return FALSE;
++    }
++    return TRUE;
+ }
+ 
+ #define buffer_print(buffer, max, offset, fmt, args...) do {            \
+@@ -4084,7 +4097,7 @@ __xml_diff_object(xmlNode * old, xmlNode * new)
+                 crm_xml_add(new, name, vcopy);
+                 free(vcopy);
+ 
+-            } else if(p_old != p_new) {
++            } else if(p_old != p_new && TRACKING_CHANGES_LAZY(new) == FALSE) {
+                 crm_info("Moved %s@%s (%d -> %d)", old->name, name, p_old, p_new);
+                 __xml_node_dirty(new);
+                 p->flags |= xpf_dirty|xpf_moved;
+@@ -4184,6 +4197,13 @@ __xml_diff_object(xmlNode * old, xmlNode * new)
+ }
+ 
+ void
++xml_calculate_significant_changes(xmlNode *old_xml, xmlNode *new_xml)
++{
++    set_doc_flag(new_xml, xpf_lazy);
++    xml_calculate_changes(old_xml, new_xml);
++}
++
++void
+ xml_calculate_changes(xmlNode * old, xmlNode * new)
+ {
+     CRM_CHECK(safe_str_eq(crm_element_name(old), crm_element_name(new)), return);
+diff --git a/tools/crm_diff.c b/tools/crm_diff.c
+index 20e7a27..0ec8e44 100644
+--- a/tools/crm_diff.c
++++ b/tools/crm_diff.c
+@@ -190,7 +190,11 @@ generate_patch(xmlNode *object_1, xmlNode *object_2, const char *xml_file_2,
+     }
+ 
+     xml_track_changes(object_2, NULL, object_2, FALSE);
+-    xml_calculate_changes(object_1, object_2);
++    if(as_cib) {
++        xml_calculate_significant_changes(object_1, object_2);
++    } else {
++        xml_calculate_changes(object_1, object_2);
++    }
+     crm_log_xml_debug(object_2, (xml_file_2? xml_file_2: "target"));
+ 
+     output = xml_create_patchset(0, object_1, object_2, NULL, FALSE);
+-- 
+1.8.3.1
+

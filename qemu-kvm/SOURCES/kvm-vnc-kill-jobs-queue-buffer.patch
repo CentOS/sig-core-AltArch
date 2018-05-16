@@ -1,0 +1,71 @@
+From 56d3fe342a9c8c8e832e59fc093515e99aa8f677 Mon Sep 17 00:00:00 2001
+From: "Daniel P. Berrange" <berrange@redhat.com>
+Date: Thu, 8 Feb 2018 17:50:21 +0100
+Subject: [PATCH 07/27] vnc: kill jobs queue buffer
+
+RH-Author: Daniel P. Berrange <berrange@redhat.com>
+Message-id: <20180208175041.5634-8-berrange@redhat.com>
+Patchwork-id: 78939
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v1 07/27] vnc: kill jobs queue buffer
+Bugzilla: 1527405
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Gerd Hoffmann <kraxel@redhat.com>
+
+RHEL-7 note: the vnc_queue_init() hunk is missing from the downstream
+patch because the buffer_init() call that the hunk removes only appeared
+with upstream commit 543b95801f98 ("vnc: attach names to buffers",
+2015-11-05), as part of v2.5.0.
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+Reviewed-by: Peter Lieven <pl@kamp.de>
+Reviewed-by: Daniel P. Berrange <berrange@redhat.com>
+Message-id: 1446203414-4013-9-git-send-email-kraxel@redhat.com
+(cherry picked from commit 8305f917c1bc86b1ead0fa9197b5443a4bd611f3)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ ui/vnc-jobs.c | 5 -----
+ 1 file changed, 5 deletions(-)
+
+diff --git a/ui/vnc-jobs.c b/ui/vnc-jobs.c
+index a141f40..a6dfdf6 100644
+--- a/ui/vnc-jobs.c
++++ b/ui/vnc-jobs.c
+@@ -53,7 +53,6 @@ struct VncJobQueue {
+     QemuCond cond;
+     QemuMutex mutex;
+     QemuThread thread;
+-    Buffer buffer;
+     bool exit;
+     QTAILQ_HEAD(, VncJob) jobs;
+ };
+@@ -192,7 +191,6 @@ static void vnc_async_encoding_start(VncState *orig, VncState *local)
+     local->zlib = orig->zlib;
+     local->hextile = orig->hextile;
+     local->zrle = orig->zrle;
+-    local->output =  queue->buffer;
+     local->csock = -1; /* Don't do any network work on this thread */
+ 
+     buffer_reset(&local->output);
+@@ -205,8 +203,6 @@ static void vnc_async_encoding_end(VncState *orig, VncState *local)
+     orig->hextile = local->hextile;
+     orig->zrle = local->zrle;
+     orig->lossy_rect = local->lossy_rect;
+-
+-    queue->buffer = local->output;
+ }
+ 
+ static int vnc_worker_thread_loop(VncJobQueue *queue)
+@@ -309,7 +305,6 @@ static void vnc_queue_clear(VncJobQueue *q)
+ {
+     qemu_cond_destroy(&queue->cond);
+     qemu_mutex_destroy(&queue->mutex);
+-    buffer_free(&queue->buffer);
+     g_free(q);
+     queue = NULL; /* Unset global queue */
+ }
+-- 
+1.8.3.1
+

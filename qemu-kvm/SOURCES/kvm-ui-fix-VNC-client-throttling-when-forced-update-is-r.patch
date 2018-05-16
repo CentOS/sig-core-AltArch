@@ -1,0 +1,207 @@
+From 0f463c3d8c457d6a0bf3b91e48fc4e9162061cf6 Mon Sep 17 00:00:00 2001
+From: "Daniel P. Berrange" <berrange@redhat.com>
+Date: Thu, 8 Feb 2018 17:50:37 +0100
+Subject: [PATCH 23/27] ui: fix VNC client throttling when forced update is
+ requested
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Daniel P. Berrange <berrange@redhat.com>
+Message-id: <20180208175041.5634-24-berrange@redhat.com>
+Patchwork-id: 78949
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v1 23/27] ui: fix VNC client throttling when forced update is requested
+Bugzilla: 1527405
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: "Daniel P. Berrange" <berrange@redhat.com>
+
+The VNC server must throttle data sent to the client to prevent the 'output'
+buffer size growing without bound, if the client stops reading data off the
+socket (either maliciously or due to stalled/slow network connection).
+
+The current throttling is very crude because it simply checks whether the
+output buffer offset is zero. This check is disabled if the client has requested
+a forced update, because we want to send these as soon as possible.
+
+As a result, the VNC client can cause QEMU to allocate arbitrary amounts of RAM.
+They can first start something in the guest that triggers lots of framebuffer
+updates eg play a youtube video. Then repeatedly send full framebuffer update
+requests, but never read data back from the server. This can easily make QEMU's
+VNC server send buffer consume 100MB of RAM per second, until the OOM killer
+starts reaping processes (hopefully the rogue QEMU process, but it might pick
+others...).
+
+To address this we make the throttling more intelligent, so we can throttle
+full updates. When we get a forced update request, we keep track of exactly how
+much data we put on the output buffer. We will not process a subsequent forced
+update request until this data has been fully sent on the wire. We always allow
+one forced update request to be in flight, regardless of what data is queued
+for incremental updates or audio data. The slight complication is that we do
+not initially know how much data an update will send, as this is done in the
+background by the VNC job thread. So we must track the fact that the job thread
+has an update pending, and not process any further updates until this job is
+has been completed & put data on the output buffer.
+
+This unbounded memory growth affects all VNC server configurations supported by
+QEMU, with no workaround possible. The mitigating factor is that it can only be
+triggered by a client that has authenticated with the VNC server, and who is
+able to trigger a large quantity of framebuffer updates or audio samples from
+the guest OS. Mostly they'll just succeed in getting the OOM killer to kill
+their own QEMU process, but its possible other processes can get taken out as
+collateral damage.
+
+This is a more general variant of the similar unbounded memory usage flaw in
+the websockets server, that was previously assigned CVE-2017-15268, and fixed
+in 2.11 by:
+
+  commit a7b20a8efa28e5f22c26c06cd06c2f12bc863493
+  Author: Daniel P. Berrange <berrange@redhat.com>
+  Date:   Mon Oct 9 14:43:42 2017 +0100
+
+    io: monitor encoutput buffer size from websocket GSource
+
+This new general memory usage flaw has been assigned CVE-2017-15124, and is
+partially fixed by this patch.
+
+RHEL-7 note: context differences in "struct VncState" and
+vnc_jobs_consume_buffer() due to downstream lacking (a) commit
+fb6ba0d5256c ("qapi event: convert VNC events", 2014-06-23), part of
+v2.1.0, and (b) commit 04d2529da27d ("ui: convert VNC server to use
+QIOChannelSocket", 2015-12-18), part of v2.6.0.
+
+Signed-off-by: Daniel P. Berrange <berrange@redhat.com>
+Reviewed-by: Darren Kenny <darren.kenny@oracle.com>
+Reviewed-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: 20171218191228.31018-11-berrange@redhat.com
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit ada8d2e4369ea49677d8672ac81bce73eefd5b54)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ ui/vnc-auth-sasl.c |  5 +++++
+ ui/vnc-jobs.c      |  5 +++++
+ ui/vnc.c           | 28 ++++++++++++++++++++++++----
+ ui/vnc.h           |  7 +++++++
+ 4 files changed, 41 insertions(+), 4 deletions(-)
+
+diff --git a/ui/vnc-auth-sasl.c b/ui/vnc-auth-sasl.c
+index 804b8e7..8188081 100644
+--- a/ui/vnc-auth-sasl.c
++++ b/ui/vnc-auth-sasl.c
+@@ -76,6 +76,11 @@ long vnc_client_write_sasl(VncState *vs)
+ 
+     vs->sasl.encodedOffset += ret;
+     if (vs->sasl.encodedOffset == vs->sasl.encodedLength) {
++        if (vs->sasl.encodedRawLength >= vs->force_update_offset) {
++            vs->force_update_offset = 0;
++        } else {
++            vs->force_update_offset -= vs->sasl.encodedRawLength;
++        }
+         vs->output.offset -= vs->sasl.encodedRawLength;
+         vs->sasl.encoded = NULL;
+         vs->sasl.encodedOffset = vs->sasl.encodedLength = 0;
+diff --git a/ui/vnc-jobs.c b/ui/vnc-jobs.c
+index e553bd9..9705899 100644
+--- a/ui/vnc-jobs.c
++++ b/ui/vnc-jobs.c
+@@ -170,6 +170,11 @@ void vnc_jobs_consume_buffer(VncState *vs)
+                                 vnc_client_write, vs);
+         }
+         buffer_move(&vs->output, &vs->jobs_buffer);
++
++        if (vs->job_update == VNC_STATE_UPDATE_FORCE) {
++            vs->force_update_offset = vs->output.offset;
++        }
++        vs->job_update = VNC_STATE_UPDATE_NONE;
+     }
+     flush = vs->csock != -1 && vs->abort != true;
+     vnc_unlock_output(vs);
+diff --git a/ui/vnc.c b/ui/vnc.c
+index 952a051..96b6caf 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -906,14 +906,28 @@ static bool vnc_should_update(VncState *vs)
+         break;
+     case VNC_STATE_UPDATE_INCREMENTAL:
+         /* Only allow incremental updates if the pending send queue
+-         * is less than the permitted threshold
++         * is less than the permitted threshold, and the job worker
++         * is completely idle.
+          */
+-        if (vs->output.offset < vs->throttle_output_offset) {
++        if (vs->output.offset < vs->throttle_output_offset &&
++            vs->job_update == VNC_STATE_UPDATE_NONE) {
+             return true;
+         }
+         break;
+     case VNC_STATE_UPDATE_FORCE:
+-        return true;
++        /* Only allow forced updates if the pending send queue
++         * does not contain a previous forced update, and the
++         * job worker is completely idle.
++         *
++         * Note this means we'll queue a forced update, even if
++         * the output buffer size is otherwise over the throttle
++         * output limit.
++         */
++        if (vs->force_update_offset == 0 &&
++            vs->job_update == VNC_STATE_UPDATE_NONE) {
++            return true;
++        }
++        break;
+     }
+     return false;
+ }
+@@ -975,8 +989,9 @@ static int vnc_update_client(VncState *vs, int has_dirty)
+         }
+     }
+ 
+-    vnc_job_push(job);
++    vs->job_update = vs->update;
+     vs->update = VNC_STATE_UPDATE_NONE;
++    vnc_job_push(job);
+     vs->has_dirty = 0;
+     return n;
+ }
+@@ -1241,6 +1256,11 @@ static long vnc_client_write_plain(VncState *vs)
+     if (!ret)
+         return 0;
+ 
++    if (ret >= vs->force_update_offset) {
++        vs->force_update_offset = 0;
++    } else {
++        vs->force_update_offset -= ret;
++    }
+     buffer_advance(&vs->output, ret);
+ 
+     if (vs->output.offset == 0) {
+diff --git a/ui/vnc.h b/ui/vnc.h
+index d7eede3..70316ba 100644
+--- a/ui/vnc.h
++++ b/ui/vnc.h
+@@ -268,6 +268,7 @@ struct VncState
+ 
+     VncDisplay *vd;
+     VncStateUpdate update; /* Most recent pending request from client */
++    VncStateUpdate job_update; /* Currently processed by job thread */
+     int has_dirty;
+     uint32_t features;
+     int absolute;
+@@ -301,6 +302,12 @@ struct VncState
+ 
+     QObject *info;
+ 
++    /* Job thread bottom half has put data for a forced update
++     * into the output buffer. This offset points to the end of
++     * the update data in the output buffer. This lets us determine
++     * when a force update is fully sent to the client, allowing
++     * us to process further forced updates. */
++    size_t force_update_offset;
+     /* We allow multiple incremental updates or audio capture
+      * samples to be queued in output buffer, provided the
+      * buffer size doesn't exceed this threshold. The value
+-- 
+1.8.3.1
+

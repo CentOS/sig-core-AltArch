@@ -1,0 +1,43 @@
+From 74171d10462e11e46c67c3aabbbc4e1185a334d4 Mon Sep 17 00:00:00 2001
+From: Andrew Beekhof <andrew@beekhof.net>
+Date: Wed, 11 Apr 2018 11:48:13 +1000
+Subject: [PATCH] Fix: rhbz#1565187 - Ensure failures that cause fencing are
+ not removed until after fencing completes
+
+---
+ lib/pengine/unpack.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/lib/pengine/unpack.c b/lib/pengine/unpack.c
+index 355cdcf..3a4a7cc 100644
+--- a/lib/pengine/unpack.c
++++ b/lib/pengine/unpack.c
+@@ -2949,6 +2949,7 @@ static bool check_operation_expiry(resource_t *rsc, node_t *node, int rc, xmlNod
+     }
+ 
+     if (clear_reason != NULL) {
++        node_t *remote_node = pe_find_node(data_set->nodes, rsc->id);
+         char *key = generate_op_key(rsc->id, CRM_OP_CLEAR_FAILCOUNT, 0);
+         action_t *clear_op = custom_action(rsc, key, CRM_OP_CLEAR_FAILCOUNT,
+                                            node, FALSE, TRUE, data_set);
+@@ -2957,6 +2958,17 @@ static bool check_operation_expiry(resource_t *rsc, node_t *node, int rc, xmlNod
+ 
+         crm_notice("Clearing failure of %s on %s because %s " CRM_XS " %s",
+                    rsc->id, node->details->uname, clear_reason, clear_op->uuid);
++
++        if (is_set(data_set->flags, pe_flag_stonith_enabled)
++            && rsc->remote_reconnect_interval
++            && remote_node
++            && remote_node->details->unclean) {
++
++            action_t *fence = pe_fence_op(remote_node, NULL, TRUE, NULL, data_set);
++            crm_notice("Waiting for %s to complete before clearing %s failure for remote node %s", fence?fence->uuid:"nil", task, rsc->id);
++
++            order_actions(fence, clear_op, pe_order_implies_then);
++        }
+     }
+ 
+     crm_element_value_int(xml_op, XML_LRM_ATTR_INTERVAL, &interval);
+-- 
+1.8.3.1
+

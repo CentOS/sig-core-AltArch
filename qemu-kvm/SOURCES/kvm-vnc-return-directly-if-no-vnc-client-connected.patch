@@ -1,0 +1,61 @@
+From 59bdfd752c491ce0e7253d78e379b0bd8c5cd00e Mon Sep 17 00:00:00 2001
+From: "Daniel P. Berrange" <berrange@redhat.com>
+Date: Thu, 8 Feb 2018 17:50:18 +0100
+Subject: [PATCH 04/27] vnc: return directly if no vnc client connected
+
+RH-Author: Daniel P. Berrange <berrange@redhat.com>
+Message-id: <20180208175041.5634-5-berrange@redhat.com>
+Patchwork-id: 78950
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v1 04/27] vnc: return directly if no vnc client connected
+Bugzilla: 1527405
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: ChenLiang <chenliang88@huawei.com>
+
+graphic_hw_update and vnc_refresh_server_surface aren't
+need to do when no vnc client connected. It can reduce
+lock contention, because vnc_refresh will hold global big
+lock two millisecond every three seconds.
+
+Signed-off-by: ChenLiang <chenliang88@huawei.com>
+Signed-off-by: Gonglei <arei.gonglei@huawei.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 9d6b20704734fe1ab789400806ebd54f579d50a2)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ ui/vnc.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/ui/vnc.c b/ui/vnc.c
+index 42070b4..9047862 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -2677,6 +2677,11 @@ static void vnc_refresh(DisplayChangeListener *dcl)
+     VncState *vs, *vn;
+     int has_dirty, rects = 0;
+ 
++    if (QTAILQ_EMPTY(&vd->clients)) {
++        update_displaychangelistener(&vd->dcl, VNC_REFRESH_INTERVAL_MAX);
++        return;
++    }
++
+     graphic_hw_update(NULL);
+ 
+     if (vnc_trylock_display(vd)) {
+@@ -2692,11 +2697,6 @@ static void vnc_refresh(DisplayChangeListener *dcl)
+         /* vs might be free()ed here */
+     }
+ 
+-    if (QTAILQ_EMPTY(&vd->clients)) {
+-        update_displaychangelistener(&vd->dcl, VNC_REFRESH_INTERVAL_MAX);
+-        return;
+-    }
+-
+     if (has_dirty && rects) {
+         vd->dcl.update_interval /= 2;
+         if (vd->dcl.update_interval < VNC_REFRESH_INTERVAL_BASE) {
+-- 
+1.8.3.1
+

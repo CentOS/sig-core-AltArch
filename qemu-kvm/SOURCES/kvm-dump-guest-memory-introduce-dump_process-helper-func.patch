@@ -1,0 +1,115 @@
+From b67ef65a1f5d8ceb02ca11c0af92d2c06fd006cb Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:38:57 +0100
+Subject: [PATCH 26/41] dump-guest-memory: introduce dump_process() helper
+ function.
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-27-marcandre.lureau@redhat.com>
+Patchwork-id: 78375
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 26/41] dump-guest-memory: introduce dump_process() helper function.
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Peter Xu <peterx@redhat.com>
+
+No functional change. Cleanup only.
+
+Signed-off-by: Peter Xu <peterx@redhat.com>
+Reviewed-by: Fam Zheng <famz@redhat.com>
+Message-Id: <1455772616-8668-6-git-send-email-peterx@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+
+(cherry picked from commit ca1fc8c97e9f26690b1ddbbbced5bafb3d65f6b5)
+
+RHEL: minor conflict due to "detach" mode not being backported.
+
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c                | 35 +++++++++++++++++++++++------------
+ include/sysemu/dump.h |  3 +++
+ 2 files changed, 26 insertions(+), 12 deletions(-)
+
+diff --git a/dump.c b/dump.c
+index 639d52a..4bce6cf 100644
+--- a/dump.c
++++ b/dump.c
+@@ -1470,6 +1470,9 @@ static void dump_init(DumpState *s, int fd, bool has_format,
+     Error *err = NULL;
+     int ret;
+ 
++    s->has_format = has_format;
++    s->format = format;
++
+     /* kdump-compressed is conflict with paging and filter */
+     if (has_format && format != DUMP_GUEST_MEMORY_FORMAT_ELF) {
+         assert(!paging && !has_filter);
+@@ -1628,8 +1631,25 @@ cleanup:
+     dump_cleanup(s);
+ }
+ 
+-void qmp_dump_guest_memory(bool paging, const char *file, bool has_begin,
+-                           int64_t begin, bool has_length,
++/* this operation might be time consuming. */
++static void dump_process(DumpState *s, Error **errp)
++{
++    Error *local_err = NULL;
++
++    if (s->has_format && s->format != DUMP_GUEST_MEMORY_FORMAT_ELF) {
++        create_kdump_vmcore(s, &local_err);
++    } else {
++        create_vmcore(s, &local_err);
++    }
++
++    s->status = (local_err ? DUMP_STATUS_FAILED : DUMP_STATUS_COMPLETED);
++    error_propagate(errp, local_err);
++
++    dump_cleanup(s);
++}
++
++void qmp_dump_guest_memory(bool paging, const char *file,
++                           bool has_begin, int64_t begin, bool has_length,
+                            int64_t length, bool has_format,
+                            DumpGuestMemoryFormat format, Error **errp)
+ {
+@@ -1712,16 +1732,7 @@ void qmp_dump_guest_memory(bool paging, const char *file, bool has_begin,
+         return;
+     }
+ 
+-    if (has_format && format != DUMP_GUEST_MEMORY_FORMAT_ELF) {
+-        create_kdump_vmcore(s, &local_err);
+-    } else {
+-        create_vmcore(s, &local_err);
+-    }
+-
+-    s->status = (local_err ? DUMP_STATUS_FAILED : DUMP_STATUS_COMPLETED);
+-    error_propagate(errp, local_err);
+-
+-    dump_cleanup(s);
++    dump_process(s, errp);
+ }
+ 
+ DumpGuestMemoryCapability *qmp_query_dump_guest_memory_capability(Error **errp)
+diff --git a/include/sysemu/dump.h b/include/sysemu/dump.h
+index 21fc02d..1da3ddb 100644
+--- a/include/sysemu/dump.h
++++ b/include/sysemu/dump.h
+@@ -178,6 +178,9 @@ typedef struct DumpState {
+     size_t num_dumpable;        /* number of page that can be dumped */
+     uint32_t flag_compress;     /* indicate the compression format */
+     DumpStatus status;          /* current dump status */
++
++    bool has_format;              /* whether format is provided */
++    DumpGuestMemoryFormat format; /* valid only if has_format == true */
+ } DumpState;
+ 
+ uint16_t cpu_to_dump16(DumpState *s, uint16_t val);
+-- 
+1.8.3.1
+

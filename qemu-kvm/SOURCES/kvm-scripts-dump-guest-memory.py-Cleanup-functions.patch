@@ -1,0 +1,201 @@
+From e40871f4bf8ca981075eb7baa5a8ff0f3f8f4a67 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:39:07 +0100
+Subject: [PATCH 36/41] scripts/dump-guest-memory.py: Cleanup functions
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-37-marcandre.lureau@redhat.com>
+Patchwork-id: 78387
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 36/41] scripts/dump-guest-memory.py: Cleanup functions
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Janosch Frank <frankja@linux.vnet.ibm.com>
+
+Increase readability by adding newlines and comments, as well as
+removing wrong whitespaces and C style braces around conditionals and
+loops.
+
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Janosch Frank <frankja@linux.vnet.ibm.com>
+Message-Id: <1453464520-3882-5-git-send-email-frankja@linux.vnet.ibm.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+
+(cherry picked from commit 6782c0e785a0ba48cd96d99f2402cb87af027d26)
+
+RHEL: conflicts due to qtailq usage
+
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ scripts/dump-guest-memory.py | 69 +++++++++++++++++++++++++++++---------------
+ 1 file changed, 46 insertions(+), 23 deletions(-)
+
+diff --git a/scripts/dump-guest-memory.py b/scripts/dump-guest-memory.py
+index d44de99..3d54d05 100644
+--- a/scripts/dump-guest-memory.py
++++ b/scripts/dump-guest-memory.py
+@@ -69,35 +69,58 @@ ELF64_PHDR = ("I"  # p_type
+           )
+ 
+ def int128_get64(val):
+-    assert (val["hi"] == 0)
++    """Returns low 64bit part of Int128 struct."""
++
++    assert val["hi"] == 0
+     return val["lo"]
+ 
+ def qtailq_foreach(head, field_str):
++    """Generator for qtails."""
++
+     var_p = head["tqh_first"]
+     while (var_p != 0):
+         var = var_p.dereference()
+-        yield var
+         var_p = var[field_str]["tqe_next"]
++        yield var
+ 
+ def qemu_get_ram_block(ram_addr):
++    """Returns the RAMBlock struct to which the given address belongs."""
++
+     ram_blocks = gdb.parse_and_eval("ram_list.blocks")
++
+     for block in qtailq_foreach(ram_blocks, "next"):
+         if (ram_addr - block["offset"] < block["length"]):
+             return block
++
+     raise gdb.GdbError("Bad ram offset %x" % ram_addr)
+ 
++
+ def qemu_get_ram_ptr(ram_addr):
++    """Returns qemu vaddr for given guest physical address."""
++
+     block = qemu_get_ram_block(ram_addr)
+     return block["host"] + (ram_addr - block["offset"])
+ 
+-def memory_region_get_ram_ptr(mr):
+-    if (mr["alias"] != 0):
+-        return (memory_region_get_ram_ptr(mr["alias"].dereference()) +
+-                mr["alias_offset"])
+-    return qemu_get_ram_ptr(mr["ram_addr"] & TARGET_PAGE_MASK)
++
++def memory_region_get_ram_ptr(memory_region):
++    if memory_region["alias"] != 0:
++        return (memory_region_get_ram_ptr(memory_region["alias"].dereference())
++                + memory_region["alias_offset"])
++
++    return qemu_get_ram_ptr(memory_region["ram_addr"] & TARGET_PAGE_MASK)
++
+ 
+ def get_guest_phys_blocks():
++    """Returns a list of ram blocks.
++
++    Each block entry contains:
++    'target_start': guest block phys start address
++    'target_end':   guest block phys end address
++    'host_addr':    qemu vaddr of the block's start
++    """
++
+     guest_phys_blocks = []
++
+     print("guest RAM blocks:")
+     print("target_start     target_end       host_addr        message "
+           "count")
+@@ -111,29 +134,29 @@ def get_guest_phys_blocks():
+     # compatibility. Otherwise range doesn't cast the value itself and
+     # breaks.
+     for cur in range(int(current_map["nr"])):
+-        flat_range   = (current_map["ranges"] + cur).dereference()
+-        mr           = flat_range["mr"].dereference()
++        flat_range = (current_map["ranges"] + cur).dereference()
++        memory_region = flat_range["mr"].dereference()
+ 
+         # we only care about RAM
+-        if (not mr["ram"]):
++        if not memory_region["ram"]:
+             continue
+ 
+         section_size = int128_get64(flat_range["addr"]["size"])
+         target_start = int128_get64(flat_range["addr"]["start"])
+-        target_end   = target_start + section_size
+-        host_addr    = (memory_region_get_ram_ptr(mr) +
+-                        flat_range["offset_in_region"])
++        target_end = target_start + section_size
++        host_addr = (memory_region_get_ram_ptr(memory_region)
++                     + flat_range["offset_in_region"])
+         predecessor = None
+ 
+         # find continuity in guest physical address space
+-        if (len(guest_phys_blocks) > 0):
++        if len(guest_phys_blocks) > 0:
+             predecessor = guest_phys_blocks[-1]
+             predecessor_size = (predecessor["target_end"] -
+                                 predecessor["target_start"])
+ 
+             # the memory API guarantees monotonically increasing
+             # traversal
+-            assert (predecessor["target_end"] <= target_start)
++            assert predecessor["target_end"] <= target_start
+ 
+             # we want continuity in both guest-physical and
+             # host-virtual memory
+@@ -141,11 +164,11 @@ def get_guest_phys_blocks():
+                 predecessor["host_addr"] + predecessor_size != host_addr):
+                 predecessor = None
+ 
+-        if (predecessor is None):
++        if predecessor is None:
+             # isolated mapping, add it to the list
+             guest_phys_blocks.append({"target_start": target_start,
+-                                      "target_end"  : target_end,
+-                                      "host_addr"   : host_addr})
++                                      "target_end":   target_end,
++                                      "host_addr":    host_addr})
+             message = "added"
+         else:
+             # expand predecessor until @target_end; predecessor's
+@@ -282,7 +305,7 @@ shape and this command should mostly work."""
+         # We should never reach PN_XNUM for paging=false dumps: there's
+         # just a handful of discontiguous ranges after merging.
+         self.phdr_num += len(self.guest_phys_blocks)
+-        assert (self.phdr_num < PN_XNUM)
++        assert self.phdr_num < PN_XNUM
+ 
+         # Calculate the ELF file offset where the memory dump commences:
+         #
+@@ -313,15 +336,15 @@ shape and this command should mostly work."""
+     def dump_iterate(self, vmcore):
+         qemu_core = gdb.inferiors()[0]
+         for block in self.guest_phys_blocks:
+-            cur  = block["host_addr"]
++            cur = block["host_addr"]
+             left = block["target_end"] - block["target_start"]
+             print("dumping range at %016x for length %016x" %
+                   (cur.cast(UINTPTR_T), left))
+-            while (left > 0):
++            while left > 0:
+                 chunk_size = min(TARGET_PAGE_SIZE, left)
+                 chunk = qemu_core.read_memory(cur, chunk_size)
+                 vmcore.write(chunk)
+-                cur  += chunk_size
++                cur += chunk_size
+                 left -= chunk_size
+ 
+     def create_vmcore(self, filename):
+@@ -336,7 +359,7 @@ shape and this command should mostly work."""
+         self.dont_repeat()
+ 
+         argv = gdb.string_to_argv(args)
+-        if (len(argv) != 1):
++        if len(argv) != 1:
+             raise gdb.GdbError("usage: dump-guest-memory FILE")
+ 
+         self.dump_init()
+-- 
+1.8.3.1
+

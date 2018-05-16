@@ -1,6 +1,6 @@
 Name: rdma-core
 Version: 15
-Release: 6%{?dist}
+Release: 7%{?dist}
 Summary: RDMA core userspace libraries and daemons
 
 # Almost everything is licensed under the OFA dual GPLv2, 2 Clause BSD license
@@ -25,6 +25,7 @@ Patch12: 0003-mlx5-Allow-creation-of-a-Multi-Packet-RQ-using-direc.patch
 Patch13: mlx4-add-a-report-of-rss-cap.patch
 Patch14: 0001-iwpmd-fix-double-mutex-unlock.patch
 Patch15: libbnxt_re_fix_lat_test_failure_in_event_mode.patch
+Patch16: i40iw-autoload-breaks-suspend.patch
 
 BuildRequires: binutils
 BuildRequires: cmake >= 2.8.11
@@ -286,6 +287,7 @@ discover and use SCSI devices via the SCSI RDMA Protocol over InfiniBand.
 %patch13 -p1
 %patch14 -p1
 %patch15 -p1
+%patch16 -p1
 
 %build
 
@@ -533,8 +535,14 @@ rm -rf %{buildroot}/%{_initrddir}/
 %doc %{_docdir}/%{name}-%{version}/ibsrpdm.md
 
 %changelog
-* Fri Apr 13 2018 Pablo Greco <pablo@fliagreco.com.ar> 15-6
+* Mon May 14 2018 Pablo Greco <pablo@fliagreco.com.ar> 15-7
 - Update to build on armv7hl
+
+* Tue Feb 27 2018 Jarod Wilson <jarod@redhat.com> 15-7
+- i40iw: revoke systemd udev rules auto-load on i40e hardware, due to
+  causing problems with suspend and resume, and fall back to load via
+  systemd rdma initscript.
+- Resolves: rhbz#1568325
 
 * Mon Feb 19 2018 Jarod Wilson <jarod@redhat.com> 15-6
 - libbnxt_re: fix lat test failure in event mode

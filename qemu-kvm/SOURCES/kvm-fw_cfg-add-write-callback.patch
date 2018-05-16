@@ -1,0 +1,173 @@
+From f865f4fe293db1dfdfbb2e03963d0c6a25a398cc Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:38:42 +0100
+Subject: [PATCH 11/41] fw_cfg: add write callback
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-12-marcandre.lureau@redhat.com>
+Patchwork-id: 78361
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 11/41] fw_cfg: add write callback
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Reintroduce the write callback that was removed when write support was
+removed in commit 023e3148567ac898c7258138f8e86c3c2bb40d07.
+
+Contrary to the previous callback implementation, the write_cb
+callback is called whenever a write happened, so handlers must be
+ready to handle partial write as necessary.
+
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+
+(cherry picked from commit 5f9252f7cc12c5cec1b3c6695aca02eb52ea7acc)
+
+RHEL: major conflict due to API changes, but minor functional changes.
+
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/core/loader.c          |  2 +-
+ hw/nvram/fw_cfg.c         | 32 ++++++++++++++++++++------------
+ include/hw/nvram/fw_cfg.h |  8 ++++++--
+ 3 files changed, 27 insertions(+), 15 deletions(-)
+
+diff --git a/hw/core/loader.c b/hw/core/loader.c
+index c824bc2..5a15449 100644
+--- a/hw/core/loader.c
++++ b/hw/core/loader.c
+@@ -700,7 +700,7 @@ void *rom_add_blob(const char *name, const void *blob, size_t len,
+         }
+ 
+         fw_cfg_add_file_callback(fw_cfg, fw_file_name,
+-                                 fw_callback, callback_opaque,
++                                 fw_callback, NULL, callback_opaque,
+                                  data, rom->romsize, read_only);
+     }
+     return data;
+diff --git a/hw/nvram/fw_cfg.c b/hw/nvram/fw_cfg.c
+index a7bc98e..616c782 100644
+--- a/hw/nvram/fw_cfg.c
++++ b/hw/nvram/fw_cfg.c
+@@ -54,6 +54,7 @@ typedef struct FWCfgEntry {
+     uint8_t *data;
+     void *callback_opaque;
+     FWCfgReadCallback read_callback;
++    FWCfgWriteCallback write_cb;
+ } FWCfgEntry;
+ 
+ struct FWCfgState {
+@@ -365,6 +366,8 @@ static void fw_cfg_dma_transfer(FWCfgState *s)
+                     dma_memory_read(s->dma, dma.address,
+                                     &e->data[s->cur_offset], len)) {
+                     dma.control |= FW_CFG_DMA_CTL_ERROR;
++                } else if (e->write_cb) {
++                    e->write_cb(e->callback_opaque, s->cur_offset, len);
+                 }
+             }
+ 
+@@ -556,11 +559,12 @@ static const VMStateDescription vmstate_fw_cfg = {
+     }
+ };
+ 
+-static void fw_cfg_add_bytes_read_callback(FWCfgState *s, uint16_t key,
+-                                           FWCfgReadCallback callback,
+-                                           void *callback_opaque,
+-                                           void *data, size_t len,
+-                                           bool read_only)
++static void fw_cfg_add_bytes_callback(FWCfgState *s, uint16_t key,
++                                      FWCfgReadCallback callback,
++                                      FWCfgWriteCallback write_cb,
++                                      void *callback_opaque,
++                                      void *data, size_t len,
++                                      bool read_only)
+ {
+     int arch = !!(key & FW_CFG_ARCH_LOCAL);
+ 
+@@ -572,13 +576,14 @@ static void fw_cfg_add_bytes_read_callback(FWCfgState *s, uint16_t key,
+     s->entries[arch][key].data = data;
+     s->entries[arch][key].len = (uint32_t)len;
+     s->entries[arch][key].read_callback = callback;
++    s->entries[arch][key].write_cb = write_cb;
+     s->entries[arch][key].callback_opaque = callback_opaque;
+     s->entries[arch][key].allow_write = !read_only;
+ }
+ 
+ void fw_cfg_add_bytes(FWCfgState *s, uint16_t key, void *data, size_t len)
+ {
+-    fw_cfg_add_bytes_read_callback(s, key, NULL, NULL, data, len, true);
++    fw_cfg_add_bytes_callback(s, key, NULL, NULL, NULL, data, len, true);
+ }
+ 
+ void fw_cfg_add_string(FWCfgState *s, uint16_t key, const char *value)
+@@ -616,8 +621,11 @@ void fw_cfg_add_i64(FWCfgState *s, uint16_t key, uint64_t value)
+ }
+ 
+ void fw_cfg_add_file_callback(FWCfgState *s,  const char *filename,
+-                              FWCfgReadCallback callback, void *callback_opaque,
+-                              void *data, size_t len, bool read_only)
++                              FWCfgReadCallback callback,
++                              FWCfgWriteCallback write_cb,
++                              void *callback_opaque,
++                              void *data, size_t len,
++                              bool read_only)
+ {
+     int i, index;
+     size_t dsize;
+@@ -641,9 +649,9 @@ void fw_cfg_add_file_callback(FWCfgState *s,  const char *filename,
+         }
+     }
+ 
+-    fw_cfg_add_bytes_read_callback(s, FW_CFG_FILE_FIRST + index,
+-                                   callback, callback_opaque, data, len,
+-                                   read_only);
++    fw_cfg_add_bytes_callback(s, FW_CFG_FILE_FIRST + index,
++                              callback, write_cb, callback_opaque, data, len,
++                              read_only);
+ 
+     s->files->f[index].size   = cpu_to_be32(len);
+     s->files->f[index].select = cpu_to_be16(FW_CFG_FILE_FIRST + index);
+@@ -655,7 +663,7 @@ void fw_cfg_add_file_callback(FWCfgState *s,  const char *filename,
+ void fw_cfg_add_file(FWCfgState *s,  const char *filename,
+                      void *data, size_t len)
+ {
+-    fw_cfg_add_file_callback(s, filename, NULL, NULL, data, len, true);
++    fw_cfg_add_file_callback(s, filename, NULL, NULL, NULL, data, len, true);
+ }
+ 
+ static void fw_cfg_machine_ready(struct Notifier *n, void *data)
+diff --git a/include/hw/nvram/fw_cfg.h b/include/hw/nvram/fw_cfg.h
+index 76fc787..a77ab84 100644
+--- a/include/hw/nvram/fw_cfg.h
++++ b/include/hw/nvram/fw_cfg.h
+@@ -73,6 +73,7 @@ typedef struct FWCfgDmaAccess {
+ 
+ typedef void (*FWCfgCallback)(void *opaque, uint8_t *data);
+ typedef void (*FWCfgReadCallback)(void *opaque, uint32_t offset);
++typedef void (*FWCfgWriteCallback)(void *opaque, off_t start, size_t len);
+ 
+ void fw_cfg_add_bytes(FWCfgState *s, uint16_t key, void *data, size_t len);
+ void fw_cfg_add_string(FWCfgState *s, uint16_t key, const char *value);
+@@ -82,8 +83,11 @@ void fw_cfg_add_i64(FWCfgState *s, uint16_t key, uint64_t value);
+ void fw_cfg_add_file(FWCfgState *s, const char *filename, void *data,
+                      size_t len);
+ void fw_cfg_add_file_callback(FWCfgState *s, const char *filename,
+-                              FWCfgReadCallback callback, void *callback_opaque,
+-                              void *data, size_t len, bool read_only);
++                              FWCfgReadCallback callback,
++                              FWCfgWriteCallback write_cb,
++                              void *callback_opaque,
++                              void *data, size_t len,
++                              bool read_only);
+ FWCfgState *fw_cfg_init(uint32_t ctl_port, uint32_t data_port,
+                         hwaddr crl_addr, hwaddr data_addr);
+ FWCfgState *fw_cfg_init_io_dma(uint32_t iobase, uint32_t dma_iobase,
+-- 
+1.8.3.1
+

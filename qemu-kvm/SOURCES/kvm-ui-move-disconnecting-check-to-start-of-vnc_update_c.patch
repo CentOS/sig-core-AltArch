@@ -1,0 +1,77 @@
+From a56b8ac0a5917f0a2d007a9249a4ea299fc5c208 Mon Sep 17 00:00:00 2001
+From: "Daniel P. Berrange" <berrange@redhat.com>
+Date: Thu, 8 Feb 2018 17:50:29 +0100
+Subject: [PATCH 15/27] ui: move disconnecting check to start of
+ vnc_update_client
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Daniel P. Berrange <berrange@redhat.com>
+Message-id: <20180208175041.5634-16-berrange@redhat.com>
+Patchwork-id: 78937
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v1 15/27] ui: move disconnecting check to start of vnc_update_client
+Bugzilla: 1527405
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+This is superficially similar to the combination of
+
+  commit 5a8be0f73d6f60ff08746377eb09ca459f39deab
+  Author: Gerd Hoffmann <kraxel@redhat.com>
+  Date:   Wed Jul 13 12:21:20 2016 +0200
+
+    vnc: make sure we finish disconnect
+
+and
+
+  commit c53df961617736f94731d94b62c2954c261d2bae
+  Author: Daniel P. Berrange <berrange@redhat.com>
+  Date:   Mon Dec 18 19:12:17 2017 +0000
+
+      ui: remove unreachable code in vnc_update_client
+
+We can't cherry-pick those changes, however, because they depend
+on the QIOChannel conversion. Thus, this downstream only change
+is done to make other following changes apply with fewer conflicts
+during backport.
+
+Signed-off-by: Daniel P. Berrangé <berrange@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ ui/vnc.c | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/ui/vnc.c b/ui/vnc.c
+index ec7bb0c..874900c 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -848,8 +848,13 @@ static int find_and_clear_dirty_height(struct VncState *vs,
+ 
+ static int vnc_update_client(VncState *vs, int has_dirty)
+ {
++    if (vs->csock == -1) {
++        vnc_disconnect_finish(vs);
++        return 0;
++    }
++
+     vs->has_dirty += has_dirty;
+-    if (vs->need_update && vs->csock != -1) {
++    if (vs->need_update) {
+         VncDisplay *vd = vs->vd;
+         VncJob *job;
+         int y;
+@@ -904,9 +909,6 @@ static int vnc_update_client(VncState *vs, int has_dirty)
+         return n;
+     }
+ 
+-    if (vs->csock == -1)
+-        vnc_disconnect_finish(vs);
+-
+     return 0;
+ }
+ 
+-- 
+1.8.3.1
+

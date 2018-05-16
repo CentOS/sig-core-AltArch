@@ -1,0 +1,64 @@
+From 9f8e26c9d8485647072b2cbe7848b8d0054597c6 Mon Sep 17 00:00:00 2001
+From: Alex Williamson <alex.williamson@redhat.com>
+Date: Fri, 29 Sep 2017 21:45:31 +0200
+Subject: [PATCH 11/27] vfio/pci: Handle host oversight
+
+RH-Author: Alex Williamson <alex.williamson@redhat.com>
+Message-id: <20170929214531.16765.45212.stgit@gimli.home>
+Patchwork-id: 76769
+O-Subject: [RHEL-7.5 qemu-kvm PATCH 11/16] vfio/pci: Handle host oversight
+Bugzilla: 1494181
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Auger Eric <eric.auger@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Eric Auger <eric.auger@redhat.com>
+
+Upstream: 4a946268504e72fe0c547b9dda97adbe277a585f
+
+In case the end-user calls qemu with -vfio-pci option without passing
+either sysfsdev or host property value, the device is interpreted as
+0000:00:00.0. Let's create a specific error message to guide the end-user.
+
+Signed-off-by: Eric Auger <eric.auger@redhat.com>
+Reviewed-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vfio.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/hw/misc/vfio.c b/hw/misc/vfio.c
+index 0af8613..a95bbaf 100644
+--- a/hw/misc/vfio.c
++++ b/hw/misc/vfio.c
+@@ -3864,6 +3864,13 @@ static int vfio_initfn(PCIDevice *pdev)
+     }
+ 
+     if (!vdev->vbasedev.sysfsdev) {
++        if (!(~vdev->host.domain || ~vdev->host.bus ||
++              ~vdev->host.slot || ~vdev->host.function)) {
++            error_report("No provided host device - "
++                         "Use -vfio-pci,host=DDDD:BB:DD.F "
++                         "or -vfio-pci,sysfsdev=PATH_TO_DEVICE");
++            return -EINVAL;
++        }
+         vdev->vbasedev.sysfsdev =
+             g_strdup_printf("/sys/bus/pci/devices/%04x:%02x:%02x.%01x",
+                             vdev->host.domain, vdev->host.bus,
+@@ -4062,6 +4069,12 @@ post_reset:
+ 
+ static void vfio_instance_init(Object *obj)
+ {
++    VFIOPCIDevice *vdev = DO_UPCAST(VFIOPCIDevice, pdev, PCI_DEVICE(obj));
++
++    vdev->host.domain = ~0U;
++    vdev->host.bus = ~0U;
++    vdev->host.slot = ~0U;
++    vdev->host.function = ~0U;
+ }
+ 
+ static Property vfio_pci_dev_properties[] = {
+-- 
+1.8.3.1
+

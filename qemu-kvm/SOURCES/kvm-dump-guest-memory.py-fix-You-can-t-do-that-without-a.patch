@@ -1,0 +1,91 @@
+From c42ed2abf0e58a0c4cf069f52756bfa412794d15 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:39:12 +0100
+Subject: [PATCH 41/41] dump-guest-memory.py: fix "You can't do that without a
+ process to debug"
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-42-marcandre.lureau@redhat.com>
+Patchwork-id: 78391
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 41/41] dump-guest-memory.py: fix "You can't do that without a process to debug"
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Upstream-status: <20171212172208.13588-1-marcandre.lureau@redhat.com>
+(reviewed, pending for release and merge window to open)
+
+If the script is run with a core (no running process), it produces an
+error:
+
+(gdb)  dump-guest-memory /tmp/vmcore X86_64
+guest RAM blocks:
+target_start     target_end       host_addr        message count
+---------------- ---------------- ---------------- ------- -----
+0000000000000000 00000000000a0000 00007f7935800000 added       1
+00000000000a0000 00000000000b0000 00007f7934200000 added       2
+00000000000c0000 00000000000ca000 00007f79358c0000 added       3
+00000000000ca000 00000000000cd000 00007f79358ca000 joined      3
+00000000000cd000 00000000000e8000 00007f79358cd000 joined      3
+00000000000e8000 00000000000f0000 00007f79358e8000 joined      3
+00000000000f0000 0000000000100000 00007f79358f0000 joined      3
+0000000000100000 0000000080000000 00007f7935900000 joined      3
+00000000fd000000 00000000fe000000 00007f7934200000 added       4
+00000000fffc0000 0000000100000000 00007f7935600000 added       5
+Python Exception <class 'gdb.error'> You can't do that without a process to debug.:
+Error occurred in Python command: You can't do that without a process
+to debug.
+
+Replace the object_resolve_path_type() function call with a local
+volatile variable.
+
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/misc/vmcoreinfo.c         | 3 +++
+ scripts/dump-guest-memory.py | 3 +--
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/hw/misc/vmcoreinfo.c b/hw/misc/vmcoreinfo.c
+index fa5f610..65b5755 100644
+--- a/hw/misc/vmcoreinfo.c
++++ b/hw/misc/vmcoreinfo.c
+@@ -35,6 +35,8 @@ static void vmcoreinfo_realize(DeviceState *dev, Error **errp)
+ {
+     VMCoreInfoState *s = VMCOREINFO(dev);
+     FWCfgState *fw_cfg = fw_cfg_find();
++    /* for gdb script dump-guest-memory.py */
++    static VMCoreInfoState * volatile vmcoreinfo_state G_GNUC_UNUSED;
+ 
+     /* Given that this function is executing, there is at least one VMCOREINFO
+      * device. Check if there are several.
+@@ -57,6 +59,7 @@ static void vmcoreinfo_realize(DeviceState *dev, Error **errp)
+                              false);
+ 
+     qemu_register_reset(vmcoreinfo_reset, dev);
++    vmcoreinfo_state = s;
+ }
+ 
+ static const VMStateDescription vmstate_vmcoreinfo = {
+diff --git a/scripts/dump-guest-memory.py b/scripts/dump-guest-memory.py
+index 12b9b7d..8a13db0 100644
+--- a/scripts/dump-guest-memory.py
++++ b/scripts/dump-guest-memory.py
+@@ -546,8 +546,7 @@ shape and this command should mostly work."""
+         return None
+ 
+     def add_vmcoreinfo(self):
+-        vmci = '(VMCoreInfoState *)' + \
+-               'object_resolve_path_type("", "vmcoreinfo", 0)'
++        vmci = 'vmcoreinfo_realize::vmcoreinfo_state'
+         if not gdb.parse_and_eval("%s" % vmci) \
+            or not gdb.parse_and_eval("(%s)->has_vmcoreinfo" % vmci):
+             return
+-- 
+1.8.3.1
+

@@ -1,0 +1,66 @@
+From 1bf158dc510fc63f11725f2350369d06a3fff929 Mon Sep 17 00:00:00 2001
+From: "Daniel P. Berrange" <berrange@redhat.com>
+Date: Thu, 8 Feb 2018 17:50:40 +0100
+Subject: [PATCH 26/27] ui: correctly advance output buffer when writing SASL
+ data
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Daniel P. Berrange <berrange@redhat.com>
+Message-id: <20180208175041.5634-27-berrange@redhat.com>
+Patchwork-id: 78955
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v1 26/27] ui: correctly advance output buffer when writing SASL data
+Bugzilla: 1527405
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+In this previous commit:
+
+  commit 8f61f1c5a6bc06438a1172efa80bc7606594fa07
+  Author: Daniel P. Berrange <berrange@redhat.com>
+  Date:   Mon Dec 18 19:12:20 2017 +0000
+
+    ui: track how much decoded data we consumed when doing SASL encoding
+
+I attempted to fix a flaw with tracking how much data had actually been
+processed when encoding with SASL. With that flaw, the VNC server could
+mistakenly discard queued data that had not been sent.
+
+The fix was not quite right though, because it merely decremented the
+vs->output.offset value. This is effectively discarding data from the
+end of the pending output buffer. We actually need to discard data from
+the start of the pending output buffer. We also want to free memory that
+is no longer required. The correct way to handle this is to use the
+buffer_advance() helper method instead of directly manipulating the
+offset value.
+
+Reported-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Daniel P. Berrangé <berrange@redhat.com>
+Reviewed-by: Eric Blake <eblake@redhat.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Message-id: 20180201155841.27509-1-berrange@redhat.com
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit 627ebec208a8809818589e17f4fce55a59420ad2)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ ui/vnc-auth-sasl.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/ui/vnc-auth-sasl.c b/ui/vnc-auth-sasl.c
+index 8188081..c39f588 100644
+--- a/ui/vnc-auth-sasl.c
++++ b/ui/vnc-auth-sasl.c
+@@ -81,7 +81,7 @@ long vnc_client_write_sasl(VncState *vs)
+         } else {
+             vs->force_update_offset -= vs->sasl.encodedRawLength;
+         }
+-        vs->output.offset -= vs->sasl.encodedRawLength;
++        buffer_advance(&vs->output, vs->sasl.encodedRawLength);
+         vs->sasl.encoded = NULL;
+         vs->sasl.encodedOffset = vs->sasl.encodedLength = 0;
+     }
+-- 
+1.8.3.1
+

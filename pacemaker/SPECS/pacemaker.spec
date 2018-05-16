@@ -79,8 +79,8 @@
 ##   propagated by systemd project
 ## - when not good enough, there's always a possibility to check
 ##   particular distro-specific macros (incl. version comparison)
-%define systemd_native (%{?_unitdir:1}%{?!_unitdir:0}%{nil \
-  } || %{?__transaction_systemd_inhibit:1}%{?!__transaction_systemd_inhibit:0}%{nil \
+%define systemd_native (%{?_unitdir:1}%{!?_unitdir:0}%{nil \
+  } || %{?__transaction_systemd_inhibit:1}%{!?__transaction_systemd_inhibit:0}%{nil \
   } || %(test -f /usr/lib/os-release; test $? -ne 0; echo $?))
 
 ## Upstream commit to use for nagios-agents-metadata package
@@ -163,7 +163,7 @@
 Name:          pacemaker
 Summary:       Scalable High-Availability cluster resource manager
 Version:       %{pcmkversion}
-Release:       %{pcmk_release}%{?dist}
+Release:       %{pcmk_release}%{?dist}.2
 %if %{defined _unitdir}
 License:       GPLv2+ and LGPLv2+
 %else
@@ -189,6 +189,13 @@ Patch7:        007-bundles.patch
 Patch8:        008-quorum.patch
 Patch9:        009-crm_resource.patch
 Patch10:       010-crm_master.patch
+Patch11:       011-regression-tests.patch
+Patch12:       012-notifs.patch
+Patch13:       013-notifs-tests.patch
+Patch14:       014-segfault.patch
+Patch15:       015-fail-timeout.patch
+Patch16:       016-crm_diff.patch
+Patch17:       017-pending-notify.patch
 
 # patches that aren't from upstream
 Patch100:      lrmd-protocol-version.patch
@@ -204,9 +211,7 @@ Obsoletes:     rgmanager < 3.2.0
 Provides:      rgmanager >= 3.2.0
 Provides:      pcmk-cluster-manager
 
-%if %{defined systemd_requires}
-%systemd_requires
-%endif
+%{?systemd_requires}
 
 ExclusiveArch: i686 x86_64 ppc64le s390x %{arm}
 
@@ -296,6 +301,7 @@ be part of the cluster.
 License:       GPLv2+ and LGPLv2+
 Summary:       Core Pacemaker libraries
 Group:         System Environment/Daemons
+Requires(pre): shadow-utils
 
 %description -n %{name}-libs
 Pacemaker is an advanced, scalable High-Availability cluster resource
@@ -330,9 +336,8 @@ Requires:      %{name}-libs = %{version}-%{release}
 Requires:      %{name}-cli = %{version}-%{release}
 Requires:      resource-agents
 Provides:      pcmk-cluster-manager
-%if %{defined systemd_requires}
-%systemd_requires
-%endif
+# -remote can be fully independent of systemd
+%{?systemd_ordering}%{!?systemd_ordering:%{?systemd_requires}}
 
 %description remote
 Pacemaker is an advanced, scalable High-Availability cluster resource
@@ -385,7 +390,7 @@ Requires:      systemd-python
 Test framework for cluster-related technologies like Pacemaker
 
 %package       doc
-License:       CC-BY-SA
+License:       CC-BY-SA-4.0
 Summary:       Documentation for Pacemaker
 Group:         Documentation
 
@@ -396,7 +401,7 @@ Pacemaker is an advanced, scalable High-Availability cluster resource
 manager for Corosync, CMAN and/or Linux-HA.
 
 %package       nagios-plugins-metadata
-License:       GPLv2+ and LGPLv2+
+License:       GPLv3
 Summary:       Pacemaker Nagios Metadata
 Group:         System Environment/Daemons
 # NOTE below are the plugins this metadata uses.
@@ -436,7 +441,7 @@ export CPPFLAGS="-DRHEL7_COMPAT"
 # Early versions of autotools (e.g. RHEL <= 5) do not support --docdir
 export docdir=%{pcmk_docdir}
 
-export systemdunitdir=%{?_unitdir}%{?!_unitdir:no}
+export systemdunitdir=%{?_unitdir}%{!?_unitdir:no}
 
 %if %{with hardening}
 # prefer distro-provided hardening flags in case they are defined
@@ -863,8 +868,20 @@ exit 0
 %attr(0644,root,root) %{_datadir}/pacemaker/nagios/plugins-metadata/*
 
 %changelog
-* Sat Apr 14 2018 Johnny Hughes <jhughes@centos.org> - 1.1.18-11
+* Mon May 14 2018 Johnny Hughes <jhughes@centos.org> - 1.1.18-11.2
 - Added armv7hl to supported arches (centos userland)
+
+* Fri Apr 20 2018 Ken Gaillot <kgaillot@redhat.com> - 1.1.18-11.2
+- Do not record pending notify actions as completed
+- Resolves: rhbz#1570618
+
+* Wed Apr 18 2018 Ken Gaillot <kgaillot@redhat.com> - 1.1.18-11.1
+- Do not schedule notifications for unrunnable actions
+- Do not expire remote failures if fencing is pending
+- Do not consider attribute order difference as CIB change in crm_diff
+- Resolves: rhbz#1563345
+- Resolves: rhbz#1566533
+- Resolves: rhbz#1568720
 
 * Fri Jan 26 2018 Ken Gaillot <kgaillot@redhat.com> - 1.1.18-11
 - Fix regression in crm_master

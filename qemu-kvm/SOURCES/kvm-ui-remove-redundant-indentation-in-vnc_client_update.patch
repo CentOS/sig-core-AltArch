@@ -1,0 +1,168 @@
+From 2f49f56062f802fd47bc1c1c81d811aa6c9e9cff Mon Sep 17 00:00:00 2001
+From: "Daniel P. Berrange" <berrange@redhat.com>
+Date: Thu, 8 Feb 2018 17:50:30 +0100
+Subject: [PATCH 16/27] ui: remove redundant indentation in vnc_client_update
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Daniel P. Berrange <berrange@redhat.com>
+Message-id: <20180208175041.5634-17-berrange@redhat.com>
+Patchwork-id: 78936
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v1 16/27] ui: remove redundant indentation in vnc_client_update
+Bugzilla: 1527405
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: "Daniel P. Berrange" <berrange@redhat.com>
+
+Now that previous dead / unreachable code has been removed, we can simplify
+the indentation in the vnc_client_update method.
+
+Signed-off-by: Daniel P. Berrange <berrange@redhat.com>
+Reviewed-by: Darren Kenny <darren.kenny@oracle.com>
+Reviewed-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: 20171218191228.31018-4-berrange@redhat.com
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit b939eb89b6f320544a9328fa908d881d0024c1ee)
+
+ Conflicts:
+	ui/vnc.c - context difference due to vs->csock no longer
+	           existing and some other optimizations in
+		   determining dirty rectangles.
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ ui/vnc.c | 104 ++++++++++++++++++++++++++++++++-------------------------------
+ 1 file changed, 53 insertions(+), 51 deletions(-)
+
+diff --git a/ui/vnc.c b/ui/vnc.c
+index 874900c..aebaa37 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -848,68 +848,70 @@ static int find_and_clear_dirty_height(struct VncState *vs,
+ 
+ static int vnc_update_client(VncState *vs, int has_dirty)
+ {
++    VncDisplay *vd = vs->vd;
++    VncJob *job;
++    int y;
++    int height, width;
++    int n = 0;
++
+     if (vs->csock == -1) {
+         vnc_disconnect_finish(vs);
+         return 0;
+     }
+ 
+     vs->has_dirty += has_dirty;
+-    if (vs->need_update) {
+-        VncDisplay *vd = vs->vd;
+-        VncJob *job;
+-        int y;
+-        int height, width;
+-        int n = 0;
+-
+-        if (vs->output.offset && !vs->audio_cap && !vs->force_update)
+-            /* kernel send buffers are full -> drop frames to throttle */
+-            return 0;
++    if (!vs->need_update) {
++        return 0;
++    }
+ 
+-        if (!vs->has_dirty && !vs->audio_cap && !vs->force_update)
+-            return 0;
++    if (vs->output.offset && !vs->audio_cap && !vs->force_update) {
++        /* kernel send buffers are full -> drop frames to throttle */
++        return 0;
++    }
+ 
+-        /*
+-         * Send screen updates to the vnc client using the server
+-         * surface and server dirty map.  guest surface updates
+-         * happening in parallel don't disturb us, the next pass will
+-         * send them to the client.
+-         */
+-        job = vnc_job_new(vs);
+-
+-        height = pixman_image_get_height(vd->server);
+-        width = pixman_image_get_width(vd->server);
+-
+-        y = 0;
+-        for (;;) {
+-            int x, h;
+-            unsigned long x2;
+-            unsigned long offset = find_next_bit((unsigned long *) &vs->dirty,
+-                                                 height * VNC_DIRTY_BPL(vs),
+-                                                 y * VNC_DIRTY_BPL(vs));
+-            if (offset == height * VNC_DIRTY_BPL(vs)) {
+-                /* no more dirty bits */
+-                break;
+-            }
+-            y = offset / VNC_DIRTY_BPL(vs);
+-            x = offset % VNC_DIRTY_BPL(vs);
+-            x2 = find_next_zero_bit((unsigned long *) &vs->dirty[y],
+-                                    VNC_DIRTY_BPL(vs), x);
+-            bitmap_clear(vs->dirty[y], x, x2 - x);
+-            h = find_and_clear_dirty_height(vs, y, x, x2, height);
+-            x2 = MIN(x2, width / VNC_DIRTY_PIXELS_PER_BIT);
+-            if (x2 > x) {
+-                n += vnc_job_add_rect(job, x * VNC_DIRTY_PIXELS_PER_BIT, y,
+-                                      (x2 - x) * VNC_DIRTY_PIXELS_PER_BIT, h);
+-            }
+-        }
++    if (!vs->has_dirty && !vs->audio_cap && !vs->force_update) {
++        return 0;
++    }
++
++    /*
++     * Send screen updates to the vnc client using the server
++     * surface and server dirty map.  guest surface updates
++     * happening in parallel don't disturb us, the next pass will
++     * send them to the client.
++     */
++    job = vnc_job_new(vs);
++
++    height = pixman_image_get_height(vd->server);
++    width = pixman_image_get_width(vd->server);
+ 
+-        vnc_job_push(job);
+-        vs->force_update = 0;
+-        vs->has_dirty = 0;
+-        return n;
++    y = 0;
++    for (;;) {
++        int x, h;
++        unsigned long x2;
++        unsigned long offset = find_next_bit((unsigned long *) &vs->dirty,
++                                             height * VNC_DIRTY_BPL(vs),
++                                             y * VNC_DIRTY_BPL(vs));
++        if (offset == height * VNC_DIRTY_BPL(vs)) {
++            /* no more dirty bits */
++            break;
++        }
++        y = offset / VNC_DIRTY_BPL(vs);
++        x = offset % VNC_DIRTY_BPL(vs);
++        x2 = find_next_zero_bit((unsigned long *) &vs->dirty[y],
++                                VNC_DIRTY_BPL(vs), x);
++        bitmap_clear(vs->dirty[y], x, x2 - x);
++        h = find_and_clear_dirty_height(vs, y, x, x2, height);
++        x2 = MIN(x2, width / VNC_DIRTY_PIXELS_PER_BIT);
++        if (x2 > x) {
++            n += vnc_job_add_rect(job, x * VNC_DIRTY_PIXELS_PER_BIT, y,
++                                  (x2 - x) * VNC_DIRTY_PIXELS_PER_BIT, h);
++        }
+     }
+ 
+-    return 0;
++    vnc_job_push(job);
++    vs->force_update = 0;
++    vs->has_dirty = 0;
++    return n;
+ }
+ 
+ /* audio */
+-- 
+1.8.3.1
+

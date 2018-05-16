@@ -1,0 +1,70 @@
+From 74eb4b3e1fcc6d36de0116c2fbbaa308191a1ab7 Mon Sep 17 00:00:00 2001
+From: "Daniel P. Berrange" <berrange@redhat.com>
+Date: Thu, 8 Feb 2018 17:50:15 +0100
+Subject: [PATCH 01/27] vnc: Fix qemu crashed when vnc client disconnect
+ suddenly
+
+RH-Author: Daniel P. Berrange <berrange@redhat.com>
+Message-id: <20180208175041.5634-2-berrange@redhat.com>
+Patchwork-id: 78947
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v1 01/27] vnc: Fix qemu crashed when vnc client disconnect suddenly
+Bugzilla: 1527405
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: "Gonglei (Arei)" <arei.gonglei@huawei.com>
+
+Hi,
+
+When I use RealVNC viewer client (http://www.realvnc.com/) to connect vnc server,
+the client disconnect suddenly, and I click reconnect button immediately, then the Qemu crashed.
+
+In the function vnc_worker_thread_loop, will call vnc_async_encoding_start
+to set the local vs->output buffer by global queue's buffer. Then send rectangles to
+the vnc client call function vnc_send_framebuffer_update. Finally, Under normal circumstances,
+call vnc_async_encoding_end to set the global queue'buffer by the local vs->output conversely.
+
+When the vnc client disconnect, the job->vs->csock will be set to -1. And the current prcoess
+logic will goto disconnected partion without call function vnc_async_encoding_end.
+But, the function vnc_send_framebuffer_update will call buffer_reserve, which
+maybe call g_realloc reset the local vs's buffer, meaning the global queue's buffer is modified also.
+If anyone use the original global queue's buffer memory will cause corruption and then crash qemu.
+
+This patch assure the function vnc_async_encoding_end being called
+even though the vnc client disconnect suddenly.
+
+Signed-off-by: Gonglei <arei.gonglei@huawei.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit e3c1adf16e38714ebd761dd02517dd07760ba6d2)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ ui/vnc-jobs.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/ui/vnc-jobs.c b/ui/vnc-jobs.c
+index 2d3fce8..a141f40 100644
+--- a/ui/vnc-jobs.c
++++ b/ui/vnc-jobs.c
+@@ -252,6 +252,8 @@ static int vnc_worker_thread_loop(VncJobQueue *queue)
+ 
+         if (job->vs->csock == -1) {
+             vnc_unlock_display(job->vs->vd);
++            /* Copy persistent encoding data */
++            vnc_async_encoding_end(job->vs, &vs);
+             goto disconnected;
+         }
+ 
+@@ -278,6 +280,9 @@ static int vnc_worker_thread_loop(VncJobQueue *queue)
+         vnc_async_encoding_end(job->vs, &vs);
+ 
+ 	qemu_bh_schedule(job->vs->bh);
++    }  else {
++        /* Copy persistent encoding data */
++        vnc_async_encoding_end(job->vs, &vs);
+     }
+     vnc_unlock_output(job->vs);
+ 
+-- 
+1.8.3.1
+

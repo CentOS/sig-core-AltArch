@@ -1,0 +1,61 @@
+From e5f537a8b3821b68040eada7a964b2dd1b17d3d3 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Tue, 21 Nov 2017 03:21:45 +0100
+Subject: [PATCH 2/9] linux-aio: Fix laio resource leak
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <20171121032145.5681-3-famz@redhat.com>
+Patchwork-id: 77767
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v2 2/2] linux-aio: Fix laio resource leak
+Bugzilla: 1491434
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+
+From: Gonglei <arei.gonglei@huawei.com>
+
+when hotplug virtio-scsi disks using laio, the aio_nr will
+increase in laio_init() by io_setup(), we can see the number by
+  # cat /proc/sys/fs/aio-nr
+  128
+if the aio_nr attach the maxnum, which found from
+  # cat /proc/sys/fs/aio-max-nr
+  65536
+the hotplug process will fail because of aio context leak.
+
+Fix it by io_destroy in laio_cleanup().
+
+Reported-by: daifulai <daifulai@huawei.com>
+Signed-off-by: Gonglei <arei.gonglei@huawei.com>
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+(cherry picked from commit a1abf40d6be2fc4b40d90ae3b46442f4a671776b)
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+	block/linux-aio.c
+
+Contextual conflict because of the previous patch's necessary deviation
+from upstream.
+---
+ block/linux-aio.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/block/linux-aio.c b/block/linux-aio.c
+index 43f14f3..e1d2593 100644
+--- a/block/linux-aio.c
++++ b/block/linux-aio.c
+@@ -232,5 +232,10 @@ void laio_cleanup(void *s_)
+ 
+     qemu_aio_set_fd_handler(s->efd, NULL, NULL, NULL, NULL);
+     close(s->efd);
++
++    if (io_destroy(s->ctx) != 0) {
++        fprintf(stderr, "%s: destroy AIO context %p failed\n",
++                        __func__, &s->ctx);
++    }
+     g_free(s);
+ }
+-- 
+1.8.3.1
+

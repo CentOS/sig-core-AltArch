@@ -1,0 +1,75 @@
+From 9d150071a8170807a0e5f638e3eddbbc29219ddc Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:38:45 +0100
+Subject: [PATCH 14/41] fw_cfg: enable DMA if -device vmcoreinfo
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-15-marcandre.lureau@redhat.com>
+Patchwork-id: 78364
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 14/41] fw_cfg: enable DMA if -device vmcoreinfo
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Upstream status: RHEL-only
+
+vmcoreinfo needs fw_cfg with DMA enabled. However, for compatibility
+reasons, DMA can't be enabled by default. In order to avoid having a
+RHEL-specific libvirt patch to enable DMA when vmcoreinfo device is
+requested, it can be done in qemu directly.
+
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/nvram/fw_cfg.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/hw/nvram/fw_cfg.c b/hw/nvram/fw_cfg.c
+index 616c782..7caf43c 100644
+--- a/hw/nvram/fw_cfg.c
++++ b/hw/nvram/fw_cfg.c
+@@ -30,6 +30,7 @@
+ #include "trace.h"
+ #include "qemu/error-report.h"
+ #include "qemu/config-file.h"
++#include "qemu/option.h"
+ 
+ #define FW_CFG_CTL_SIZE 2
+ #define FW_CFG_DATA_SIZE 1
+@@ -675,6 +676,17 @@ static void fw_cfg_machine_ready(struct Notifier *n, void *data)
+     fw_cfg_add_file(s, "bootorder", (uint8_t*)bootindex, len);
+ }
+ 
++static int driver_is_vmcoreinfo(QemuOpts *opts, void *opaque)
++{
++    return g_strcmp0(qemu_opt_get(opts, "driver"), "vmcoreinfo") == 0;
++}
++
++static bool opts_has_vmcoreinfo(void)
++{
++    return qemu_opts_foreach(qemu_find_opts("device"),
++                             driver_is_vmcoreinfo, NULL, 1) != 0;
++}
++
+ static FWCfgState *
+ fw_cfg_init_dma(uint32_t ctl_port, uint32_t data_port,
+                 uint32_t dma_port,
+@@ -692,6 +704,11 @@ fw_cfg_init_dma(uint32_t ctl_port, uint32_t data_port,
+     qdev_prop_set_uint32(dev, "data_iobase", data_port);
+     qdev_prop_set_uint32(dev, "dma_iobase", dma_port);
+ 
++    if (opts_has_vmcoreinfo()) {
++        /* RHEL-only: enable DMA operations for vmcoreinfo device */
++        qdev_prop_set_bit(dev, "dma_enabled", true);
++    }
++
+     if (!dma_requested) {
+         qdev_prop_set_bit(dev, "dma_enabled", false);
+     }
+-- 
+1.8.3.1
+

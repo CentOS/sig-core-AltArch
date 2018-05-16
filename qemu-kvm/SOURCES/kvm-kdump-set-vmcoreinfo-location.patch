@@ -1,0 +1,79 @@
+From 266135a48594041655e0e2e4b647251bc812670c Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:39:03 +0100
+Subject: [PATCH 32/41] kdump: set vmcoreinfo location
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-33-marcandre.lureau@redhat.com>
+Patchwork-id: 78383
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 32/41] kdump: set vmcoreinfo location
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+kdump header provides offset and size of the vmcoreinfo content,
+append it if available (skip the ELF note header).
+
+crash-7.1.9 was the first version that started looking in the
+vmcoreinfo data for phys_base instead of in the kdump_sub_header.
+
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+
+(cherry picked from commit 9ada575bbafaf6d3724a7f59df9da89776817cac)
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/dump.c b/dump.c
+index 3bce730..5aeff02 100644
+--- a/dump.c
++++ b/dump.c
+@@ -855,6 +855,18 @@ static void create_header32(DumpState *s, Error **errp)
+     kh->dump_level = cpu_to_dump32(s, DUMP_LEVEL);
+ 
+     offset_note = DISKDUMP_HEADER_BLOCKS * block_size + size;
++    if (s->guest_note &&
++        note_name_equal(s, s->guest_note, "VMCOREINFO")) {
++        uint64_t hsize, name_size, size_vmcoreinfo_desc, offset_vmcoreinfo;
++
++        get_note_sizes(s, s->guest_note,
++                       &hsize, &name_size, &size_vmcoreinfo_desc);
++        offset_vmcoreinfo = offset_note + s->note_size - s->guest_note_size +
++            (DIV_ROUND_UP(hsize, 4) + DIV_ROUND_UP(name_size, 4)) * 4;
++        kh->offset_vmcoreinfo = cpu_to_dump64(s, offset_vmcoreinfo);
++        kh->size_vmcoreinfo = cpu_to_dump32(s, size_vmcoreinfo_desc);
++    }
++
+     kh->offset_note = cpu_to_dump64(s, offset_note);
+     kh->note_size = cpu_to_dump32(s, s->note_size);
+ 
+@@ -955,6 +967,18 @@ static void create_header64(DumpState *s, Error **errp)
+     kh->dump_level = cpu_to_dump32(s, DUMP_LEVEL);
+ 
+     offset_note = DISKDUMP_HEADER_BLOCKS * block_size + size;
++    if (s->guest_note &&
++        note_name_equal(s, s->guest_note, "VMCOREINFO")) {
++        uint64_t hsize, name_size, size_vmcoreinfo_desc, offset_vmcoreinfo;
++
++        get_note_sizes(s, s->guest_note,
++                       &hsize, &name_size, &size_vmcoreinfo_desc);
++        offset_vmcoreinfo = offset_note + s->note_size - s->guest_note_size +
++            (DIV_ROUND_UP(hsize, 4) + DIV_ROUND_UP(name_size, 4)) * 4;
++        kh->offset_vmcoreinfo = cpu_to_dump64(s, offset_vmcoreinfo);
++        kh->size_vmcoreinfo = cpu_to_dump64(s, size_vmcoreinfo_desc);
++    }
++
+     kh->offset_note = cpu_to_dump64(s, offset_note);
+     kh->note_size = cpu_to_dump64(s, s->note_size);
+ 
+-- 
+1.8.3.1
+

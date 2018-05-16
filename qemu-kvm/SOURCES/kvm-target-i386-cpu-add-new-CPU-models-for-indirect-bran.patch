@@ -1,0 +1,523 @@
+From 4f2a39dd988cfae0210dfa7a84be00617ba17bef Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Wed, 13 Dec 2017 15:43:41 -0200
+Subject: [PATCH 3/3] target-i386: cpu: add new CPU models for indirect branch
+ predictor restrictions
+
+RH-Author: Eduardo Habkost <ehabkost@redhat.com>
+Message-id: <20171213174341.20684-4-ehabkost@redhat.com>
+Patchwork-id: n/a
+O-Subject: [CONFIDENTIAL][RHEL-7.5 qemu-kvm PATCH v2 3/3] target-i386: cpu: add
+ new CPU models for indirect branch predictor restrictions
+Bugzilla: CVE-2017-5715
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Changes v1 -> v2:
+* Copied the original CPU models from the same source file, just adding
+  SPEC_CTRL and updating level/xlevel/model_id/stepping, to keep compatibility
+  code exactly the same.
+* Update compat_props so we can be sure the same compat rules will apply to the
+  original CPU models and to the *-IBRS ones
+
+To ensure the New CPU models won't introduce any unexpected
+changes except for the spec-ctrl feature (even if people are
+running older machine-types), copy all compat_props entries for
+existing CPU models to their *-IBRS versions.
+
+The only entries that are not being copied are the ones touching
+"(min-)level" and "(min-)xlevel" because it's an expected result
+of the CPU model change (otherwise the spec-ctrl feature would
+remain unavailable to the guest).
+
+The entries that had to be copied can be found using:
+  $ git grep -E 'Nehalem|Westmere|SandyBridge|IvyBridge|Haswell-noTSX|Haswell|Broadwell-noTSX|Broadwell|Skylake-Client|Skylake-Server|EPYC'
+
+Note that the upstream-only PC_COMPAT_* macros are not being
+touched as they are not used by the RHEL machine-types.
+---
+ hw/i386/pc_piix.c |  17 +++
+ hw/i386/pc_q35.c  |   1 +
+ target-i386/cpu.c | 328 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ target-i386/cpu.h |   3 +
+ 4 files changed, 349 insertions(+)
+
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index b043124..c53a6d4 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -753,7 +753,9 @@ static void pc_compat_rhel700(QEMUMachineInitArgs *args)
+     x86_cpu_compat_set_features("Conroe", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+     x86_cpu_compat_set_features("Penryn", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+     x86_cpu_compat_set_features("Nehalem", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    x86_cpu_compat_set_features("Nehalem-IBRS", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+     x86_cpu_compat_set_features("Westmere", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    x86_cpu_compat_set_features("Westmere-IBRS", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+     /* SandyBridge and Haswell already have x2apic enabled */
+     x86_cpu_compat_set_features("Opteron_G1", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+     x86_cpu_compat_set_features("Opteron_G2", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+@@ -928,18 +930,31 @@ static void pc_compat_rhel660(QEMUMachineInitArgs *args)
+     x86_cpu_compat_set_features("Conroe", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+     x86_cpu_compat_set_features("Penryn", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+     x86_cpu_compat_set_features("Nehalem", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    x86_cpu_compat_set_features("Nehalem-IBRS", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+     x86_cpu_compat_set_features("Westmere", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
++    x86_cpu_compat_set_features("Westmere-IBRS", FEAT_1_ECX, CPUID_EXT_X2APIC, 0);
+     x86_cpu_compat_set_features("Westmere", FEAT_1_ECX, 0, CPUID_EXT_PCLMULQDQ);
++    x86_cpu_compat_set_features("Westmere-IBRS", FEAT_1_ECX, 0, CPUID_EXT_PCLMULQDQ);
+     x86_cpu_compat_set_features("Westmere", FEAT_8000_0001_EDX,
+              CPUID_EXT2_FXSR | CPUID_EXT2_MMX | CPUID_EXT2_PAT |
+              CPUID_EXT2_CMOV | CPUID_EXT2_PGE | CPUID_EXT2_APIC |
+              CPUID_EXT2_CX8 | CPUID_EXT2_MCE | CPUID_EXT2_PAE | CPUID_EXT2_MSR |
+              CPUID_EXT2_TSC | CPUID_EXT2_PSE | CPUID_EXT2_DE | CPUID_EXT2_FPU,
+              0);
++    x86_cpu_compat_set_features("Westmere-IBRS", FEAT_8000_0001_EDX,
++             CPUID_EXT2_FXSR | CPUID_EXT2_MMX | CPUID_EXT2_PAT |
++             CPUID_EXT2_CMOV | CPUID_EXT2_PGE | CPUID_EXT2_APIC |
++             CPUID_EXT2_CX8 | CPUID_EXT2_MCE | CPUID_EXT2_PAE | CPUID_EXT2_MSR |
++             CPUID_EXT2_TSC | CPUID_EXT2_PSE | CPUID_EXT2_DE | CPUID_EXT2_FPU,
++             0);
+     x86_cpu_compat_set_features("Broadwell", FEAT_8000_0001_EDX,
+                                 0, CPUID_EXT2_RDTSCP);
++    x86_cpu_compat_set_features("Broadwell-IBRS", FEAT_8000_0001_EDX,
++                                0, CPUID_EXT2_RDTSCP);
+     x86_cpu_compat_set_features("Broadwell", FEAT_7_0_EBX,
+                                 0, CPUID_7_0_EBX_SMAP);
++    x86_cpu_compat_set_features("Broadwell-IBRS", FEAT_7_0_EBX,
++                                0, CPUID_7_0_EBX_SMAP);
+ 
+     /* RHEL-6 kernel never supported exposing RDTSCP */
+     x86_cpu_compat_set_features(NULL, FEAT_8000_0001_EDX, 0, CPUID_EXT2_RDTSCP);
+@@ -1122,6 +1137,8 @@ static void pc_compat_rhel630(QEMUMachineInitArgs *args)
+     enable_compat_apic_id_mode();
+     x86_cpu_compat_set_features("SandyBridge", FEAT_1_ECX,
+                                 0, CPUID_EXT_TSC_DEADLINE_TIMER);
++    x86_cpu_compat_set_features("SandyBridge-IBRS", FEAT_1_ECX,
++                                0, CPUID_EXT_TSC_DEADLINE_TIMER);
+ }
+ 
+ static void pc_init_rhel630(QEMUMachineInitArgs *args)
+diff --git a/hw/i386/pc_q35.c b/hw/i386/pc_q35.c
+index 850a25a..e6043df 100644
+--- a/hw/i386/pc_q35.c
++++ b/hw/i386/pc_q35.c
+@@ -228,6 +228,7 @@ static void pc_q35_init_1_4(QEMUMachineInitArgs *args)
+ {
+     x86_cpu_compat_set_features("n270", FEAT_1_ECX, 0, CPUID_EXT_MOVBE);
+     x86_cpu_compat_set_features("Westmere", FEAT_1_ECX, 0, CPUID_EXT_PCLMULQDQ);
++    x86_cpu_compat_set_features("Westmere-IBRS", FEAT_1_ECX, 0, CPUID_EXT_PCLMULQDQ);
+     pc_q35_init_1_5(args);
+ }
+ 
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index 335689b..08b43f5 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -884,6 +884,31 @@ static x86_def_t builtin_x86_defs[] = {
+         .model_id = "Intel Core i7 9xx (Nehalem Class Core i7)",
+     },
+     {
++        .name = "Nehalem-IBRS",
++        .level = 11,
++        .vendor = CPUID_VENDOR_INTEL,
++        .family = 6,
++        .model = 26,
++        .stepping = 3,
++        .features[FEAT_1_EDX] =
++            CPUID_SSE2 | CPUID_SSE | CPUID_FXSR | CPUID_MMX |
++             CPUID_CLFLUSH | CPUID_PSE36 | CPUID_PAT | CPUID_CMOV | CPUID_MCA |
++             CPUID_PGE | CPUID_MTRR | CPUID_SEP | CPUID_APIC | CPUID_CX8 |
++             CPUID_MCE | CPUID_PAE | CPUID_MSR | CPUID_TSC | CPUID_PSE |
++             CPUID_DE | CPUID_FP87,
++        .features[FEAT_1_ECX] =
++            CPUID_EXT_POPCNT | CPUID_EXT_SSE42 | CPUID_EXT_SSE41 |
++             CPUID_EXT_CX16 | CPUID_EXT_SSSE3 | CPUID_EXT_SSE3,
++        .features[FEAT_7_0_EDX] =
++            CPUID_7_0_EDX_SPEC_CTRL,
++        .features[FEAT_8000_0001_EDX] =
++            CPUID_EXT2_LM | CPUID_EXT2_SYSCALL | CPUID_EXT2_NX,
++        .features[FEAT_8000_0001_ECX] =
++            CPUID_EXT3_LAHF_LM,
++        .xlevel = 0x80000008,
++        .model_id = "Intel Core i7 9xx (Nehalem Core i7, IBRS update)",
++    },
++    {
+         .name = "Westmere",
+         .level = 11,
+         .vendor = CPUID_VENDOR_INTEL,
+@@ -908,6 +933,32 @@ static x86_def_t builtin_x86_defs[] = {
+         .model_id = "Westmere E56xx/L56xx/X56xx (Nehalem-C)",
+     },
+     {
++        .name = "Westmere-IBRS",
++        .level = 11,
++        .vendor = CPUID_VENDOR_INTEL,
++        .family = 6,
++        .model = 44,
++        .stepping = 1,
++        .features[FEAT_1_EDX] =
++            CPUID_SSE2 | CPUID_SSE | CPUID_FXSR | CPUID_MMX |
++             CPUID_CLFLUSH | CPUID_PSE36 | CPUID_PAT | CPUID_CMOV | CPUID_MCA |
++             CPUID_PGE | CPUID_MTRR | CPUID_SEP | CPUID_APIC | CPUID_CX8 |
++             CPUID_MCE | CPUID_PAE | CPUID_MSR | CPUID_TSC | CPUID_PSE |
++             CPUID_DE | CPUID_FP87,
++        .features[FEAT_1_ECX] =
++            CPUID_EXT_AES | CPUID_EXT_POPCNT | CPUID_EXT_SSE42 |
++             CPUID_EXT_SSE41 | CPUID_EXT_CX16 | CPUID_EXT_SSSE3 |
++             CPUID_EXT_PCLMULQDQ | CPUID_EXT_SSE3,
++        .features[FEAT_8000_0001_EDX] =
++            CPUID_EXT2_LM | CPUID_EXT2_SYSCALL | CPUID_EXT2_NX,
++        .features[FEAT_8000_0001_ECX] =
++            CPUID_EXT3_LAHF_LM,
++	.features[FEAT_7_0_EDX] =
++	    CPUID_7_0_EDX_SPEC_CTRL,
++        .xlevel = 0x80000008,
++        .model_id = "Westmere E56xx/L56xx/X56xx (IBRS update)",
++    },
++    {
+         .name = "SandyBridge",
+         .level = 0xd,
+         .vendor = CPUID_VENDOR_INTEL,
+@@ -937,6 +988,37 @@ static x86_def_t builtin_x86_defs[] = {
+         .model_id = "Intel Xeon E312xx (Sandy Bridge)",
+     },
+     {
++        .name = "SandyBridge-IBRS",
++        .level = 0xd,
++        .vendor = CPUID_VENDOR_INTEL,
++        .family = 6,
++        .model = 42,
++        .stepping = 1,
++        .features[FEAT_1_EDX] =
++            CPUID_SSE2 | CPUID_SSE | CPUID_FXSR | CPUID_MMX |
++             CPUID_CLFLUSH | CPUID_PSE36 | CPUID_PAT | CPUID_CMOV | CPUID_MCA |
++             CPUID_PGE | CPUID_MTRR | CPUID_SEP | CPUID_APIC | CPUID_CX8 |
++             CPUID_MCE | CPUID_PAE | CPUID_MSR | CPUID_TSC | CPUID_PSE |
++             CPUID_DE | CPUID_FP87,
++        .features[FEAT_1_ECX] =
++            CPUID_EXT_AVX | CPUID_EXT_XSAVE | CPUID_EXT_AES |
++             CPUID_EXT_TSC_DEADLINE_TIMER | CPUID_EXT_POPCNT |
++             CPUID_EXT_X2APIC | CPUID_EXT_SSE42 | CPUID_EXT_SSE41 |
++             CPUID_EXT_CX16 | CPUID_EXT_SSSE3 | CPUID_EXT_PCLMULQDQ |
++             CPUID_EXT_SSE3,
++        .features[FEAT_8000_0001_EDX] =
++            CPUID_EXT2_LM | CPUID_EXT2_RDTSCP | CPUID_EXT2_NX |
++             CPUID_EXT2_SYSCALL,
++        .features[FEAT_8000_0001_ECX] =
++            CPUID_EXT3_LAHF_LM,
++	.features[FEAT_7_0_EDX] =
++	    CPUID_7_0_EDX_SPEC_CTRL,
++        .features[FEAT_XSAVE] =
++            CPUID_XSAVE_XSAVEOPT,
++        .xlevel = 0x80000008,
++        .model_id = "Intel Xeon E312xx (Sandy Bridge, IBRS update)",
++    },
++    {
+         .name = "IvyBridge",
+         .level = 0xd,
+         .vendor = CPUID_VENDOR_INTEL,
+@@ -969,6 +1051,40 @@ static x86_def_t builtin_x86_defs[] = {
+         .model_id = "Intel Xeon E3-12xx v2 (Ivy Bridge)",
+     },
+     {
++        .name = "IvyBridge-IBRS",
++        .level = 0xd,
++        .vendor = CPUID_VENDOR_INTEL,
++        .family = 6,
++        .model = 58,
++        .stepping = 9,
++        .features[FEAT_1_EDX] =
++            CPUID_VME | CPUID_SSE2 | CPUID_SSE | CPUID_FXSR | CPUID_MMX |
++            CPUID_CLFLUSH | CPUID_PSE36 | CPUID_PAT | CPUID_CMOV | CPUID_MCA |
++            CPUID_PGE | CPUID_MTRR | CPUID_SEP | CPUID_APIC | CPUID_CX8 |
++            CPUID_MCE | CPUID_PAE | CPUID_MSR | CPUID_TSC | CPUID_PSE |
++            CPUID_DE | CPUID_FP87,
++        .features[FEAT_1_ECX] =
++            CPUID_EXT_AVX | CPUID_EXT_XSAVE | CPUID_EXT_AES |
++            CPUID_EXT_TSC_DEADLINE_TIMER | CPUID_EXT_POPCNT |
++            CPUID_EXT_X2APIC | CPUID_EXT_SSE42 | CPUID_EXT_SSE41 |
++            CPUID_EXT_CX16 | CPUID_EXT_SSSE3 | CPUID_EXT_PCLMULQDQ |
++            CPUID_EXT_SSE3 | CPUID_EXT_F16C | CPUID_EXT_RDRAND,
++        .features[FEAT_7_0_EBX] =
++            CPUID_7_0_EBX_FSGSBASE | CPUID_7_0_EBX_SMEP |
++            CPUID_7_0_EBX_ERMS,
++        .features[FEAT_8000_0001_EDX] =
++            CPUID_EXT2_LM | CPUID_EXT2_RDTSCP | CPUID_EXT2_NX |
++            CPUID_EXT2_SYSCALL,
++        .features[FEAT_8000_0001_ECX] =
++            CPUID_EXT3_LAHF_LM,
++	.features[FEAT_7_0_EDX] =
++	    CPUID_7_0_EDX_SPEC_CTRL,
++        .features[FEAT_XSAVE] =
++            CPUID_XSAVE_XSAVEOPT,
++        .xlevel = 0x80000008,
++        .model_id = "Intel Xeon E3-12xx v2 (Ivy Bridge, IBRS)",
++    },
++    {
+         .name = "Haswell",
+         .level = 0xd,
+         .vendor = CPUID_VENDOR_INTEL,
+@@ -1004,6 +1120,43 @@ static x86_def_t builtin_x86_defs[] = {
+         .model_id = "Intel Core Processor (Haswell)",
+     },
+     {
++        .name = "Haswell-IBRS",
++        .level = 0xd,
++        .vendor = CPUID_VENDOR_INTEL,
++        .family = 6,
++        .model = 60,
++        .stepping = 4,
++        .features[FEAT_1_EDX] =
++            CPUID_SSE2 | CPUID_SSE | CPUID_FXSR | CPUID_MMX |
++             CPUID_CLFLUSH | CPUID_PSE36 | CPUID_PAT | CPUID_CMOV | CPUID_MCA |
++             CPUID_PGE | CPUID_MTRR | CPUID_SEP | CPUID_APIC | CPUID_CX8 |
++             CPUID_MCE | CPUID_PAE | CPUID_MSR | CPUID_TSC | CPUID_PSE |
++             CPUID_DE | CPUID_FP87,
++        .features[FEAT_1_ECX] =
++            CPUID_EXT_AVX | CPUID_EXT_XSAVE | CPUID_EXT_AES |
++             CPUID_EXT_POPCNT | CPUID_EXT_X2APIC | CPUID_EXT_SSE42 |
++             CPUID_EXT_SSE41 | CPUID_EXT_CX16 | CPUID_EXT_SSSE3 |
++             CPUID_EXT_PCLMULQDQ | CPUID_EXT_SSE3 |
++             CPUID_EXT_TSC_DEADLINE_TIMER | CPUID_EXT_FMA | CPUID_EXT_MOVBE |
++             CPUID_EXT_PCID,
++        .features[FEAT_8000_0001_EDX] =
++            CPUID_EXT2_LM | CPUID_EXT2_RDTSCP | CPUID_EXT2_NX |
++             CPUID_EXT2_SYSCALL,
++        .features[FEAT_8000_0001_ECX] =
++            CPUID_EXT3_LAHF_LM,
++	.features[FEAT_7_0_EDX] =
++	    CPUID_7_0_EDX_SPEC_CTRL,
++        .features[FEAT_7_0_EBX] =
++            CPUID_7_0_EBX_FSGSBASE | CPUID_7_0_EBX_BMI1 |
++            CPUID_7_0_EBX_HLE | CPUID_7_0_EBX_AVX2 | CPUID_7_0_EBX_SMEP |
++            CPUID_7_0_EBX_BMI2 | CPUID_7_0_EBX_ERMS | CPUID_7_0_EBX_INVPCID |
++            CPUID_7_0_EBX_RTM,
++        .features[FEAT_XSAVE] =
++            CPUID_XSAVE_XSAVEOPT,
++        .xlevel = 0x80000008,
++        .model_id = "Intel Core Processor (Haswell, IBRS)",
++    },
++    {
+         .name = "Broadwell",
+         .level = 0xd,
+         .vendor = CPUID_VENDOR_INTEL,
+@@ -1040,6 +1193,44 @@ static x86_def_t builtin_x86_defs[] = {
+         .model_id = "Intel Core Processor (Broadwell)",
+     },
+     {
++        .name = "Broadwell-IBRS",
++        .level = 0xd,
++        .vendor = CPUID_VENDOR_INTEL,
++        .family = 6,
++        .model = 61,
++        .stepping = 2,
++        .features[FEAT_1_EDX] =
++            CPUID_SSE2 | CPUID_SSE | CPUID_FXSR | CPUID_MMX |
++            CPUID_CLFLUSH | CPUID_PSE36 | CPUID_PAT | CPUID_CMOV | CPUID_MCA |
++            CPUID_PGE | CPUID_MTRR | CPUID_SEP | CPUID_APIC | CPUID_CX8 |
++            CPUID_MCE | CPUID_PAE | CPUID_MSR | CPUID_TSC | CPUID_PSE |
++            CPUID_DE | CPUID_FP87,
++        .features[FEAT_1_ECX] =
++            CPUID_EXT_AVX | CPUID_EXT_XSAVE | CPUID_EXT_AES |
++            CPUID_EXT_POPCNT | CPUID_EXT_X2APIC | CPUID_EXT_SSE42 |
++            CPUID_EXT_SSE41 | CPUID_EXT_CX16 | CPUID_EXT_SSSE3 |
++            CPUID_EXT_PCLMULQDQ | CPUID_EXT_SSE3 |
++            CPUID_EXT_TSC_DEADLINE_TIMER | CPUID_EXT_FMA | CPUID_EXT_MOVBE |
++            CPUID_EXT_PCID,
++        .features[FEAT_8000_0001_EDX] =
++            CPUID_EXT2_LM | CPUID_EXT2_RDTSCP | CPUID_EXT2_NX |
++            CPUID_EXT2_SYSCALL,
++        .features[FEAT_8000_0001_ECX] =
++            CPUID_EXT3_LAHF_LM | CPUID_EXT3_3DNOWPREFETCH,
++	.features[FEAT_7_0_EDX] =
++	    CPUID_7_0_EDX_SPEC_CTRL,
++        .features[FEAT_7_0_EBX] =
++            CPUID_7_0_EBX_FSGSBASE | CPUID_7_0_EBX_BMI1 |
++            CPUID_7_0_EBX_HLE | CPUID_7_0_EBX_AVX2 | CPUID_7_0_EBX_SMEP |
++            CPUID_7_0_EBX_BMI2 | CPUID_7_0_EBX_ERMS | CPUID_7_0_EBX_INVPCID |
++            CPUID_7_0_EBX_RTM | CPUID_7_0_EBX_RDSEED | CPUID_7_0_EBX_ADX |
++            CPUID_7_0_EBX_SMAP,
++        .features[FEAT_XSAVE] =
++            CPUID_XSAVE_XSAVEOPT,
++        .xlevel = 0x80000008,
++        .model_id = "Intel Core Processor (Broadwell, IBRS)",
++    },
++    {
+         .name = "Skylake-Client",
+         .level = 0xd,
+         .vendor = CPUID_VENDOR_INTEL,
+@@ -1083,6 +1274,51 @@ static x86_def_t builtin_x86_defs[] = {
+         .model_id = "Intel Core Processor (Skylake)",
+     },
+     {
++        .name = "Skylake-Client-IBRS",
++        .level = 0xd,
++        .vendor = CPUID_VENDOR_INTEL,
++        .family = 6,
++        .model = 94,
++        .stepping = 3,
++        .features[FEAT_1_EDX] =
++            CPUID_VME | CPUID_SSE2 | CPUID_SSE | CPUID_FXSR | CPUID_MMX |
++            CPUID_CLFLUSH | CPUID_PSE36 | CPUID_PAT | CPUID_CMOV | CPUID_MCA |
++            CPUID_PGE | CPUID_MTRR | CPUID_SEP | CPUID_APIC | CPUID_CX8 |
++            CPUID_MCE | CPUID_PAE | CPUID_MSR | CPUID_TSC | CPUID_PSE |
++            CPUID_DE | CPUID_FP87,
++        .features[FEAT_1_ECX] =
++            CPUID_EXT_AVX | CPUID_EXT_XSAVE | CPUID_EXT_AES |
++            CPUID_EXT_POPCNT | CPUID_EXT_X2APIC | CPUID_EXT_SSE42 |
++            CPUID_EXT_SSE41 | CPUID_EXT_CX16 | CPUID_EXT_SSSE3 |
++            CPUID_EXT_PCLMULQDQ | CPUID_EXT_SSE3 |
++            CPUID_EXT_TSC_DEADLINE_TIMER | CPUID_EXT_FMA | CPUID_EXT_MOVBE |
++            CPUID_EXT_PCID | CPUID_EXT_F16C | CPUID_EXT_RDRAND,
++        .features[FEAT_8000_0001_EDX] =
++            CPUID_EXT2_LM | CPUID_EXT2_RDTSCP | CPUID_EXT2_NX |
++            CPUID_EXT2_SYSCALL,
++        .features[FEAT_8000_0001_ECX] =
++            CPUID_EXT3_ABM | CPUID_EXT3_LAHF_LM | CPUID_EXT3_3DNOWPREFETCH,
++	.features[FEAT_7_0_EDX] =
++	    CPUID_7_0_EDX_SPEC_CTRL,
++        .features[FEAT_7_0_EBX] =
++            CPUID_7_0_EBX_FSGSBASE | CPUID_7_0_EBX_BMI1 |
++            CPUID_7_0_EBX_HLE | CPUID_7_0_EBX_AVX2 | CPUID_7_0_EBX_SMEP |
++            CPUID_7_0_EBX_BMI2 | CPUID_7_0_EBX_ERMS | CPUID_7_0_EBX_INVPCID |
++            CPUID_7_0_EBX_RTM | CPUID_7_0_EBX_RDSEED | CPUID_7_0_EBX_ADX |
++            CPUID_7_0_EBX_SMAP | CPUID_7_0_EBX_MPX,
++        /* Missing: XSAVES (not supported by some Linux versions,
++         * including v4.1 to v4.12).
++         * KVM doesn't yet expose any XSAVES state save component,
++         * and the only one defined in Skylake (processor tracing)
++         * probably will block migration anyway.
++         */
++        .features[FEAT_XSAVE] =
++            CPUID_XSAVE_XSAVEOPT | CPUID_XSAVE_XSAVEC |
++            CPUID_XSAVE_XGETBV1,
++        .xlevel = 0x80000008,
++        .model_id = "Intel Core Processor (Skylake, IBRS)",
++    },
++    {
+         .name = "Skylake-Server",
+         .level = 0xd,
+         .vendor = CPUID_VENDOR_INTEL,
+@@ -1133,6 +1369,54 @@ static x86_def_t builtin_x86_defs[] = {
+         .model_id = "Intel Xeon Processor (Skylake)",
+     },
+     {
++        .name = "Skylake-Server-IBRS",
++        .level = 0xd,
++        .vendor = CPUID_VENDOR_INTEL,
++        .family = 6,
++        .model = 85,
++        .stepping = 4,
++        .features[FEAT_1_EDX] =
++            CPUID_VME | CPUID_SSE2 | CPUID_SSE | CPUID_FXSR | CPUID_MMX |
++            CPUID_CLFLUSH | CPUID_PSE36 | CPUID_PAT | CPUID_CMOV | CPUID_MCA |
++            CPUID_PGE | CPUID_MTRR | CPUID_SEP | CPUID_APIC | CPUID_CX8 |
++            CPUID_MCE | CPUID_PAE | CPUID_MSR | CPUID_TSC | CPUID_PSE |
++            CPUID_DE | CPUID_FP87,
++        .features[FEAT_1_ECX] =
++            CPUID_EXT_AVX | CPUID_EXT_XSAVE | CPUID_EXT_AES |
++            CPUID_EXT_POPCNT | CPUID_EXT_X2APIC | CPUID_EXT_SSE42 |
++            CPUID_EXT_SSE41 | CPUID_EXT_CX16 | CPUID_EXT_SSSE3 |
++            CPUID_EXT_PCLMULQDQ | CPUID_EXT_SSE3 |
++            CPUID_EXT_TSC_DEADLINE_TIMER | CPUID_EXT_FMA | CPUID_EXT_MOVBE |
++            CPUID_EXT_PCID | CPUID_EXT_F16C | CPUID_EXT_RDRAND,
++        .features[FEAT_8000_0001_EDX] =
++            CPUID_EXT2_LM | CPUID_EXT2_PDPE1GB | CPUID_EXT2_RDTSCP |
++            CPUID_EXT2_NX | CPUID_EXT2_SYSCALL,
++        .features[FEAT_8000_0001_ECX] =
++            CPUID_EXT3_ABM | CPUID_EXT3_LAHF_LM | CPUID_EXT3_3DNOWPREFETCH,
++	.features[FEAT_7_0_EDX] =
++	    CPUID_7_0_EDX_SPEC_CTRL,
++        .features[FEAT_7_0_EBX] =
++            CPUID_7_0_EBX_FSGSBASE | CPUID_7_0_EBX_BMI1 |
++            CPUID_7_0_EBX_HLE | CPUID_7_0_EBX_AVX2 | CPUID_7_0_EBX_SMEP |
++            CPUID_7_0_EBX_BMI2 | CPUID_7_0_EBX_ERMS | CPUID_7_0_EBX_INVPCID |
++            CPUID_7_0_EBX_RTM | CPUID_7_0_EBX_RDSEED | CPUID_7_0_EBX_ADX |
++            CPUID_7_0_EBX_SMAP | CPUID_7_0_EBX_MPX | CPUID_7_0_EBX_CLWB |
++            CPUID_7_0_EBX_AVX512F | CPUID_7_0_EBX_AVX512DQ |
++            CPUID_7_0_EBX_AVX512BW | CPUID_7_0_EBX_AVX512CD |
++            CPUID_7_0_EBX_AVX512VL,
++        /* Missing: XSAVES (not supported by some Linux versions,
++         * including v4.1 to v4.12).
++         * KVM doesn't yet expose any XSAVES state save component,
++         * and the only one defined in Skylake (processor tracing)
++         * probably will block migration anyway.
++         */
++        .features[FEAT_XSAVE] =
++            CPUID_XSAVE_XSAVEOPT | CPUID_XSAVE_XSAVEC |
++            CPUID_XSAVE_XGETBV1,
++        .xlevel = 0x80000008,
++        .model_id = "Intel Xeon Processor (Skylake, IBRS)",
++    },
++    {
+         .name = "Opteron_G1",
+         .level = 5,
+         .vendor = CPUID_VENDOR_AMD,
+@@ -1332,6 +1616,50 @@ static x86_def_t builtin_x86_defs[] = {
+         .xlevel = 0x8000000A,
+         .model_id = "AMD EPYC Processor",
+     },
++    {
++        .name = "EPYC-IBPB",
++        .level = 0xd,
++        .vendor = CPUID_VENDOR_AMD,
++        .family = 23,
++        .model = 1,
++        .stepping = 2,
++        .features[FEAT_1_EDX] =
++            CPUID_SSE2 | CPUID_SSE | CPUID_FXSR | CPUID_MMX | CPUID_CLFLUSH |
++            CPUID_PSE36 | CPUID_PAT | CPUID_CMOV | CPUID_MCA | CPUID_PGE |
++            CPUID_MTRR | CPUID_SEP | CPUID_APIC | CPUID_CX8 | CPUID_MCE |
++            CPUID_PAE | CPUID_MSR | CPUID_TSC | CPUID_PSE | CPUID_DE |
++            CPUID_VME | CPUID_FP87,
++        .features[FEAT_1_ECX] =
++            CPUID_EXT_RDRAND | CPUID_EXT_F16C | CPUID_EXT_AVX |
++            CPUID_EXT_XSAVE | CPUID_EXT_AES |  CPUID_EXT_POPCNT |
++            CPUID_EXT_MOVBE | CPUID_EXT_SSE42 | CPUID_EXT_SSE41 |
++            CPUID_EXT_CX16 | CPUID_EXT_FMA | CPUID_EXT_SSSE3 |
++            CPUID_EXT_MONITOR | CPUID_EXT_PCLMULQDQ | CPUID_EXT_SSE3,
++        .features[FEAT_8000_0001_EDX] =
++            CPUID_EXT2_LM | CPUID_EXT2_RDTSCP | CPUID_EXT2_PDPE1GB |
++            CPUID_EXT2_FFXSR | CPUID_EXT2_MMXEXT | CPUID_EXT2_NX |
++            CPUID_EXT2_SYSCALL,
++        .features[FEAT_8000_0001_ECX] =
++            CPUID_EXT3_OSVW | CPUID_EXT3_3DNOWPREFETCH |
++            CPUID_EXT3_MISALIGNSSE | CPUID_EXT3_SSE4A | CPUID_EXT3_ABM |
++            CPUID_EXT3_CR8LEG | CPUID_EXT3_SVM | CPUID_EXT3_LAHF_LM,
++	.features[FEAT_8000_0008_EBX] =
++	    CPUID_8000_0008_EBX_IBPB,
++        .features[FEAT_7_0_EBX] =
++            CPUID_7_0_EBX_FSGSBASE | CPUID_7_0_EBX_BMI1 | CPUID_7_0_EBX_AVX2 |
++            CPUID_7_0_EBX_SMEP | CPUID_7_0_EBX_BMI2 | CPUID_7_0_EBX_RDSEED |
++            CPUID_7_0_EBX_ADX | CPUID_7_0_EBX_SMAP | CPUID_7_0_EBX_CLFLUSHOPT |
++            CPUID_7_0_EBX_SHA_NI,
++        /* Missing: XSAVES (not supported by some Linux versions,
++         * including v4.1 to v4.12).
++         * KVM doesn't yet expose any XSAVES state save component.
++         */
++        .features[FEAT_XSAVE] =
++            CPUID_XSAVE_XSAVEOPT | CPUID_XSAVE_XSAVEC |
++            CPUID_XSAVE_XGETBV1,
++        .xlevel = 0x8000000A,
++        .model_id = "AMD EPYC Processor (with IBPB)",
++    },
+ };
+ 
+ /**
+diff --git a/target-i386/cpu.h b/target-i386/cpu.h
+index 7d815cd..a8a640a 100644
+--- a/target-i386/cpu.h
++++ b/target-i386/cpu.h
+@@ -589,6 +589,9 @@ typedef uint32_t FeatureWordArray[FEATURE_WORDS];
+ 
+ #define CPUID_7_0_EDX_AVX512_4VNNIW (1U << 2) /* AVX512 Neural Network Instructions */
+ #define CPUID_7_0_EDX_AVX512_4FMAPS (1U << 3) /* AVX512 Multiply Accumulation Single Precision */
++#define CPUID_7_0_EDX_SPEC_CTRL     (1U << 26) /* Indirect Branch - Restrict Speculation */
++
++#define CPUID_8000_0008_EBX_IBPB    (1U << 12) /* Indirect Branch Prediction Barrier */
+ 
+ #define CPUID_7_0_ECX_PKU      (1U << 3)
+ #define CPUID_7_0_ECX_OSPKE    (1U << 4)
+-- 
+1.8.3.1
+

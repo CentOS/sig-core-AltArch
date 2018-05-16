@@ -1,0 +1,88 @@
+From 26e8c3574944585f9f02a92b03a6e7097dd3a7dd Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:38:53 +0100
+Subject: [PATCH 22/41] dump: allow target to set the physical base
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-23-marcandre.lureau@redhat.com>
+Patchwork-id: 78371
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 22/41] dump: allow target to set the physical base
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Andrew Jones <drjones@redhat.com>
+
+crash assumes the physical base in the kdump subheader of
+makedumpfile formatted dumps is correct. Zero is not correct
+for all architectures, so allow it to be changed.
+
+(No functional change.)
+
+Signed-off-by: Andrew Jones <drjones@redhat.com>
+Reviewed-by: Peter Maydell <peter.maydell@linaro.org>
+Message-id: 1452542185-10914-5-git-send-email-drjones@redhat.com
+Signed-off-by: Peter Maydell <peter.maydell@linaro.org>
+
+(cherry picked from commit b6e05aa473b52e049654fae834453232e6b6e798)
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c                     | 4 ++--
+ include/sysemu/dump-arch.h | 1 +
+ include/sysemu/dump.h      | 1 -
+ 3 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/dump.c b/dump.c
+index b5d6608..a359c29 100644
+--- a/dump.c
++++ b/dump.c
+@@ -780,7 +780,7 @@ static void create_header32(DumpState *s, Error **errp)
+ 
+     /* 64bit max_mapnr_64 */
+     kh->max_mapnr_64 = cpu_to_dump64(s, s->max_mapnr);
+-    kh->phys_base = cpu_to_dump32(s, PHYS_BASE);
++    kh->phys_base = cpu_to_dump32(s, s->dump_info.phys_base);
+     kh->dump_level = cpu_to_dump32(s, DUMP_LEVEL);
+ 
+     offset_note = DISKDUMP_HEADER_BLOCKS * block_size + size;
+@@ -880,7 +880,7 @@ static void create_header64(DumpState *s, Error **errp)
+ 
+     /* 64bit max_mapnr_64 */
+     kh->max_mapnr_64 = cpu_to_dump64(s, s->max_mapnr);
+-    kh->phys_base = cpu_to_dump64(s, PHYS_BASE);
++    kh->phys_base = cpu_to_dump64(s, s->dump_info.phys_base);
+     kh->dump_level = cpu_to_dump32(s, DUMP_LEVEL);
+ 
+     offset_note = DISKDUMP_HEADER_BLOCKS * block_size + size;
+diff --git a/include/sysemu/dump-arch.h b/include/sysemu/dump-arch.h
+index 4335839..e25b02e 100644
+--- a/include/sysemu/dump-arch.h
++++ b/include/sysemu/dump-arch.h
+@@ -20,6 +20,7 @@ typedef struct ArchDumpInfo {
+     int d_class;             /* ELFCLASS32 or ELFCLASS64 */
+     uint32_t page_size;      /* The target's page size. If it's variable and
+                               * unknown, then this should be the maximum. */
++    uint64_t phys_base;      /* The target's physmem base. */
+ } ArchDumpInfo;
+ 
+ struct GuestPhysBlockList; /* memory_mapping.h */
+diff --git a/include/sysemu/dump.h b/include/sysemu/dump.h
+index 16cbd8d..2f04b24 100644
+--- a/include/sysemu/dump.h
++++ b/include/sysemu/dump.h
+@@ -33,7 +33,6 @@
+ 
+ #define KDUMP_SIGNATURE             "KDUMP   "
+ #define SIG_LEN                     (sizeof(KDUMP_SIGNATURE) - 1)
+-#define PHYS_BASE                   (0)
+ #define DUMP_LEVEL                  (1)
+ #define DISKDUMP_HEADER_BLOCKS      (1)
+ 
+-- 
+1.8.3.1
+

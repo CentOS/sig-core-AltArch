@@ -1,0 +1,68 @@
+From b72ee3ebf0f00962872c69ad3576e1c8c0a208d9 Mon Sep 17 00:00:00 2001
+From: Fam Zheng <famz@redhat.com>
+Date: Thu, 21 Sep 2017 14:23:45 -0300
+Subject: [PATCH] block: Limit multiwrite merge (downstream only)
+
+RH-Author: Fam Zheng <famz@redhat.com>
+Message-id: <20170921142345.22892-1-famz@redhat.com>
+Patchwork-id: 76502
+O-Subject: [RHEL-7.4 qemu-kvm PATCH] block: Limit multiwrite merge (downstream only)
+Bugzilla: 1492559
+RH-Acked-by: Max Reitz <mreitz@redhat.com>
+RH-Acked-by: John Snow <jsnow@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+
+BZ: https://bugzilla.redhat.com/show_bug.cgi?id=1492559
+Brew: https://brewweb.engineering.redhat.com/brew/taskinfo?taskID=14090140
+Upstream: Fixed since 2.3, see below.
+
+We don't limit the size of the final request of multiwrite_merge. The BZ
+has a relatively stable reproducer: Attach an iscsi:// lun as
+virtio-blk, then mkfs.ext4. When the guest kernel flushes the page
+cache, iscsi driver gets two huge requests that are rejected by the LIO
+iscsi target, then reports EIO.
+
+Upstream QEMU and qemu-kvm-rhev don't have this problem because of two
+things:
+
+1) multiread feature in virtio-blk added in 2.3 (95f7142abc8).
+
+2) request fragmentation in block layer I/O in 2.7 (04ed95f484 and
+   1a62d0accd).
+
+For 1), we cannot do a faithful backport because it is a new feature,
+and is invasive. The change of this patch can be seen as doing a small
+part from it, though the implementation is totally different.
+
+For 2), we would have a serious context conflict because upstream has a
+lot of intermediate changes. The patch could possibly be rewritten in
+downstream but is on the one hand much more risky than this patch as it
+touches the very center of the block I/O code, and on the other hand
+loses the meaning because the diff will completely deviate from
+upstream.
+
+Signed-off-by: Fam Zheng <famz@redhat.com>
+Signed-off-by: Wainer dos Santos Moschetta <wainersm@redhat.com>
+---
+ block.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/block.c b/block.c
+index bdcd741389..b0373d0c16 100644
+--- a/block.c
++++ b/block.c
+@@ -4303,6 +4303,11 @@ static int multiwrite_merge(BlockDriverState *bs, BlockRequest *reqs,
+             merge = 0;
+         }
+ 
++        if (reqs[outidx].qiov->size + reqs[i].qiov->size >=
++            bs->bl.max_transfer_length * BDRV_SECTOR_SIZE) {
++            merge = 0;
++        }
++
+         if (merge) {
+             size_t size;
+             QEMUIOVector *qiov = g_malloc0(sizeof(*qiov));
+-- 
+2.13.5
+

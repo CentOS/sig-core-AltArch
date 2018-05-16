@@ -1,0 +1,143 @@
+From 9a2ab369a3685f85dfa7449c31a2267333cb1468 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:39:02 +0100
+Subject: [PATCH 31/41] dump: update phys_base header field based on VMCOREINFO
+ content
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-32-marcandre.lureau@redhat.com>
+Patchwork-id: 78380
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 31/41] dump: update phys_base header field based on VMCOREINFO content
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+If the guest note is VMCOREINFO, try to get phys_base from it.
+
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+
+(cherry picked from commit d9feb51772b4ade9700c7fa54529327a6c8183a7)
+
+RHEL: replace qemu_strotu64() usage, warn_report()->error_report()
+
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ docs/specs/vmcoreinfo.txt |  8 +++++++
+ dump.c                    | 57 +++++++++++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 63 insertions(+), 2 deletions(-)
+
+diff --git a/docs/specs/vmcoreinfo.txt b/docs/specs/vmcoreinfo.txt
+index 2868a77..8212610 100644
+--- a/docs/specs/vmcoreinfo.txt
++++ b/docs/specs/vmcoreinfo.txt
+@@ -39,3 +39,11 @@ qemu dumps.
+ 
+ The note format/class must be of the target bitness and the size must
+ be less than 1Mb.
++
++If the ELF note name is "VMCOREINFO", it is expected to be the Linux
++vmcoreinfo note (see Documentation/ABI/testing/sysfs-kernel-vmcoreinfo
++in Linux source). In this case, qemu dump code will read the content
++as a key=value text file, looking for "NUMBER(phys_base)" key
++value. The value is expected to be more accurate than architecture
++guess of the value. This is useful for KASLR-enabled guest with
++ancient tools not handling the VMCOREINFO note.
+diff --git a/dump.c b/dump.c
+index 823d1ad..3bce730 100644
+--- a/dump.c
++++ b/dump.c
+@@ -777,6 +777,23 @@ static void get_note_sizes(DumpState *s, const void *note,
+     }
+ }
+ 
++static bool note_name_equal(DumpState *s,
++                            const uint8_t *note, const char *name)
++{
++    int len = strlen(name) + 1;
++    uint64_t head_size, name_size;
++
++    get_note_sizes(s, note, &head_size, &name_size, NULL);
++    head_size = ROUND_UP(head_size, 4);
++
++    if (name_size != len ||
++        memcmp(note + head_size, "VMCOREINFO", len)) {
++        return false;
++    }
++
++    return true;
++}
++
+ /* write common header, sub header and elf note to vmcore */
+ static void create_header32(DumpState *s, Error **errp)
+ {
+@@ -1553,6 +1570,40 @@ static int64_t dump_calculate_size(DumpState *s)
+     return total;
+ }
+ 
++static void vmcoreinfo_update_phys_base(DumpState *s)
++{
++    uint64_t size, note_head_size, name_size, phys_base;
++    char **lines;
++    uint8_t *vmci;
++    size_t i;
++
++    if (!note_name_equal(s, s->guest_note, "VMCOREINFO")) {
++        return;
++    }
++
++    get_note_sizes(s, s->guest_note, &note_head_size, &name_size, &size);
++    note_head_size = ROUND_UP(note_head_size, 4);
++
++    vmci = s->guest_note + note_head_size + ROUND_UP(name_size, 4);
++    *(vmci + size) = '\0';
++
++    lines = g_strsplit((char *)vmci, "\n", -1);
++    for (i = 0; lines[i]; i++) {
++        if (g_str_has_prefix(lines[i], "NUMBER(phys_base)=")) {
++            errno = 0;
++            phys_base = strtoull(lines[i] + 18, NULL, 16);
++            if (errno == ERANGE) {
++                error_report("Failed to read NUMBER(phys_base)=");
++            } else {
++                s->dump_info.phys_base = phys_base;
++            }
++            break;
++        }
++    }
++
++    g_strfreev(lines);
++}
++
+ static void dump_init(DumpState *s, int fd, bool has_format,
+                       DumpGuestMemoryFormat format, bool paging, bool has_filter,
+                       int64_t begin, int64_t length, Error **errp)
+@@ -1636,8 +1687,9 @@ static void dump_init(DumpState *s, int fd, bool has_format,
+     }
+ 
+     /*
+-     * The goal of this block is to copy the guest note out of
+-     * the guest.  Failure to do so is not fatal for dumping.
++     * The goal of this block is to (a) update the previously guessed
++     * phys_base, (b) copy the guest note out of the guest.
++     * Failure to do so is not fatal for dumping.
+      */
+     if (vmci) {
+         uint64_t addr, note_head_size, name_size, desc_size;
+@@ -1670,6 +1722,7 @@ static void dump_init(DumpState *s, int fd, bool has_format,
+                 g_free(s->guest_note);
+                 s->guest_note = NULL;
+             } else {
++                vmcoreinfo_update_phys_base(s);
+                 s->note_size += s->guest_note_size;
+             }
+         }
+-- 
+1.8.3.1
+

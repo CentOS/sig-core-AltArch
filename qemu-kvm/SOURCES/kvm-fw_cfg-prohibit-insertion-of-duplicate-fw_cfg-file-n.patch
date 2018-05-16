@@ -1,0 +1,80 @@
+From 08eb83666fe11d81813270541bcb76bad8bd5902 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:38:34 +0100
+Subject: [PATCH 03/41] fw_cfg: prohibit insertion of duplicate fw_cfg file
+ names
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-4-marcandre.lureau@redhat.com>
+Patchwork-id: 78351
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 03/41] fw_cfg: prohibit insertion of duplicate fw_cfg file names
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: "Gabriel L. Somlo" <somlo@cmu.edu>
+
+Exit with an error (instead of simply logging a trace event)
+whenever the same fw_cfg file name is added multiple times via
+one of the fw_cfg_add_file[_callback]() host-side API calls.
+
+Signed-off-by: Gabriel Somlo <somlo@cmu.edu>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+
+(cherry picked from commit 0eb973f91521c6bcb6399d25327711d083f6eb10)
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/nvram/fw_cfg.c | 11 ++++++-----
+ trace-events      |  1 -
+ 2 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/hw/nvram/fw_cfg.c b/hw/nvram/fw_cfg.c
+index 149e2fb..a33e861 100644
+--- a/hw/nvram/fw_cfg.c
++++ b/hw/nvram/fw_cfg.c
+@@ -443,18 +443,19 @@ void fw_cfg_add_file_callback(FWCfgState *s,  const char *filename,
+     index = be32_to_cpu(s->files->count);
+     assert(index < FW_CFG_FILE_SLOTS);
+ 
+-    fw_cfg_add_bytes_read_callback(s, FW_CFG_FILE_FIRST + index,
+-                                   callback, callback_opaque, data, len);
+-
+     pstrcpy(s->files->f[index].name, sizeof(s->files->f[index].name),
+             filename);
+     for (i = 0; i < index; i++) {
+         if (strcmp(s->files->f[index].name, s->files->f[i].name) == 0) {
+-            trace_fw_cfg_add_file_dupe(s, s->files->f[index].name);
+-            return;
++            error_report("duplicate fw_cfg file name: %s",
++                         s->files->f[index].name);
++            exit(1);
+         }
+     }
+ 
++    fw_cfg_add_bytes_read_callback(s, FW_CFG_FILE_FIRST + index,
++                                   callback, callback_opaque, data, len);
++
+     s->files->f[index].size   = cpu_to_be32(len);
+     s->files->f[index].select = cpu_to_be16(FW_CFG_FILE_FIRST + index);
+     trace_fw_cfg_add_file(s, index, s->files->f[index].name, len);
+diff --git a/trace-events b/trace-events
+index a987dfa..8c3ce0c 100644
+--- a/trace-events
++++ b/trace-events
+@@ -178,7 +178,6 @@ ecc_diag_mem_readb(uint64_t addr, uint32_t ret) "Read diagnostic %"PRId64"= %02x
+ # hw/nvram/fw_cfg.c
+ fw_cfg_select(void *s, uint16_t key, int ret) "%p key %d = %d"
+ fw_cfg_read(void *s, uint8_t ret) "%p = %d"
+-fw_cfg_add_file_dupe(void *s, char *name) "%p %s"
+ fw_cfg_add_file(void *s, int index, char *name, size_t len) "%p #%d: %s (%zd bytes)"
+ 
+ # hw/block/hd-geometry.c
+-- 
+1.8.3.1
+

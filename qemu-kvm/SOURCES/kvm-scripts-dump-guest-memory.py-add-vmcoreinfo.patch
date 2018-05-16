@@ -1,0 +1,134 @@
+From 8a0fb382404cba1a4d88dd489a14d585fc95f3cf Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:39:10 +0100
+Subject: [PATCH 39/41] scripts/dump-guest-memory.py: add vmcoreinfo
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-40-marcandre.lureau@redhat.com>
+Patchwork-id: 78389
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 39/41] scripts/dump-guest-memory.py: add vmcoreinfo
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Add a vmcoreinfo ELF note in the dump if vmcoreinfo device has the
+memory location details.
+
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+
+(cherry picked from commit d23bfa91b7789534d16ede6cb7d925bfac3f3c4c)
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ scripts/dump-guest-memory.py | 61 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 61 insertions(+)
+
+diff --git a/scripts/dump-guest-memory.py b/scripts/dump-guest-memory.py
+index 03d692d..471aa73 100644
+--- a/scripts/dump-guest-memory.py
++++ b/scripts/dump-guest-memory.py
+@@ -17,6 +17,7 @@
+ # gdb.
+ 
+ import ctypes
++import struct
+ 
+ UINTPTR_T = gdb.lookup_type("uintptr_t")
+ 
+@@ -48,6 +49,17 @@ EM_S390 = 22
+ EM_AARCH = 183
+ EM_X86_64 = 62
+ 
++VMCOREINFO_FORMAT_ELF = 1
++
++def le16_to_cpu(val):
++    return struct.unpack("<H", struct.pack("=H", val))[0]
++
++def le32_to_cpu(val):
++    return struct.unpack("<I", struct.pack("=I", val))[0]
++
++def le64_to_cpu(val):
++    return struct.unpack("<Q", struct.pack("=Q", val))[0]
++
+ class ELF(object):
+     """Representation of a ELF file."""
+ 
+@@ -123,6 +135,25 @@ class ELF(object):
+         self.segments[0].p_filesz += ctypes.sizeof(note)
+         self.segments[0].p_memsz += ctypes.sizeof(note)
+ 
++
++    def add_vmcoreinfo_note(self, vmcoreinfo):
++        """Adds a vmcoreinfo note to the ELF dump."""
++        # compute the header size, and copy that many bytes from the note
++        header = get_arch_note(self.endianness, 0, 0)
++        ctypes.memmove(ctypes.pointer(header),
++                       vmcoreinfo, ctypes.sizeof(header))
++        if header.n_descsz > 1 << 20:
++            print('warning: invalid vmcoreinfo size')
++            return
++        # now get the full note
++        note = get_arch_note(self.endianness,
++                             header.n_namesz - 1, header.n_descsz)
++        ctypes.memmove(ctypes.pointer(note), vmcoreinfo, ctypes.sizeof(note))
++
++        self.notes.append(note)
++        self.segments[0].p_filesz += ctypes.sizeof(note)
++        self.segments[0].p_memsz += ctypes.sizeof(note)
++
+     def add_segment(self, p_type, p_paddr, p_size):
+         """Adds a segment to the elf."""
+ 
+@@ -505,6 +536,35 @@ shape and this command should mostly work."""
+                 cur += chunk_size
+                 left -= chunk_size
+ 
++    def phys_memory_read(self, addr, size):
++        qemu_core = gdb.inferiors()[0]
++        for block in self.guest_phys_blocks:
++            if block["target_start"] <= addr \
++               and addr + size <= block["target_end"]:
++                haddr = block["host_addr"] + (addr - block["target_start"])
++                return qemu_core.read_memory(haddr, size)
++        return None
++
++    def add_vmcoreinfo(self):
++        if not gdb.parse_and_eval("vmcoreinfo_find()") \
++           or not gdb.parse_and_eval("vmcoreinfo_find()->has_vmcoreinfo"):
++            return
++
++        fmt = gdb.parse_and_eval("vmcoreinfo_find()->vmcoreinfo.guest_format")
++        addr = gdb.parse_and_eval("vmcoreinfo_find()->vmcoreinfo.paddr")
++        size = gdb.parse_and_eval("vmcoreinfo_find()->vmcoreinfo.size")
++
++        fmt = le16_to_cpu(fmt)
++        addr = le64_to_cpu(addr)
++        size = le32_to_cpu(size)
++
++        if fmt != VMCOREINFO_FORMAT_ELF:
++            return
++
++        vmcoreinfo = self.phys_memory_read(addr, size)
++        if vmcoreinfo:
++            self.elf.add_vmcoreinfo_note(vmcoreinfo.tobytes())
++
+     def invoke(self, args, from_tty):
+         """Handles command invocation from gdb."""
+ 
+@@ -518,6 +578,7 @@ shape and this command should mostly work."""
+ 
+         self.elf = ELF("X86_64")
+         self.guest_phys_blocks = get_guest_phys_blocks()
++        self.add_vmcoreinfo()
+ 
+         with open(argv[0], "wb") as vmcore:
+             self.dump_init(vmcore)
+-- 
+1.8.3.1
+

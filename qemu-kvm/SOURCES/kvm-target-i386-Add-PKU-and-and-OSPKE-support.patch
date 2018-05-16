@@ -1,0 +1,186 @@
+From 27f52a18ed8503f5a0333106c38e44f911052d4d Mon Sep 17 00:00:00 2001
+From: "plai@redhat.com" <plai@redhat.com>
+Date: Mon, 11 Sep 2017 21:57:36 +0200
+Subject: [PATCH 4/4] target-i386: Add PKU and and OSPKE support
+
+RH-Author: plai@redhat.com
+Message-id: <1505167056-5861-1-git-send-email-plai@redhat.com>
+Patchwork-id: 76308
+O-Subject: [RHEL7.5 PATCH BZ 1387648 v2] target-i386: Add PKU and and OSPKE support
+Bugzilla: 1387648
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+RH-Acked-by: Bandan Das <bsd@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Huaitong Han <huaitong.han@intel.com>
+
+------ v2 comment
+BZ: https://bugzilla.redhat.com/show_bug.cgi?id=1387648
+BREW: https://brewweb.engineering.redhat.com/brew/taskinfo?taskID=14031692
+
+In v1, Eduardo noticed "avx512-vpopcntdq" moved in
+target-i386/cpu.c:cpuid_7_0_ecx_feature_name[].
+Corrected the patch typo here in v2.
+
+Tested on intel-purley-fpgabmp-01.khw.lab.eng.bos.redhat.com.
+VM guest was fedora-26 image (linux 4.11.0-300).
+Tests Run (of tools/testing/selftests/x86/protection_keys.c):
+ 1. Successful test on host,
+ 2. Successful negative test w/ current qemu-kvm in VM guest.
+ 3. Successful test w/ test build qemu-kvm in VM guest.
+------
+
+Add PKU and OSPKE CPUID features, including xsave state and
+migration support.
+
+Signed-off-by: Huaitong Han <huaitong.han@intel.com>
+Reviewed-by: Eduardo Habkost <ehabkost@redhat.com>
+[ehabkost: squashed 3 patches together, edited patch description]
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+
+(cherry picked from commit f74eefe0b98cd7e13825de8e8d9f32e22aed102c)
+Signed-off-by: Paul Lai <plai@redhat.com>
+
+Resolved Conflicts:
+	target-i386/cpu.c
+	target-i386/cpu.h
+	target-i386/kvm.c
+	target-i386/machine.c
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/cpu.c     |  6 ++++--
+ target-i386/cpu.h     |  6 ++++++
+ target-i386/kvm.c     |  3 +++
+ target-i386/machine.c | 25 +++++++++++++++++++++++++
+ 4 files changed, 38 insertions(+), 2 deletions(-)
+
+diff --git a/target-i386/cpu.c b/target-i386/cpu.c
+index ae56995..fbd3117 100644
+--- a/target-i386/cpu.c
++++ b/target-i386/cpu.c
+@@ -155,8 +155,8 @@ static const char *cpuid_7_0_ebx_feature_name[] = {
+ };
+ 
+ static const char *cpuid_7_0_ecx_feature_name[] = {
+-    NULL, "avx512vbmi", NULL, NULL,
+-    NULL, NULL, NULL, NULL,
++    NULL, "avx512vbmi", NULL, "pku",
++    "ospke", NULL, NULL, NULL,
+     NULL, NULL, NULL, NULL,
+     NULL, NULL, "avx512-vpopcntdq", NULL,
+     NULL, NULL, NULL, NULL,
+@@ -361,6 +361,8 @@ static const ExtSaveArea ext_save_areas[] = {
+             .offset = 0x480, .size = 0x200 },
+     [7] = { .feature = FEAT_7_0_EBX, .bits = CPUID_7_0_EBX_AVX512F,
+             .offset = 0x680, .size = 0x400 },
++    [9] = { .feature = FEAT_7_0_ECX, .bits = CPUID_7_0_ECX_PKU,
++            .offset = 0xA80, .size = 0x8 },
+ };
+ 
+ const char *get_register_name_32(unsigned int reg)
+diff --git a/target-i386/cpu.h b/target-i386/cpu.h
+index ac60309..7a12c0d 100644
+--- a/target-i386/cpu.h
++++ b/target-i386/cpu.h
+@@ -394,6 +394,7 @@
+ #define XSTATE_OPMASK                   (1ULL << 5)
+ #define XSTATE_ZMM_Hi256                (1ULL << 6)
+ #define XSTATE_Hi16_ZMM                 (1ULL << 7)
++#define XSTATE_PKRU                     (1ULL << 9)
+ 
+ 
+ /* CPUID feature words */
+@@ -586,6 +587,9 @@ typedef uint32_t FeatureWordArray[FEATURE_WORDS];
+ #define CPUID_7_0_EDX_AVX512_4VNNIW (1U << 2) /* AVX512 Neural Network Instructions */
+ #define CPUID_7_0_EDX_AVX512_4FMAPS (1U << 3) /* AVX512 Multiply Accumulation Single Precision */
+ 
++#define CPUID_7_0_ECX_PKU      (1U << 3)
++#define CPUID_7_0_ECX_OSPKE    (1U << 4)
++
+ #define CPUID_XSAVE_XSAVEOPT   (1U << 0)
+ #define CPUID_XSAVE_XSAVEC     (1U << 1)
+ #define CPUID_XSAVE_XGETBV1    (1U << 2)
+@@ -1029,6 +1033,8 @@ typedef struct CPUX86State {
+     uint64_t xcr0;
+     uint64_t xss;
+ 
++    uint32_t pkru;
++
+     TPRAccess tpr_access_type;
+ } CPUX86State;
+ 
+diff --git a/target-i386/kvm.c b/target-i386/kvm.c
+index 6a479f4..0dc0e79 100644
+--- a/target-i386/kvm.c
++++ b/target-i386/kvm.c
+@@ -1008,6 +1008,7 @@ static int kvm_put_fpu(X86CPU *cpu)
+ #define XSAVE_OPMASK      272
+ #define XSAVE_ZMM_Hi256   288
+ #define XSAVE_Hi16_ZMM    416
++#define XSAVE_PKRU        672
+ 
+ static int kvm_put_xsave(X86CPU *cpu)
+ {
+@@ -1051,6 +1052,7 @@ static int kvm_put_xsave(X86CPU *cpu)
+ #ifdef TARGET_X86_64
+     memcpy(&xsave->region[XSAVE_Hi16_ZMM], env->hi16_zmm_regs,
+             sizeof env->hi16_zmm_regs);
++    memcpy(&xsave->region[XSAVE_PKRU], &env->pkru, sizeof env->pkru);
+ #endif
+     r = kvm_vcpu_ioctl(CPU(cpu), KVM_SET_XSAVE, xsave);
+     return r;
+@@ -1388,6 +1390,7 @@ static int kvm_get_xsave(X86CPU *cpu)
+ #ifdef TARGET_X86_64
+     memcpy(env->hi16_zmm_regs, &xsave->region[XSAVE_Hi16_ZMM],
+             sizeof env->hi16_zmm_regs);
++    memcpy(&env->pkru, &xsave->region[XSAVE_PKRU], sizeof env->pkru);
+ #endif
+     return 0;
+ }
+diff --git a/target-i386/machine.c b/target-i386/machine.c
+index ce7fcd3..ba34088 100644
+--- a/target-i386/machine.c
++++ b/target-i386/machine.c
+@@ -722,6 +722,26 @@ static const VMStateDescription vmstate_xss = {
+     }
+ };
+ 
++#ifdef TARGET_X86_64
++static bool pkru_needed(void *opaque)
++{
++    X86CPU *cpu = opaque;
++    CPUX86State *env = &cpu->env;
++
++    return env->pkru != 0;
++}
++
++static const VMStateDescription vmstate_pkru = {
++    .name = "cpu/pkru",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (VMStateField[]){
++        VMSTATE_UINT32(env.pkru, X86CPU),
++        VMSTATE_END_OF_LIST()
++    }
++};
++#endif
++
+ const VMStateDescription vmstate_x86_cpu = {
+     .name = "cpu",
+     .version_id = 12,
+@@ -871,6 +891,11 @@ const VMStateDescription vmstate_x86_cpu = {
+          }, {
+             .vmsd = &vmstate_xss,
+             .needed = xss_needed,
++#ifdef TARGET_X86_64
++         }, {
++            .vmsd = &vmstate_pkru,
++            .needed = pkru_needed,
++#endif
+         } , {
+             /* empty */
+         }
+-- 
+1.8.3.1
+

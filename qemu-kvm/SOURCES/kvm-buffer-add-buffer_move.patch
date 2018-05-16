@@ -1,0 +1,74 @@
+From e0406c32a13c399b646834089779c39341143253 Mon Sep 17 00:00:00 2001
+From: "Daniel P. Berrange" <berrange@redhat.com>
+Date: Thu, 8 Feb 2018 17:50:20 +0100
+Subject: [PATCH 06/27] buffer: add buffer_move
+
+RH-Author: Daniel P. Berrange <berrange@redhat.com>
+Message-id: <20180208175041.5634-7-berrange@redhat.com>
+Patchwork-id: 78944
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v1 06/27] buffer: add buffer_move
+Bugzilla: 1527405
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Gerd Hoffmann <kraxel@redhat.com>
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+Reviewed-by: Peter Lieven <pl@kamp.de>
+Reviewed-by: Daniel P. Berrange <berrange@redhat.com>
+Message-id: 1446203414-4013-5-git-send-email-kraxel@redhat.com
+(cherry picked from commit 830a9583206a051c240b74c3f688a015dc5d2967)
+
+ Conflicts:
+	include/qemu/buffer.h
+	util/buffer.c - APIs are still in vnc.{c,h}
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ ui/vnc.c | 16 ++++++++++++++++
+ ui/vnc.h |  1 +
+ 2 files changed, 17 insertions(+)
+
+diff --git a/ui/vnc.c b/ui/vnc.c
+index b520f58..95457ad 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -530,6 +530,22 @@ void buffer_move_empty(Buffer *to, Buffer *from)
+     from->buffer = NULL;
+ }
+ 
++void buffer_move(Buffer *to, Buffer *from)
++{
++    if (to->offset == 0) {
++        buffer_move_empty(to, from);
++        return;
++    }
++
++    buffer_reserve(to, from->offset);
++    buffer_append(to, from->buffer, from->offset);
++
++    g_free(from->buffer);
++    from->offset = 0;
++    from->capacity = 0;
++    from->buffer = NULL;
++}
++
+ 
+ static void vnc_desktop_resize(VncState *vs)
+ {
+diff --git a/ui/vnc.h b/ui/vnc.h
+index c300660..703fef9 100644
+--- a/ui/vnc.h
++++ b/ui/vnc.h
+@@ -549,6 +549,7 @@ void buffer_append(Buffer *buffer, const void *data, size_t len);
+ void buffer_advance(Buffer *buf, size_t len);
+ uint8_t *buffer_end(Buffer *buffer);
+ void buffer_move_empty(Buffer *to, Buffer *from);
++void buffer_move(Buffer *to, Buffer *from);
+ 
+ 
+ /* Misc helpers */
+-- 
+1.8.3.1
+

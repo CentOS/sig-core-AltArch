@@ -1,0 +1,130 @@
+From bc5ebe6df8479b32dbf46f75f32cfad7008a14f0 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:38:32 +0100
+Subject: [PATCH 01/41] fw_cfg: remove support for guest-side data writes
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-2-marcandre.lureau@redhat.com>
+Patchwork-id: 78353
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 01/41] fw_cfg: remove support for guest-side data writes
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: "Gabriel L. Somlo" <somlo@cmu.edu>
+
+>From this point forward, any guest-side writes to the fw_cfg
+data register will be treated as no-ops. This patch also removes
+the unused host-side API function fw_cfg_add_callback(), which
+allowed the registration of a callback to be executed each time
+the guest completed a full overwrite of a given fw_cfg data item.
+
+Signed-off-by: Gabriel Somlo <somlo@cmu.edu>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+
+(cherry picked from commit 023e3148567ac898c7258138f8e86c3c2bb40d07)
+
+RHEL: Fix conflicts, due to fw_cfg_modify_bytes_read() introduction in
+      upstream commit bdbb5b1706d165e8d4222121f1e9b59b6b4359ce.
+
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/nvram/fw_cfg.c         | 35 +----------------------------------
+ include/hw/nvram/fw_cfg.h |  2 --
+ trace-events              |  1 -
+ 3 files changed, 1 insertion(+), 37 deletions(-)
+
+diff --git a/hw/nvram/fw_cfg.c b/hw/nvram/fw_cfg.c
+index fcb3146..9d7b99e 100644
+--- a/hw/nvram/fw_cfg.c
++++ b/hw/nvram/fw_cfg.c
+@@ -40,7 +40,6 @@ typedef struct FWCfgEntry {
+     uint32_t len;
+     uint8_t *data;
+     void *callback_opaque;
+-    FWCfgCallback callback;
+     FWCfgReadCallback read_callback;
+ } FWCfgEntry;
+ 
+@@ -206,22 +205,7 @@ static void fw_cfg_reboot(FWCfgState *s)
+ 
+ static void fw_cfg_write(FWCfgState *s, uint8_t value)
+ {
+-    int arch = !!(s->cur_entry & FW_CFG_ARCH_LOCAL);
+-    FWCfgEntry *e = (s->cur_entry == FW_CFG_INVALID) ? NULL :
+-                     &s->entries[arch][s->cur_entry & FW_CFG_ENTRY_MASK];
+-
+-    trace_fw_cfg_write(s, value);
+-
+-    if (s->cur_entry & FW_CFG_WRITE_CHANNEL
+-        && e != NULL
+-        && e->callback
+-        && s->cur_offset < e->len) {
+-        e->data[s->cur_offset++] = value;
+-        if (s->cur_offset == e->len) {
+-            e->callback(e->callback_opaque, e->data);
+-            s->cur_offset = 0;
+-        }
+-    }
++    /* nothing, write support removed in QEMU v2.4+ */
+ }
+ 
+ static int fw_cfg_select(FWCfgState *s, uint16_t key)
+@@ -442,23 +426,6 @@ void fw_cfg_add_i64(FWCfgState *s, uint16_t key, uint64_t value)
+     fw_cfg_add_bytes(s, key, copy, sizeof(value));
+ }
+ 
+-void fw_cfg_add_callback(FWCfgState *s, uint16_t key, FWCfgCallback callback,
+-                         void *callback_opaque, void *data, size_t len)
+-{
+-    int arch = !!(key & FW_CFG_ARCH_LOCAL);
+-
+-    assert(key & FW_CFG_WRITE_CHANNEL);
+-
+-    key &= FW_CFG_ENTRY_MASK;
+-
+-    assert(key < FW_CFG_MAX_ENTRY && len <= UINT32_MAX);
+-
+-    s->entries[arch][key].data = data;
+-    s->entries[arch][key].len = (uint32_t)len;
+-    s->entries[arch][key].callback_opaque = callback_opaque;
+-    s->entries[arch][key].callback = callback;
+-}
+-
+ void fw_cfg_add_file_callback(FWCfgState *s,  const char *filename,
+                               FWCfgReadCallback callback, void *callback_opaque,
+                               void *data, size_t len)
+diff --git a/include/hw/nvram/fw_cfg.h b/include/hw/nvram/fw_cfg.h
+index 72b1549..aa5f351 100644
+--- a/include/hw/nvram/fw_cfg.h
++++ b/include/hw/nvram/fw_cfg.h
+@@ -69,8 +69,6 @@ void fw_cfg_add_string(FWCfgState *s, uint16_t key, const char *value);
+ void fw_cfg_add_i16(FWCfgState *s, uint16_t key, uint16_t value);
+ void fw_cfg_add_i32(FWCfgState *s, uint16_t key, uint32_t value);
+ void fw_cfg_add_i64(FWCfgState *s, uint16_t key, uint64_t value);
+-void fw_cfg_add_callback(FWCfgState *s, uint16_t key, FWCfgCallback callback,
+-                         void *callback_opaque, void *data, size_t len);
+ void fw_cfg_add_file(FWCfgState *s, const char *filename, void *data,
+                      size_t len);
+ void fw_cfg_add_file_callback(FWCfgState *s, const char *filename,
+diff --git a/trace-events b/trace-events
+index fa2618d..a987dfa 100644
+--- a/trace-events
++++ b/trace-events
+@@ -176,7 +176,6 @@ ecc_diag_mem_writeb(uint64_t addr, uint32_t val) "Write diagnostic %"PRId64" = %
+ ecc_diag_mem_readb(uint64_t addr, uint32_t ret) "Read diagnostic %"PRId64"= %02x"
+ 
+ # hw/nvram/fw_cfg.c
+-fw_cfg_write(void *s, uint8_t value) "%p %d"
+ fw_cfg_select(void *s, uint16_t key, int ret) "%p key %d = %d"
+ fw_cfg_read(void *s, uint8_t ret) "%p = %d"
+ fw_cfg_add_file_dupe(void *s, char *name) "%p %s"
+-- 
+1.8.3.1
+

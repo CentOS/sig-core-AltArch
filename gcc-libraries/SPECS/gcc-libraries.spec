@@ -60,7 +60,7 @@ Provides: libatomic libitm libcilkrts libgfortran4
 Obsoletes: libitm
 
 Version: %{gcc_version}
-Release: %{gcc_release}.1.1%{?dist}
+Release: %{gcc_release}.2.1%{?dist}
 # libgcc, libgfortran, libmudflap, libgomp, libstdc++ and crtstuff have
 # GCC Runtime Exception.
 License: GPLv3+ and GPLv3+ with exceptions and GPLv2+ with exceptions and LGPLv2+ and BSD
@@ -196,6 +196,11 @@ Patch1002: gcc7-alt-compat-test.patch
 Patch1005: gcc7-rh1118870.patch
 Patch1100: gcc7-htm-in-asm.patch
 
+# Support for more DEC extensions in libgfortran runtime
+# BZ1554429
+Patch2000: 0000-infrastructure.patch
+Patch2001: 0022-Default-values-for-certain-field-descriptors-in-form.patch
+
 %if 0%{?rhel} >= 7
 %global nonsharedver 48
 %else
@@ -303,6 +308,9 @@ sed -i -e 's/ -Wl,-z,nodlopen//g' gcc/ada/gcc-interface/Makefile.in
 
 %patch1005 -p0 -b .rh1118870~
 %patch1100 -p0 -b .gcc6-htm-in-asm~
+
+%patch2000 -p1 -b .dec-extensions~
+%patch2001 -p1 -b .dec-extensions-2~
 
 %if 0%{?rhel} == 6
 # Default to -gdwarf-3 rather than -gdwarf-4
@@ -688,8 +696,11 @@ fi
 %doc gcc/COPYING3 COPYING.RUNTIME rpm.doc/gfortran/*
 
 %changelog
-* Fri Apr 13 2018 Pablo Greco <pablo@fliagreco.com.ar> 7.2.1-1.1.1
+* Mon May 14 2018 Pablo Greco <pablo@fliagreco.com.ar> 7.2.1-1.2.1
 - Update to build on armv7hl
+
+* Thu Apr  5 2018 Marek Polacek <polacek@redhat.com> 7.2.1-1.2.1
+- Add support for DEC formatting extensions (#1564043)
 
 * Thu Oct 19 2017 Marek Polacek <polacek@redhat.com> 7.2.1-1.1.1
 - update from gcc-7.2.1-1 (#1477224)

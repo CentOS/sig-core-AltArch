@@ -1,0 +1,65 @@
+From 6d5a6268d535d641147f16a5d0343beadaaab3d9 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:39:11 +0100
+Subject: [PATCH 40/41] dump-guest-memory.py: fix No symbol "vmcoreinfo_find"
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-41-marcandre.lureau@redhat.com>
+Patchwork-id: 78390
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 40/41] dump-guest-memory.py: fix No symbol "vmcoreinfo_find"
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+When qemu is compiled without debug, the dump gdb python script can fail with:
+
+Error occurred in Python command: No symbol "vmcoreinfo_find" in current context.
+
+Because vmcoreinfo_find() is inlined and not exported.
+
+Use the underlying object_resolve_path_type() to get the instance instead.
+
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Reviewed-by: Laszlo Ersek <lersek@redhat.com>
+Reviewed-by: Michael S. Tsirkin <mst@redhat.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+
+(cherry picked from commit d36d0a9d152316a41e02c2613a71f5859f407da1)
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ scripts/dump-guest-memory.py | 12 +++++++-----
+ 1 file changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/scripts/dump-guest-memory.py b/scripts/dump-guest-memory.py
+index 471aa73..12b9b7d 100644
+--- a/scripts/dump-guest-memory.py
++++ b/scripts/dump-guest-memory.py
+@@ -546,13 +546,15 @@ shape and this command should mostly work."""
+         return None
+ 
+     def add_vmcoreinfo(self):
+-        if not gdb.parse_and_eval("vmcoreinfo_find()") \
+-           or not gdb.parse_and_eval("vmcoreinfo_find()->has_vmcoreinfo"):
++        vmci = '(VMCoreInfoState *)' + \
++               'object_resolve_path_type("", "vmcoreinfo", 0)'
++        if not gdb.parse_and_eval("%s" % vmci) \
++           or not gdb.parse_and_eval("(%s)->has_vmcoreinfo" % vmci):
+             return
+ 
+-        fmt = gdb.parse_and_eval("vmcoreinfo_find()->vmcoreinfo.guest_format")
+-        addr = gdb.parse_and_eval("vmcoreinfo_find()->vmcoreinfo.paddr")
+-        size = gdb.parse_and_eval("vmcoreinfo_find()->vmcoreinfo.size")
++        fmt = gdb.parse_and_eval("(%s)->vmcoreinfo.guest_format" % vmci)
++        addr = gdb.parse_and_eval("(%s)->vmcoreinfo.paddr" % vmci)
++        size = gdb.parse_and_eval("(%s)->vmcoreinfo.size" % vmci)
+ 
+         fmt = le16_to_cpu(fmt)
+         addr = le64_to_cpu(addr)
+-- 
+1.8.3.1
+

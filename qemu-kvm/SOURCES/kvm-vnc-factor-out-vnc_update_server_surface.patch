@@ -1,0 +1,75 @@
+From cf12dd3eb8a9c18fbccbe01cfcf8290d483becee Mon Sep 17 00:00:00 2001
+From: "Daniel P. Berrange" <berrange@redhat.com>
+Date: Thu, 8 Feb 2018 17:50:25 +0100
+Subject: [PATCH 11/27] vnc: factor out vnc_update_server_surface
+
+RH-Author: Daniel P. Berrange <berrange@redhat.com>
+Message-id: <20180208175041.5634-12-berrange@redhat.com>
+Patchwork-id: 78952
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v1 11/27] vnc: factor out vnc_update_server_surface
+Bugzilla: 1527405
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Gerd Hoffmann <kraxel@redhat.com>
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+Reviewed-by: Peter Lieven <pl@kamp.de>
+Reviewed-by: Daniel P. Berrange <berrange@redhat.com>
+Message-id: 1446203414-4013-13-git-send-email-kraxel@redhat.com
+(cherry picked from commit 453f842bc4cab49f10c267cff9ad3cf657265d49)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ ui/vnc.c | 21 +++++++++++++++------
+ 1 file changed, 15 insertions(+), 6 deletions(-)
+
+diff --git a/ui/vnc.c b/ui/vnc.c
+index c3f29df..38e0f1a 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -613,6 +613,17 @@ void *vnc_server_fb_ptr(VncDisplay *vd, int x, int y)
+     return ptr;
+ }
+ 
++static void vnc_update_server_surface(VncDisplay *vd)
++{
++    qemu_pixman_image_unref(vd->server);
++    vd->server = NULL;
++
++    vd->server = pixman_image_create_bits(VNC_SERVER_FB_FORMAT,
++                                          vnc_width(vd),
++                                          vnc_height(vd),
++                                          NULL, 0);
++}
++
+ static void vnc_dpy_switch(DisplayChangeListener *dcl,
+                            DisplaySurface *surface)
+ {
+@@ -621,19 +632,17 @@ static void vnc_dpy_switch(DisplayChangeListener *dcl,
+     int width, height;
+ 
+     vnc_abort_display_jobs(vd);
++    vd->ds = surface;
+ 
+     /* server surface */
+-    qemu_pixman_image_unref(vd->server);
+-    vd->ds = surface;
+-    width = vnc_width(vd);
+-    height = vnc_height(vd);
+-    vd->server = pixman_image_create_bits(VNC_SERVER_FB_FORMAT,
+-                                          width, height, NULL, 0);
++    vnc_update_server_surface(vd);
+ 
+     /* guest surface */
+     qemu_pixman_image_unref(vd->guest.fb);
+     vd->guest.fb = pixman_image_ref(surface->image);
+     vd->guest.format = surface->format;
++    width = vnc_width(vd);
++    height = vnc_height(vd);
+     memset(vd->guest.dirty, 0x00, sizeof(vd->guest.dirty));
+     vnc_set_area_dirty(vd->guest.dirty, width, height, 0, 0,
+                        width, height);
+-- 
+1.8.3.1
+

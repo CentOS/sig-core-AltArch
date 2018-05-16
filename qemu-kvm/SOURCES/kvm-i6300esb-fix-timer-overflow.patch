@@ -1,0 +1,63 @@
+From 5918245d224a7a527052ed30af2627187777a282 Mon Sep 17 00:00:00 2001
+From: Richard Jones <rjones@redhat.com>
+Date: Wed, 1 Nov 2017 11:33:01 +0100
+Subject: [PATCH 6/7] i6300esb: fix timer overflow
+
+RH-Author: Richard Jones <rjones@redhat.com>
+Message-id: <1509535982-27927-3-git-send-email-rjones@redhat.com>
+Patchwork-id: 77460
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 2/3] i6300esb: fix timer overflow
+Bugzilla: 1470244
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Laurent Vivier <lvivier@redhat.com>
+
+We use muldiv64() to compute the time to wait:
+
+    timeout = muldiv64(get_ticks_per_sec(), timeout, 33000000);
+
+but get_ticks_per_sec() is 10^9 (30 bit value) and timeout
+is a 35 bit value.
+
+Whereas muldiv64 is:
+
+    uint64_t muldiv64(uint64_t a, uint32_t b, uint32_t c)
+
+So we loose 3 bits of timeout.
+
+Swapping get_ticks_per_sec() and timeout fixes it.
+
+We can also replace it by a multiplication by 30 ns,
+but this changes PCI clock frequency from 33MHz to 33.333333MHz
+and we need to do this on all the QEMU PCI devices (later...)
+
+Signed-off-by: Laurent Vivier <lvivier@redhat.com>
+Reviewed-by: David Gibson <david@gibson.dropbear.id.au>
+Signed-off-by: Michael Tokarev <mjt@tls.msk.ru>
+(cherry picked from commit fee562e9e41290a22623de83b673a8929ec5280d)
+
+BZ: https://bugzilla.redhat.com/show_bug.cgi?id=1470244
+Upstream-status: fee562e9e41290a22623de83b673a8929ec5280d
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/watchdog/wdt_i6300esb.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hw/watchdog/wdt_i6300esb.c b/hw/watchdog/wdt_i6300esb.c
+index be35034..fa8e3b9 100644
+--- a/hw/watchdog/wdt_i6300esb.c
++++ b/hw/watchdog/wdt_i6300esb.c
+@@ -132,7 +132,7 @@ static void i6300esb_restart_timer(I6300State *d, int stage)
+      * multiply here can exceed 64-bits, before we divide by 33MHz, so
+      * we use a higher-precision intermediate result.
+      */
+-    timeout = muldiv64(get_ticks_per_sec(), timeout, 33000000);
++    timeout = muldiv64(timeout, get_ticks_per_sec(), 33000000);
+ 
+     i6300esb_debug("stage %d, timeout %" PRIi64 "\n", d->stage, timeout);
+ 
+-- 
+1.8.3.1
+

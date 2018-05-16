@@ -1,0 +1,99 @@
+From f84d8a785cd2309325476ae5e6a60170dac7c75a Mon Sep 17 00:00:00 2001
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+Date: Tue, 23 Jan 2018 18:09:33 +0100
+Subject: [PATCH 3/3] qxl: add migration blocker to avoid pre-save assert
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Message-id: <20180123180933.26008-2-dgilbert@redhat.com>
+Patchwork-id: 78698
+O-Subject: [RHEL-7.5 qemu-kvm PATCH 1/1] qxl: add migration blocker to avoid pre-save assert
+Bugzilla: 1536883
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Gerd Hoffmann <kraxel@redhat.com>
+
+Cc: 1635339@bugs.launchpad.net
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+Reviewed-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: 20170410113131.2585-1-kraxel@redhat.com
+(cherry picked from commit 86dbcdd9c7590d06db89ca256c5eaf0b4aba8858)
+  dgilbert: Fixup change in migrate_add_blocker parameters
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/display/qxl.c | 27 +++++++++++++++++++++++++++
+ hw/display/qxl.h |  1 +
+ 2 files changed, 28 insertions(+)
+
+diff --git a/hw/display/qxl.c b/hw/display/qxl.c
+index 0a755df..0625a76 100644
+--- a/hw/display/qxl.c
++++ b/hw/display/qxl.c
+@@ -26,6 +26,7 @@
+ #include "qemu/atomic.h"
+ #include "monitor/monitor.h"
+ #include "sysemu/sysemu.h"
++#include "migration/migration.h"
+ #include "trace.h"
+ 
+ #include "qxl.h"
+@@ -637,6 +638,26 @@ static int interface_get_command(QXLInstance *sin, struct QXLCommandExt *ext)
+         qxl->guest_primary.commands++;
+         qxl_track_command(qxl, ext);
+         qxl_log_command(qxl, "cmd", ext);
++        {
++            /*
++             * Windows 8 drivers place qxl commands in the vram
++             * (instead of the ram) bar.  We can't live migrate such a
++             * guest, so add a migration blocker in case we detect
++             * this, to avoid triggering the assert in pre_save().
++             *
++             * https://cgit.freedesktop.org/spice/win32/qxl-wddm-dod/commit/?id=f6e099db39e7d0787f294d5fd0dce328b5210faa
++             */
++            void *msg = qxl_phys2virt(qxl, ext->cmd.data, ext->group_id);
++            if (msg != NULL && (
++                    msg < (void *)qxl->vga.vram_ptr ||
++                    msg > ((void *)qxl->vga.vram_ptr + qxl->vga.vram_size))) {
++                if (!qxl->migration_blocker) {
++                    error_setg(&qxl->migration_blocker,
++                               "qxl: guest bug: command not in ram bar");
++                    migrate_add_blocker(qxl->migration_blocker);
++                }
++            }
++        }
+         trace_qxl_ring_command_get(qxl->id, qxl_mode_to_string(qxl->mode));
+         return true;
+     default:
+@@ -1215,6 +1236,12 @@ static void qxl_hard_reset(PCIQXLDevice *d, int loadvm)
+     qemu_spice_create_host_memslot(&d->ssd);
+     qxl_soft_reset(d);
+ 
++    if (d->migration_blocker) {
++        migrate_del_blocker(d->migration_blocker);
++        error_free(d->migration_blocker);
++        d->migration_blocker = NULL;
++    }
++
+     if (startstop) {
+         qemu_spice_display_start();
+     }
+diff --git a/hw/display/qxl.h b/hw/display/qxl.h
+index f3f51e2..11cf2aa 100644
+--- a/hw/display/qxl.h
++++ b/hw/display/qxl.h
+@@ -36,6 +36,7 @@ typedef struct PCIQXLDevice {
+     uint32_t           cmdlog;
+ 
+     uint32_t           guest_bug;
++    Error              *migration_blocker;
+ 
+     enum qxl_mode      mode;
+     uint32_t           cmdflags;
+-- 
+1.8.3.1
+

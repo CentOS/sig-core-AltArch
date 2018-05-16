@@ -1,0 +1,228 @@
+From a12ad57f4b108dc98987b2002169ccfbbd76721d Mon Sep 17 00:00:00 2001
+From: "Daniel P. Berrange" <berrange@redhat.com>
+Date: Thu, 8 Feb 2018 17:50:36 +0100
+Subject: [PATCH 22/27] ui: fix VNC client throttling when audio capture is
+ active
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Daniel P. Berrange <berrange@redhat.com>
+Message-id: <20180208175041.5634-23-berrange@redhat.com>
+Patchwork-id: 78958
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v1 22/27] ui: fix VNC client throttling when audio capture is active
+Bugzilla: 1527405
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: "Daniel P. Berrange" <berrange@redhat.com>
+
+The VNC server must throttle data sent to the client to prevent the 'output'
+buffer size growing without bound, if the client stops reading data off the
+socket (either maliciously or due to stalled/slow network connection).
+
+The current throttling is very crude because it simply checks whether the
+output buffer offset is zero. This check must be disabled if audio capture is
+enabled, because when streaming audio the output buffer offset will rarely be
+zero due to queued audio data, and so this would starve framebuffer updates.
+
+As a result, the VNC client can cause QEMU to allocate arbitrary amounts of RAM.
+They can first start something in the guest that triggers lots of framebuffer
+updates eg play a youtube video. Then enable audio capture, and simply never
+read data back from the server. This can easily make QEMU's VNC server send
+buffer consume 100MB of RAM per second, until the OOM killer starts reaping
+processes (hopefully the rogue QEMU process, but it might pick others...).
+
+To address this we make the throttling more intelligent, so we can throttle
+when audio capture is active too. To determine how to throttle incremental
+updates or audio data, we calculate a size threshold. Normally the threshold is
+the approximate number of bytes associated with a single complete framebuffer
+update. ie width * height * bytes per pixel. We'll send incremental updates
+until we hit this threshold, at which point we'll stop sending updates until
+data has been written to the wire, causing the output buffer offset to fall
+back below the threshold.
+
+If audio capture is enabled, we increase the size of the threshold to also
+allow for upto 1 seconds worth of audio data samples. ie nchannels * bytes
+per sample * frequency. This allows the output buffer to have a mixture of
+incremental framebuffer updates and audio data queued, but once the threshold
+is exceeded, audio data will be dropped and incremental updates will be
+throttled.
+
+This unbounded memory growth affects all VNC server configurations supported by
+QEMU, with no workaround possible. The mitigating factor is that it can only be
+triggered by a client that has authenticated with the VNC server, and who is
+able to trigger a large quantity of framebuffer updates or audio samples from
+the guest OS. Mostly they'll just succeed in getting the OOM killer to kill
+their own QEMU process, but its possible other processes can get taken out as
+collateral damage.
+
+This is a more general variant of the similar unbounded memory usage flaw in
+the websockets server, that was previously assigned CVE-2017-15268, and fixed
+in 2.11 by:
+
+  commit a7b20a8efa28e5f22c26c06cd06c2f12bc863493
+  Author: Daniel P. Berrange <berrange@redhat.com>
+  Date:   Mon Oct 9 14:43:42 2017 +0100
+
+    io: monitor encoutput buffer size from websocket GSource
+
+This new general memory usage flaw has been assigned CVE-2017-15124, and is
+partially fixed by this patch.
+
+RHEL-7 note: minimal context differences in "struct VncState" due to
+downstream lacking (a) commit fb6ba0d5256c ("qapi event: convert VNC
+events", 2014-06-23), part of v2.1.0, and (b) commit 8e9b0d24fb98 ("ui:
+convert VNC websockets to use crypto APIs", 2015-07-08), part of v2.4.0.
+
+Signed-off-by: Daniel P. Berrange <berrange@redhat.com>
+Reviewed-by: Darren Kenny <darren.kenny@oracle.com>
+Reviewed-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: 20171218191228.31018-10-berrange@redhat.com
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+(cherry picked from commit e2b72cb6e0443d90d7ab037858cb6834b6cca852)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ ui/vnc.c | 72 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++--------
+ ui/vnc.h |  6 ++++++
+ 2 files changed, 70 insertions(+), 8 deletions(-)
+
+diff --git a/ui/vnc.c b/ui/vnc.c
+index a7ec8cc..952a051 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -47,6 +47,7 @@ static VncDisplay *vnc_display; /* needed for info vnc */
+ 
+ static int vnc_cursor_define(VncState *vs);
+ static void vnc_release_modifiers(VncState *vs);
++static void vnc_update_throttle_offset(VncState *vs);
+ 
+ static void vnc_set_share_mode(VncState *vs, VncShareMode mode)
+ {
+@@ -664,6 +665,7 @@ static void vnc_dpy_switch(DisplayChangeListener *dcl,
+         vnc_set_area_dirty(vs->dirty, vd, 0, 0,
+                            vnc_width(vd),
+                            vnc_height(vd));
++        vnc_update_throttle_offset(vs);
+     }
+ }
+ 
+@@ -846,16 +848,67 @@ static int find_and_clear_dirty_height(struct VncState *vs,
+     return h;
+ }
+ 
++/*
++ * Figure out how much pending data we should allow in the output
++ * buffer before we throttle incremental display updates, and/or
++ * drop audio samples.
++ *
++ * We allow for equiv of 1 full display's worth of FB updates,
++ * and 1 second of audio samples. If audio backlog was larger
++ * than that the client would already suffering awful audio
++ * glitches, so dropping samples is no worse really).
++ */
++static void vnc_update_throttle_offset(VncState *vs)
++{
++    size_t offset =
++        vs->client_width * vs->client_height * vs->client_pf.bytes_per_pixel;
++
++    if (vs->audio_cap) {
++        int freq = vs->as.freq;
++        /* We don't limit freq when reading settings from client, so
++         * it could be upto MAX_INT in size. 48khz is a sensible
++         * upper bound for trustworthy clients */
++        int bps;
++        if (freq > 48000) {
++            freq = 48000;
++        }
++        switch (vs->as.fmt) {
++        default:
++        case  AUD_FMT_U8:
++        case  AUD_FMT_S8:
++            bps = 1;
++            break;
++        case  AUD_FMT_U16:
++        case  AUD_FMT_S16:
++            bps = 2;
++            break;
++        case  AUD_FMT_U32:
++        case  AUD_FMT_S32:
++            bps = 4;
++            break;
++        }
++        offset += freq * bps * vs->as.nchannels;
++    }
++
++    /* Put a floor of 1MB on offset, so that if we have a large pending
++     * buffer and the display is resized to a small size & back again
++     * we don't suddenly apply a tiny send limit
++     */
++    offset = MAX(offset, 1024 * 1024);
++
++    vs->throttle_output_offset = offset;
++}
++
+ static bool vnc_should_update(VncState *vs)
+ {
+     switch (vs->update) {
+     case VNC_STATE_UPDATE_NONE:
+         break;
+     case VNC_STATE_UPDATE_INCREMENTAL:
+-        /* Only allow incremental updates if the output buffer
+-         * is empty, or if audio capture is enabled.
++        /* Only allow incremental updates if the pending send queue
++         * is less than the permitted threshold
+          */
+-        if (!vs->output.offset || vs->audio_cap) {
++        if (vs->output.offset < vs->throttle_output_offset) {
+             return true;
+         }
+         break;
+@@ -963,11 +1016,13 @@ static void audio_capture(void *opaque, void *buf, int size)
+     VncState *vs = opaque;
+ 
+     vnc_lock_output(vs);
+-    vnc_write_u8(vs, VNC_MSG_SERVER_QEMU);
+-    vnc_write_u8(vs, VNC_MSG_SERVER_QEMU_AUDIO);
+-    vnc_write_u16(vs, VNC_MSG_SERVER_QEMU_AUDIO_DATA);
+-    vnc_write_u32(vs, size);
+-    vnc_write(vs, buf, size);
++    if (vs->output.offset < vs->throttle_output_offset) {
++        vnc_write_u8(vs, VNC_MSG_SERVER_QEMU);
++        vnc_write_u8(vs, VNC_MSG_SERVER_QEMU_AUDIO);
++        vnc_write_u16(vs, VNC_MSG_SERVER_QEMU_AUDIO_DATA);
++        vnc_write_u32(vs, size);
++        vnc_write(vs, buf, size);
++    }
+     vnc_unlock_output(vs);
+     vnc_flush(vs);
+ }
+@@ -2214,6 +2269,7 @@ static int protocol_client_msg(VncState *vs, uint8_t *data, size_t len)
+         break;
+     }
+ 
++    vnc_update_throttle_offset(vs);
+     vnc_read_when(vs, protocol_client_msg, 1);
+     return 0;
+ }
+diff --git a/ui/vnc.h b/ui/vnc.h
+index f19fd0a..d7eede3 100644
+--- a/ui/vnc.h
++++ b/ui/vnc.h
+@@ -301,6 +301,12 @@ struct VncState
+ 
+     QObject *info;
+ 
++    /* We allow multiple incremental updates or audio capture
++     * samples to be queued in output buffer, provided the
++     * buffer size doesn't exceed this threshold. The value
++     * is calculating dynamically based on framebuffer size
++     * and audio sample settings in vnc_update_throttle_offset() */
++    size_t throttle_output_offset;
+     Buffer output;
+     Buffer input;
+ #ifdef CONFIG_VNC_WS
+-- 
+1.8.3.1
+

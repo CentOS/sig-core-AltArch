@@ -1,0 +1,85 @@
+From a32c9e8da011b25ba9a056bc41c990694b730566 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@redhat.com>
+Date: Wed, 13 Dec 2017 13:38:51 +0100
+Subject: [PATCH 20/41] dump: Fix dump-guest-memory termination and
+ use-after-close
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Marc-André Lureau <marcandre.lureau@redhat.com>
+Message-id: <20171213133912.26176-21-marcandre.lureau@redhat.com>
+Patchwork-id: 78374
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 20/41] dump: Fix dump-guest-memory termination and use-after-close
+Bugzilla: 1411490
+RH-Acked-by: Laszlo Ersek <lersek@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Gonglei <arei.gonglei@huawei.com>
+
+dump_iterate() dumps blocks in a loop.  Eventually, get_next_block()
+returns "no more".  We then call dump_completed().  But we neglect to
+break the loop!  Broken in commit 4c7e251a.
+
+Because of that, we dump the last block again.  This attempts to write
+to s->fd, which fails if we're lucky.  The error makes dump_iterate()
+return failure.  It's the only way it can ever return.
+
+Theoretical: if we're not so lucky, something else has opened something
+for writing and got the same fd.  dump_iterate() then keeps looping,
+messing up the something else's output, until a write fails, or the
+process mercifully terminates.
+
+The obvious fix is to restore the return lost in commit 4c7e251a.  But
+the root cause of the bug is needlessly opaque loop control.  Replace it
+by a clean do ... while loop.
+
+This makes the badly chosen return values of get_next_block() more
+visible.  Cleaning that up is outside the scope of this bug fix.
+
+Signed-off-by: Gonglei <arei.gonglei@huawei.com>
+Signed-off-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Michael Tokarev <mjt@tls.msk.ru>
+
+(cherry picked from commit 08a655be71d0a130a5d9bf7816d096ec31c4f055)
+Signed-off-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ dump.c | 11 ++++-------
+ 1 file changed, 4 insertions(+), 7 deletions(-)
+
+diff --git a/dump.c b/dump.c
+index 099346a..83b6d20 100644
+--- a/dump.c
++++ b/dump.c
+@@ -610,10 +610,9 @@ static void dump_iterate(DumpState *s, Error **errp)
+ {
+     GuestPhysBlock *block;
+     int64_t size;
+-    int ret;
+     Error *local_err = NULL;
+ 
+-    while (1) {
++    do {
+         block = s->next_block;
+ 
+         size = block->target_end - block->target_start;
+@@ -629,11 +628,9 @@ static void dump_iterate(DumpState *s, Error **errp)
+             return;
+         }
+ 
+-        ret = get_next_block(s, block);
+-        if (ret == 1) {
+-            dump_completed(s);
+-        }
+-    }
++    } while (!get_next_block(s, block));
++
++    dump_completed(s);
+ }
+ 
+ static void create_vmcore(DumpState *s, Error **errp)
+-- 
+1.8.3.1
+

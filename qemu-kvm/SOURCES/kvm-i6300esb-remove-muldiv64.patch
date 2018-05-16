@@ -1,0 +1,78 @@
+From a548a4b5d3a130ada6498669b4bf01bf47fe4560 Mon Sep 17 00:00:00 2001
+From: Richard Jones <rjones@redhat.com>
+Date: Wed, 1 Nov 2017 11:33:02 +0100
+Subject: [PATCH 7/7] i6300esb: remove muldiv64()
+
+RH-Author: Richard Jones <rjones@redhat.com>
+Message-id: <1509535982-27927-4-git-send-email-rjones@redhat.com>
+Patchwork-id: 77463
+O-Subject: [RHEL-7.5 qemu-kvm PATCH v3 3/3] i6300esb: remove muldiv64()
+Bugzilla: 1470244
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Thomas Huth <thuth@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Laurent Vivier <lvivier@redhat.com>
+
+Originally, timers were ticks based, and it made sense to
+add ticks to current time to know when to trigger an alarm.
+
+But since commit:
+
+7447545 change all other clock references to use nanosecond resolution accessors
+
+All timers use nanoseconds and we need to convert ticks to nanoseconds, by
+doing something like:
+
+    y = muldiv64(x, get_ticks_per_sec(), PCI_FREQUENCY)
+
+where x is the number of device ticks and y the number of system ticks.
+
+y is used as nanoseconds in timer functions,
+it works because 1 tick is 1 nanosecond.
+(get_ticks_per_sec() is 10^9)
+
+But as PCI frequency is 33 MHz, we can also do:
+
+    y = x * 30; /* 33 MHz PCI period is 30 ns */
+
+Which is much more simple.
+
+This implies a 33.333333 MHz PCI frequency,
+but this is correct.
+
+Signed-off-by: Laurent Vivier <lvivier@redhat.com>
+(cherry picked from commit 9491e9bc019a365dfa9780f462984a0d052f4c0d)
+
+BZ: https://bugzilla.redhat.com/show_bug.cgi?id=1470244
+Upstream-status: 9491e9bc019a365dfa9780f462984a0d052f4c0d
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/watchdog/wdt_i6300esb.c | 11 +++--------
+ 1 file changed, 3 insertions(+), 8 deletions(-)
+
+diff --git a/hw/watchdog/wdt_i6300esb.c b/hw/watchdog/wdt_i6300esb.c
+index fa8e3b9..6dede4e 100644
+--- a/hw/watchdog/wdt_i6300esb.c
++++ b/hw/watchdog/wdt_i6300esb.c
+@@ -125,14 +125,9 @@ static void i6300esb_restart_timer(I6300State *d, int stage)
+     else
+         timeout <<= 5;
+ 
+-    /* Get the timeout in units of ticks_per_sec.
+-     *
+-     * ticks_per_sec is typically 10^9 == 0x3B9ACA00 (30 bits), with
+-     * 20 bits of user supplied preload, and 15 bits of scale, the
+-     * multiply here can exceed 64-bits, before we divide by 33MHz, so
+-     * we use a higher-precision intermediate result.
+-     */
+-    timeout = muldiv64(timeout, get_ticks_per_sec(), 33000000);
++    /* Get the timeout in nanoseconds. */
++
++    timeout = timeout * 30; /* on a PCI bus, 1 tick is 30 ns*/
+ 
+     i6300esb_debug("stage %d, timeout %" PRIi64 "\n", d->stage, timeout);
+ 
+-- 
+1.8.3.1
+
