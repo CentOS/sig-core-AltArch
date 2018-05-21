@@ -213,7 +213,7 @@ Provides:      pcmk-cluster-manager
 
 %{?systemd_requires}
 
-ExclusiveArch: i686 x86_64 ppc64le s390x %{arm}
+ExclusiveArch: i686 x86_64 ppc64le s390x %{arm} aarch64
 
 # Pacemaker targets compatibility with python 2.6+ and 3.2+
 Requires:      python >= 2.6
