@@ -1,0 +1,81 @@
+From f96f2f273741ea19311c6e7a6f556c09b6ff9415 Mon Sep 17 00:00:00 2001
+From: Mark Doffman <mark.doffman@codethink.co.uk>
+Date: Tue, 23 Jun 2015 22:59:08 +0000
+Subject: [PATCH 01/23] Allow repeated compatible type specifications.
+
+Add a check to see if a repeated type specification is compatible
+with the previous specification. Only create an error on incompatible
+type specifications for the same symbol.
+
+Some fixes by Jim MacArthur <jim.macarthur@codethink.co.uk>
+---
+
+    0001-Allow-repeated-compatible-type-specifications.patch
+    
+    0015-Allow-redefinition-of-types-for-procedures.patch
+    
+    0021-Correct-internal-fault-in-select_type_9.f90.patch
+
+
+diff --git a/gcc/fortran/symbol.c b/gcc/fortran/symbol.c
+index ec43e63..67ad504 100644
+--- a/gcc/fortran/symbol.c
++++ b/gcc/fortran/symbol.c
+@@ -1877,6 +1877,8 @@ gfc_add_type (gfc_symbol *sym, gfc_typespec *ts, locus *where)
+   if (sym->attr.result && type == BT_UNKNOWN && sym->ns->proc_name)
+     type = sym->ns->proc_name->ts.type;
+ 
++  flavor = sym->attr.flavor;
++
+   if (type != BT_UNKNOWN && !(sym->attr.function && sym->attr.implicit_type)
+       && !(gfc_state_stack->previous && gfc_state_stack->previous->previous
+ 	   && gfc_state_stack->previous->previous->state == COMP_SUBMODULE)
+@@ -1886,6 +1888,20 @@ gfc_add_type (gfc_symbol *sym, gfc_typespec *ts, locus *where)
+ 	gfc_error ("Symbol %qs at %L conflicts with symbol from module %qs, "
+ 		   "use-associated at %L", sym->name, where, sym->module,
+ 		   &sym->declared_at);
++      else if (gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
++	{
++	  /* Ignore temporaries and class/procedure names */
++          if (sym->ts.type == BT_DERIVED || sym->ts.type == BT_CLASS || sym->ts.type == BT_PROCEDURE)
++	    return false;
++
++	  if (gfc_compare_types (&sym->ts, ts)
++	      && (flavor == FL_UNKNOWN || flavor == FL_VARIABLE || flavor == FL_PROCEDURE))
++	    {
++	      return gfc_notify_std (GFC_STD_LEGACY,
++				     "Symbol '%qs' at %L already has basic type of %s", sym->name,
++				     where, gfc_basic_typename (type));
++	    }
++	}
+       else
+ 	gfc_error ("Symbol %qs at %L already has basic type of %s", sym->name,
+ 		 where, gfc_basic_typename (type));
+@@ -1899,8 +1915,6 @@ gfc_add_type (gfc_symbol *sym, gfc_typespec *ts, locus *where)
+       return false;
+     }
+ 
+-  flavor = sym->attr.flavor;
+-
+   if (flavor == FL_PROGRAM || flavor == FL_BLOCK_DATA || flavor == FL_MODULE
+       || flavor == FL_LABEL
+       || (flavor == FL_PROCEDURE && sym->attr.subroutine)
+diff --git a/gcc/testsuite/gfortran.dg/duplicate_type_4.f90 b/gcc/testsuite/gfortran.dg/duplicate_type_4.f90
+new file mode 100644
+index 0000000..cdd29ea
+--- /dev/null
++++ b/gcc/testsuite/gfortran.dg/duplicate_type_4.f90
+@@ -0,0 +1,13 @@
++! { dg-do compile }
++! { dg-options "-std=f95" }
++
++! PR fortran/30239
++! Check for errors when a symbol gets declared a type twice, even if it
++! is the same.
++
++INTEGER FUNCTION foo ()
++  IMPLICIT NONE
++  INTEGER :: x
++  INTEGER :: x ! { dg-error "basic type of" }
++  x = 42
++END FUNCTION foo

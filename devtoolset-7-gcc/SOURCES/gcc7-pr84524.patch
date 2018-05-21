@@ -1,0 +1,96 @@
+2018-02-23  Jakub Jelinek  <jakub@redhat.com>
+
+	PR target/84524
+	* config/i386/sse.md (*<code><mode>3): Replace <mask_prefix3> with
+	orig,vex.
+	(*<plusminus_insn><mode>3): Likewise.  Remove <mask_operand3> uses.
+
+	* gcc.c-torture/execute/pr84524.c: New test.
+	* gcc.target/i386/avx512bw-pr84524.c: New test.
+
+--- gcc/config/i386/sse.md.jj	2018-02-13 09:31:24.769607162 +0100
++++ gcc/config/i386/sse.md	2018-02-23 11:51:00.271477979 +0100
+@@ -9938,11 +9938,11 @@ (define_insn "*<plusminus_insn><mode>3"
+    && ix86_binary_operator_ok (<CODE>, <MODE>mode, operands)"
+   "@
+    p<plusminus_mnemonic><ssemodesuffix>\t{%2, %0|%0, %2}
+-   vp<plusminus_mnemonic><ssemodesuffix>\t{%2, %1, %0<mask_operand3>|%0<mask_operand3>, %1, %2}"
++   vp<plusminus_mnemonic><ssemodesuffix>\t{%2, %1, %0|%0, %1, %2}"
+   [(set_attr "isa" "noavx,avx")
+    (set_attr "type" "sseiadd")
+    (set_attr "prefix_data16" "1,*")
+-   (set_attr "prefix" "<mask_prefix3>")
++   (set_attr "prefix" "orig,vex")
+    (set_attr "mode" "<sseinsnmode>")])
+ 
+ (define_insn "*<plusminus_insn><mode>3_mask"
+@@ -11822,7 +11822,7 @@ (define_insn "*<code><mode>3"
+ 	    (eq_attr "mode" "TI"))
+        (const_string "1")
+        (const_string "*")))
+-   (set_attr "prefix" "<mask_prefix3>")
++   (set_attr "prefix" "orig,vex")
+    (set (attr "mode")
+ 	(cond [(and (match_test "<MODE_SIZE> == 16")
+ 		    (match_test "TARGET_SSE_PACKED_SINGLE_INSN_OPTIMAL"))
+--- gcc/testsuite/gcc.c-torture/execute/pr84524.c.jj	2018-02-23 11:54:51.913492631 +0100
++++ gcc/testsuite/gcc.c-torture/execute/pr84524.c	2018-02-23 11:59:55.467511836 +0100
+@@ -0,0 +1,41 @@
++/* PR target/84524 */
++
++__attribute__((noipa)) void
++foo (unsigned short *x)
++{
++  unsigned short i, v;
++  unsigned char j;
++  for (i = 0; i < 256; i++)
++    {
++      v = i << 8;
++      for (j = 0; j < 8; j++)
++	if (v & 0x8000)
++	  v = (v << 1) ^ 0x1021;
++	else
++	  v = v << 1;
++      x[i] = v;
++    }
++}
++
++int
++main ()
++{
++  unsigned short a[256];
++
++  foo (a);
++  for (int i = 0; i < 256; i++)
++    {
++      unsigned short v = i << 8;
++      for (int j = 0; j < 8; j++)
++	{
++	  asm volatile ("" : "+r" (v));
++	  if (v & 0x8000)
++	    v = (v << 1) ^ 0x1021;
++	  else
++	    v = v << 1;
++	}
++      if (a[i] != v)
++	__builtin_abort ();
++    }
++  return 0;
++}
+--- gcc/testsuite/gcc.target/i386/avx512bw-pr84524.c.jj	2018-02-23 11:58:16.919505601 +0100
++++ gcc/testsuite/gcc.target/i386/avx512bw-pr84524.c	2018-02-23 11:58:57.377508169 +0100
+@@ -0,0 +1,14 @@
++/* PR target/84524 */
++/* { dg-do run { target avx512bw } } */
++/* { dg-options "-O3 -mavx512bw" } */
++
++#include "avx512bw-check.h"
++
++#define main() do_main()
++#include "../../gcc.c-torture/execute/pr84524.c"
++
++static void
++avx512bw_test (void)
++{
++  do_main ();
++}

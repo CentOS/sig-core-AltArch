@@ -1,0 +1,56 @@
+From 5d5a6c9d8c5a8db252d972ec32dd70d2510404fb Mon Sep 17 00:00:00 2001
+From: Jim MacArthur <jim.macarthur@codethink.co.uk>
+Date: Thu, 4 Feb 2016 16:00:30 +0000
+Subject: [PATCH 12/23] Allow old-style initializers in derived types
+
+This allows simple declarations in derived types and structures, such as:
+    LOGICAL*1      NIL      /0/
+Only single value expressions are allowed at the moment.
+
+This feature is enabled by the `-std=extra-legacy` compiler flag.
+---
+
+       0012-Allow-old-style-initializers-in-derived-types.patch
+    
+        Drop unnecessary whitespace
+
+diff --git a/gcc/fortran/decl.c b/gcc/fortran/decl.c
+index c90f9de..3ad9c2c 100644
+--- a/gcc/fortran/decl.c
++++ b/gcc/fortran/decl.c
+@@ -2437,12 +2437,30 @@ variable_decl (int elem)
+          but not components of derived types.  */
+       else if (gfc_current_state () == COMP_DERIVED)
+ 	{
+-	  gfc_error ("Invalid old style initialization for derived type "
+-		     "component at %C");
+-	  m = MATCH_ERROR;
+-	  goto cleanup;
+-	}
++	  if (gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
++	    {
++	      /* Attempt to match an old-style initializer which is a simple
++		 integer or character expression; this will not work with
++		 multiple values. */
++	      m = gfc_match_init_expr (&initializer);
++	      if (m == MATCH_ERROR)
++		goto cleanup;
++	      else if (m == MATCH_YES)
++		{
++		  m = gfc_match ("/");
++		  if (m != MATCH_YES)
++		    goto cleanup;
++		}
++	    }
++	  else
+ 
++	    {
++	      gfc_error ("Invalid old style initialization for derived type "
++			 "component at %C");
++	      m = MATCH_ERROR;
++	      goto cleanup;
++	    }
++	}
+       /* For structure components, read the initializer as a special
+          expression and let the rest of this function apply the initializer
+          as usual.  */

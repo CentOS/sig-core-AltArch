@@ -1,0 +1,68 @@
+From 00f13a60974cb4145799593398cc61894326c222 Mon Sep 17 00:00:00 2001
+From: Jim MacArthur <jim.macarthur@codethink.co.uk>
+Date: Wed, 7 Oct 2015 16:31:18 -0400
+Subject: [PATCH 09/23] Convert LOGICAL to INTEGER for arithmetic ops, and vice
+ versa
+
+We allow converting LOGICAL types to INTEGER when doing arithmetic
+operations, and converting INTEGER types to LOGICAL for use in
+boolean operations.
+
+This feature is enabled with the `-std=extra-legacy` compiler flag.
+---
+
+    0009-Convert-LOGICAL-to-INTEGER-for-arithmetic-ops-and-vi.patch
+    Fixup
+
+diff --git a/gcc/fortran/resolve.c b/gcc/fortran/resolve.c
+index 667cc50..33b441a 100644
+--- a/gcc/fortran/resolve.c
++++ b/gcc/fortran/resolve.c
+@@ -3627,6 +3627,22 @@ is_character_based (bt type)
+    for the conversion.  */
+ 
+ static void
++convert_integer_to_logical (gfc_expr *e)
++{
++  if (e->ts.type == BT_INTEGER)
++    {
++      /* Convert to LOGICAL */
++      gfc_typespec t;
++      t.type = BT_LOGICAL;
++      t.kind = 1;
++      gfc_convert_type_warn (e, &t, 2, 1);
++    }
++}
++
++/* If E is a logical, convert it to an integer and issue a warning
++   for the conversion.  */
++
++static void
+ convert_logical_to_integer (gfc_expr *e)
+ {
+   if (e->ts.type == BT_LOGICAL)
+@@ -3733,6 +3749,12 @@ resolve_operator (gfc_expr *e)
+     case INTRINSIC_OR:
+     case INTRINSIC_EQV:
+     case INTRINSIC_NEQV:
++      if (gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
++	{
++	  convert_integer_to_logical (op1);
++	  convert_integer_to_logical (op2);
++	}
++
+       if (op1->ts.type == BT_LOGICAL && op2->ts.type == BT_LOGICAL)
+ 	{
+ 	  e->ts.type = BT_LOGICAL;
+@@ -3774,6 +3796,11 @@ resolve_operator (gfc_expr *e)
+ 	  return resolve_function (e);
+ 	}
+ 
++      if (gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
++	{
++	  convert_integer_to_logical (op1);
++	}
++
+       if (op1->ts.type == BT_LOGICAL)
+ 	{
+ 	  e->ts.type = BT_LOGICAL;

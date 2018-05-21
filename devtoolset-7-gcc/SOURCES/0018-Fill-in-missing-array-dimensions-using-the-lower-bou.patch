@@ -1,0 +1,62 @@
+From b8527b8f03c4c50869c4f9a063f5c7686e58e5e9 Mon Sep 17 00:00:00 2001
+From: Jim MacArthur <jim.macarthur@codethink.co.uk>
+Date: Fri, 26 Aug 2016 17:46:05 +0100
+Subject: [PATCH 18/23] Fill in missing array dimensions using the lower bound
+
+This feature is enabled by the `-fstd=extra-legacy` compiler flag
+---
+
+
+    0018-Fill-in-missing-array-dimensions-using-the-lower-bou.patch
+
+diff --git a/gcc/fortran/resolve.c b/gcc/fortran/resolve.c
+index a831f70..ac35357 100644
+--- a/gcc/fortran/resolve.c
++++ b/gcc/fortran/resolve.c
+@@ -4396,6 +4396,27 @@ compare_spec_to_ref (gfc_array_ref *ar)
+   if (ar->type == AR_FULL)
+     return true;
+ 
++  if ((gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
++      && as->rank > ar->dimen)
++    {
++      /* Add in the missing dimensions, assuming they are the lower bound
++         of that dimension if not specified. */
++      int j;
++      gfc_warning (0, "Using the lower bound for unspecified dimensions "
++                   "in array reference at %L", &ar->where);
++      /* Other parts of the code iterate ar->start and ar->end from 0 to
++	 ar->dimen, so it is safe to assume slots from ar->dimen upwards
++	 are unused (i.e. there are no gaps; the specified indexes are
++	 contiguous and start at zero */
++      for(j = ar->dimen; j <= as->rank; j++)
++        {
++	  ar->start[j] = gfc_copy_expr (as->lower[j]);
++	  ar->end[j]   = gfc_copy_expr (as->lower[j]);
++	  ar->dimen_type[j] = DIMEN_ELEMENT;
++        }
++      ar->dimen = as->rank;
++    }
++
+   if (as->rank != ar->dimen)
+     {
+       gfc_error ("Rank mismatch in array reference at %L (%d/%d)",
+diff --git a/gcc/testsuite/gfortran.dg/array_6.f90 b/gcc/testsuite/gfortran.dg/array_6.f90
+new file mode 100644
+index 0000000..20752a1
+--- /dev/null
++++ b/gcc/testsuite/gfortran.dg/array_6.f90
+@@ -0,0 +1,13 @@
++! { dg-do compile }
++! { dg-options "-std=extra-legacy" }!
++! Checks that under-specified arrays (referencing arrays with fewer
++! dimensions than the array spec) generates a warning.
++!
++! Contributed by Jim MacArthur <jim.macarthur@codethink.co.uk>
++!
++
++program under_specified_array
++    INTEGER chsbrd(8,8)
++    chsbrd(3,1) = 5
++    print *, chsbrd(3) ! { dg-warning "Using the lower bound for unspecified dimensions in array reference" }
++end program

@@ -1,0 +1,48 @@
+From ab5aa6f7c04e7193c5387bc74db2605c4dc07f01 Mon Sep 17 00:00:00 2001
+From: Jim MacArthur <jim.macarthur@codethink.co.uk>
+Date: Thu, 4 Feb 2016 16:46:46 +0000
+Subject: [PATCH 05/23] Allow comparisons between INTEGER and REAL
+
+This feature is enabled with the `-std=extra-legacy` compiler flag.
+---
+        0005-Allow-comparisons-between-INTEGER-and-REAL.patch
+
+diff --git a/gcc/fortran/check.c b/gcc/fortran/check.c
+index 4f2d216..fd0d280 100644
+--- a/gcc/fortran/check.c
++++ b/gcc/fortran/check.c
+@@ -901,6 +901,24 @@ gfc_check_allocated (gfc_expr *array)
+ }
+ 
+ 
++/* Attempt to promote types of A and B so that they are
++   equivalent, if possible.  */
++void
++promote_types (gfc_expr *a, gfc_expr *b)
++{
++  if (a->ts.type == b->ts.type)
++    return;
++  if (a->ts.type == BT_REAL && b->ts.type == BT_INTEGER)
++    {
++      gfc_convert_type_warn (b, &a->ts, 2, 1);
++      return;
++    }
++  if (a->ts.type == BT_INTEGER && b->ts.type == BT_REAL)
++    {
++      gfc_convert_type_warn (a, &b->ts, 2, 1);
++    }
++}
++
+ /* Common check function where the first argument must be real or
+    integer and the second argument must be the same as the first.  */
+ 
+@@ -910,6 +928,9 @@ gfc_check_a_p (gfc_expr *a, gfc_expr *p)
+   if (!int_or_real_check (a, 0))
+     return false;
+ 
++  if (gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
++    promote_types(a, p);
++
+   if (a->ts.type != p->ts.type)
+     {
+       gfc_error ("%qs and %qs arguments of %qs intrinsic at %L must "

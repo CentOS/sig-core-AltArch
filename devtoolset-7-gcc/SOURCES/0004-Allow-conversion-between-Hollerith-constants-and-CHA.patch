@@ -1,0 +1,318 @@
+From 7420e95a0ebb2401d67ad405670fb6a8d33f02da Mon Sep 17 00:00:00 2001
+From: Jim MacArthur <jim.macarthur@codethink.co.uk>
+Date: Thu, 4 Feb 2016 17:18:30 +0000
+Subject: [PATCH 04/23] Allow conversion between Hollerith constants and
+ CHARACTER and INTEGER
+
+Warnings are raised when this happens.
+
+This feature is enabled with the `-std=extra-legacy` compiler flag.
+
+        0004-Allow-conversion-between-Hollerith-constants-and-CHA.patch
+
+diff --git a/gcc/fortran/arith.c b/gcc/fortran/arith.c
+index 8fa305c..fc1be48 100644
+--- a/gcc/fortran/arith.c
++++ b/gcc/fortran/arith.c
+@@ -2514,7 +2514,7 @@ gfc_int2log (gfc_expr *src, int kind)
+ }
+ 
+ 
+-/* Helper function to set the representation in a Hollerith conversion.  
++/* Helper function to set the representation in a Hollerith conversion.
+    This assumes that the ts.type and ts.kind of the result have already
+    been set.  */
+ 
+@@ -2545,6 +2545,34 @@ hollerith2representation (gfc_expr *result, gfc_expr *src)
+ }
+ 
+ 
++/* Helper function to set the representation in a character conversion.
++   This assumes that the ts.type and ts.kind of the result have already
++   been set.  */
++
++static void
++character2representation (gfc_expr *result, gfc_expr *src)
++{
++  int src_len, result_len;
++  int i;
++  src_len = src->value.character.length;
++  result_len = gfc_target_expr_size (result);
++
++  if (src_len > result_len)
++    gfc_warning (0, "The character constant at %L is too long to convert to %s",
++		 &src->where, gfc_typename(&result->ts));
++
++  result->representation.string = XCNEWVEC (char, result_len + 1);
++
++  for (i = 0; i < MIN (result_len, src_len); i++)
++    result->representation.string[i] = (char) src->value.character.string[i];
++
++  if (src_len < result_len)
++    memset (&result->representation.string[src_len], ' ', result_len - src_len);
++
++  result->representation.string[result_len] = '\0'; /* For debugger  */
++  result->representation.length = result_len;
++}
++
+ /* Convert Hollerith to integer. The constant will be padded or truncated.  */
+ 
+ gfc_expr *
+@@ -2560,6 +2588,19 @@ gfc_hollerith2int (gfc_expr *src, int kind)
+   return result;
+ }
+ 
++/* Convert character to integer. The constant will be padded or truncated. */
++
++gfc_expr *
++gfc_character2int (gfc_expr *src, int kind)
++{
++  gfc_expr *result;
++  result = gfc_get_constant_expr (BT_INTEGER, kind, &src->where);
++
++  character2representation (result, src);
++  gfc_interpret_integer (kind, (unsigned char *) result->representation.string,
++			 result->representation.length, result->value.integer);
++  return result;
++}
+ 
+ /* Convert Hollerith to real. The constant will be padded or truncated.  */
+ 
+diff --git a/gcc/fortran/arith.h b/gcc/fortran/arith.h
+index 9c623a4..3cd663b 100644
+--- a/gcc/fortran/arith.h
++++ b/gcc/fortran/arith.h
+@@ -82,6 +82,7 @@ gfc_expr *gfc_hollerith2real (gfc_expr *, int);
+ gfc_expr *gfc_hollerith2complex (gfc_expr *, int);
+ gfc_expr *gfc_hollerith2character (gfc_expr *, int);
+ gfc_expr *gfc_hollerith2logical (gfc_expr *, int);
++gfc_expr *gfc_character2int (gfc_expr *, int);
+ 
+ #endif /* GFC_ARITH_H  */
+ 
+diff --git a/gcc/fortran/check.c b/gcc/fortran/check.c
+index 6e62d40..4f2d216 100644
+--- a/gcc/fortran/check.c
++++ b/gcc/fortran/check.c
+@@ -2544,9 +2544,14 @@ gfc_check_index (gfc_expr *string, gfc_expr *substring, gfc_expr *back,
+ }
+ 
+ 
++/* This is the check function for the argument to the INT intrinsic */
+ bool
+ gfc_check_int (gfc_expr *x, gfc_expr *kind)
+ {
++  if ((gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
++      && x->ts.type == BT_CHARACTER)
++    return true;
++
+   if (!numeric_check (x, 0))
+     return false;
+ 
+diff --git a/gcc/fortran/intrinsic.c b/gcc/fortran/intrinsic.c
+index 2f60fe8..371f5b8 100644
+--- a/gcc/fortran/intrinsic.c
++++ b/gcc/fortran/intrinsic.c
+@@ -3928,6 +3928,17 @@ add_conversions (void)
+ 	  add_conv (BT_LOGICAL, gfc_logical_kinds[j].kind,
+ 		    BT_INTEGER, gfc_integer_kinds[i].kind, GFC_STD_LEGACY);
+ 	}
++
++  /* Oracle allows character values to be converted to integers,
++     similar to Hollerith-Integer conversion - the first characters will
++     be turned into ascii values. */
++  if (gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
++    {
++      /* Character-Integer conversions.  */
++      for (i = 0; gfc_integer_kinds[i].kind != 0; i++)
++	add_conv (BT_CHARACTER, gfc_default_character_kind,
++		  BT_INTEGER, gfc_integer_kinds[i].kind, GFC_STD_LEGACY);
++    }
+ }
+ 
+ 
+@@ -5008,6 +5019,15 @@ gfc_convert_type_warn (gfc_expr *expr, gfc_typespec *ts, int eflag, int wflag)
+ 			     gfc_typename (&from_ts), gfc_typename (ts),
+ 			     &expr->where);
+ 	}
++      else if ((gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
++	       && from_ts.type == BT_CHARACTER
++	       && ts->type == BT_INTEGER)
++	{
++	  if (warn_conversion_extra || warn_conversion)
++	    gfc_warning_now (0, "Conversion from %s to %s at %L",
++			     gfc_typename (&from_ts), gfc_typename (ts),
++			     &expr->where);
++	}
+       else
+         gcc_unreachable ();
+     }
+diff --git a/gcc/fortran/resolve.c b/gcc/fortran/resolve.c
+index 4bb88b4..84a4827 100644
+--- a/gcc/fortran/resolve.c
++++ b/gcc/fortran/resolve.c
+@@ -3615,6 +3615,30 @@ logical_to_bitwise (gfc_expr *e)
+   return e;
+ }
+ 
++/* Return true if TYPE is character based, false otherwise.  */
++
++static int
++is_character_based (bt type)
++{
++  return type == BT_CHARACTER || type == BT_HOLLERITH;
++}
++
++/* If E is a logical, convert it to an integer and issue a warning
++   for the conversion.  */
++
++static void
++convert_logical_to_integer (gfc_expr *e)
++{
++  if (e->ts.type == BT_LOGICAL)
++    {
++      /* Convert to INTEGER */
++      gfc_typespec t;
++      t.type = BT_INTEGER;
++      t.kind = 1;
++      gfc_convert_type_warn (e, &t, 2, 1);
++    }
++}
++
+ /* Resolve an operator expression node.  This can involve replacing the
+    operation with a user defined function call.  */
+ 
+@@ -3781,6 +3805,38 @@ resolve_operator (gfc_expr *e)
+     case INTRINSIC_EQ_OS:
+     case INTRINSIC_NE:
+     case INTRINSIC_NE_OS:
++
++      if (gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
++	{
++	  convert_logical_to_integer (op1);
++	  convert_logical_to_integer (op2);
++	}
++
++      /* If you're comparing hollerith contants to character expresisons,
++	 convert the hollerith constant */
++      if ((gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
++	  && is_character_based (op1->ts.type)
++	  && is_character_based (op2->ts.type))
++	{
++	  gfc_typespec ts;
++	  ts.type = BT_CHARACTER;
++	  ts.kind = op1->ts.kind;
++	  if (op1->ts.type == BT_HOLLERITH)
++	  {
++	    gfc_convert_type_warn (op1, &ts, 2, 1);
++	    gfc_warning (0, "Promoting argument for comparison from HOLLERITH "
++	                 "to CHARACTER at %L", &op1->where);
++	  }
++	  ts.type = BT_CHARACTER;
++	  ts.kind = op2->ts.kind;
++	  if (op2->ts.type == BT_HOLLERITH)
++	  {
++	    gfc_convert_type_warn (op2, &ts, 2, 1);
++	    gfc_warning (0, "Promoting argument for comparison from HOLLERITH "
++                         "to CHARACTER at %L", &op2->where);
++	  }
++	}
++
+       if (op1->ts.type == BT_CHARACTER && op2->ts.type == BT_CHARACTER
+ 	  && op1->ts.kind == op2->ts.kind)
+ 	{
+@@ -3789,6 +3845,29 @@ resolve_operator (gfc_expr *e)
+ 	  break;
+ 	}
+ 
++      /* Numeric to hollerith comparisons */
++      if ((gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
++	  && gfc_numeric_ts (&op1->ts)
++	  && (op2->ts.type == BT_HOLLERITH || op2->ts.type == BT_CHARACTER))
++	{
++	  gfc_warning (0, "Promoting argument for comparison from character type to INTEGER at %L", &op2->where);
++	  gfc_typespec ts;
++	  ts.type = BT_INTEGER;
++	  ts.kind = 4;
++	  gfc_convert_type_warn (op2, &ts, 2, 1);
++	}
++
++      if ((gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
++	  && gfc_numeric_ts (&op2->ts)
++	  && (op1->ts.type == BT_HOLLERITH || op1->ts.type == BT_CHARACTER))
++	{
++	  gfc_warning (0, "Promoting argument for comparison from character type to INTEGER at %L", &op1->where);
++	  gfc_typespec ts;
++	  ts.type = BT_INTEGER;
++	  ts.kind = 4;
++	  gfc_convert_type_warn (op1, &ts, 2, 1);
++	}
++
+       if (gfc_numeric_ts (&op1->ts) && gfc_numeric_ts (&op2->ts))
+ 	{
+ 	  gfc_type_convert_binary (e, 1);
+@@ -3985,7 +4064,6 @@ bad_op:
+   return false;
+ }
+ 
+-
+ /************** Array resolution subroutines **************/
+ 
+ enum compare_result
+diff --git a/gcc/fortran/simplify.c b/gcc/fortran/simplify.c
+index 09da1d2..80c9637 100644
+--- a/gcc/fortran/simplify.c
++++ b/gcc/fortran/simplify.c
+@@ -7144,6 +7144,14 @@ gfc_convert_constant (gfc_expr *e, bt type, int kind)
+ 	}
+       break;
+ 
++   case BT_CHARACTER:
++      if (type == BT_INTEGER)
++	{
++	  f = gfc_character2int;
++	  break;
++	}
++      goto oops;
++
+     default:
+     oops:
+       gfc_internal_error ("gfc_convert_constant(): Unexpected type");
+diff --git a/gcc/testsuite/gfortran.dg/hollerith-character-comparison.f90 b/gcc/testsuite/gfortran.dg/hollerith-character-comparison.f90
+new file mode 100644
+index 0000000..9c462b9
+--- /dev/null
++++ b/gcc/testsuite/gfortran.dg/hollerith-character-comparison.f90
+@@ -0,0 +1,15 @@
++       ! { dg-options "-std=extra-legacy" }
++
++      program convert
++      REAL*4 a
++      INTEGER*4 b
++      b = 1000
++      print *, 4HJMAC.eq.4HJMAC ! { dg-warning "Promoting argument for comparison from HOLLERITH to CHARACTER at" }
++      print *, 4HJMAC.eq."JMAC" ! { dg-warning "Promoting argument for comparison from HOLLERITH to CHARACTER at" }
++      print *, 4HJMAC.eq."JMAN" ! { dg-warning "Promoting argument for comparison from HOLLERITH to CHARACTER at" }
++      print *, "JMAC".eq.4HJMAN !  { dg-warning "Promoting argument for comparison from HOLLERITH to CHARACTER at" }
++      print *, "AAAA".eq.5HAAAAA ! { dg-warning "Promoting argument for comparison from HOLLERITH to CHARACTER at" }
++      print *, "BBBBB".eq.5HBBBB ! { dg-warning "Promoting argument for comparison from HOLLERITH to CHARACTER at" }
++
++      end program
++
+diff --git a/gcc/testsuite/gfortran.dg/hollerith-int-comparison.f90 b/gcc/testsuite/gfortran.dg/hollerith-int-comparison.f90
+new file mode 100644
+index 0000000..f44c1f8
+--- /dev/null
++++ b/gcc/testsuite/gfortran.dg/hollerith-int-comparison.f90
+@@ -0,0 +1,11 @@
++       ! { dg-options "-std=extra-legacy" }
++
++      program convert
++      INTEGER*4 b
++      b = 5HRIVET ! { dg-warning "Legacy Extension: Hollerith constant|Conversion from HOLLERITH to INTEGER|too long to convert" }
++      print *, 4HJMAC.eq.400 ! { dg-warning "Legacy Extension: Hollerith constant|Promoting argument for comparison from character|Conversion from HOLLERITH to INTEGER" }
++      print *, 4HRIVE.eq.1163282770 ! { dg-warning "Legacy Extension: Hollerith constant|Promoting argument for comparison from character|Conversion from HOLLERITH to INTEGER" }
++      print *, b
++      print *, 1163282770.eq.4HRIVE ! { dg-warning "Legacy Extension: Hollerith constant|Promoting argument for comparison from character|Conversion from HOLLERITH to INTEGER" }
++      end program
++
