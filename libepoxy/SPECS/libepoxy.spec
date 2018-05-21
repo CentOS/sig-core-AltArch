@@ -55,9 +55,11 @@ make install DESTDIR=$RPM_BUILD_ROOT
 find $RPM_BUILD_ROOT -type f -name '*.la' -delete -print
 
 %check
+%ifnarch %{arm}
 # In theory this is fixed in 1.2 but we still see errors on most platforms
 # https://github.com/anholt/libepoxy/issues/24
 make check # || ( cat test/test-suite.log ; objdump -T %{_libdir}/libdl.so.? )
+%endif
 
 %post -p /sbin/ldconfig
 %postun -p /sbin/ldconfig
@@ -74,6 +76,9 @@ make check # || ( cat test/test-suite.log ; objdump -T %{_libdir}/libdl.so.? )
 %{_libdir}/pkgconfig/epoxy.pc
 
 %changelog
+* Mon May 21 2018 Pablo Greco <pablo@fliagreco.com.ar> - 1.3.1-2
+- Disable tests on arm
+
 * Wed Apr 11 2018 Debarshi Ray <rishi@fedoraproject.org> - 1.3.1-2
 - Prevent crash in epoxy_glx_version if GLX is not available
 Resolves: #1566101
