@@ -1,0 +1,135 @@
+--- libada/Makefile.in.jj	2009-01-14 12:07:35.000000000 +0100
++++ libada/Makefile.in	2009-01-15 14:25:33.000000000 +0100
+@@ -66,18 +66,40 @@ libsubdir := $(libdir)/gcc/$(target_nonc
+ ADA_RTS_DIR=$(GCC_DIR)/ada/rts$(subst /,_,$(MULTISUBDIR))
+ ADA_RTS_SUBDIR=./rts$(subst /,_,$(MULTISUBDIR))
+ 
++DEFAULTMULTIFLAGS :=
++ifeq ($(MULTISUBDIR),)
++targ:=$(subst -, ,$(target))
++arch:=$(word 1,$(targ))
++ifeq ($(words $(targ)),2)
++osys:=$(word 2,$(targ))
++else
++osys:=$(word 3,$(targ))
++endif
++ifeq ($(strip $(filter-out i%86 x86_64 powerpc% ppc% s390% sparc% linux%, $(arch) $(osys))),)
++ifeq ($(shell $(CC) $(CFLAGS) -print-multi-os-directory),../lib64)
++DEFAULTMULTIFLAGS := -m64
++else
++ifeq ($(strip $(filter-out s390%, $(arch))),)
++DEFAULTMULTIFLAGS := -m31
++else
++DEFAULTMULTIFLAGS := -m32
++endif
++endif
++endif
++endif
++
+ # exeext should not be used because it's the *host* exeext.  We're building
+ # a *target* library, aren't we?!?  Likewise for CC.  Still, provide bogus
+ # definitions just in case something slips through the safety net provided
+ # by recursive make invocations in gcc/ada/Makefile.in
+ LIBADA_FLAGS_TO_PASS = \
+         "MAKEOVERRIDES=" \
+-        "LDFLAGS=$(LDFLAGS)" \
++        "LDFLAGS=$(LDFLAGS) $(DEFAULTMULTIFLAGS)" \
+         "LN_S=$(LN_S)" \
+         "SHELL=$(SHELL)" \
+-        "GNATLIBFLAGS=$(GNATLIBFLAGS) $(MULTIFLAGS)" \
+-        "GNATLIBCFLAGS=$(GNATLIBCFLAGS) $(MULTIFLAGS)" \
+-        "GNATLIBCFLAGS_FOR_C=$(GNATLIBCFLAGS_FOR_C) $(MULTIFLAGS)" \
++        "GNATLIBFLAGS=$(GNATLIBFLAGS) $(MULTIFLAGS) $(DEFAULTMULTIFLAGS)" \
++        "GNATLIBCFLAGS=$(GNATLIBCFLAGS) $(MULTIFLAGS) $(DEFAULTMULTIFLAGS)" \
++        "GNATLIBCFLAGS_FOR_C=$(GNATLIBCFLAGS_FOR_C) $(MULTIFLAGS) $(DEFAULTMULTIFLAGS)" \
+         "PICFLAG_FOR_TARGET=$(PICFLAG)" \
+         "THREAD_KIND=$(THREAD_KIND)" \
+         "TRACE=$(TRACE)" \
+@@ -88,7 +110,7 @@ LIBADA_FLAGS_TO_PASS = \
+         "exeext=.exeext.should.not.be.used " \
+ 	'CC=the.host.compiler.should.not.be.needed' \
+ 	"GCC_FOR_TARGET=$(CC)" \
+-        "CFLAGS=$(CFLAGS)"
++        "CFLAGS=$(CFLAGS) $(DEFAULTMULTIFLAGS)"
+ 
+ # Rules to build gnatlib.
+ .PHONY: gnatlib gnatlib-plain gnatlib-sjlj gnatlib-zcx gnatlib-shared osconstool
+--- gcc/ada/sem_util.adb	(revision 161677)
++++ gcc/ada/sem_util.adb	(working copy)
+@@ -5487,7 +5487,7 @@ package body Sem_Util is
+             Exp           : Node_Id;
+             Assn          : Node_Id;
+             Choice        : Node_Id;
+-            Comp_Type     : Entity_Id;
++            Comp_Type     : Entity_Id := Empty;
+             Is_Array_Aggr : Boolean;
+ 
+          begin
+--- config-ml.in.jj	2010-06-30 09:50:44.000000000 +0200
++++ config-ml.in	2010-07-02 21:24:17.994211151 +0200
+@@ -511,6 +511,8 @@ multi-do:
+ 				ADAFLAGS="$(ADAFLAGS) $${flags}" \
+ 				prefix="$(prefix)" \
+ 				exec_prefix="$(exec_prefix)" \
++				mandir="$(mandir)" \
++				infodir="$(infodir)" \
+ 				GOCFLAGS="$(GOCFLAGS) $${flags}" \
+ 				CXXFLAGS="$(CXXFLAGS) $${flags}" \
+ 				LIBCFLAGS="$(LIBCFLAGS) $${flags}" \
+--- libcpp/macro.c.jj	2015-01-14 11:01:34.000000000 +0100
++++ libcpp/macro.c	2015-01-14 14:22:19.286949884 +0100
+@@ -2947,8 +2947,6 @@ create_iso_definition (cpp_reader *pfile
+   cpp_token *token;
+   const cpp_token *ctoken;
+   bool following_paste_op = false;
+-  const char *paste_op_error_msg =
+-    N_("'##' cannot appear at either end of a macro expansion");
+   unsigned int num_extra_tokens = 0;
+ 
+   /* Get the first token of the expansion (or the '(' of a
+@@ -3059,7 +3057,8 @@ create_iso_definition (cpp_reader *pfile
+ 	     function-like macros, but not at the end.  */
+ 	  if (following_paste_op)
+ 	    {
+-	      cpp_error (pfile, CPP_DL_ERROR, paste_op_error_msg);
++	      cpp_error (pfile, CPP_DL_ERROR,
++			 "'##' cannot appear at either end of a macro expansion");
+ 	      return false;
+ 	    }
+ 	  break;
+@@ -3072,7 +3071,8 @@ create_iso_definition (cpp_reader *pfile
+ 	     function-like macros, but not at the beginning.  */
+ 	  if (macro->count == 1)
+ 	    {
+-	      cpp_error (pfile, CPP_DL_ERROR, paste_op_error_msg);
++	      cpp_error (pfile, CPP_DL_ERROR,
++			 "'##' cannot appear at either end of a macro expansion");
+ 	      return false;
+ 	    }
+ 
+--- libcpp/expr.c.jj	2015-01-14 11:01:34.000000000 +0100
++++ libcpp/expr.c	2015-01-14 14:35:52.851002344 +0100
+@@ -672,16 +672,17 @@ cpp_classify_number (cpp_reader *pfile,
+       if ((result & CPP_N_WIDTH) == CPP_N_LARGE
+ 	  && CPP_OPTION (pfile, cpp_warn_long_long))
+         {
+-          const char *message = CPP_OPTION (pfile, cplusplus) 
+-				? N_("use of C++11 long long integer constant")
+-		                : N_("use of C99 long long integer constant");
+-
+ 	  if (CPP_OPTION (pfile, c99))
+             cpp_warning_with_line (pfile, CPP_W_LONG_LONG, virtual_location,
+-				   0, message);
++				   0, CPP_OPTION (pfile, cplusplus)
++				      ? N_("use of C++11 long long integer constant")
++				      : N_("use of C99 long long integer constant"));
+           else
+             cpp_pedwarning_with_line (pfile, CPP_W_LONG_LONG,
+-				      virtual_location, 0, message);
++				      virtual_location, 0,
++				      CPP_OPTION (pfile, cplusplus)
++				      ? N_("use of C++11 long long integer constant")
++				      : N_("use of C99 long long integer constant"));
+         }
+ 
+       result |= CPP_N_INTEGER;

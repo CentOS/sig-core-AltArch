@@ -1,0 +1,125 @@
+commit 366dbfaa2132186e5e8b0688df05662967e628c7
+Author: jakub <jakub@138bc75d-0d04-0410-961f-82ee72b054a4>
+Date:   Wed Mar 28 11:59:06 2018 +0000
+
+            * gfortran.h (gfc_dt): Rename default_exp field to dec_ext.
+            * ioparm.def (IOPARM_dt_default_exp): Rename to ...
+            (IOPARM_dt_dec_ext): ... this.
+            * trans-io.c (build_dt): Adjust for default_exp renaming to
+            dec_ext and IOPARM_dt_default_exp renaming to IOPARM_dt_dec_ext.
+            * io.c (match_io): Likewise.
+    
+            * io/io.h (IOPARM_DT_DEFAULT_EXP): Rename to ...
+            (IOPARM_DT_DEC_EXT): ... this.
+            * io/list_read.c (parse_real): Adjust for IOPARM_DT_DEFAULT_EXP
+            renaming to IOPARM_DT_DEC_EXT.
+            (read_real): Likewise.
+            * io/read.c (read_f): Likewise.
+    
+    
+    git-svn-id: svn+ssh://gcc.gnu.org/svn/gcc/trunk@258920 138bc75d-0d04-0410-961f-82ee72b054a4
+
+diff --git a/gcc/fortran/gfortran.h b/gcc/fortran/gfortran.h
+index 2bfd1e3019d..507570ccbff 100644
+--- a/gcc/fortran/gfortran.h
++++ b/gcc/fortran/gfortran.h
+@@ -2437,7 +2437,7 @@ typedef struct
+   gfc_expr *io_unit, *format_expr, *rec, *advance, *iostat, *size, *iomsg,
+ 	   *id, *pos, *asynchronous, *blank, *decimal, *delim, *pad, *round,
+ 	   *sign, *extra_comma, *dt_io_kind, *udtio;
+-  char default_exp;
++  char dec_ext;
+ 
+   gfc_symbol *namelist;
+   /* A format_label of `format_asterisk' indicates the "*" format */
+diff --git a/gcc/fortran/io.c b/gcc/fortran/io.c
+index 10b7e827dab..0aa31bb6a4f 100644
+--- a/gcc/fortran/io.c
++++ b/gcc/fortran/io.c
+@@ -4291,9 +4291,10 @@ get_io_list:
+ 	goto syntax;
+     }
+ 
+-  /* See if we want to use defaults for missing exponents in real transfers.  */
++  /* See if we want to use defaults for missing exponents in real transfers
++     and other DEC runtime extensions.  */
+   if (flag_dec)
+-    dt->default_exp = 1;
++    dt->dec_ext = 1;
+ 
+   /* A full IO statement has been matched.  Check the constraints.  spec_end is
+      supplied for cases where no locus is supplied.  */
+diff --git a/gcc/fortran/ioparm.def b/gcc/fortran/ioparm.def
+index b9dc58f26a7..9ab3b58946e 100644
+--- a/gcc/fortran/ioparm.def
++++ b/gcc/fortran/ioparm.def
+@@ -118,5 +118,5 @@ IOPARM (dt,      round,		1 << 23, char2)
+ IOPARM (dt,      sign,		1 << 24, char1)
+ #define IOPARM_dt_f2003		      (1 << 25)
+ #define IOPARM_dt_dtio		      (1 << 26)
+-#define IOPARM_dt_default_exp	      (1 << 27)
++#define IOPARM_dt_dec_ext	      (1 << 27)
+ IOPARM (dt,      u,		0,	 pad)
+diff --git a/gcc/fortran/trans-io.c b/gcc/fortran/trans-io.c
+index 9058712c695..2626c4651e2 100644
+--- a/gcc/fortran/trans-io.c
++++ b/gcc/fortran/trans-io.c
+@@ -1958,8 +1958,8 @@ build_dt (tree function, gfc_code * code)
+       if (dt->udtio)
+ 	mask |= IOPARM_dt_dtio;
+ 
+-      if (dt->default_exp)
+-	mask |= IOPARM_dt_default_exp;
++      if (dt->dec_ext)
++	mask |= IOPARM_dt_dec_ext;
+ 
+       if (dt->namelist)
+ 	{
+diff --git a/libgfortran/io/io.h b/libgfortran/io/io.h
+index 3c2a2cae38a..ccbaf47ff90 100644
+--- a/libgfortran/io/io.h
++++ b/libgfortran/io/io.h
+@@ -442,7 +442,7 @@ st_parameter_inquire;
+ #define IOPARM_DT_HAS_SIGN			(1 << 24)
+ #define IOPARM_DT_HAS_F2003                     (1 << 25)
+ #define IOPARM_DT_HAS_UDTIO                     (1 << 26)
+-#define IOPARM_DT_DEFAULT_EXP			(1 << 27)
++#define IOPARM_DT_DEC_EXT			(1 << 27)
+ /* Internal use bit.  */
+ #define IOPARM_DT_IONML_SET			(1u << 31)
+ 
+diff --git a/libgfortran/io/list_read.c b/libgfortran/io/list_read.c
+index d052d1fa828..300c3bd23f3 100644
+--- a/libgfortran/io/list_read.c
++++ b/libgfortran/io/list_read.c
+@@ -1380,7 +1380,7 @@ parse_real (st_parameter_dt *dtp, void *buffer, int length)
+   if (!isdigit (c))
+     {
+       /* Extension: allow default exponent of 0 when omitted.  */
+-      if (dtp->common.flags & IOPARM_DT_DEFAULT_EXP)
++      if (dtp->common.flags & IOPARM_DT_DEC_EXT)
+ 	{
+ 	  push_char (dtp, '0');
+ 	  goto done;
+@@ -1831,7 +1831,7 @@ read_real (st_parameter_dt *dtp, void *dest, int length)
+   if (!isdigit (c))
+     {
+       /* Extension: allow default exponent of 0 when omitted.  */
+-      if (dtp->common.flags & IOPARM_DT_DEFAULT_EXP)
++      if (dtp->common.flags & IOPARM_DT_DEC_EXT)
+ 	{
+ 	  push_char (dtp, '0');
+ 	  goto done;
+diff --git a/libgfortran/io/read.c b/libgfortran/io/read.c
+index 87adfb8a41d..976020af448 100644
+--- a/libgfortran/io/read.c
++++ b/libgfortran/io/read.c
+@@ -1093,7 +1093,7 @@ exponent:
+   if (w == 0)
+     {
+       /* Extension: allow default exponent of 0 when omitted.  */
+-      if (dtp->common.flags & IOPARM_DT_DEFAULT_EXP)
++      if (dtp->common.flags & IOPARM_DT_DEC_EXT)
+ 	goto done;
+       else
+ 	goto bad_float;

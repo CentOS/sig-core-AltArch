@@ -1,0 +1,95 @@
+From 72d3915eadd1121d8b2f0be04fafc17e9232be81 Mon Sep 17 00:00:00 2001
+From: Jim MacArthur <jim.macarthur@codethink.co.uk>
+Date: Thu, 5 Nov 2015 18:57:53 +0000
+Subject: [PATCH 13/23] Allow per-variable kind specification.
+
+      INTEGER*4 x*2, y*8
+
+The per-variable sizes override the kind specified in the type.
+At the moment, you can follow this with an array specification, so
+INTEGER x*2(10) is OK, but not the other way round.
+
+This feature is enabled by the `-std=extra-legacy` compiler flag.
+---
+
+    0013-Allow-per-variable-kind-specification.patch
+
+diff --git a/gcc/fortran/decl.c b/gcc/fortran/decl.c
+index 3ad9c2c..832904a 100644
+--- a/gcc/fortran/decl.c
++++ b/gcc/fortran/decl.c
+@@ -1019,6 +1019,24 @@ syntax:
+   return MATCH_ERROR;
+ }
+ 
++/* This matches the nonstandard kind given after a variable name, like:
++   INTEGER x*2, y*4
++   The per-variable kind will override any kind given in the type
++   declaration.
++*/
++
++static match
++match_per_symbol_kind (int *length)
++{
++  match m;
++
++  m = gfc_match_char ('*');
++  if (m != MATCH_YES)
++    return m;
++
++  m = gfc_match_small_literal_int (length, NULL);
++  return m;
++}
+ 
+ /* Special subroutine for finding a symbol.  Check if the name is found
+    in the current name space.  If not, and we're compiling a function or
+@@ -2193,10 +2211,13 @@ variable_decl (int elem)
+   bool t;
+   gfc_symbol *sym;
+   match cl_match;
++  match kind_match;
++  int overridden_kind;
+ 
+   initializer = NULL;
+   as = NULL;
+   cp_as = NULL;
++  kind_match = MATCH_NO;
+ 
+   /* When we get here, we've just matched a list of attributes and
+      maybe a type and a double colon.  The next thing we expect to see
+@@ -2216,9 +2237,18 @@ variable_decl (int elem)
+   if ((gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
+       && current_ts.type == BT_CHARACTER)
+     {
+-      cl_match = match_character_length_clause (&cl, &cl_deferred, elem);
+-      if (cl_match == MATCH_ERROR)
+-	goto cleanup;
++      if (current_ts.type == BT_CHARACTER)
++	{
++	  cl_match = match_character_length_clause (&cl, &cl_deferred, elem);
++	  if (cl_match == MATCH_ERROR)
++	    goto cleanup;
++	}
++      else
++	{
++	  kind_match = match_per_symbol_kind (&overridden_kind);
++	  if (kind_match == MATCH_ERROR)
++	    goto cleanup;
++	}
+     }
+ 
+   /* Now we could see the optional array spec. or character length.  */
+@@ -2412,6 +2442,13 @@ variable_decl (int elem)
+       goto cleanup;
+     }
+ 
++  if (kind_match == MATCH_YES)
++    {
++      gfc_find_symbol (name, gfc_current_ns, 1, &sym);
++      /* sym *must* be found at this point */
++      sym->ts.kind = overridden_kind;
++    }
++
+   if (!check_function_name (name))
+     {
+       m = MATCH_ERROR;

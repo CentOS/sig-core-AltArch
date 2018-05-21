@@ -1,0 +1,68 @@
+From 99c791361468b61976d6054e1ec1c81fe43e6559 Mon Sep 17 00:00:00 2001
+From: Jim MacArthur <jim.macarthur@codethink.co.uk>
+Date: Wed, 11 Nov 2015 15:37:00 +0000
+Subject: [PATCH 14/23] Allow non-logical expressions in IF statements
+
+This feature is enabled by the `-std=extra-legacy` compiler flag.
+---
+
+    0014-Allow-non-logical-expressions-in-IF-statements.patch
+
+diff --git a/gcc/fortran/match.c b/gcc/fortran/match.c
+index 682f7b0..c63b834 100644
+--- a/gcc/fortran/match.c
++++ b/gcc/fortran/match.c
+@@ -25,6 +25,7 @@ along with GCC; see the file COPYING3.  If not see
+ #include "gfortran.h"
+ #include "match.h"
+ #include "parse.h"
++#include "arith.h"
+ 
+ int gfc_matching_ptr_assignment = 0;
+ int gfc_matching_procptr_assignment = 0;
+@@ -1666,7 +1667,17 @@ got_match:
+   *p->next = new_st;
+   p->next->loc = gfc_current_locus;
+ 
+-  p->expr1 = expr;
++  if ((gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
++      && expr->ts.type != BT_LOGICAL)
++    {
++      p->expr1 = gfc_ne (expr, gfc_get_int_expr (1, &gfc_current_locus, 0), INTRINSIC_NE);
++      gfc_warning_now (0, "The type of condition in this IF statement isn't LOGICAL; it will be true if it evaluates to nonzero.");
++    }
++  else
++    {
++      p->expr1 = expr;
++    }
++  p->op = EXEC_IF;
+ 
+   gfc_clear_new_st ();
+ 
+diff --git a/gcc/fortran/parse.c b/gcc/fortran/parse.c
+index 3aedb1d..e926ba6 100644
+--- a/gcc/fortran/parse.c
++++ b/gcc/fortran/parse.c
+@@ -26,6 +26,7 @@ along with GCC; see the file COPYING3.  If not see
+ #include <setjmp.h>
+ #include "match.h"
+ #include "parse.h"
++#include "arith.h"
+ 
+ /* Current statement label.  Zero means no statement label.  Because new_st
+    can get wiped during statement matching, we have to keep it separate.  */
+@@ -4036,6 +4037,14 @@ parse_if_block (void)
+   d = add_statement ();
+ 
+   d->expr1 = top->expr1;
++
++  if ((gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
++      && top->expr1->ts.type != BT_LOGICAL)
++    {
++      d->expr1 = gfc_ne (top->expr1, gfc_get_int_expr (1, &gfc_current_locus, 0), INTRINSIC_NE);
++      gfc_warning_now (0, "The type of condition in this IF statement isn't LOGICAL; it will be true if it evaluates to nonzero.");
++    }
++
+   top->expr1 = NULL;
+   top->block = d;
+ 

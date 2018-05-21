@@ -1,0 +1,516 @@
+diff --git a/gcc/fortran/io.c b/gcc/fortran/io.c
+index d93dcfa..f47565c 100644
+--- a/gcc/fortran/io.c
++++ b/gcc/fortran/io.c
+@@ -909,6 +909,13 @@ data_desc:
+ 
+       if (u != FMT_POSINT)
+ 	{
++	  if (flag_dec)
++	    {
++	      /* Assume a default width based on the variable size.  */
++	      saved_token = u;
++	      break;
++	    }
++
+ 	  format_locus.nextc += format_string_pos;
+ 	  gfc_error ("Positive width required in format "
+ 			 "specifier %s at %L", token_to_string (t),
+@@ -1030,6 +1037,13 @@ data_desc:
+ 	goto fail;
+       if (t != FMT_ZERO && t != FMT_POSINT)
+ 	{
++	  if (flag_dec)
++	    {
++	      /* Assume the default width is expected here and continue lexing.  */
++	      value = 0; /* It doesn't matter what we set the value to here.  */
++	      saved_token = t;
++	      break;
++	    }
+ 	  error = nonneg_required;
+ 	  goto syntax;
+ 	}
+@@ -1099,8 +1113,17 @@ data_desc:
+ 	goto fail;
+       if (t != FMT_ZERO && t != FMT_POSINT)
+ 	{
+-	  error = nonneg_required;
+-	  goto syntax;
++	  if (flag_dec)
++	    {
++	      /* Assume the default width is expected here and continue lexing.  */
++	      value = 0; /* It doesn't matter what we set the value to here.  */
++	      saved_token = t;
++	    }
++	  else
++	    {
++	      error = nonneg_required;
++	      goto syntax;
++	    }
+ 	}
+       else if (is_input && t == FMT_ZERO)
+ 	{
+diff --git a/gcc/testsuite/gfortran.dg/fmt_f_default_field_width.f90 b/gcc/testsuite/gfortran.dg/fmt_f_default_field_width.f90
+new file mode 100644
+index 0000000..b087b8f
+--- /dev/null
++++ b/gcc/testsuite/gfortran.dg/fmt_f_default_field_width.f90
+@@ -0,0 +1,43 @@
++! { dg-do run }
++! { dg-options -fdec }
++!
++! Test case for the default field widths enabled by the -fdec-format-defaults flag.
++!
++! This feature is not part of any Fortran standard, but it is supported by the
++! Oracle Fortran compiler and others.
++!
++! libgfortran uses printf() internally to implement FORMAT. If you print float
++! values to a higher precision than the type can actually store, the results
++! are implementation dependent: some platforms print zeros, others print random
++! numbers. Don't depend on this behaviour in tests because they will not be
++! portable.
++
++    character(50) :: buffer
++
++    real*4 :: real_4
++    real*8 :: real_8
++    real*16 :: real_16
++    integer :: len
++
++    real_4 = 4.18
++    write(buffer, '(A, F, A)') ':',real_4,':'
++    print *,buffer
++    if (buffer.ne.":      4.1799998:") call abort
++
++    real_4 = 0.00000018
++    write(buffer, '(A, F, A)') ':',real_4,':'
++    print *,buffer
++    if (buffer.ne.":      0.0000002:") call abort
++
++    real_8 = 4.18
++    write(buffer, '(A, F, A)') ':',real_8,':'
++    print *,buffer
++    len = len_trim(buffer)
++    if (len /= 27) call abort
++
++    real_16 = 4.18
++    write(buffer, '(A, F, A)') ':',real_16,':'
++    print *,buffer
++    len = len_trim(buffer)
++    if (len /= 44) call abort
++end
+diff --git a/gcc/testsuite/gfortran.dg/fmt_g_default_field_width.f90 b/gcc/testsuite/gfortran.dg/fmt_g_default_field_width.f90
+new file mode 100644
+index 0000000..3d3a476
+--- /dev/null
++++ b/gcc/testsuite/gfortran.dg/fmt_g_default_field_width.f90
+@@ -0,0 +1,48 @@
++! { dg-do run }
++! { dg-options -fdec }
++!
++! Test case for the default field widths enabled by the -fdec-format-defaults flag.
++!
++! This feature is not part of any Fortran standard, but it is supported by the
++! Oracle Fortran compiler and others.
++!
++! libgfortran uses printf() internally to implement FORMAT. If you print float
++! values to a higher precision than the type can actually store, the results
++! are implementation dependent: some platforms print zeros, others print random
++! numbers. Don't depend on this behaviour in tests because they will not be
++! portable.
++
++    character(50) :: buffer
++
++    real*4 :: real_4
++    real*8 :: real_8
++    real*16 :: real_16
++    integer :: len
++
++    real_4 = 4.18
++    write(buffer, '(A, G, A)') ':',real_4,':'
++    print *,buffer
++    if (buffer.ne.":   4.180000    :") call abort
++
++    real_4 = 0.00000018
++    write(buffer, '(A, G, A)') ':',real_4,':'
++    print *,buffer
++    if (buffer.ne.":  0.1800000E-06:") call abort
++
++    real_4 = 18000000.4
++    write(buffer, '(A, G, A)') ':',real_4,':'
++    print *,buffer
++    if (buffer.ne.":  0.1800000E+08:") call abort
++
++    real_8 = 4.18
++    write(buffer, '(A, G, A)') ':',real_8,':'
++    print *,buffer
++    len = len_trim(buffer)
++    if (len /= 27) call abort
++
++    real_16 = 4.18
++    write(buffer, '(A, G, A)') ':',real_16,':'
++    print *,buffer
++    len = len_trim(buffer)
++    if (len /= 44) call abort
++end
+diff --git a/gcc/testsuite/gfortran.dg/fmt_i_default_field_width.f90 b/gcc/testsuite/gfortran.dg/fmt_i_default_field_width.f90
+new file mode 100644
+index 0000000..ac4e165
+--- /dev/null
++++ b/gcc/testsuite/gfortran.dg/fmt_i_default_field_width.f90
+@@ -0,0 +1,38 @@
++! { dg-do run }
++! { dg-options -fdec }
++!
++! Test case for the default field widths enabled by the -fdec-format-defaults flag.
++!
++! This feature is not part of any Fortran standard, but it is supported by the
++! Oracle Fortran compiler and others.
++
++    character(50) :: buffer
++    character(1) :: colon
++
++    integer*2 :: integer_2
++    integer*4 :: integer_4
++    integer*8 :: integer_8
++
++    write(buffer, '(A, I, A)') ':',12340,':'
++    print *,buffer
++    if (buffer.ne.":       12340:") call abort
++
++    read(buffer, '(A1, I, A1)') colon, integer_4, colon
++    if (integer_4.ne.12340) call abort
++
++    integer_2 = -99
++    write(buffer, '(A, I, A)') ':',integer_2,':'
++    print *,buffer
++    if (buffer.ne.":    -99:") call abort
++
++    integer_8 = -11112222
++    write(buffer, '(A, I, A)') ':',integer_8,':'
++    print *,buffer
++    if (buffer.ne.":              -11112222:") call abort
++
++! If the width is 7 and there are 7 leading zeroes, the result should be zero.
++    integer_2 = 789
++    buffer = '0000000789'
++    read(buffer, '(I)') integer_2
++    if (integer_2.ne.0) call abort
++end
+diff --git a/libgfortran/io/format.c b/libgfortran/io/format.c
+index c2abdd7..692b1ff 100644
+--- a/libgfortran/io/format.c
++++ b/libgfortran/io/format.c
+@@ -956,12 +956,33 @@ parse_format_list (st_parameter_dt *dtp, bool *seen_dd)
+ 	  *seen_dd = true;
+ 	  if (u != FMT_POSINT && u != FMT_ZERO)
+ 	    {
++	      if (dtp->common.flags & IOPARM_DT_DEC_EXT)
++		{
++		  tail->u.real.w = DEFAULT_WIDTH;
++		  tail->u.real.d = 0;
++		  tail->u.real.e = -1;
++		  fmt->saved_token = u;
++		  break;
++		}
+ 	      fmt->error = nonneg_required;
+ 	      goto finished;
+ 	    }
+ 	}
++      else if (u == FMT_ZERO)
++	{
++	  fmt->error = posint_required;
++	  goto finished;
++	}
+       else if (u != FMT_POSINT)
+ 	{
++	  if (dtp->common.flags & IOPARM_DT_DEC_EXT)
++	    {
++	      tail->u.real.w = DEFAULT_WIDTH;
++	      tail->u.real.d = 0;
++	      tail->u.real.e = -1;
++	      fmt->saved_token = u;
++	      break;
++	    }
+ 	  fmt->error = posint_required;
+ 	  goto finished;
+ 	}
+@@ -1099,6 +1120,13 @@ parse_format_list (st_parameter_dt *dtp, bool *seen_dd)
+ 	{
+ 	  if (t != FMT_POSINT)
+ 	    {
++	      if (dtp->common.flags & IOPARM_DT_DEC_EXT)
++		{
++		  tail->u.integer.w = DEFAULT_WIDTH;
++		  tail->u.integer.m = -1;
++		  fmt->saved_token = t;
++		  break;
++		}
+ 	      fmt->error = posint_required;
+ 	      goto finished;
+ 	    }
+@@ -1107,6 +1135,13 @@ parse_format_list (st_parameter_dt *dtp, bool *seen_dd)
+ 	{
+ 	  if (t != FMT_ZERO && t != FMT_POSINT)
+ 	    {
++	      if (dtp->common.flags & IOPARM_DT_DEC_EXT)
++		{
++		  tail->u.integer.w = DEFAULT_WIDTH;
++		  tail->u.integer.m = -1;
++		  fmt->saved_token = t;
++		  break;
++		}
+ 	      fmt->error = nonneg_required;
+ 	      goto finished;
+ 	    }
+diff --git a/libgfortran/io/io.h b/libgfortran/io/io.h
+index 5583183..d1d08e8 100644
+--- a/libgfortran/io/io.h
++++ b/libgfortran/io/io.h
+@@ -981,5 +981,55 @@ memset4 (gfc_char4_t *p, gfc_char4_t c, int k)
+     *p++ = c;
+ }
+ 
++/* Used in width fields to indicate that the default should be used */
++#define DEFAULT_WIDTH -1
++
++/* Defaults for certain format field descriptors. These are decided based on
++ * the type of the value being formatted.
++ *
++ * The behaviour here is modelled on the Oracle Fortran compiler. At the time
++ * of writing, the details were available at this URL:
++ *
++ *   https://docs.oracle.com/cd/E19957-01/805-4939/6j4m0vnc3/index.html#z4000743746d
++ */
++
++static inline int
++default_width_for_integer (int kind)
++{
++  switch (kind)
++    {
++    case 1:
++    case 2:  return  7;
++    case 4:  return 12;
++    case 8:  return 23;
++    case 16: return 44;
++    default: return  0;
++    }
++}
++
++static inline int
++default_width_for_float (int kind)
++{
++  switch (kind)
++    {
++    case 4:  return 15;
++    case 8:  return 25;
++    case 16: return 42;
++    default: return  0;
++    }
++}
++
++static inline int
++default_precision_for_float (int kind)
++{
++  switch (kind)
++    {
++    case 4:  return 7;
++    case 8:  return 16;
++    case 16: return 33;
++    default: return 0;
++    }
++}
++
+ #endif
+ 
+diff --git a/libgfortran/io/read.c b/libgfortran/io/read.c
+index 2c9de48..e911e35 100644
+--- a/libgfortran/io/read.c
++++ b/libgfortran/io/read.c
+@@ -629,6 +629,12 @@ read_decimal (st_parameter_dt *dtp, const fnode *f, char *dest, int length)
+ 
+   w = f->u.w;
+ 
++  /* This is a legacy extension, and the frontend will only allow such cases
++   * through when -fdec-format-defaults is passed.
++   */
++  if (w == DEFAULT_WIDTH)
++    w = default_width_for_integer (length);
++
+   p = read_block_form (dtp, &w);
+ 
+   if (p == NULL)
+diff --git a/libgfortran/io/write.c b/libgfortran/io/write.c
+index a7307a8..c8e52fb 100644
+--- a/libgfortran/io/write.c
++++ b/libgfortran/io/write.c
+@@ -684,9 +684,8 @@ write_l (st_parameter_dt *dtp, const fnode *f, char *source, int len)
+   p[wlen - 1] = (n) ? 'T' : 'F';
+ }
+ 
+-
+ static void
+-write_boz (st_parameter_dt *dtp, const fnode *f, const char *q, int n)
++write_boz (st_parameter_dt *dtp, const fnode *f, const char *q, int n, int len)
+ {
+   int w, m, digits, nzero, nblank;
+   char *p;
+@@ -719,6 +718,9 @@ write_boz (st_parameter_dt *dtp, const fnode *f, const char *q, int n)
+   /* Select a width if none was specified.  The idea here is to always
+      print something.  */
+ 
++  if (w == DEFAULT_WIDTH)
++    w = default_width_for_integer (len);
++
+   if (w == 0)
+     w = ((digits < m) ? m : digits);
+ 
+@@ -845,6 +847,8 @@ write_decimal (st_parameter_dt *dtp, const fnode *f, const char *source,
+ 
+   /* Select a width if none was specified.  The idea here is to always
+      print something.  */
++  if (w == DEFAULT_WIDTH)
++    w = default_width_for_integer (len);
+ 
+   if (w == 0)
+     w = ((digits < m) ? m : digits) + nsign;
+@@ -1187,13 +1191,13 @@ write_b (st_parameter_dt *dtp, const fnode *f, const char *source, int len)
+   if (len > (int) sizeof (GFC_UINTEGER_LARGEST))
+     {
+       p = btoa_big (source, itoa_buf, len, &n);
+-      write_boz (dtp, f, p, n);
++      write_boz (dtp, f, p, n, len);
+     }
+   else
+     {
+       n = extract_uint (source, len);
+       p = btoa (n, itoa_buf, sizeof (itoa_buf));
+-      write_boz (dtp, f, p, n);
++      write_boz (dtp, f, p, n, len);
+     }
+ }
+ 
+@@ -1208,13 +1212,13 @@ write_o (st_parameter_dt *dtp, const fnode *f, const char *source, int len)
+   if (len > (int) sizeof (GFC_UINTEGER_LARGEST))
+     {
+       p = otoa_big (source, itoa_buf, len, &n);
+-      write_boz (dtp, f, p, n);
++      write_boz (dtp, f, p, n, len);
+     }
+   else
+     {
+       n = extract_uint (source, len);
+       p = otoa (n, itoa_buf, sizeof (itoa_buf));
+-      write_boz (dtp, f, p, n);
++      write_boz (dtp, f, p, n, len);
+     }
+ }
+ 
+@@ -1228,13 +1232,13 @@ write_z (st_parameter_dt *dtp, const fnode *f, const char *source, int len)
+   if (len > (int) sizeof (GFC_UINTEGER_LARGEST))
+     {
+       p = ztoa_big (source, itoa_buf, len, &n);
+-      write_boz (dtp, f, p, n);
++      write_boz (dtp, f, p, n, len);
+     }
+   else
+     {
+       n = extract_uint (source, len);
+       p = gfc_xtoa (n, itoa_buf, sizeof (itoa_buf));
+-      write_boz (dtp, f, p, n);
++      write_boz (dtp, f, p, n, len);
+     }
+ }
+ 
+@@ -1504,7 +1508,7 @@ size_from_kind (st_parameter_dt *dtp, const fnode *f, int kind)
+ {
+   int size;
+ 
+-  if (f->format == FMT_F && f->u.real.w == 0)
++  if ((f->format == FMT_F && f->u.real.w == 0) || f->u.real.w == DEFAULT_WIDTH)
+     {
+       switch (kind)
+       {
+diff --git a/libgfortran/io/write_float.def b/libgfortran/io/write_float.def
+index 7f0aa1d..73dc910 100644
+--- a/libgfortran/io/write_float.def
++++ b/libgfortran/io/write_float.def
+@@ -113,7 +113,8 @@ determine_precision (st_parameter_dt * dtp, const fnode * f, int len)
+ static void
+ build_float_string (st_parameter_dt *dtp, const fnode *f, char *buffer,
+ 		    size_t size, int nprinted, int precision, int sign_bit,
+-		    bool zero_flag, int npad, char *result, size_t *len)
++		    bool zero_flag, int npad, int default_width, char *result,
++                    size_t *len)
+ {
+   char *put;
+   char *digits;
+@@ -132,8 +133,17 @@ build_float_string (st_parameter_dt *dtp, const fnode *f, char *buffer,
+   sign_t sign;
+ 
+   ft = f->format;
+-  w = f->u.real.w;
+-  d = f->u.real.d;
++  if (f->u.real.w == DEFAULT_WIDTH)
++    /* This codepath can only be reached with -fdec-format-defaults. */
++    {
++      w = default_width;
++      d = precision;
++    }
++  else
++    {
++      w = f->u.real.w;
++      d = f->u.real.d;
++    }
+   p = dtp->u.p.scale_factor;
+ 
+   rchar = '5';
+@@ -958,6 +968,11 @@ determine_en_precision (st_parameter_dt *dtp, const fnode *f,
+       int save_scale_factor;\
+       volatile GFC_REAL_ ## x temp;\
+       save_scale_factor = dtp->u.p.scale_factor;\
++      if (w == DEFAULT_WIDTH)\
++	{\
++	  w = default_width;\
++	  d = precision;\
++	}\
+       switch (dtp->u.p.current_unit->round_status)\
+ 	{\
+ 	  case ROUND_ZERO:\
+@@ -1033,7 +1048,8 @@ determine_en_precision (st_parameter_dt *dtp, const fnode *f,
+ 	  nprinted = FDTOA(y,precision,m);\
+ 	}\
+       build_float_string (dtp, &newf, buffer, size, nprinted, precision,\
+-				   sign_bit, zero_flag, npad, result, res_len);\
++				   sign_bit, zero_flag, npad, default_width,\
++				   result, res_len);\
+       dtp->u.p.scale_factor = save_scale_factor;\
+     }\
+   else\
+@@ -1043,7 +1059,8 @@ determine_en_precision (st_parameter_dt *dtp, const fnode *f,
+       else\
+ 	nprinted = DTOA(y,precision,m);\
+       build_float_string (dtp, f, buffer, size, nprinted, precision,\
+-				   sign_bit, zero_flag, npad, result, res_len);\
++				   sign_bit, zero_flag, npad, default_width,\
++				   result, res_len);\
+     }\
+ }\
+ 
+@@ -1057,6 +1074,16 @@ get_float_string (st_parameter_dt *dtp, const fnode *f, const char *source,
+ {
+   int sign_bit, nprinted;
+   bool zero_flag;
++  int default_width = 0;
++
++  if (f->u.real.w == DEFAULT_WIDTH)
++    /* This codepath can only be reached with -fdec-format-defaults. The default
++     * values are based on those used in the Oracle Fortran compiler.
++     */
++    {
++      default_width = default_width_for_float (kind);
++      precision = default_precision_for_float (kind);
++    }
+ 
+   switch (kind)
+     {
