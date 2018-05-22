@@ -794,7 +794,7 @@ Provides: java-%{javaver}-%{origin}-accessibility = %{epoch}:%{version}-%{releas
 
 Name:    java-%{javaver}-%{origin}
 Version: %{javaver}.%{updatever}
-Release: 7.%{buildver}%{?dist}
+Release: 8.%{buildver}%{?dist}
 # java-1.5.0-ibm from jpackage.org set Epoch to 1 for unknown reasons,
 # and this change was brought into RHEL-4.  java-1.5.0-ibm packages
 # also included the epoch in their virtual provides.  This created a
@@ -909,6 +909,7 @@ Patch509: rh1176206-root.patch
 Patch523: pr2974-rh1337583.patch
 # PR3083, RH1346460: Regression in SSL debug output without an ECC provider
 Patch528: pr3083-rh1346460.patch
+Patch529: rh1566890_embargoed20180521.patch
 
 # Upstreamable debugging patches
 # Patches 204 and 205 stop the build adding .gnu_debuglink sections to unstripped files
@@ -1315,6 +1316,7 @@ sh %{SOURCE12}
 %patch523
 %patch526
 %patch528
+%patch529
 %patch538
 %patch560
 %patch561
@@ -1544,8 +1546,6 @@ do
   fi
 done
 
-# Disabled on armhfp
-%ifnarch %{arm}
 # Make sure gdb can do a backtrace based on line numbers on libjvm.so
 gdb -q "$JAVA_HOME/bin/java" <<EOF | tee gdb.out
 handle SIGSEGV pass nostop noprint
@@ -1559,7 +1559,6 @@ end
 run -version
 EOF
 grep 'JavaCallWrapper::JavaCallWrapper' gdb.out
-%endif
 
 # Check src.zip has all sources. See RHBZ#1130490
 jar -tf $JAVA_HOME/src.zip | grep 'sun.misc.Unsafe'
@@ -1971,8 +1970,9 @@ require "copy_jdk_configs.lua"
 %endif
 
 %changelog
-* Wed May  9 2018 Fabian Arrotin <arrfab@centos.org>
-- disabled gdb test as segfaults on armhfp
+* Wed May 16 2018 Jiri Vanek <jvanek@redhat.com> - 1:1.8.0.171-8.b10
+- added and applied 1566890_embargoed20180521.patch
+- Resolves: rhbz#1578555
 
 * Tue Apr 17 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.171-7.b10
 - Bump release number to be greater than RHEL 7.6 package to allow build with .el7 suffix
