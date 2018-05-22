@@ -14,7 +14,7 @@
     %global have_usbredir 0
 %endif
 
-%ifnarch s390 s390x %{arm}
+%ifnarch s390 s390x
     %global have_librdma 1
     %global have_tcmalloc 1
 %endif
@@ -40,9 +40,6 @@
 %endif
 %ifarch aarch64
     %global kvm_target    aarch64
-%endif
-%ifarch %{arm}
-    %global kvm_target    arm
 %endif
 
 #Versions of various parts:
@@ -79,13 +76,13 @@ Obsoletes: %1 < %{obsoletes_version}                                      \
 Summary: QEMU is a machine emulator and virtualizer
 Name: %{pkgname}%{?pkgsuffix}
 Version: 1.5.3
-Release: 156%{?dist}.1
+Release: 156%{?dist}.2
 # Epoch because we pushed a qemu-1.0 package. AIUI this can't ever be dropped
 Epoch: 10
 License: GPLv2+ and LGPLv2+ and BSD
 Group: Development/Tools
 URL: http://www.qemu.org/
-ExclusiveArch: x86_64 %{arm}
+ExclusiveArch: x86_64
 Requires: seabios-bin >= 1.7.2.2-5
 Requires: sgabios-bin
 Requires: seavgabios-bin
@@ -3872,6 +3869,8 @@ Patch1905: kvm-io-skip-updates-to-client-if-websocket-output-buffer.patch
 Patch1906: kvm-vga-add-ram_addr_t-cast.patch
 # For bz#1567913 - CVE-2018-7858 qemu-kvm: Qemu: cirrus: OOB access when updating vga display [rhel-7] [rhel-7.5.z]
 Patch1907: kvm-vga-fix-region-calculation.patch
+# For bz#1574075 - EMBARGOED CVE-2018-3639 qemu-kvm: Kernel: omega-4 [rhel-7.5.z]
+Patch1908: kvm-i386-define-the-ssbd-CPUID-feature-bit-CVE-2018-3639.patch
 
 
 BuildRequires: zlib-devel
@@ -5957,6 +5956,7 @@ tar -xf %{SOURCE21}
 %patch1905 -p1
 %patch1906 -p1
 %patch1907 -p1
+%patch1908 -p1
 
 %build
 buildarch="%{kvm_target}-softmmu"
@@ -6402,8 +6402,10 @@ sh %{_sysconfdir}/sysconfig/modules/kvm.modules &> /dev/null || :
 %{_mandir}/man8/qemu-nbd.8*
 
 %changelog
-* Mon May 14 2018 Fabian Arrotin <arrfab@centos.org> - 1.5.3-156.el7_5.1
-- Added kvm_target arm (Jacco@redsleeve.org)
+* Fri May 11 2018 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-156.el7_5.2
+- kvm-i386-define-the-ssbd-CPUID-feature-bit-CVE-2018-3639.patch [bz#1574075]
+- Resolves: bz#1574075
+  (EMBARGOED CVE-2018-3639 qemu-kvm: Kernel: omega-4 [rhel-7.5.z])
 
 * Mon Apr 16 2018 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-156.el7_5.1
 - kvm-vga-add-ram_addr_t-cast.patch [bz#1567913]
