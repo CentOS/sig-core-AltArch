@@ -1546,6 +1546,8 @@ do
   fi
 done
 
+# Disabled on armhfp
+%ifnarch %{arm}
 # Make sure gdb can do a backtrace based on line numbers on libjvm.so
 gdb -q "$JAVA_HOME/bin/java" <<EOF | tee gdb.out
 handle SIGSEGV pass nostop noprint
@@ -1559,6 +1561,7 @@ end
 run -version
 EOF
 grep 'JavaCallWrapper::JavaCallWrapper' gdb.out
+%endif
 
 # Check src.zip has all sources. See RHBZ#1130490
 jar -tf $JAVA_HOME/src.zip | grep 'sun.misc.Unsafe'
@@ -1970,6 +1973,9 @@ require "copy_jdk_configs.lua"
 %endif
 
 %changelog
+* Mon May 21 2018 Fabian Arrotin <arrfab@centos.org>
+- disabled gdb test as segfaults on armhfp
+
 * Wed May 16 2018 Jiri Vanek <jvanek@redhat.com> - 1:1.8.0.171-8.b10
 - added and applied 1566890_embargoed20180521.patch
 - Resolves: rhbz#1578555
