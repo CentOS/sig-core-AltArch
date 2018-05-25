@@ -54,7 +54,7 @@ Summary: The Linux kernel
 %if 0%{?released_kernel}
 
 # Do we have a -stable update to apply?
-%define stable_update 17
+%define stable_update 43
 # Set rpm version accordingly
 %if 0%{?stable_update}
 %define stablerev %{stable_update}
@@ -605,7 +605,7 @@ Patch323: bcm2837-bluetooth-support.patch
 
 # Generic fixes and enablement for Socionext SoC and 96board
 # https://patchwork.kernel.org/patch/9980861/
-Patch331: PCI-aspm-deal-with-missing-root-ports-in-link-state-handling.patch
+#Patch331: PCI-aspm-deal-with-missing-root-ports-in-link-state-handling.patch
 
 # https://git.kernel.org/pub/scm/linux/kernel/git/ardb/linux.git/log/?h=synquacer-netsec
 Patch332: arm64-socionext-96b-enablement.patch
@@ -617,10 +617,10 @@ Patch335: arm-exynos-fix-usb3.patch
 # 500 - Temp fixes/CVEs etc
 
 # rbhz 1519591 1520764
-Patch500: dccp-CVE-2017-8824-use-after-free-in-DCCP-code.patch
+#Patch500: dccp-CVE-2017-8824-use-after-free-in-DCCP-code.patch
 
 # 550-600 Meltdown and Spectre Fixes
-Patch550: prevent-bounds-check-bypass-via-speculative-execution.patch
+#Patch550: prevent-bounds-check-bypass-via-speculative-execution.patch
 
 # 600 - Patches for improved Bay and Cherry Trail device support
 # Below patches are submitted upstream, awaiting review / merging
@@ -641,22 +641,22 @@ Patch621: drm-i915-Boost-GPU-clocks-if-we-miss-the-pageflip-s-vblank.patch
 Patch625: v3-2-2-Input-synaptics---Lenovo-X1-Carbon-5-should-use-SMBUS-RMI.patch
 
 # Fixes for QXL issues
-Patch627: qxl-fixes.patch
+#Patch627: qxl-fixes.patch
 
 # rhbz 1462175
 Patch628: HID-rmi-Check-that-a-device-is-a-RMI-device-before-c.patch
 
 # rhbz 1514969
-Patch633: 0001-platform-x86-dell-laptop-Filter-out-spurious-keyboar.patch
+#Patch633: 0001-platform-x86-dell-laptop-Filter-out-spurious-keyboar.patch
 
 # Fix crash on Xwayland using nouveau
-Patch634: dma-buf-fix-reservation_object_wait_timeout_rcu-once-more-v2.patch
+#Patch634: dma-buf-fix-reservation_object_wait_timeout_rcu-once-more-v2.patch
 
 # rhbz 1539238
 Patch635: Add-support-for-One-by-Wacom-CTL-472-CTL-672.patch
 
 # CVE-2018-5750 rhbz 1539706 1539708
-Patch636: ACPI-sbshc-remove-raw-pointer-from-printk-message.patch
+#Patch636: ACPI-sbshc-remove-raw-pointer-from-printk-message.patch
 
 # rhbz 1492664 1492665
 Patch637: 0001-mm-don-t-warn-about-allocations-which-stall-for-too-.patch
@@ -2240,6 +2240,14 @@ fi
 #
 #
 %changelog
+* Fri May 25 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.43-201
+- Remove upstream Patches no longer needed
+- Rebase to LTS 4.14.43
+
+* Mon Mar 19 2018 Johnny Hughes <johnny@centos.org> - 4.14.28-201
+- Remove upstream Patches no longer needed (P. Greco)
+- Rebase to LTS 4.14.28
+
 * Wed Feb 07 2018 Johnny Hughes <johnny@centos.org> - 4.14.17-201
 - Roll in CentOS Mods
 
