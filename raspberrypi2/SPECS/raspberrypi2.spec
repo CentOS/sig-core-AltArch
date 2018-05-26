@@ -1,14 +1,14 @@
-%global commit_firmware_short 25cf637
-%global commit_firmware_long  25cf637ccc90d7d2fa37277c807ab33b655bd0f4
-%global commit_linux_short 4d78845
-%global commit_linux_long  4d78845fd711bdd7c0f20aafb3c976073d86b4e3
+%global commit_firmware_short 784fe6c
+%global commit_firmware_long  784fe6cebd9e5726c0c7b9e449f7cdbf2cf6959d
+%global commit_linux_short a209214
+%global commit_linux_long  a2092141807514666a273971cc8fa9e80f14439f
 
 %define Arch arm
 %define local_version v7
 %define extra_version 1
 
 Name:           raspberrypi2
-Version:        4.14.27
+Version:        4.14.43
 Release:        %{local_version}.%{extra_version}%{?dist}
 Summary:        Specific kernel and bootcode for Raspberry Pi
 
@@ -184,6 +184,9 @@ cp $(ls -1d /usr/share/%{name}-kernel/*-*/|tail -1)/boot/overlays/*.dtb* /boot/o
 %doc /boot/LICENCE.broadcom
 
 %changelog
+* Sat May 26 2018 Fabian Arrotin <arrfab@centos.org> - 4.14.43-v1.el7
+- updated to 4.14.43
+
 * Sun Mar 18 2018 Fabian Arrotin <arrfab@centos.org> - 4.14.27-v1.el7
 - Bumped to 4.14.x LTS branch (used now by rpi foundation too)
 
