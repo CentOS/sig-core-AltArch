@@ -7,3 +7,4 @@ The real source (aka Source0 , or other binary blobs) should come from either :
  * $upstream project (like kernel.org for vanilla/upstream kernel)
 
 
+This repository also hosts the kickstarts used to build the armhfp images. Those are located under image_build directory
