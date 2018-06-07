@@ -68,6 +68,10 @@ rm -fv %{buildroot}%{_pkgdocdir}/COPYING
 * Thu Jun  7 2018 Pablo Greco <pablo@fliagreco.com.ar> - 008.0-8
 - Revert patches to make it work on el7
 
+* Sat Feb 10 2018 Neal Gompa <ngompa13@gmail.com> - 008.0-8
+- Fix compatibility with pykickstart 3.9+ (#1544075)
+- Bump requires of livecd-tools to minimum version with pykickstart 3.9+ compatibility
+
 * Wed Feb 07 2018 Fedora Release Engineering <releng@fedoraproject.org> - 008.0-7
 - Rebuilt for https://fedoraproject.org/wiki/Fedora_28_Mass_Rebuild
 
