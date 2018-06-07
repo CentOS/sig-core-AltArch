@@ -1,3 +1,7 @@
+%{!?python2_sitelib: %global python2_sitelib %(%{__python} -c "import distutils.sysconfig as d; print d.get_python_lib()")}
+
+%define debug_package %{nil}
+
 Name: appliance-tools
 Summary: Tools for building Appliances
 Version: 008.0
@@ -14,9 +18,11 @@ Patch1: 0002-Make-it-possible-to-disable-compression.patch
 Patch3: 0001-Use-block-size-with-xz-to-make-seekable-xz-compresse.patch
 Patch4: 0001-Remove-usage-of-kickstart.get_modules-rhbz-1544075.patch
 
+Patch9999: 9999-revert-bca4b0df03b2831c31ace011fdcf3c6e73c9df66.patch
+
 # Ensure system deps are installed (rhbz#1409536)
-Requires: python2-imgcreate >= 1:25.0-2
-Requires: python2-urlgrabber
+Requires: python-imgcreate
+Requires: python-urlgrabber
 Requires: curl rsync kpartx
 Requires: zlib
 Requires: qemu-img
@@ -55,11 +61,12 @@ rm -fv %{buildroot}%{_pkgdocdir}/COPYING
 %dir %{python2_sitelib}/ec2convert
 %{python2_sitelib}/appcreate/*
 %{python2_sitelib}/ec2convert/*
+/usr/share/doc/appliance-tools/COPYING
+/usr/share/doc/appliance-tools/README
 
 %changelog
-* Sat Feb 10 2018 Neal Gompa <ngompa13@gmail.com> - 008.0-8
-- Fix compatibility with pykickstart 3.9+ (#1544075)
-- Bump requires of livecd-tools to minimum version with pykickstart 3.9+ compatibility
+* Thu Jun  7 2018 Pablo Greco <pablo@fliagreco.com.ar> - 008.0-8
+- Revert patches to make it work on el7
 
 * Wed Feb 07 2018 Fedora Release Engineering <releng@fedoraproject.org> - 008.0-7
 - Rebuilt for https://fedoraproject.org/wiki/Fedora_28_Mass_Rebuild
