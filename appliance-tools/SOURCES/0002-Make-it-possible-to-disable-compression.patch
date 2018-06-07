@@ -1,0 +1,117 @@
+From 042ec7b7c2f5e6a4b0bbf1818c2cd93ba9ebde8f Mon Sep 17 00:00:00 2001
+From: Lubomir Rintel <lkundrak@v3.sk>
+Date: Mon, 5 Oct 2015 05:14:42 -0400
+Subject: [PATCH 2/2] Make it possible to disable compression
+
+---
+ appcreate/appliance.py     | 25 +++++++++++++++----------
+ docs/appliance-creator.pod |  6 +++++-
+ tools/appliance-creator    |  4 +++-
+ 3 files changed, 23 insertions(+), 12 deletions(-)
+
+diff --git a/appcreate/appliance.py b/appcreate/appliance.py
+index f77b13b..258396d 100644
+--- a/appcreate/appliance.py
++++ b/appcreate/appliance.py
+@@ -43,7 +43,7 @@ class ApplianceImageCreator(ImageCreator):
+ 
+     """
+ 
+-    def __init__(self, ks, name, disk_format, vmem, vcpu, releasever=None):
++    def __init__(self, ks, name, disk_format, vmem, vcpu, releasever=None, no_compress=False):
+         """Initialize a ApplianceImageCreator instance.
+ 
+         This method takes the same arguments as ImageCreator.__init__()
+@@ -55,6 +55,7 @@ class ApplianceImageCreator(ImageCreator):
+         self.__imgdir = None
+         self.__disks = {}
+         self.__disk_format = disk_format
++        self.__compress = not no_compress
+ 
+         #appliance parameters
+         self.vmem = vmem
+@@ -629,14 +630,18 @@ class ApplianceImageCreator(ImageCreator):
+         else:
+             logging.debug("moving disks to stage location")
+             for name in self.__disks.keys():
+-                rc = subprocess.call(["xz", "-z", "%s/%s-%s.%s" %(self.__imgdir, self.name, name, self.__disk_format)])
+-                if rc == 0:
+-                    logging.debug("compression successful")
+-                if rc != 0:
+-                    raise CreatorError("Unable to compress disk to %s" % self.__disk_format)
+-
+-                src = "%s/%s-%s.%s.xz" % (self.__imgdir, self.name, name, self.__disk_format)
+-                dst = "%s/%s-%s.%s.xz" % (self._outdir, self.name, name, self.__disk_format)
++                src = "%s/%s-%s.%s" % (self.__imgdir, self.name, name, self.__disk_format)
++                dst = "%s/%s-%s.%s" % (self._outdir, self.name, name, self.__disk_format)
++
++                if self.__compress:
++                    rc = subprocess.call(["xz", "-z", src])
++                    if rc == 0:
++                        logging.debug("compression successful")
++                    if rc != 0:
++                        raise CreatorError("Unable to compress disk to %s" % self.__disk_format)
++                    src = "%s.xz" % (src)
++                    dst = "%s.xz" % (dst)
++
+                 logging.debug("moving %s to %s" % (src, dst))
+                 shutil.move(src, dst)
+         #write meta data in stage dir
+@@ -647,7 +652,7 @@ class ApplianceImageCreator(ImageCreator):
+         for name in self.__disks.keys():
+             dst = "%s/%s-%s.%s" % (self._outdir, self.name, name, self.__disk_format)
+             logging.debug("converting %s image to %s" % (self.__disks[name].lofile, dst))
+-            if self.__disk_format == "qcow2":
++            if self.__compress and self.__disk_format == "qcow2":
+                 logging.debug("using compressed qcow2")
+                 compressflag = "-c"
+             else:
+diff --git a/docs/appliance-creator.pod b/docs/appliance-creator.pod
+index 93bebad..a0ad804 100644
+--- a/docs/appliance-creator.pod
++++ b/docs/appliance-creator.pod
+@@ -38,7 +38,7 @@ Name of appliance image to be created (default based on config name)
+ 
+ =item -f FORMAT, --format=FORMAT
+ 
+-Disk format, this will take any input that qemu-img convert will take (raw, qcow2, vmdk, ...) Note: not all disk formats with work with all virt technologies. raw images are xz compressed, qcow2 images use compression.
++Disk format, this will take any input that qemu-img convert will take (raw, qcow2, vmdk, ...) Note: not all disk formats with work with all virt technologies. raw images are xz compressed, qcow2 images use compression (unless disabled with --no-compress option.
+ 
+ =item --vmem=VMEM
+ 
+@@ -52,6 +52,10 @@ Number of virtual cpus for appliance (default: 1)
+ 
+ Generate a checksum for the created appliance
+ 
++=item --no-compress
++
++Disable image compression.
++
+ =back
+ 
+ =head1 SYSTEM DIRECTORY OPTIONS
+diff --git a/tools/appliance-creator b/tools/appliance-creator
+index 9e3fa15..3ffc22c 100755
+--- a/tools/appliance-creator
++++ b/tools/appliance-creator
+@@ -57,6 +57,8 @@ def parse_options(args):
+                       help=("Generate a checksum for the created appliance"))
+     appopt.add_option("-f", "--format", type="string", dest="disk_format", default="raw",
+                       help="Disk format (default: raw)")
++    appopt.add_option("", "--no-compress", action="store_true", dest="no_compress", default=False,
++                      help="Avoid compressing the image")
+     parser.add_option_group(appopt)
+     
+     
+@@ -129,7 +131,7 @@ def main():
+     if options.name:
+         name = options.name
+             
+-    creator = appcreate.ApplianceImageCreator(ks, name, options.disk_format, options.vmem, options.vcpu, releasever=options.version)
++    creator = appcreate.ApplianceImageCreator(ks, name, options.disk_format, options.vmem, options.vcpu, releasever=options.version, no_compress=options.no_compress)
+     creator.tmpdir = options.tmpdir
+     creator.checksum = options.checksum
+ 
+-- 
+2.9.3
+
