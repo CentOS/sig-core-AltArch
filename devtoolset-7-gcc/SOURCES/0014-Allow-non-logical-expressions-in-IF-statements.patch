@@ -8,61 +8,136 @@ This feature is enabled by the `-std=extra-legacy` compiler flag.
 
     0014-Allow-non-logical-expressions-in-IF-statements.patch
 
-diff --git a/gcc/fortran/match.c b/gcc/fortran/match.c
-index 682f7b0..c63b834 100644
---- a/gcc/fortran/match.c
-+++ b/gcc/fortran/match.c
-@@ -25,6 +25,7 @@ along with GCC; see the file COPYING3.  If not see
- #include "gfortran.h"
- #include "match.h"
- #include "parse.h"
-+#include "arith.h"
- 
- int gfc_matching_ptr_assignment = 0;
- int gfc_matching_procptr_assignment = 0;
-@@ -1666,7 +1667,17 @@ got_match:
-   *p->next = new_st;
-   p->next->loc = gfc_current_locus;
- 
--  p->expr1 = expr;
-+  if ((gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
-+      && expr->ts.type != BT_LOGICAL)
-+    {
-+      p->expr1 = gfc_ne (expr, gfc_get_int_expr (1, &gfc_current_locus, 0), INTRINSIC_NE);
-+      gfc_warning_now (0, "The type of condition in this IF statement isn't LOGICAL; it will be true if it evaluates to nonzero.");
-+    }
-+  else
-+    {
-+      p->expr1 = expr;
-+    }
-+  p->op = EXEC_IF;
- 
-   gfc_clear_new_st ();
- 
-diff --git a/gcc/fortran/parse.c b/gcc/fortran/parse.c
-index 3aedb1d..e926ba6 100644
---- a/gcc/fortran/parse.c
-+++ b/gcc/fortran/parse.c
-@@ -26,6 +26,7 @@ along with GCC; see the file COPYING3.  If not see
- #include <setjmp.h>
- #include "match.h"
- #include "parse.h"
-+#include "arith.h"
- 
- /* Current statement label.  Zero means no statement label.  Because new_st
-    can get wiped during statement matching, we have to keep it separate.  */
-@@ -4036,6 +4037,14 @@ parse_if_block (void)
-   d = add_statement ();
- 
-   d->expr1 = top->expr1;
+    Allow non-logical expressions in IF statements
+    
+    This feature is enabled by the `-std=extra-legacy` compiler flag.
+    
+    Signed-off-by: Ben Brewer <ben.brewer@codethink.co.uk>
+    Signed-off-by: Francisco Redondo Marchena <francisco.marchena@codethink.co.uk>
+
+diff --git a/gcc/fortran/resolve.c b/gcc/fortran/resolve.c
+index 33b441aa1bc..f979915e856 100644
+--- a/gcc/fortran/resolve.c
++++ b/gcc/fortran/resolve.c
+@@ -9919,10 +9919,23 @@ gfc_resolve_blocks (gfc_code *b, gfc_namespace *ns)
+       switch (b->op)
+ 	{
+ 	case EXEC_IF:
+-	  if (t && b->expr1 != NULL
+-	      && (b->expr1->ts.type != BT_LOGICAL || b->expr1->rank != 0))
+-	    gfc_error ("IF clause at %L requires a scalar LOGICAL expression",
+-		       &b->expr1->where);
++	  if (t && b->expr1 != NULL)
++	    {
++	      if (gfc_option.allow_std & GFC_STD_EXTRA_LEGACY && b->expr1->ts.type != BT_LOGICAL)
++		{
++		  gfc_expr* cast;
++		  cast = gfc_ne (b->expr1, gfc_get_int_expr (1, &gfc_current_locus, 0), INTRINSIC_NE);
++		  if (cast == NULL)
++		    gfc_internal_error ("gfc_resolve_blocks(): Failed to cast to LOGICAL in IF");
++		  b->expr1 = cast;
++		  gfc_warning (0, "Non-LOGICAL type in IF statement condition %L"
++			       " will be true if it evaluates to nonzero", &b->expr1->where);
++		}
 +
-+  if ((gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
-+      && top->expr1->ts.type != BT_LOGICAL)
-+    {
-+      d->expr1 = gfc_ne (top->expr1, gfc_get_int_expr (1, &gfc_current_locus, 0), INTRINSIC_NE);
-+      gfc_warning_now (0, "The type of condition in this IF statement isn't LOGICAL; it will be true if it evaluates to nonzero.");
-+    }
-+
-   top->expr1 = NULL;
-   top->block = d;
++	      if ((b->expr1->ts.type != BT_LOGICAL || b->expr1->rank != 0))
++		gfc_error ("IF clause at %L requires a scalar LOGICAL expression",
++			   &b->expr1->where);
++	    }
+ 	  break;
  
+ 	case EXEC_WHERE:
+@@ -11182,11 +11195,23 @@ start:
+ 	  break;
+ 
+ 	case EXEC_IF:
+-	  if (t && code->expr1 != NULL
+-	      && (code->expr1->ts.type != BT_LOGICAL
+-		  || code->expr1->rank != 0))
+-	    gfc_error ("IF clause at %L requires a scalar LOGICAL expression",
+-		       &code->expr1->where);
++	  if (t && code->expr1 != NULL)
++            {
++	      if (gfc_option.allow_std & GFC_STD_EXTRA_LEGACY && code->expr1->ts.type != BT_LOGICAL)
++		{
++		  gfc_expr* cast;
++		  cast = gfc_ne (code->expr1, gfc_get_int_expr (1, &gfc_current_locus, 0), INTRINSIC_NE);
++		  if (cast == NULL)
++		    gfc_internal_error ("gfc_resolve_code(): Failed to cast to LOGICAL in IF");
++		  code->expr1 = cast;
++		  gfc_warning (0, "Non-LOGICAL type in IF statement condition %L"
++			       " will be true if it evaluates to nonzero", &code->expr1->where);
++		}
++
++	      if ((code->expr1->ts.type != BT_LOGICAL || code->expr1->rank != 0))
++		gfc_error ("IF clause at %L requires a scalar LOGICAL expression",
++			   &code->expr1->where);
++	    }
+ 	  break;
+ 
+ 	case EXEC_CALL:
+diff --git a/gcc/testsuite/gfortran.dg/dec_logical_expressions_if_statements_blocks.f b/gcc/testsuite/gfortran.dg/dec_logical_expressions_if_statements_blocks.f
+new file mode 100644
+index 00000000000..ad23fcfc9af
+--- /dev/null
++++ b/gcc/testsuite/gfortran.dg/dec_logical_expressions_if_statements_blocks.f
+@@ -0,0 +1,21 @@
++! { dg-do compile }
++! { dg-options "-std=extra-legacy" }
++!
++! Allow logical expressions in if statements and blocks
++!
++        PROGRAM logical_exp_if_st_bl
++          INTEGER ipos/1/
++          INTEGER ineg/0/
++
++          ! Test non logical variables
++          if (ineg) STOP 1 ! { dg-warning "if it evaluates to nonzero" }
++          if (0) STOP 2 ! { dg-warning "if it evaluates to nonzero" }
++
++          ! Test non logical expressions in if statements
++          if (MOD(ipos, 1)) STOP 3 ! { dg-warning "if it evaluates to nonzero" }
++
++          ! Test non logical expressions in if blocks
++          if (MOD(2 * ipos, 2)) then ! { dg-warning "if it evaluates to nonzero" }
++            STOP 4
++          endif
++        END
+commit cf72338b9468fad669b60600bcce7918a8d4591e
+Author: Jeff Law <law@redhat.com>
+Date:   Tue Jun 5 15:45:41 2018 -0600
+
+    Additional test for
+    
+        0014-Allow-non-logical-expressions-in-IF-statements.patch
+        "Allow non-logical expressions in IF statements"
+
+diff --git a/gcc/testsuite/gfortran.dg/dec_logical_expressions_if_statements_blocks-2.f b/gcc/testsuite/gfortran.dg/dec_logical_expressions_if_statements_blocks-2.f
+new file mode 100644
+index 00000000000..7da6aaceec7
+--- /dev/null
++++ b/gcc/testsuite/gfortran.dg/dec_logical_expressions_if_statements_blocks-2.f
+@@ -0,0 +1,23 @@
++! { dg-do compile }
++! { dg-options "-std=extra-legacy" }
++
++       function othersub1()
++        integer*4 othersub1
++        othersub1 = 1
++       end
++       function othersub2()
++        integer*4 othersub2
++        othersub2 = 2
++       end
++       program MAIN
++        integer*4 othersub1
++        integer*4 othersub2
++c the if (integer) works here 
++        if (othersub2()) then		! { dg-warning "" }
++         write (*,*), 'othersub2 is true'
++c but fails in the "else if"
++        else if (othersub1()) then	! { dg-warning "" }
++         write (*,*), 'othersub2 is false, othersub1 is true'
++        endif
++       end
++

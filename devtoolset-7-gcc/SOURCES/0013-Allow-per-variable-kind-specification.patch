@@ -14,8 +14,20 @@ This feature is enabled by the `-std=extra-legacy` compiler flag.
 
     0013-Allow-per-variable-kind-specification.patch
 
+    Allow per-variable kind specification.
+    
+          INTEGER*4 x*2, y*8
+    
+    The per-variable sizes override the kind specified in the type.
+    At the moment, you can follow this with an array specification, so
+    INTEGER x*2(10) is OK, but not the other way round.
+    
+    This feature is enabled by the `-std=extra-legacy` compiler flag.
+    
+    Test written by: Francisco Redondo Marchena <francisco.marchena@codethink.co.uk>
+
 diff --git a/gcc/fortran/decl.c b/gcc/fortran/decl.c
-index 3ad9c2c..832904a 100644
+index 3ad9c2c8b40..faa08d9c4bb 100644
 --- a/gcc/fortran/decl.c
 +++ b/gcc/fortran/decl.c
 @@ -1019,6 +1019,24 @@ syntax:
@@ -57,9 +69,13 @@ index 3ad9c2c..832904a 100644
  
    /* When we get here, we've just matched a list of attributes and
       maybe a type and a double colon.  The next thing we expect to see
-@@ -2216,9 +2237,18 @@ variable_decl (int elem)
-   if ((gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
-       && current_ts.type == BT_CHARACTER)
+@@ -2213,12 +2234,20 @@ variable_decl (int elem)
+   cl_match = MATCH_NO;
+ 
+   /* Check for a character length clause before an array clause */
+-  if ((gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
+-      && current_ts.type == BT_CHARACTER)
++  if (gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
      {
 -      cl_match = match_character_length_clause (&cl, &cl_deferred, elem);
 -      if (cl_match == MATCH_ERROR)
@@ -79,7 +95,7 @@ index 3ad9c2c..832904a 100644
      }
  
    /* Now we could see the optional array spec. or character length.  */
-@@ -2412,6 +2442,13 @@ variable_decl (int elem)
+@@ -2412,6 +2441,13 @@ variable_decl (int elem)
        goto cleanup;
      }
  
@@ -93,3 +109,21 @@ index 3ad9c2c..832904a 100644
    if (!check_function_name (name))
      {
        m = MATCH_ERROR;
+diff --git a/gcc/testsuite/gfortran.dg/dec_spec_in_variable.f b/gcc/testsuite/gfortran.dg/dec_spec_in_variable.f
+new file mode 100644
+index 00000000000..0341a176aca
+--- /dev/null
++++ b/gcc/testsuite/gfortran.dg/dec_spec_in_variable.f
+@@ -0,0 +1,12 @@
++! { dg-do compile }
++! { dg-options "-std=extra-legacy" }
++!
++! Test kind specification in variable not in type
++!
++        PROGRAM spec_in_var
++          INTEGER  ai*1/1/
++          REAL ar*4/1.0/
++
++          if(ai.NE.1) STOP 1
++          if(abs(ar - 1.0) > 1.0D-6) STOP 2
++        END

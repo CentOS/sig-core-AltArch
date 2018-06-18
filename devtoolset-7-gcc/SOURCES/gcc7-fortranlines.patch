@@ -1,0 +1,36 @@
+diff -Nrup a/gcc/fortran/scanner.c b/gcc/fortran/scanner.c
+--- a/gcc/fortran/scanner.c	2017-03-08 12:35:48.000000000 -0500
++++ b/gcc/fortran/scanner.c	2018-05-03 19:01:52.000000000 -0400
+@@ -2097,6 +2097,10 @@ preprocessor_line (gfc_char_t *c)
+           in the linemap.  Alternative could be using GC or updating linemap to
+           point to the new name, but there is no API for that currently.  */
+       current_file->filename = xstrdup (filename);
++
++      /* We need to tell the linemap API that the filename changed.  Just
++	 changing current_file is insufficient.  */
++      linemap_add (line_table, LC_RENAME, false, current_file->filename, line);
+     }
+ 
+   /* Set new line number.  */
+diff -Nrup a/gcc/testsuite/gfortran.dg/linefile.f90 b/gcc/testsuite/gfortran.dg/linefile.f90
+--- a/gcc/testsuite/gfortran.dg/linefile.f90	1969-12-31 19:00:00.000000000 -0500
++++ b/gcc/testsuite/gfortran.dg/linefile.f90	2018-05-07 13:34:22.000000000 -0400
+@@ -0,0 +1,18 @@
++! { dg-do compile }
++! { dg-options "-Wall" }
++
++! This will verify that the # <line> <file> directive later does not
++! mess up the diagnostic on this line
++SUBROUTINE s(dummy) ! { dg-warning "Unused" }
++  INTEGER, INTENT(in) :: dummy
++END SUBROUTINE
++
++# 12345 "foo-f"
++SUBROUTINE s2(dummy)
++  INTEGER, INTENT(in) :: dummy
++END SUBROUTINE
++! We want to check that the # directive changes the filename in the
++! diagnostic.  Nothing else really matters here.  dg-regexp allows us
++! to see the entire diagnostic.  We just have to make sure to consume
++! the entire message.
++! { dg-regexp "foo-f\[^\n]*" }
