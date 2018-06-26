@@ -1,48 +1,1117 @@
-From ab5aa6f7c04e7193c5387bc74db2605c4dc07f01 Mon Sep 17 00:00:00 2001
-From: Jim MacArthur <jim.macarthur@codethink.co.uk>
-Date: Thu, 4 Feb 2016 16:46:46 +0000
-Subject: [PATCH 05/23] Allow comparisons between INTEGER and REAL
-
-This feature is enabled with the `-std=extra-legacy` compiler flag.
----
-        0005-Allow-comparisons-between-INTEGER-and-REAL.patch
-
-diff --git a/gcc/fortran/check.c b/gcc/fortran/check.c
-index 4f2d216..fd0d280 100644
---- a/gcc/fortran/check.c
-+++ b/gcc/fortran/check.c
-@@ -901,6 +901,24 @@ gfc_check_allocated (gfc_expr *array)
+diff -Nrup a/gcc/fortran/check.c b/gcc/fortran/check.c
+--- a/gcc/fortran/check.c	2018-06-05 11:49:50.228072283 -0600
++++ b/gcc/fortran/check.c	2018-06-05 11:50:45.287707664 -0600
+@@ -901,12 +901,40 @@ gfc_check_allocated (gfc_expr *array)
  }
  
  
-+/* Attempt to promote types of A and B so that they are
-+   equivalent, if possible.  */
-+void
-+promote_types (gfc_expr *a, gfc_expr *b)
++/* Check function where both arguments must be real or integer
++   and warn if they are different types.  */
++
++bool
++check_int_real_promotion (gfc_expr *a, gfc_expr *b)
 +{
-+  if (a->ts.type == b->ts.type)
-+    return;
-+  if (a->ts.type == BT_REAL && b->ts.type == BT_INTEGER)
++  gfc_expr *i;
++
++  if (!int_or_real_check (a, 0))
++    return false;
++
++  if (!int_or_real_check (b, 1))
++    return false;
++
++  if (a->ts.type != b->ts.type)
 +    {
-+      gfc_convert_type_warn (b, &a->ts, 2, 1);
-+      return;
++      i = (a->ts.type != BT_REAL ? a : b);
++      gfc_warning_now (OPT_Wconversion, "Conversion from INTEGER to REAL "
++		       "at %L might lose precision", &i->where);
 +    }
-+  if (a->ts.type == BT_INTEGER && b->ts.type == BT_REAL)
-+    {
-+      gfc_convert_type_warn (a, &b->ts, 2, 1);
-+    }
++
++  return true;
 +}
++
 +
  /* Common check function where the first argument must be real or
     integer and the second argument must be the same as the first.  */
  
-@@ -910,6 +928,9 @@ gfc_check_a_p (gfc_expr *a, gfc_expr *p)
+ bool
+ gfc_check_a_p (gfc_expr *a, gfc_expr *p)
+ {
++  if (flag_dec)
++    return check_int_real_promotion (a, p);
++
    if (!int_or_real_check (a, 0))
      return false;
  
-+  if (gfc_option.allow_std & GFC_STD_EXTRA_LEGACY)
-+    promote_types(a, p);
+@@ -3035,6 +3063,41 @@ check_rest (bt type, int kind, gfc_actua
+ }
+ 
+ 
++/* Check function where all arguments of an argument list must be real
++   or integer.  */
 +
-   if (a->ts.type != p->ts.type)
++static bool
++check_rest_int_real (gfc_actual_arglist *arglist)
++{
++  gfc_actual_arglist *arg, *tmp;
++  gfc_expr *x;
++  int m, n;
++
++  if (!min_max_args (arglist))
++    return false;
++
++  for (arg = arglist, n=1; arg; arg = arg->next, n++)
++    {
++      x = arg->expr;
++      if (x->ts.type != BT_INTEGER && x->ts.type != BT_REAL)
++	{
++	  gfc_error ("%<a%d%> argument of %qs intrinsic at %L must be "
++		     "INTEGER or REAL", n, gfc_current_intrinsic, &x->where);
++	  return false;
++	}
++
++      for (tmp = arglist, m=1; tmp != arg; tmp = tmp->next, m++)
++	if (!gfc_check_conformance (tmp->expr, x,
++				    "arguments 'a%d' and 'a%d' for "
++				    "intrinsic '%s'", m, n,
++				    gfc_current_intrinsic))
++	  return false;
++    }
++
++  return true;
++}
++
++
+ bool
+ gfc_check_min_max (gfc_actual_arglist *arg)
+ {
+@@ -3059,7 +3122,10 @@ gfc_check_min_max (gfc_actual_arglist *a
+       return false;
+     }
+ 
+-  return check_rest (x->ts.type, x->ts.kind, arg);
++  if (flag_dec && x->ts.type != BT_CHARACTER)
++    return check_rest_int_real (arg);
++  else
++    return check_rest (x->ts.type, x->ts.kind, arg);
+ }
+ 
+ 
+@@ -4293,6 +4359,9 @@ gfc_check_shift (gfc_expr *i, gfc_expr *
+ bool
+ gfc_check_sign (gfc_expr *a, gfc_expr *b)
+ {
++  if (flag_dec)
++    return check_int_real_promotion (a, b);
++
+   if (!int_or_real_check (a, 0))
+     return false;
+ 
+diff -Nrup a/gcc/fortran/iresolve.c b/gcc/fortran/iresolve.c
+--- a/gcc/fortran/iresolve.c	2017-03-08 10:35:49.000000000 -0700
++++ b/gcc/fortran/iresolve.c	2018-06-05 11:50:45.287707664 -0600
+@@ -892,19 +892,22 @@ gfc_resolve_dble (gfc_expr *f, gfc_expr
+ void
+ gfc_resolve_dim (gfc_expr *f, gfc_expr *a, gfc_expr *p)
+ {
+-  f->ts.type = a->ts.type;
+   if (p != NULL)
+-    f->ts.kind = gfc_kind_max (a,p);
+-  else
+-    f->ts.kind = a->ts.kind;
+-
+-  if (p != NULL && a->ts.kind != p->ts.kind)
      {
-       gfc_error ("%qs and %qs arguments of %qs intrinsic at %L must "
+-      if (a->ts.kind == gfc_kind_max (a,p))
+-	gfc_convert_type (p, &a->ts, 2);
++      f->ts.kind = gfc_kind_max (a,p);
++      if (a->ts.type == BT_REAL || p->ts.type == BT_REAL)
++	f->ts.type = BT_REAL;
+       else
+-	gfc_convert_type (a, &p->ts, 2);
++	f->ts.type = BT_INTEGER;
++
++      if (a->ts.kind != f->ts.kind || a->ts.type != f->ts.type)
++	gfc_convert_type (a, &f->ts, 2);
++
++      if (p->ts.kind != f->ts.kind || p->ts.type != f->ts.type)
++	gfc_convert_type (p, &f->ts, 2);
+     }
++  else
++    f->ts = a->ts;
+ 
+   f->value.function.name
+     = gfc_get_string ("__dim_%c%d", gfc_type_letter (f->ts.type), f->ts.kind);
+@@ -1669,14 +1672,17 @@ gfc_resolve_minmax (const char *name, gf
+   /* Find the largest type kind.  */
+   for (a = args->next; a; a = a->next)
+     {
++      if (a->expr-> ts.type == BT_REAL)
++	f->ts.type = BT_REAL;
++
+       if (a->expr->ts.kind > f->ts.kind)
+ 	f->ts.kind = a->expr->ts.kind;
+     }
+ 
+-  /* Convert all parameters to the required kind.  */
++  /* Convert all parameters to the required type and/or kind.  */
+   for (a = args; a; a = a->next)
+     {
+-      if (a->expr->ts.kind != f->ts.kind)
++      if (a->expr->ts.type != f->ts.type || a->expr->ts.kind != f->ts.kind)
+ 	gfc_convert_type (a->expr, &f->ts, 2);
+     }
+ 
+@@ -1958,19 +1964,22 @@ gfc_resolve_minval (gfc_expr *f, gfc_exp
+ void
+ gfc_resolve_mod (gfc_expr *f, gfc_expr *a, gfc_expr *p)
+ {
+-  f->ts.type = a->ts.type;
+   if (p != NULL)
+-    f->ts.kind = gfc_kind_max (a,p);
+-  else
+-    f->ts.kind = a->ts.kind;
+-
+-  if (p != NULL && a->ts.kind != p->ts.kind)
+     {
+-      if (a->ts.kind == gfc_kind_max (a,p))
+-	gfc_convert_type (p, &a->ts, 2);
++      f->ts.kind = gfc_kind_max (a,p);
++      if (a->ts.type == BT_REAL || p->ts.type == BT_REAL)
++	f->ts.type = BT_REAL;
+       else
+-	gfc_convert_type (a, &p->ts, 2);
++	f->ts.type = BT_INTEGER;
++
++      if (a->ts.kind != f->ts.kind || a->ts.type != f->ts.type)
++	gfc_convert_type (a, &f->ts, 2);
++
++      if (p->ts.kind != f->ts.kind || p->ts.type != f->ts.type)
++	gfc_convert_type (p, &f->ts, 2);
+     }
++  else
++    f->ts = a->ts;
+ 
+   f->value.function.name
+     = gfc_get_string ("__mod_%c%d", gfc_type_letter (f->ts.type), f->ts.kind);
+@@ -1980,19 +1989,22 @@ gfc_resolve_mod (gfc_expr *f, gfc_expr *
+ void
+ gfc_resolve_modulo (gfc_expr *f, gfc_expr *a, gfc_expr *p)
+ {
+-  f->ts.type = a->ts.type;
+   if (p != NULL)
+-    f->ts.kind = gfc_kind_max (a,p);
+-  else
+-    f->ts.kind = a->ts.kind;
+-
+-  if (p != NULL && a->ts.kind != p->ts.kind)
+     {
+-      if (a->ts.kind == gfc_kind_max (a,p))
+-	gfc_convert_type (p, &a->ts, 2);
++      f->ts.kind = gfc_kind_max (a,p);
++      if (a->ts.type == BT_REAL || p->ts.type == BT_REAL)
++	f->ts.type = BT_REAL;
+       else
+-	gfc_convert_type (a, &p->ts, 2);
++	f->ts.type = BT_INTEGER;
++
++      if (a->ts.kind != f->ts.kind || a->ts.type != f->ts.type)
++	gfc_convert_type (a, &f->ts, 2);
++
++      if (p->ts.kind != f->ts.kind || p->ts.type != f->ts.type)
++	gfc_convert_type (p, &f->ts, 2);
+     }
++  else
++    f->ts = a->ts;
+ 
+   f->value.function.name
+     = gfc_get_string ("__modulo_%c%d", gfc_type_letter (f->ts.type),
+@@ -2364,9 +2376,26 @@ gfc_resolve_shift (gfc_expr *f, gfc_expr
+ 
+ 
+ void
+-gfc_resolve_sign (gfc_expr *f, gfc_expr *a, gfc_expr *b ATTRIBUTE_UNUSED)
++gfc_resolve_sign (gfc_expr *f, gfc_expr *a, gfc_expr *b)
+ {
+-  f->ts = a->ts;
++  if (b != NULL)
++    {
++      f->ts.kind = gfc_kind_max (a, b);
++      if (a->ts.type == BT_REAL || b->ts.type == BT_REAL)
++	f->ts.type = BT_REAL;
++      else
++	f->ts.type = BT_INTEGER;
++
++      if (a->ts.kind != f->ts.kind || a->ts.type != f->ts.type)
++	gfc_convert_type (a, &f->ts, 2);
++
++      if (b->ts.kind != f->ts.kind || b->ts.type != f->ts.type)
++	gfc_convert_type (b, &f->ts, 2);
++    }
++  else
++    {
++      f->ts = a->ts;
++    }
+   f->value.function.name
+     = gfc_get_string ("__sign_%c%d", gfc_type_letter (a->ts.type), a->ts.kind);
+ }
+diff -Nrup a/gcc/fortran/simplify.c b/gcc/fortran/simplify.c
+--- a/gcc/fortran/simplify.c	2018-06-05 11:49:50.231072264 -0600
++++ b/gcc/fortran/simplify.c	2018-06-05 11:51:17.284495772 -0600
+@@ -2088,39 +2088,78 @@ gfc_simplify_digits (gfc_expr *x)
+ }
+ 
+ 
++/* Simplify function which sets the floating-point value of ar from
++   the value of a independently if a is integer of real.  */
++
++static void
++simplify_int_real_promotion (const gfc_expr *a, const gfc_expr *b, mpfr_t *ar)
++{
++  if (a->ts.type == BT_REAL)
++    {
++      mpfr_init2 (*ar, (a->ts.kind * 8));
++      mpfr_set (*ar, a->value.real, GFC_RND_MODE);
++    }
++  else
++    {
++      mpfr_init2 (*ar, (b->ts.kind * 8));
++      mpfr_set_z (*ar, a->value.integer, GFC_RND_MODE);
++    }
++}
++
++
++/* Simplify function which promotes a and b arguments from integer to real if required in
++   ar and br floating-point values. This function returns true if a or b are reals and false
++   otherwise. */
++
++static bool
++simplify_int_real_promotion2 (const gfc_expr *a, const gfc_expr *b, mpfr_t *ar, mpfr_t *br)
++{
++  if (a->ts.type != BT_REAL && b->ts.type != BT_REAL)
++    return false;
++
++  simplify_int_real_promotion (a, b, ar);
++  simplify_int_real_promotion (b, a, br);
++
++  return true;
++}
++
++
+ gfc_expr *
+ gfc_simplify_dim (gfc_expr *x, gfc_expr *y)
+ {
+   gfc_expr *result;
+   int kind;
+ 
++  mpfr_t xr;
++  mpfr_t yr;
++
+   if (x->expr_type != EXPR_CONSTANT || y->expr_type != EXPR_CONSTANT)
+     return NULL;
+ 
+-  kind = x->ts.kind > y->ts.kind ? x->ts.kind : y->ts.kind;
+-  result = gfc_get_constant_expr (x->ts.type, kind, &x->where);
+-
+-  switch (x->ts.type)
++  if ((x->ts.type != BT_REAL && x->ts.type != BT_INTEGER)
++      || (y->ts.type != BT_REAL && y->ts.type != BT_INTEGER))
+     {
+-      case BT_INTEGER:
+-	if (mpz_cmp (x->value.integer, y->value.integer) > 0)
+-	  mpz_sub (result->value.integer, x->value.integer, y->value.integer);
+-	else
+-	  mpz_set_ui (result->value.integer, 0);
+-
+-	break;
+-
+-      case BT_REAL:
+-	if (mpfr_cmp (x->value.real, y->value.real) > 0)
+-	  mpfr_sub (result->value.real, x->value.real, y->value.real,
+-		    GFC_RND_MODE);
+-	else
+-	  mpfr_set_ui (result->value.real, 0, GFC_RND_MODE);
++      gfc_internal_error ("gfc_simplify_dim(): Bad arguments");
++      return NULL;
++    }
+ 
+-	break;
++  kind = x->ts.kind > y->ts.kind ? x->ts.kind : y->ts.kind;
+ 
+-      default:
+-	gfc_internal_error ("gfc_simplify_dim(): Bad type");
++  if (simplify_int_real_promotion2 (x, y, &xr, &yr))
++    {
++      result = gfc_get_constant_expr (BT_REAL, kind, &x->where);
++      if (mpfr_cmp (xr, yr) > 0)
++	mpfr_sub (result->value.real, xr, yr, GFC_RND_MODE);
++      else
++	mpfr_set_ui (result->value.real, 0, GFC_RND_MODE);
++    }
++  else
++    {
++      result = gfc_get_constant_expr (BT_INTEGER, kind, &x->where);
++      if (mpz_cmp (x->value.integer, y->value.integer) > 0)
++	mpz_sub (result->value.integer, x->value.integer, y->value.integer);
++      else
++	mpz_set_ui (result->value.integer, 0);
+     }
+ 
+   return range_check (result, "DIM");
+@@ -4427,12 +4466,82 @@ gfc_simplify_merge_bits (gfc_expr *i, gf
+ static void
+ min_max_choose (gfc_expr *arg, gfc_expr *extremum, int sign)
+ {
++  mpfr_t *arp;
++  mpfr_t *erp;
++  mpfr_t ar;
++  mpfr_t er;
++
++  if (arg->ts.type != extremum->ts.type)
++    {
++      if (arg->ts.type == BT_REAL)
++	{
++	  arp = &arg->value.real;
++	}
++      else
++	{
++	  mpfr_init2 (ar, (arg->ts.kind * 8));
++	  mpfr_set_z (ar, arg->value.integer, GFC_RND_MODE);
++	  arp = &ar;
++	}
++
++      if (extremum->ts.type == BT_REAL)
++	{
++	  erp = &extremum->value.real;
++	}
++      else
++	{
++	  mpfr_init2 (er, (extremum->ts.kind * 8));
++	  mpfr_set_z (er, extremum->value.integer, GFC_RND_MODE);
++	  erp = &er;
++	}
++
++      if (mpfr_nan_p (*erp))
++	{
++	  extremum->ts.type = arg->ts.type;
++	  extremum->ts.kind = arg->ts.kind;
++	  if (arg->ts.type == BT_INTEGER)
++	    {
++	      mpz_init2 (extremum->value.integer, (arg->ts.kind * 8));
++	      mpz_set (extremum->value.integer, arg->value.integer);
++	    }
++	  else
++	    {
++	      mpfr_init2 (extremum->value.real, (arg->ts.kind * 8));
++	      mpfr_set (extremum->value.real, *arp, GFC_RND_MODE);
++	    }
++	}
++      else
++	{
++	  if ((mpfr_cmp (*arp, *erp) * sign) > 0)
++	    {
++	      extremum->ts.type = arg->ts.type;
++	      extremum->ts.kind = arg->ts.kind;
++	      if (arg->ts.type == BT_INTEGER)
++		{
++		  mpz_init2 (extremum->value.integer, (arg->ts.kind * 8));
++		  mpz_set (extremum->value.integer, arg->value.integer);
++		}
++	      else
++		{
++		  mpfr_init2 (extremum->value.real, (arg->ts.kind * 8));
++		  mpfr_set (extremum->value.real, *arp, GFC_RND_MODE);
++		}
++	    }
++	}
++
++      return;
++    }
++
+   switch (arg->ts.type)
+     {
+       case BT_INTEGER:
+-	if (mpz_cmp (arg->value.integer,
+-			extremum->value.integer) * sign > 0)
+-	mpz_set (extremum->value.integer, arg->value.integer);
++	if ((mpz_cmp (arg->value.integer,
++		       extremum->value.integer) * sign) > 0)
++	  {
++	    if (arg->ts.kind > extremum->ts.kind)
++	      extremum->ts.kind = arg->ts.kind;
++	    mpz_set (extremum->value.integer, arg->value.integer);
++	  }
+ 	break;
+ 
+       case BT_REAL:
+@@ -4641,41 +4750,48 @@ gfc_simplify_mod (gfc_expr *a, gfc_expr
+   gfc_expr *result;
+   int kind;
+ 
++  mpfr_t ar;
++  mpfr_t pr;
++
+   if (a->expr_type != EXPR_CONSTANT || p->expr_type != EXPR_CONSTANT)
+     return NULL;
+ 
++  if ((a->ts.type != BT_REAL && a->ts.type != BT_INTEGER)
++      || (p->ts.type != BT_REAL && p->ts.type != BT_INTEGER))
++    {
++      gfc_internal_error ("gfc_simplify_mod(): Bad arguments");
++      return NULL;
++    }
++
+   kind = a->ts.kind > p->ts.kind ? a->ts.kind : p->ts.kind;
+-  result = gfc_get_constant_expr (a->ts.type, kind, &a->where);
+ 
+-  switch (a->ts.type)
++  if (simplify_int_real_promotion2 (a, p, &ar, &pr))
+     {
+-      case BT_INTEGER:
+-	if (mpz_cmp_ui (p->value.integer, 0) == 0)
+-	  {
+-	    /* Result is processor-dependent.  */
+-	    gfc_error ("Second argument MOD at %L is zero", &a->where);
+-	    gfc_free_expr (result);
+-	    return &gfc_bad_expr;
+-	  }
+-	mpz_tdiv_r (result->value.integer, a->value.integer, p->value.integer);
+-	break;
++      result = gfc_get_constant_expr (BT_REAL, kind, &a->where);
+ 
+-      case BT_REAL:
+-	if (mpfr_cmp_ui (p->value.real, 0) == 0)
+-	  {
+-	    /* Result is processor-dependent.  */
+-	    gfc_error ("Second argument of MOD at %L is zero", &p->where);
+-	    gfc_free_expr (result);
+-	    return &gfc_bad_expr;
+-	  }
++      if (mpfr_cmp_ui (pr, 0) == 0)
++	{
++	  /* Result is processor-dependent.  */
++	  gfc_error ("Second argument of MOD at %L is zero", &p->where);
++	  gfc_free_expr (result);
++	  return &gfc_bad_expr;
++	}
+ 
+-	gfc_set_model_kind (kind);
+-	mpfr_fmod (result->value.real, a->value.real, p->value.real,
+-		   GFC_RND_MODE);
+-	break;
++      gfc_set_model_kind (kind);
++      mpfr_fmod (result->value.real, ar, pr, GFC_RND_MODE);
++    }
++  else
++    {
++      result = gfc_get_constant_expr (BT_INTEGER, kind, &a->where);
+ 
+-      default:
+-	gfc_internal_error ("gfc_simplify_mod(): Bad arguments");
++      if (mpz_cmp_ui (p->value.integer, 0) == 0)
++	{
++	  /* Result is processor-dependent.  */
++	  gfc_error ("Second argument MOD at %L is zero", &p->where);
++	  gfc_free_expr (result);
++	  return &gfc_bad_expr;
++	}
++      mpz_tdiv_r (result->value.integer, a->value.integer, p->value.integer);
+     }
+ 
+   return range_check (result, "MOD");
+@@ -4688,52 +4804,55 @@ gfc_simplify_modulo (gfc_expr *a, gfc_ex
+   gfc_expr *result;
+   int kind;
+ 
++  mpfr_t ar;
++  mpfr_t pr;
++
+   if (a->expr_type != EXPR_CONSTANT || p->expr_type != EXPR_CONSTANT)
+     return NULL;
+ 
+-  kind = a->ts.kind > p->ts.kind ? a->ts.kind : p->ts.kind;
+-  result = gfc_get_constant_expr (a->ts.type, kind, &a->where);
+-
+-  switch (a->ts.type)
++  if ((a->ts.type != BT_REAL && a->ts.type != BT_INTEGER)
++      || (p->ts.type != BT_REAL && p->ts.type != BT_INTEGER))
+     {
+-      case BT_INTEGER:
+-	if (mpz_cmp_ui (p->value.integer, 0) == 0)
+-	  {
+-	    /* Result is processor-dependent. This processor just opts
+-	      to not handle it at all.  */
+-	    gfc_error ("Second argument of MODULO at %L is zero", &a->where);
+-	    gfc_free_expr (result);
+-	    return &gfc_bad_expr;
+-	  }
+-	mpz_fdiv_r (result->value.integer, a->value.integer, p->value.integer);
++      gfc_internal_error ("gfc_simplify_modulo(): Bad arguments");
++      return NULL;
++    }
+ 
+-	break;
++  kind = a->ts.kind > p->ts.kind ? a->ts.kind : p->ts.kind;
+ 
+-      case BT_REAL:
+-	if (mpfr_cmp_ui (p->value.real, 0) == 0)
+-	  {
+-	    /* Result is processor-dependent.  */
+-	    gfc_error ("Second argument of MODULO at %L is zero", &p->where);
+-	    gfc_free_expr (result);
+-	    return &gfc_bad_expr;
+-	  }
++  if (simplify_int_real_promotion2 (a, p, &ar, &pr))
++    {
++      result = gfc_get_constant_expr (BT_REAL, kind, &a->where);
+ 
+-	gfc_set_model_kind (kind);
+-	mpfr_fmod (result->value.real, a->value.real, p->value.real,
+-		   GFC_RND_MODE);
+-	if (mpfr_cmp_ui (result->value.real, 0) != 0)
+-	  {
+-	    if (mpfr_signbit (a->value.real) != mpfr_signbit (p->value.real))
+-	      mpfr_add (result->value.real, result->value.real, p->value.real,
+-			GFC_RND_MODE);
+-	  }
+-	else
+-	  mpfr_copysign (result->value.real, result->value.real,
+-			 p->value.real, GFC_RND_MODE);
+-	break;
++      if (mpfr_cmp_ui (pr, 0) == 0)
++	{
++	  /* Result is processor-dependent.  */
++	  gfc_error ("Second argument of MODULO at %L is zero", &p->where);
++	  gfc_free_expr (result);
++	  return &gfc_bad_expr;
++	}
++      gfc_set_model_kind (kind);
++      mpfr_fmod (result->value.real, ar, pr, GFC_RND_MODE);
++      if (mpfr_cmp_ui (result->value.real, 0) != 0)
++	{
++	  if (mpfr_signbit (ar) != mpfr_signbit (pr))
++	    mpfr_add (result->value.real, result->value.real, pr, GFC_RND_MODE);
++	}
++      else
++	mpfr_copysign (result->value.real, result->value.real, pr, GFC_RND_MODE);
++    }
++  else
++    {
++      result = gfc_get_constant_expr (BT_INTEGER, kind, &a->where);
+ 
+-      default:
+-	gfc_internal_error ("gfc_simplify_modulo(): Bad arguments");
++      if (mpz_cmp_ui (p->value.integer, 0) == 0)
++        {
++          /* Result is processor-dependent. This processor just opts
++	     to not handle it at all.  */
++          gfc_error ("Second argument of MODULO at %L is zero", &a->where);
++          gfc_free_expr (result);
++          return &gfc_bad_expr;
++	}
++      mpz_fdiv_r (result->value.integer, a->value.integer, p->value.integer);
+     }
+ 
+   return range_check (result, "MODULO");
+@@ -6133,27 +6252,40 @@ gfc_expr *
+ gfc_simplify_sign (gfc_expr *x, gfc_expr *y)
+ {
+   gfc_expr *result;
++  bool neg;
+ 
+   if (x->expr_type != EXPR_CONSTANT || y->expr_type != EXPR_CONSTANT)
+     return NULL;
+ 
+   result = gfc_get_constant_expr (x->ts.type, x->ts.kind, &x->where);
+ 
++  switch (y->ts.type)
++    {
++      case BT_INTEGER:
++	neg = (mpz_sgn (y->value.integer) < 0);
++	break;
++
++      case BT_REAL:
++	neg = (mpfr_sgn (y->value.real) < 0);
++	break;
++
++      default:
++	gfc_internal_error ("Bad type in gfc_simplify_sign");
++    }
++
+   switch (x->ts.type)
+     {
+       case BT_INTEGER:
+ 	mpz_abs (result->value.integer, x->value.integer);
+-	if (mpz_sgn (y->value.integer) < 0)
++	if (neg)
+ 	  mpz_neg (result->value.integer, result->value.integer);
+ 	break;
+ 
+       case BT_REAL:
+-	if (flag_sign_zero)
+-	  mpfr_copysign (result->value.real, x->value.real, y->value.real,
+-			GFC_RND_MODE);
++	if (flag_sign_zero && y->ts.type == BT_REAL)
++	  mpfr_copysign (result->value.real, x->value.real, y->value.real, GFC_RND_MODE);
+ 	else
+-	  mpfr_setsign (result->value.real, x->value.real,
+-			mpfr_sgn (y->value.real) < 0 ? 1 : 0, GFC_RND_MODE);
++	  mpfr_setsign (result->value.real, x->value.real, neg, GFC_RND_MODE);
+ 	break;
+ 
+       default:
+diff -Nrup a/gcc/testsuite/gfortran.dg/dec_intrinsic_int_real_const_promotion.f b/gcc/testsuite/gfortran.dg/dec_intrinsic_int_real_const_promotion.f
+--- a/gcc/testsuite/gfortran.dg/dec_intrinsic_int_real_const_promotion.f	1969-12-31 17:00:00.000000000 -0700
++++ b/gcc/testsuite/gfortran.dg/dec_intrinsic_int_real_const_promotion.f	2018-06-05 11:50:45.288707657 -0600
+@@ -0,0 +1,86 @@
++! { dg-do compile }
++! { dg-options "-fdec -finit-real=snan" }
++!
++! Test promotion between integers and reals in intrinsic operations.
++! These operations are: mod, modulo, dim, sign, min, max, minloc and
++! maxloc.
++!
++      PROGRAM promotion_int_real_const
++        ! array_nan 4th position value is NAN
++        REAL array_nan(4)
++        DATA array_nan(1)/-4.0/
++        DATA array_nan(2)/3.0/
++        DATA array_nan(3)/-2/
++
++        INTEGER m_i/0/
++        REAL m_r/0.0/
++
++        INTEGER md_i/0/
++        REAL md_r/0.0/
++
++        INTEGER d_i/0/
++        REAL d_r/0.0/
++
++        INTEGER s_i/0/
++        REAL s_r/0.0/
++
++        INTEGER mn_i/0/
++        REAL mn_r/0.0/
++
++        INTEGER mx_i/0/
++        REAL mx_r/0.0/
++
++        m_i = MOD(4, 3)
++        if (m_i .ne. 1) STOP 1
++        m_r = MOD(4.0, 3.0)
++        if (abs(m_r - 1.0) > 1.0D-6) STOP 2
++        m_r = MOD(4, 3.0)
++        if (abs(m_r - 1.0) > 1.0D-6) STOP 3
++        m_r = MOD(4.0, 3)
++        if (abs(m_r - 1.0) > 1.0D-6) STOP 4
++
++        md_i = MODULO(4, 3)
++        if (md_i .ne. 1) STOP 5
++        md_r = MODULO(4.0, 3.0)
++        if (abs(md_r - 1.0) > 1.0D-6) STOP 6
++        md_r = MODULO(4, 3.0)
++        if (abs(md_r - 1.0) > 1.0D-6) STOP 7
++        md_r = MODULO(4.0, 3)
++        if (abs(md_r - 1.0) > 1.0D-6) STOP 8
++
++        d_i = DIM(4, 3)
++        if (d_i .ne. 1) STOP 9
++        d_r = DIM(4.0, 3.0)
++        if (abs(d_r - 1.0) > 1.0D-6) STOP 10
++        d_r = DIM(4.0, 3)
++        if (abs(d_r - 1.0) > 1.0D-6) STOP 11
++        d_r = DIM(3, 4.0)
++        if (abs(d_r) > 1.0D-6) STOP 12
++
++        s_i = SIGN(-4, 3)
++        if (s_i .ne. 4) STOP 13
++        s_r = SIGN(4.0, -3.0)
++        if (abs(s_r - (-4.0)) > 1.0D-6) STOP 14
++        s_r = SIGN(4.0, -3)
++        if (abs(s_r - (-4.0)) > 1.0D-6) STOP 15
++        s_r = SIGN(-4, 3.0)
++        if (abs(s_r - 4.0) > 1.0D-6) STOP 16
++
++        mx_i = MAX(-4, -3, 2, 1)
++        if (mx_i .ne. 2) STOP 17
++        mx_r = MAX(-4.0, -3.0, 2.0, 1.0)
++        if (abs(mx_r - 2.0) > 1.0D-6) STOP 18
++        mx_r = MAX(-4, -3.0, 2.0, 1)
++        if (abs(mx_r - 2.0) > 1.0D-6) STOP 19
++        mx_i = MAXLOC(array_nan, 1)
++        if (mx_i .ne. 2) STOP 20
++
++        mn_i = MIN(-4, -3, 2, 1)
++        if (mn_i .ne. -4) STOP 21
++        mn_r = MIN(-4.0, -3.0, 2.0, 1.0)
++        if (abs(mn_r - (-4.0)) > 1.0D-6) STOP 22
++        mn_r = MIN(-4, -3.0, 2.0, 1)
++        if (abs(mn_r - (-4.0)) > 1.0D-6) STOP 23
++        mn_i = MINLOC(array_nan, 1)
++        if (mn_i .ne. 1) STOP 24
++      END PROGRAM
+diff -Nrup a/gcc/testsuite/gfortran.dg/dec_intrinsic_int_real_promotion-2.f b/gcc/testsuite/gfortran.dg/dec_intrinsic_int_real_promotion-2.f
+--- a/gcc/testsuite/gfortran.dg/dec_intrinsic_int_real_promotion-2.f	1969-12-31 17:00:00.000000000 -0700
++++ b/gcc/testsuite/gfortran.dg/dec_intrinsic_int_real_promotion-2.f	2018-06-05 11:50:45.288707657 -0600
+@@ -0,0 +1,114 @@
++! { dg-do compile }
++! { dg-options "-fdec" }
++!
++! Test promotion between integers and reals in intrinsic operations.
++! These operations are: mod, modulo, dim, sign, min, max, minloc and
++! maxloc.
++!
++      PROGRAM promotion_int_real
++        REAL l/0.0/
++        LOGICAL a_i
++        LOGICAL*4 a2_i
++        LOGICAL b_i
++        LOGICAL*8 b2_i
++        LOGICAL x_i
++        LOGICAL y_i
++        CHARACTER a_r
++        CHARACTER*4 a2_r
++        CHARACTER b_r
++        CHARACTER*8 b2_r
++        CHARACTER x_r
++        CHARACTER y_r
++
++        INTEGER m_i/0/
++        REAL m_r/0.0/
++
++        INTEGER md_i/0/
++        REAL md_r/0.0/
++
++        INTEGER d_i/0/
++        REAL d_r/0.0/
++
++        INTEGER s_i/0/
++        REAL s_r/0.0/
++
++        INTEGER mn_i/0/
++        REAL mn_r/0.0/
++
++        INTEGER mx_i/0/
++        REAL mx_r/0.0/
++
++        m_i = MOD(a_i, b_i)                     ! { dg-error "" }
++        if (m_i .ne. 1) STOP 1
++        m_i = MOD(a2_i, b2_i)                   ! { dg-error "" }
++        if (m_i .ne. 1) STOP 2
++        m_r = MOD(a_r, b_r)                     ! { dg-error "" }
++        if (abs(m_r - 1.0) > 1.0D-6) STOP 3
++        m_r = MOD(a2_r, b2_r)                   ! { dg-error "" }
++        if (abs(m_r - 1.0) > 1.0D-6) STOP 4
++        m_r = MOD(a_i, b_r)                     ! { dg-error "" }
++        if (abs(m_r - 1.0) > 1.0D-6) STOP 5
++        m_r = MOD(a_r, b_i)                     ! { dg-error "" }
++        if (abs(m_r - 1.0) > 1.0D-6) STOP 6
++
++        md_i = MODULO(a_i, b_i)                 ! { dg-error "" }
++        if (md_i .ne. 1) STOP 7
++        md_i = MODULO(a2_i, b2_i)               ! { dg-error "" }
++        if (md_i .ne. 1) STOP 8
++        md_r = MODULO(a_r, b_r)                 ! { dg-error "" }
++        if (abs(md_r - 1.0) > 1.0D-6) STOP 9
++        md_r = MODULO(a2_r, b2_r)               ! { dg-error "" }
++        if (abs(md_r - 1.0) > 1.0D-6) STOP 10
++        md_r = MODULO(a_i, b_r)                 ! { dg-error "" }
++        if (abs(md_r - 1.0) > 1.0D-6) STOP 11
++        md_r = MODULO(a_r, b_i)                 ! { dg-error "" }
++        if (abs(md_r - 1.0) > 1.0D-6) STOP 12
++
++        d_i = DIM(a_i, b_i)                     ! { dg-error "" }
++        if (d_i .ne. 1) STOP 13
++        d_i = DIM(a2_i, b2_i)                   ! { dg-error "" }
++        if (d_i .ne. 1) STOP 14
++        d_r = DIM(a_r, b_r)                     ! { dg-error "" }
++        if (abs(d_r - 1.0) > 1.0D-6) STOP 15
++        d_r = DIM(a2_r, b2_r)                   ! { dg-error "" }
++        if (abs(d_r - 1.0) > 1.0D-6) STOP 16
++        d_r = DIM(a_r, b_i)                     ! { dg-error "" }
++        if (abs(d_r - 1.0) > 1.0D-6) STOP 17
++        d_r = DIM(b_i, a_r)                     ! { dg-error "" }
++        if (abs(d_r) > 1.0D-6) STOP 18
++
++        s_i = SIGN(-a_i, b_i)                   ! { dg-error "" }
++        if (s_i .ne. 4) STOP 19
++        s_i = SIGN(-a2_i, b2_i)                 ! { dg-error "" }
++        if (s_i .ne. 4) STOP 20
++        s_r = SIGN(a_r, -b_r)                   ! { dg-error "" }
++        if (abs(s_r - (-a_r)) > 1.0D-6) STOP 21 ! { dg-error "" }
++        s_r = SIGN(a2_r, -b2_r)                 ! { dg-error "" }
++        if (abs(s_r - (-a2_r)) > 1.0D-6) STOP 22 ! { dg-error "" }
++        s_r = SIGN(a_r, -b_i)                   ! { dg-error "" }
++        if (abs(s_r - (-a_r)) > 1.0D-6) STOP 23 ! { dg-error "" }
++        s_r = SIGN(-a_i, b_r)                   ! { dg-error "" }
++        if (abs(s_r - a_r) > 1.0D-6) STOP 24    ! { dg-error "" }
++
++        mx_i = MAX(-a_i, -b_i, x_i, y_i)        ! { dg-error "" }
++        if (mx_i .ne. x_i) STOP 25              ! { dg-error "" }
++        mx_i = MAX(-a2_i, -b2_i, x_i, y_i)      ! { dg-error "" }
++        if (mx_i .ne. x_i) STOP 26              ! { dg-error "" }
++        mx_r = MAX(-a_r, -b_r, x_r, y_r)        ! { dg-error "" }
++        if (abs(mx_r - x_r) > 1.0D-6) STOP 27   ! { dg-error "" }
++        mx_r = MAX(-a_r, -b_r, x_r, y_r)        ! { dg-error "" }
++        if (abs(mx_r - x_r) > 1.0D-6) STOP 28   ! { dg-error "" }
++        mx_r = MAX(-a_i, -b_r, x_r, y_i)        ! { dg-error "" }
++        if (abs(mx_r - x_r) > 1.0D-6) STOP 29   ! { dg-error "" }
++
++        mn_i = MIN(-a_i, -b_i, x_i, y_i)        ! { dg-error "" }
++        if (mn_i .ne. -a_i) STOP 31             ! { dg-error "" }
++        mn_i = MIN(-a2_i, -b2_i, x_i, y_i)      ! { dg-error "" }
++        if (mn_i .ne. -a2_i) STOP 32            ! { dg-error "" }
++        mn_r = MIN(-a_r, -b_r, x_r, y_r)        ! { dg-error "" }
++        if (abs(mn_r - (-a_r)) > 1.0D-6) STOP 33 ! { dg-error "" }
++        mn_r = MIN(-a2_r, -b2_r, x_r, y_r)      ! { dg-error "" }
++        if (abs(mn_r - (-a2_r)) > 1.0D-6) STOP 34 ! { dg-error "" }
++        mn_r = MIN(-a_i, -b_r, x_r, y_i)        ! { dg-error "" }
++        if (abs(mn_r - (-a_r)) > 1.0D-6) STOP 35 ! { dg-error "" }
++      END PROGRAM
+diff -Nrup a/gcc/testsuite/gfortran.dg/dec_intrinsic_int_real_promotion-3.f b/gcc/testsuite/gfortran.dg/dec_intrinsic_int_real_promotion-3.f
+--- a/gcc/testsuite/gfortran.dg/dec_intrinsic_int_real_promotion-3.f	1969-12-31 17:00:00.000000000 -0700
++++ b/gcc/testsuite/gfortran.dg/dec_intrinsic_int_real_promotion-3.f	2018-06-05 11:50:45.288707657 -0600
+@@ -0,0 +1,114 @@
++! { dg-do compile }
++! { dg-options "-fdec" }
++!
++! Test promotion between integers and reals in intrinsic operations.
++! These operations are: mod, modulo, dim, sign, min, max, minloc and
++! maxloc.
++!
++      PROGRAM promotion_int_real
++        REAL l/0.0/
++        INTEGER a_i/4/
++        INTEGER*4 a2_i/4/
++        CHARACTER b_i
++        CHARACTER*8 b2_i
++        INTEGER x_i/2/
++        CHARACTER y_i
++        REAL a_r/4.0/
++        REAL*4 a2_r/4.0/
++        LOGICAL b_r
++        LOGICAL*8 b2_r
++        REAL x_r/2.0/
++        LOGICAL y_r
++
++        INTEGER m_i/0/
++        REAL m_r/0.0/
++
++        INTEGER md_i/0/
++        REAL md_r/0.0/
++
++        INTEGER d_i/0/
++        REAL d_r/0.0/
++
++        INTEGER s_i/0/
++        REAL s_r/0.0/
++
++        INTEGER mn_i/0/
++        REAL mn_r/0.0/
++
++        INTEGER mx_i/0/
++        REAL mx_r/0.0/
++
++        m_i = MOD(a_i, b_i)                     ! { dg-error "" }
++        if (m_i .ne. 1) STOP 1
++        m_i = MOD(a2_i, b2_i)                   ! { dg-error "" }
++        if (m_i .ne. 1) STOP 2
++        m_r = MOD(a_r, b_r)                     ! { dg-error "" }
++        if (abs(m_r - 1.0) > 1.0D-6) STOP 3
++        m_r = MOD(a2_r, b2_r)                   ! { dg-error "" }
++        if (abs(m_r - 1.0) > 1.0D-6) STOP 4
++        m_r = MOD(a_i, b_r)                     ! { dg-error "" }
++        if (abs(m_r - 1.0) > 1.0D-6) STOP 5
++        m_r = MOD(a_r, b_i)                     ! { dg-error "" }
++        if (abs(m_r - 1.0) > 1.0D-6) STOP 6
++
++        md_i = MODULO(a_i, b_i)                 ! { dg-error "" }
++        if (md_i .ne. 1) STOP 7
++        md_i = MODULO(a2_i, b2_i)               ! { dg-error "" }
++        if (md_i .ne. 1) STOP 8
++        md_r = MODULO(a_r, b_r)                 ! { dg-error "" }
++        if (abs(md_r - 1.0) > 1.0D-6) STOP 9
++        md_r = MODULO(a2_r, b2_r)               ! { dg-error "" }
++        if (abs(md_r - 1.0) > 1.0D-6) STOP 10
++        md_r = MODULO(a_i, b_r)                 ! { dg-error "" }
++        if (abs(md_r - 1.0) > 1.0D-6) STOP 11
++        md_r = MODULO(a_r, b_i)                 ! { dg-error "" }
++        if (abs(md_r - 1.0) > 1.0D-6) STOP 12
++
++        d_i = DIM(a_i, b_i)                     ! { dg-error "" }
++        if (d_i .ne. 1) STOP 13
++        d_i = DIM(a2_i, b2_i)                   ! { dg-error "" }
++        if (d_i .ne. 1) STOP 14
++        d_r = DIM(a_r, b_r)                     ! { dg-error "" }
++        if (abs(d_r - 1.0) > 1.0D-6) STOP 15
++        d_r = DIM(a2_r, b2_r)                   ! { dg-error "" }
++        if (abs(d_r - 1.0) > 1.0D-6) STOP 16
++        d_r = DIM(a_r, b_i)                     ! { dg-error "" }
++        if (abs(d_r - 1.0) > 1.0D-6) STOP 17
++        d_r = DIM(b_i, a_r)                     ! { dg-error "" }
++        if (abs(d_r) > 1.0D-6) STOP 18
++
++        s_i = SIGN(-a_i, b_i)                   ! { dg-error "" }
++        if (s_i .ne. 4) STOP 19
++        s_i = SIGN(-a2_i, b2_i)                 ! { dg-error "" }
++        if (s_i .ne. 4) STOP 20
++        s_r = SIGN(a_r, -b_r)                   ! { dg-error "" }
++        if (abs(s_r - (-a_r)) > 1.0D-6) STOP 21
++        s_r = SIGN(a2_r, -b2_r)                 ! { dg-error "" }
++        if (abs(s_r - (-a2_r)) > 1.0D-6) STOP 22
++        s_r = SIGN(a_r, -b_i)                   ! { dg-error "" }
++        if (abs(s_r - (-a_r)) > 1.0D-6) STOP 23
++        s_r = SIGN(-a_i, b_r)                   ! { dg-error "" }
++        if (abs(s_r - a_r) > 1.0D-6) STOP 24
++
++        mx_i = MAX(-a_i, -b_i, x_i, y_i)        ! { dg-error "" }
++        if (mx_i .ne. x_i) STOP 25
++        mx_i = MAX(-a2_i, -b2_i, x_i, y_i)      ! { dg-error "" }
++        if (mx_i .ne. x_i) STOP 26
++        mx_r = MAX(-a_r, -b_r, x_r, y_r)        ! { dg-error "" }
++        if (abs(mx_r - x_r) > 1.0D-6) STOP 27
++        mx_r = MAX(-a_r, -b_r, x_r, y_r)        ! { dg-error "" }
++        if (abs(mx_r - x_r) > 1.0D-6) STOP 28
++        mx_r = MAX(-a_i, -b_r, x_r, y_i)        ! { dg-error "" }
++        if (abs(mx_r - x_r) > 1.0D-6) STOP 29
++
++        mn_i = MIN(-a_i, -b_i, x_i, y_i)        ! { dg-error "" }
++        if (mn_i .ne. -a_i) STOP 31
++        mn_i = MIN(-a2_i, -b2_i, x_i, y_i)      ! { dg-error "" }
++        if (mn_i .ne. -a2_i) STOP 32
++        mn_r = MIN(-a_r, -b_r, x_r, y_r)        ! { dg-error "" }
++        if (abs(mn_r - (-a_r)) > 1.0D-6) STOP 33
++        mn_r = MIN(-a2_r, -b2_r, x_r, y_r)      ! { dg-error "" }
++        if (abs(mn_r - (-a2_r)) > 1.0D-6) STOP 34
++        mn_r = MIN(-a_i, -b_r, x_r, y_i)        ! { dg-error "" }
++        if (abs(mn_r - (-a_r)) > 1.0D-6) STOP 35
++      END PROGRAM
+diff -Nrup a/gcc/testsuite/gfortran.dg/dec_intrinsic_int_real_promotion.f b/gcc/testsuite/gfortran.dg/dec_intrinsic_int_real_promotion.f
+--- a/gcc/testsuite/gfortran.dg/dec_intrinsic_int_real_promotion.f	1969-12-31 17:00:00.000000000 -0700
++++ b/gcc/testsuite/gfortran.dg/dec_intrinsic_int_real_promotion.f	2018-06-05 11:50:45.288707657 -0600
+@@ -0,0 +1,126 @@
++! { dg-do compile }
++! { dg-options "-fdec" }
++!
++! Test promotion between integers and reals in intrinsic operations.
++! These operations are: mod, modulo, dim, sign, min, max, minloc and
++! maxloc.
++!
++      PROGRAM promotion_int_real
++        REAL l/0.0/
++        INTEGER a_i/4/
++        INTEGER*4 a2_i/4/
++        INTEGER b_i/3/
++        INTEGER*8 b2_i/3/
++        INTEGER x_i/2/
++        INTEGER y_i/1/
++        REAL a_r/4.0/
++        REAL*4 a2_r/4.0/
++        REAL b_r/3.0/
++        REAL*8 b2_r/3.0/
++        REAL x_r/2.0/
++        REAL y_r/1.0/
++
++        REAL array_nan(4)
++        DATA array_nan(1)/-4.0/
++        DATA array_nan(2)/3.0/
++        DATA array_nan(3)/-2/
++
++        INTEGER m_i/0/
++        REAL m_r/0.0/
++
++        INTEGER md_i/0/
++        REAL md_r/0.0/
++
++        INTEGER d_i/0/
++        REAL d_r/0.0/
++
++        INTEGER s_i/0/
++        REAL s_r/0.0/
++
++        INTEGER mn_i/0/
++        REAL mn_r/0.0/
++
++        INTEGER mx_i/0/
++        REAL mx_r/0.0/
++
++        ! array_nan 4th position value is NAN
++        array_nan(4) = 0/l
++
++        m_i = MOD(a_i, b_i)
++        if (m_i .ne. 1) STOP 1
++        m_i = MOD(a2_i, b2_i)
++        if (m_i .ne. 1) STOP 2
++        m_r = MOD(a_r, b_r)
++        if (abs(m_r - 1.0) > 1.0D-6) STOP 3
++        m_r = MOD(a2_r, b2_r)
++        if (abs(m_r - 1.0) > 1.0D-6) STOP 4
++        m_r = MOD(a_i, b_r)
++        if (abs(m_r - 1.0) > 1.0D-6) STOP 5
++        m_r = MOD(a_r, b_i)
++        if (abs(m_r - 1.0) > 1.0D-6) STOP 6
++
++        md_i = MODULO(a_i, b_i)
++        if (md_i .ne. 1) STOP 7
++        md_i = MODULO(a2_i, b2_i)
++        if (md_i .ne. 1) STOP 8
++        md_r = MODULO(a_r, b_r)
++        if (abs(md_r - 1.0) > 1.0D-6) STOP 9
++        md_r = MODULO(a2_r, b2_r)
++        if (abs(md_r - 1.0) > 1.0D-6) STOP 10
++        md_r = MODULO(a_i, b_r)
++        if (abs(md_r - 1.0) > 1.0D-6) STOP 11
++        md_r = MODULO(a_r, b_i)
++        if (abs(md_r - 1.0) > 1.0D-6) STOP 12
++
++        d_i = DIM(a_i, b_i)
++        if (d_i .ne. 1) STOP 13
++        d_i = DIM(a2_i, b2_i)
++        if (d_i .ne. 1) STOP 14
++        d_r = DIM(a_r, b_r)
++        if (abs(d_r - 1.0) > 1.0D-6) STOP 15
++        d_r = DIM(a2_r, b2_r)
++        if (abs(d_r - 1.0) > 1.0D-6) STOP 16
++        d_r = DIM(a_r, b_i)
++        if (abs(d_r - 1.0) > 1.0D-6) STOP 17
++        d_r = DIM(b_i, a_r)
++        if (abs(d_r) > 1.0D-6) STOP 18
++
++        s_i = SIGN(-a_i, b_i)
++        if (s_i .ne. 4) STOP 19
++        s_i = SIGN(-a2_i, b2_i)
++        if (s_i .ne. 4) STOP 20
++        s_r = SIGN(a_r, -b_r)
++        if (abs(s_r - (-a_r)) > 1.0D-6) STOP 21
++        s_r = SIGN(a2_r, -b2_r)
++        if (abs(s_r - (-a2_r)) > 1.0D-6) STOP 22
++        s_r = SIGN(a_r, -b_i)
++        if (abs(s_r - (-a_r)) > 1.0D-6) STOP 23
++        s_r = SIGN(-a_i, b_r)
++        if (abs(s_r - a_r) > 1.0D-6) STOP 24
++
++        mx_i = MAX(-a_i, -b_i, x_i, y_i)
++        if (mx_i .ne. x_i) STOP 25
++        mx_i = MAX(-a2_i, -b2_i, x_i, y_i)
++        if (mx_i .ne. x_i) STOP 26
++        mx_r = MAX(-a_r, -b_r, x_r, y_r)
++        if (abs(mx_r - x_r) > 1.0D-6) STOP 27
++        mx_r = MAX(-a_r, -b_r, x_r, y_r)
++        if (abs(mx_r - x_r) > 1.0D-6) STOP 28
++        mx_r = MAX(-a_i, -b_r, x_r, y_i)
++        if (abs(mx_r - x_r) > 1.0D-6) STOP 29
++        mx_i = MAXLOC(array_nan, 1)
++        if (mx_i .ne. 2) STOP 30
++
++        mn_i = MIN(-a_i, -b_i, x_i, y_i)
++        if (mn_i .ne. -a_i) STOP 31
++        mn_i = MIN(-a2_i, -b2_i, x_i, y_i)
++        if (mn_i .ne. -a2_i) STOP 32
++        mn_r = MIN(-a_r, -b_r, x_r, y_r)
++        if (abs(mn_r - (-a_r)) > 1.0D-6) STOP 33
++        mn_r = MIN(-a2_r, -b2_r, x_r, y_r)
++        if (abs(mn_r - (-a2_r)) > 1.0D-6) STOP 34
++        mn_r = MIN(-a_i, -b_r, x_r, y_i)
++        if (abs(mn_r - (-a_r)) > 1.0D-6) STOP 35
++        mn_i = MINLOC(array_nan, 1)
++        if (mn_i .ne. 1) STOP 36
++      END PROGRAM

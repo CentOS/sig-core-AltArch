@@ -9,19 +9,33 @@ operations, and converting INTEGER types to LOGICAL for use in
 boolean operations.
 
 This feature is enabled with the `-std=extra-legacy` compiler flag.
----
 
-    0009-Convert-LOGICAL-to-INTEGER-for-arithmetic-ops-and-vi.patch
-    Fixup
+commit f40dbd54915de8155aad94bfa19c22f11b8a8eae
+Author: Jim MacArthur <jim.macarthur@codethink.co.uk>
+Date:   Wed Oct 7 16:31:18 2015 -0400
+
+    Convert LOGICAL to INTEGER for arithmetic ops, and vice versa
+    
+    We allow converting LOGICAL types to INTEGER when doing arithmetic
+    operations, and converting INTEGER types to LOGICAL for use in
+    boolean operations.
+    
+    This feature is enabled with the `-std=extra-legacy` compiler flag.
+    
+    Test written by: Francisco Redondo Marchena <francisco.marchena@codethink.co.uk>
 
 diff --git a/gcc/fortran/resolve.c b/gcc/fortran/resolve.c
-index 667cc50..33b441a 100644
+index 667cc5073e3..33b441aa1bc 100644
 --- a/gcc/fortran/resolve.c
 +++ b/gcc/fortran/resolve.c
-@@ -3627,6 +3627,22 @@ is_character_based (bt type)
-    for the conversion.  */
+@@ -3623,6 +3623,22 @@ is_character_based (bt type)
+   return type == BT_CHARACTER || type == BT_HOLLERITH;
+ }
  
- static void
++/* If E is a logical, convert it to an integer and issue a warning
++   for the conversion.  */
++
++static void
 +convert_integer_to_logical (gfc_expr *e)
 +{
 +  if (e->ts.type == BT_INTEGER)
@@ -34,13 +48,9 @@ index 667cc50..33b441a 100644
 +    }
 +}
 +
-+/* If E is a logical, convert it to an integer and issue a warning
-+   for the conversion.  */
-+
-+static void
- convert_logical_to_integer (gfc_expr *e)
- {
-   if (e->ts.type == BT_LOGICAL)
+ /* If E is a logical, convert it to an integer and issue a warning
+    for the conversion.  */
+ 
 @@ -3733,6 +3749,12 @@ resolve_operator (gfc_expr *e)
      case INTRINSIC_OR:
      case INTRINSIC_EQV:
@@ -66,3 +76,36 @@ index 667cc50..33b441a 100644
        if (op1->ts.type == BT_LOGICAL)
  	{
  	  e->ts.type = BT_LOGICAL;
+diff --git a/gcc/testsuite/gfortran.dg/dec_logical_to_integer_and_vice_versa.f b/gcc/testsuite/gfortran.dg/dec_logical_to_integer_and_vice_versa.f
+new file mode 100644
+index 00000000000..7b9ec0d0cd2
+--- /dev/null
++++ b/gcc/testsuite/gfortran.dg/dec_logical_to_integer_and_vice_versa.f
+@@ -0,0 +1,27 @@
++! { dg-do compile }
++! { dg-options "-std=extra-legacy" }
++!
++! Test convertion between logical and integer for logical operators
++!
++        PROGRAM logical_integer_conversion
++          LOGICAL lpos /.true./
++          INTEGER ineg/0/
++          INTEGER ires
++          LOGICAL lres
++
++          ! Test Logicals converted to Integers
++          if ((lpos.AND.ineg).EQ.1) STOP 3
++          if ((ineg.AND.lpos).NE.0) STOP 4
++          ires = (.true..AND.0)
++          if (ires.NE.0) STOP 5
++          ires = (1.AND..false.)
++          if (ires.EQ.1) STOP 6
++
++          ! Test Integers converted to Logicals
++          if (lpos.EQ.ineg) STOP 7
++          if (ineg.EQ.lpos) STOP 8
++          lres = (.true..EQ.0)
++          if (lres) STOP 9
++          lres = (1.EQ..false.)
++          if (lres) STOP 10
++        END

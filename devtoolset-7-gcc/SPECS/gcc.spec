@@ -95,7 +95,7 @@
 Summary: GCC version 7
 Name: %{?scl_prefix}gcc
 Version: %{gcc_version}
-Release: %{gcc_release}.4%{?dist}
+Release: %{gcc_release}.10%{?dist}
 # libgcc, libgfortran, libgomp, libstdc++ and crtstuff have
 # GCC Runtime Exception.
 License: GPLv3+ and GPLv3+ with exceptions and GPLv2+ with exceptions and LGPLv2+ and BSD
@@ -261,6 +261,7 @@ Patch11: gcc7-Wno-format-security.patch
 Patch13: gcc7-rh1512529-aarch64.patch
 Patch14: gcc7-pr84524.patch
 Patch15: gcc7-pr84128.patch
+Patch16: gcc7-rh1570967.patch
 
 Patch1000: gcc7-libstdc++-compat.patch
 Patch1001: gcc7-alt-compat-test.patch
@@ -294,6 +295,10 @@ Patch3018: 0018-Fill-in-missing-array-dimensions-using-the-lower-bou.patch
 Patch3019: 0019-Add-tests-for-AUTOMATIC-keyword.patch
 Patch3020: 0020-Add-test-for-STRUCTURE-and-RECORD.patch
 Patch3022: 0022-Default-values-for-certain-field-descriptors-in-form.patch
+Patch3023: gcc7-fortranlines.patch
+Patch3024: gcc7-fortran-include.patch
+
+
 
 # specific patches for .el7 armhfp build
 Patch10001: gcc7-dts-arm.patch
@@ -694,6 +699,7 @@ This package contains the Memory Protection Extensions static runtime libraries.
 %patch13 -p0 -b .rh1512529-aarch64~
 %patch14 -p0 -b .pr84524~
 %patch15 -p0 -b .pr84128~
+%patch16 -p0 -b .rh1570967~
 
 %if 0%{?rhel} <= 7
 %patch1000 -p0 -b .libstdc++-compat~
@@ -749,6 +755,8 @@ cd ..
 %patch3019 -p1 -b .fortran19~
 %patch3020 -p1 -b .fortran20~
 %patch3022 -p1 -b .fortran22~
+%patch3023 -p1 -b .fortran23~
+%patch3024 -p1 -b .fortran24~
 %endif
 
 %ifarch %{arm}
@@ -2912,8 +2920,31 @@ fi
 %doc rpm.doc/changelogs/libcc1/ChangeLog*
 
 %changelog
-* Mon May 21 2018 Pablo Greco <pablo@fliagreco.com.ar> 7.3.1-5.4
+* Mon Jun 18 2018 Pablo Greco <pablo@fliagreco.com.ar> 7.3.1-5.10
 - Fix for armhfp
+
+* Tue Jun 12 2018 Marek Polacek <polacek@redhat.com> 7.3.1-5.10
+- bump for rebuild
+
+* Tue Jun 05 2018 Jeff Law <polacek@redhat.com> 7.3.1-5.9
+- Fix INCLUDE handling when pathname is on a separate line
+- Integrate updates to patches #0005 and #0014.  Add testcases for
+- various legacy fortran extensions (#1586289)
+
+
+* Sat May 19 2018 Marek Polacek <polacek@redhat.com> 7.3.1-5.8
+- bump for rebuild
+
+* Wed May  9 2018 Marek Polacek <polacek@redhat.com> 7.3.1-5.7
+- fix 0014-Allow-non-logical-expressions-in-IF-statements.patch: also allow
+  non logical expressions in ELSE-IF statements
+
+* Mon Apr 23 2018 Jeff Law <law@redhat.com> 7.3.1-5.6
+- Fix handling of -fdlines-as-comments when -fdec is enabled
+  (#1570967)
+
+* Tue Apr 17 2018 Marek Polacek <polacek@redhat.com> 7.3.1-5.5
+- fix a goof in 0013-Allow-per-variable-kind-specification.patch
 
 * Thu Mar 29 2018 Jeff Law <law@redhat.com> 7.3.1-5.4
 - Add Jakub's patch to generalize default exponent handling to
