@@ -216,7 +216,7 @@ Provides:      pcmk-cluster-manager
 
 %{?systemd_requires}
 
-ExclusiveArch: i686 x86_64 ppc64le s390x
+ExclusiveArch: i686 x86_64 ppc64le s390x %{arm} aarch64
 
 # Pacemaker targets compatibility with python 2.6+ and 3.2+
 Requires:      python >= 2.6
@@ -871,6 +871,9 @@ exit 0
 %attr(0644,root,root) %{_datadir}/pacemaker/nagios/plugins-metadata/*
 
 %changelog
+* Wed Jun 27 2018 Johnny Hughes <jhughes@centos.org> - 1.1.18-11.3
+- Added armv7hl and aarch64 to supported arches
+
 * Tue Jun 5 2018 Ken Gaillot <kgaillot@redhat.com> - 1.1.18-11.3
 - Fix regression in handling of mixed-case node names
 - Avoid multiple recovery of stonith devices
