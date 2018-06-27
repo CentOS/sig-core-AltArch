@@ -1,0 +1,169 @@
+From 404335e8ed73046c079435fe73b921ec993614e4 Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Wed, 23 May 2018 20:54:57 +0200
+Subject: [PATCH 1/2] i386: Define the Virt SSBD MSR and handling of it
+ (CVE-2018-3639)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Eduardo Habkost <ehabkost@redhat.com>
+Message-id: <20180523205458.32764-2-ehabkost@redhat.com>
+Patchwork-id: 80461
+O-Subject: [RHEL-7.5.z qemu-kvm PATCH 1/2] i386: Define the Virt SSBD MSR and handling of it (CVE-2018-3639)
+Bugzilla: 1584363
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Igor Mammedov <imammedo@redhat.com>
+RH-Acked-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+From: Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+
+"Some AMD processors only support a non-architectural means of enabling
+speculative store bypass disable (SSBD).  To allow a simplified view of
+this to a guest, an architectural definition has been created through a new
+CPUID bit, 0x80000008_EBX[25], and a new MSR, 0xc001011f.  With this, a
+hypervisor can virtualize the existence of this definition and provide an
+architectural method for using SSBD to a guest.
+
+Add the new CPUID feature, the new MSR and update the existing SSBD
+support to use this MSR when present." (from x86/speculation: Add virtualized
+speculative store bypass disable support in Linux).
+
+Signed-off-by: Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Reviewed-by: Daniel P. Berrangé <berrange@redhat.com>
+Signed-off-by: Daniel P. Berrangé <berrange@redhat.com>
+Message-Id: <20180521215424.13520-4-berrange@redhat.com>
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+(cherry picked from commit cfeea0c021db6234c154dbc723730e81553924ff)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+
+Conflicts:
+    target-i386/kvm.c (MSR code)
+    target-i386/machine.c (trivial change from
+        VMStateDescription.needed to VMStateSubsection.needed)
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+---
+ target-i386/cpu.h     |  2 ++
+ target-i386/kvm.c     | 17 +++++++++++++++--
+ target-i386/machine.c | 21 +++++++++++++++++++++
+ 3 files changed, 38 insertions(+), 2 deletions(-)
+
+diff --git a/target-i386/cpu.h b/target-i386/cpu.h
+index da84443..68d0c0e 100644
+--- a/target-i386/cpu.h
++++ b/target-i386/cpu.h
+@@ -305,6 +305,7 @@
+ #define MSR_IA32_APICBASE_BASE          (0xfffff<<12)
+ #define MSR_TSC_ADJUST                  0x0000003b
+ #define MSR_IA32_SPEC_CTRL              0x48
++#define MSR_VIRT_SSBD                   0xc001011f
+ #define MSR_IA32_TSCDEADLINE            0x6e0
+ 
+ #define MSR_P6_PERFCTR0                 0xc1
+@@ -1044,6 +1045,7 @@ typedef struct CPUX86State {
+     uint32_t pkru;
+ 
+     uint64_t spec_ctrl;
++    uint64_t virt_ssbd;
+ 
+     TPRAccess tpr_access_type;
+ } CPUX86State;
+diff --git a/target-i386/kvm.c b/target-i386/kvm.c
+index 24d17ad..656e24b 100644
+--- a/target-i386/kvm.c
++++ b/target-i386/kvm.c
+@@ -78,6 +78,7 @@ static bool has_msr_hv_tsc;
+ static bool has_msr_mtrr;
+ static bool has_msr_xss;
+ static bool has_msr_spec_ctrl;
++static bool has_msr_virt_ssbd;
+ 
+ static bool has_msr_architectural_pmu;
+ static uint32_t num_architectural_pmu_counters;
+@@ -805,6 +806,10 @@ static int kvm_get_supported_msrs(KVMState *s)
+                     has_msr_spec_ctrl = true;
+                     continue;
+                 }
++                if (kvm_msr_list->indices[i] == MSR_VIRT_SSBD) {
++                    has_msr_virt_ssbd = true;
++                    continue;
++                }
+             }
+         }
+ 
+@@ -1195,6 +1200,10 @@ static int kvm_put_msrs(X86CPU *cpu, int level)
+     if (has_msr_spec_ctrl) {
+         kvm_msr_entry_set(&msrs[n++], MSR_IA32_SPEC_CTRL, env->spec_ctrl);
+     }
++    if (has_msr_virt_ssbd) {
++        kvm_msr_entry_set(&msrs[n++], MSR_VIRT_SSBD, env->virt_ssbd);
++    }
++
+ #ifdef TARGET_X86_64
+     if (lm_capable_kernel) {
+         kvm_msr_entry_set(&msrs[n++], MSR_CSTAR, env->cstar);
+@@ -1555,8 +1564,9 @@ static int kvm_get_msrs(X86CPU *cpu)
+     if (has_msr_spec_ctrl) {
+         msrs[n++].index = MSR_IA32_SPEC_CTRL;
+     }
+-
+-
++    if (has_msr_virt_ssbd) {
++        msrs[n++].index = MSR_VIRT_SSBD;
++    }
+     if (!env->tsc_valid) {
+         msrs[n++].index = MSR_IA32_TSC;
+         env->tsc_valid = !runstate_is_running();
+@@ -1800,6 +1810,9 @@ static int kvm_get_msrs(X86CPU *cpu)
+         case MSR_IA32_SPEC_CTRL:
+             env->spec_ctrl = msrs[i].data;
+             break;
++        case MSR_VIRT_SSBD:
++            env->virt_ssbd = msrs[i].data;
++            break;
+         }
+     }
+ 
+diff --git a/target-i386/machine.c b/target-i386/machine.c
+index d883c86..507ab1a 100644
+--- a/target-i386/machine.c
++++ b/target-i386/machine.c
+@@ -760,6 +760,24 @@ static const VMStateDescription vmstate_spec_ctrl = {
+     }
+ };
+ 
++static bool virt_ssbd_needed(void *opaque)
++{
++    X86CPU *cpu = opaque;
++    CPUX86State *env = &cpu->env;
++
++    return env->virt_ssbd != 0;
++}
++
++static const VMStateDescription vmstate_msr_virt_ssbd = {
++    .name = "cpu/virt_ssbd",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (VMStateField[]){
++        VMSTATE_UINT64(env.virt_ssbd, X86CPU),
++        VMSTATE_END_OF_LIST()
++    }
++};
++
+ const VMStateDescription vmstate_x86_cpu = {
+     .name = "cpu",
+     .version_id = 12,
+@@ -917,6 +935,9 @@ const VMStateDescription vmstate_x86_cpu = {
+         }, {
+             .vmsd = &vmstate_spec_ctrl,
+             .needed = spec_ctrl_needed,
++        }, {
++            .vmsd = &vmstate_msr_virt_ssbd,
++            .needed = virt_ssbd_needed,
+         } , {
+             /* empty */
+         }
+-- 
+1.8.3.1
+

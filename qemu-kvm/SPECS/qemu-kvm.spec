@@ -79,7 +79,7 @@ Obsoletes: %1 < %{obsoletes_version}                                      \
 Summary: QEMU is a machine emulator and virtualizer
 Name: %{pkgname}%{?pkgsuffix}
 Version: 1.5.3
-Release: 156%{?dist}.2
+Release: 156%{?dist}.3
 # Epoch because we pushed a qemu-1.0 package. AIUI this can't ever be dropped
 Epoch: 10
 License: GPLv2+ and LGPLv2+ and BSD
@@ -3874,6 +3874,10 @@ Patch1906: kvm-vga-add-ram_addr_t-cast.patch
 Patch1907: kvm-vga-fix-region-calculation.patch
 # For bz#1574075 - EMBARGOED CVE-2018-3639 qemu-kvm: Kernel: omega-4 [rhel-7.5.z]
 Patch1908: kvm-i386-define-the-ssbd-CPUID-feature-bit-CVE-2018-3639.patch
+# For bz#1584363 - CVE-2018-3639 qemu-kvm: hw: cpu: AMD: speculative store bypass [rhel-7.5.z]
+Patch1909: kvm-i386-Define-the-Virt-SSBD-MSR-and-handling-of-it-CVE.patch
+# For bz#1584363 - CVE-2018-3639 qemu-kvm: hw: cpu: AMD: speculative store bypass [rhel-7.5.z]
+Patch1910: kvm-i386-define-the-AMD-virt-ssbd-CPUID-feature-bit-CVE-.patch
 
 
 BuildRequires: zlib-devel
@@ -5960,6 +5964,8 @@ tar -xf %{SOURCE21}
 %patch1906 -p1
 %patch1907 -p1
 %patch1908 -p1
+%patch1909 -p1
+%patch1910 -p1
 
 %build
 buildarch="%{kvm_target}-softmmu"
@@ -6405,8 +6411,14 @@ sh %{_sysconfdir}/sysconfig/modules/kvm.modules &> /dev/null || :
 %{_mandir}/man8/qemu-nbd.8*
 
 %changelog
-* Mon May 21 2018 Fabian Arrotin <arrfab@centos.org> - 1.5.3-156.el7_5.2
+* Wed Jun 27 2018 Fabian Arrotin <arrfab@centos.org> - 1.5.3-156.el7_5.3
 - Added kvm_target arm (Jacco@redsleeve.org)
+
+* Fri Jun 08 2018 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-156.el7_5.3
+- kvm-i386-Define-the-Virt-SSBD-MSR-and-handling-of-it-CVE.patch [bz#1584363]
+- kvm-i386-define-the-AMD-virt-ssbd-CPUID-feature-bit-CVE-.patch [bz#1584363]
+- Resolves: bz#1584363
+  (CVE-2018-3639 qemu-kvm: hw: cpu: AMD: speculative store bypass [rhel-7.5.z])
 
 * Fri May 11 2018 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-156.el7_5.2
 - kvm-i386-define-the-ssbd-CPUID-feature-bit-CVE-2018-3639.patch [bz#1574075]

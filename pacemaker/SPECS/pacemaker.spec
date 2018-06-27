@@ -163,7 +163,7 @@
 Name:          pacemaker
 Summary:       Scalable High-Availability cluster resource manager
 Version:       %{pcmkversion}
-Release:       %{pcmk_release}%{?dist}.2
+Release:       %{pcmk_release}%{?dist}.3
 %if %{defined _unitdir}
 License:       GPLv2+ and LGPLv2+
 %else
@@ -196,6 +196,9 @@ Patch14:       014-segfault.patch
 Patch15:       015-fail-timeout.patch
 Patch16:       016-crm_diff.patch
 Patch17:       017-pending-notify.patch
+Patch18:       018-node-names.patch
+Patch19:       019-requires-quorum.patch
+Patch20:       020-multiple-active.patch
 
 # patches that aren't from upstream
 Patch100:      lrmd-protocol-version.patch
@@ -868,8 +871,14 @@ exit 0
 %attr(0644,root,root) %{_datadir}/pacemaker/nagios/plugins-metadata/*
 
 %changelog
-* Mon May 14 2018 Johnny Hughes <jhughes@centos.org> - 1.1.18-11.2
-- Added armv7hl to supported arches (centos userland)
+* Wed Jun 27 2018 Johnny Hughes <jhughes@centos.org> - 1.1.18-11.3
+- Added armv7hl and aarch64 to supported arches
+
+* Tue Jun 5 2018 Ken Gaillot <kgaillot@redhat.com> - 1.1.18-11.3
+- Fix regression in handling of mixed-case node names
+- Avoid multiple recovery of stonith devices
+- Resolves: rhbz#1583747
+- Resolves: rhbz#1585741
 
 * Fri Apr 20 2018 Ken Gaillot <kgaillot@redhat.com> - 1.1.18-11.2
 - Do not record pending notify actions as completed
