@@ -1,0 +1,660 @@
+From 85a3a174e1fc4cd4b055eb22827c1c3d0b288a85 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Tue, 22 May 2018 11:00:22 -0500
+Subject: [PATCH 1/3] Low: libpe_status: handle pending migrations correctly
+
+This is mainly a refactor of unpack_rsc_migration() for readability.
+
+The one significant change is that previously, a migrate_from operation that
+was *recorded* as pending (record-pending=true) was treated differently from an
+unrecorded pending migrate_from (record-pending=false).
+---
+ include/crm/pengine/status.h |   3 +
+ lib/pengine/unpack.c         | 162 ++++++++++++++++++++++++-------------------
+ 2 files changed, 94 insertions(+), 71 deletions(-)
+
+diff --git a/include/crm/pengine/status.h b/include/crm/pengine/status.h
+index fca7f12..a8c90e2 100644
+--- a/include/crm/pengine/status.h
++++ b/include/crm/pengine/status.h
+@@ -30,6 +30,9 @@ typedef struct pe_action_s pe_action_t;
+ typedef struct resource_s resource_t;
+ typedef struct ticket_s ticket_t;
+ 
++// forward-compatible with Pacemaker 2.0.0
++typedef struct resource_s pe_resource_t;
++
+ typedef enum no_quorum_policy_e {
+     no_quorum_freeze,
+     no_quorum_stop,
+diff --git a/lib/pengine/unpack.c b/lib/pengine/unpack.c
+index 1b8ca22..73bbe27 100644
+--- a/lib/pengine/unpack.c
++++ b/lib/pengine/unpack.c
+@@ -2414,94 +2414,114 @@ find_lrm_op(const char *resource, const char *op, const char *node, const char *
+     return get_xpath_object(xpath, data_set->input, LOG_DEBUG);
+ }
+ 
++static bool
++stop_happened_after(pe_resource_t *rsc, pe_node_t *node, xmlNode *xml_op,
++                    pe_working_set_t *data_set)
++{
++    xmlNode *stop_op = find_lrm_op(rsc->id, CRMD_ACTION_STOP, node->details->id,
++                                   NULL, data_set);
++
++    if (stop_op) {
++        int stop_id = 0;
++        int task_id = 0;
++
++        crm_element_value_int(stop_op, XML_LRM_ATTR_CALLID, &stop_id);
++        crm_element_value_int(xml_op, XML_LRM_ATTR_CALLID, &task_id);
++        if (stop_id > task_id) {
++            return TRUE;
++        }
++    }
++    return FALSE;
++}
++
+ static void
+ unpack_rsc_migration(resource_t *rsc, node_t *node, xmlNode *xml_op, pe_working_set_t * data_set)
+ {
+-
+-    /*
+-     * The normal sequence is (now): migrate_to(Src) -> migrate_from(Tgt) -> stop(Src)
+-     *
+-     * So if a migrate_to is followed by a stop, then we don't need to care what
+-     * happened on the target node
++    /* A successful migration sequence is:
++     *    migrate_to on source node
++     *    migrate_from on target node
++     *    stop on source node
+      *
+-     * Without the stop, we need to look for a successful migrate_from.
+-     * This would also imply we're no longer running on the source
++     * If a migrate_to is followed by a stop, the entire migration (successful
++     * or failed) is complete, and we don't care what happened on the target.
+      *
+-     * Without the stop, and without a migrate_from op we make sure the resource
+-     * gets stopped on both source and target (assuming the target is up)
++     * If no migrate_from has happened, the migration is considered to be
++     * "partial". If the migrate_from failed, make sure the resource gets
++     * stopped on both source and target (if up).
+      *
++     * If the migrate_to and migrate_from both succeeded (which also implies the
++     * resource is no longer running on the source), but there is no stop, the
++     * migration is considered to be "dangling".
+      */
+-    int stop_id = 0;
+-    int task_id = 0;
+-    xmlNode *stop_op =
+-        find_lrm_op(rsc->id, CRMD_ACTION_STOP, node->details->id, NULL, data_set);
+-
+-    if (stop_op) {
+-        crm_element_value_int(stop_op, XML_LRM_ATTR_CALLID, &stop_id);
++    int from_rc = 0;
++    int from_status = 0;
++    const char *migrate_source = NULL;
++    const char *migrate_target = NULL;
++    pe_node_t *target = NULL;
++    pe_node_t *source = NULL;
++    xmlNode *migrate_from = NULL;
++
++    if (stop_happened_after(rsc, node, xml_op, data_set)) {
++        return;
+     }
+ 
+-    crm_element_value_int(xml_op, XML_LRM_ATTR_CALLID, &task_id);
++    // Clones are not allowed to migrate, so role can't be master
++    rsc->role = RSC_ROLE_STARTED;
+ 
+-    if (stop_op == NULL || stop_id < task_id) {
+-        int from_rc = 0, from_status = 0;
+-        const char *migrate_source =
+-            crm_element_value(xml_op, XML_LRM_ATTR_MIGRATE_SOURCE);
+-        const char *migrate_target =
+-            crm_element_value(xml_op, XML_LRM_ATTR_MIGRATE_TARGET);
++    migrate_source = crm_element_value(xml_op, XML_LRM_ATTR_MIGRATE_SOURCE);
++    migrate_target = crm_element_value(xml_op, XML_LRM_ATTR_MIGRATE_TARGET);
+ 
+-        node_t *target = pe_find_node(data_set->nodes, migrate_target);
+-        node_t *source = pe_find_node(data_set->nodes, migrate_source);
+-        xmlNode *migrate_from =
+-            find_lrm_op(rsc->id, CRMD_ACTION_MIGRATED, migrate_target, migrate_source,
+-                        data_set);
++    target = pe_find_node(data_set->nodes, migrate_target);
++    source = pe_find_node(data_set->nodes, migrate_source);
+ 
+-        rsc->role = RSC_ROLE_STARTED;       /* can be master? */
+-        if (migrate_from) {
+-            crm_element_value_int(migrate_from, XML_LRM_ATTR_RC, &from_rc);
+-            crm_element_value_int(migrate_from, XML_LRM_ATTR_OPSTATUS, &from_status);
+-            pe_rsc_trace(rsc, "%s op on %s exited with status=%d, rc=%d",
+-                         ID(migrate_from), migrate_target, from_status, from_rc);
+-        }
+-
+-        if (migrate_from && from_rc == PCMK_OCF_OK
+-            && from_status == PCMK_LRM_OP_DONE) {
+-            pe_rsc_trace(rsc, "Detected dangling migration op: %s on %s", ID(xml_op),
+-                         migrate_source);
++    // Check whether there was a migrate_from action
++    migrate_from = find_lrm_op(rsc->id, CRMD_ACTION_MIGRATED, migrate_target,
++                               migrate_source, data_set);
++    if (migrate_from) {
++        crm_element_value_int(migrate_from, XML_LRM_ATTR_RC, &from_rc);
++        crm_element_value_int(migrate_from, XML_LRM_ATTR_OPSTATUS, &from_status);
++        pe_rsc_trace(rsc, "%s op on %s exited with status=%d, rc=%d",
++                     ID(migrate_from), migrate_target, from_status, from_rc);
++    }
+ 
+-            /* all good
+-             * just need to arrange for the stop action to get sent
+-             * but _without_ affecting the target somehow
+-             */
+-            rsc->role = RSC_ROLE_STOPPED;
+-            rsc->dangling_migrations = g_list_prepend(rsc->dangling_migrations, node);
++    if (migrate_from && from_rc == PCMK_OCF_OK
++        && from_status == PCMK_LRM_OP_DONE) {
++        /* The migrate_to and migrate_from both succeeded, so mark the migration
++         * as "dangling". This will be used to schedule a stop action on the
++         * source without affecting the target.
++         */
++        pe_rsc_trace(rsc, "Detected dangling migration op: %s on %s", ID(xml_op),
++                     migrate_source);
++        rsc->role = RSC_ROLE_STOPPED;
++        rsc->dangling_migrations = g_list_prepend(rsc->dangling_migrations, node);
+ 
+-        } else if (migrate_from) {  /* Failed */
+-            if (target && target->details->online) {
+-                pe_rsc_trace(rsc, "Marking active on %s %p %d", migrate_target, target,
+-                             target->details->online);
+-                native_add_running(rsc, target, data_set);
+-            }
++    } else if (migrate_from && (from_status != PCMK_LRM_OP_PENDING)) { // Failed
++        if (target && target->details->online) {
++            pe_rsc_trace(rsc, "Marking active on %s %p %d", migrate_target, target,
++                         target->details->online);
++            native_add_running(rsc, target, data_set);
++        }
+ 
+-        } else {    /* Pending or complete but erased */
+-            if (target && target->details->online) {
+-                pe_rsc_trace(rsc, "Marking active on %s %p %d", migrate_target, target,
+-                             target->details->online);
++    } else { // Pending, or complete but erased
++        if (target && target->details->online) {
++            pe_rsc_trace(rsc, "Marking active on %s %p %d", migrate_target, target,
++                         target->details->online);
+ 
+-                native_add_running(rsc, target, data_set);
+-                if (source && source->details->online) {
+-                    /* If we make it here we have a partial migration.  The migrate_to
+-                     * has completed but the migrate_from on the target has not. Hold on
+-                     * to the target and source on the resource. Later on if we detect that
+-                     * the resource is still going to run on that target, we may continue
+-                     * the migration */
+-                    rsc->partial_migration_target = target;
+-                    rsc->partial_migration_source = source;
+-                }
+-            } else {
+-                /* Consider it failed here - forces a restart, prevents migration */
+-                set_bit(rsc->flags, pe_rsc_failed);
+-                clear_bit(rsc->flags, pe_rsc_allow_migrate);
++            native_add_running(rsc, target, data_set);
++            if (source && source->details->online) {
++                /* This is a partial migration: the migrate_to completed
++                 * successfully on the source, but the migrate_from has not
++                 * completed. Remember the source and target; if the newly
++                 * chosen target remains the same when we schedule actions
++                 * later, we may continue with the migration.
++                 */
++                rsc->partial_migration_target = target;
++                rsc->partial_migration_source = source;
+             }
++        } else {
++            /* Consider it failed here - forces a restart, prevents migration */
++            set_bit(rsc->flags, pe_rsc_failed);
++            clear_bit(rsc->flags, pe_rsc_allow_migrate);
+         }
+     }
+ }
+-- 
+1.8.3.1
+
+
+From 37913a1dec2bda66476bddb5559817d23058be59 Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 21 May 2018 12:43:09 -0500
+Subject: [PATCH 2/3] Refactor: libpe_status: new functions for finding
+ resource's active nodes
+
+Existing code often grabs rsc->running_on->data (i.e. the first node in the
+list) as the resource's current node, and often uses
+g_list_length(rsc->running_on).
+
+However, if the resource is in the middle of a partial migration, the migration
+source should be preferred as the current node. Also, if a resource has
+"requires" set to "nothing" or "quorum", a clean, online node should be
+preferred as the current node, and a caller should ignore unclean and offline
+nodes when counting in certain cases.
+
+These functions will allow those issues to be addressed in later commits.
+---
+ include/crm/pengine/internal.h |  34 +++++++-----
+ lib/pengine/complex.c          | 121 ++++++++++++++++++++++++++++++++++++-----
+ 2 files changed, 127 insertions(+), 28 deletions(-)
+
+diff --git a/include/crm/pengine/internal.h b/include/crm/pengine/internal.h
+index e9d7582..fe8f6a1 100644
+--- a/include/crm/pengine/internal.h
++++ b/include/crm/pengine/internal.h
+@@ -1,20 +1,10 @@
+ /*
+- * Copyright (C) 2004 Andrew Beekhof <andrew@beekhof.net>
++ * Copyright 2004-2018 Andrew Beekhof <andrew@beekhof.net>
+  *
+- * This program is free software; you can redistribute it and/or
+- * modify it under the terms of the GNU Lesser General Public
+- * License as published by the Free Software Foundation; either
+- * version 2 of the License, or (at your option) any later version.
+- *
+- * This software is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+- * General Public License for more details.
+- *
+- * You should have received a copy of the GNU Lesser General Public
+- * License along with this library; if not, write to the Free Software
+- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
++ * This source code is licensed under the GNU Lesser General Public License
++ * version 2.1 or later (LGPLv2.1+) WITHOUT ANY WARRANTY.
+  */
++
+ #ifndef PE_INTERNAL__H
+ #  define PE_INTERNAL__H
+ #  include <string.h>
+@@ -125,6 +115,22 @@ int pe_get_failcount(node_t *node, resource_t *rsc, time_t *last_failure,
+                      uint32_t flags, xmlNode *xml_op,
+                      pe_working_set_t *data_set);
+ 
++
++/* Functions for finding/counting a resource's active nodes */
++
++pe_node_t *pe__find_active_on(const resource_t *rsc,
++                              unsigned int *count_all,
++                              unsigned int *count_clean);
++pe_node_t *pe__find_active_requires(const resource_t *rsc,
++                                    unsigned int *count);
++
++static inline pe_node_t *
++pe__current_node(const resource_t *rsc)
++{
++    return pe__find_active_on(rsc, NULL, NULL);
++}
++
++
+ /* Binary like operators for lists of nodes */
+ extern void node_list_exclude(GHashTable * list, GListPtr list2, gboolean merge_scores);
+ extern GListPtr node_list_dup(GListPtr list, gboolean reset, gboolean filter);
+diff --git a/lib/pengine/complex.c b/lib/pengine/complex.c
+index 86f290c..cdd409a 100644
+--- a/lib/pengine/complex.c
++++ b/lib/pengine/complex.c
+@@ -1,19 +1,8 @@
+ /*
+- * Copyright (C) 2004 Andrew Beekhof <andrew@beekhof.net>
++ * Copyright 2004-2018 Andrew Beekhof <andrew@beekhof.net>
+  *
+- * This library is free software; you can redistribute it and/or
+- * modify it under the terms of the GNU Lesser General Public
+- * License as published by the Free Software Foundation; either
+- * version 2.1 of the License, or (at your option) any later version.
+- *
+- * This library is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+- * Lesser General Public License for more details.
+- *
+- * You should have received a copy of the GNU Lesser General Public
+- * License along with this library; if not, write to the Free Software
+- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
++ * This source code is licensed under the GNU Lesser General Public License
++ * version 2.1 or later (LGPLv2.1+) WITHOUT ANY WARRANTY.
+  */
+ 
+ #include <crm_internal.h>
+@@ -981,3 +970,107 @@ common_free(resource_t * rsc)
+     free(rsc->pending_task);
+     free(rsc);
+ }
++
++/*!
++ * \brief
++ * \internal Find a node (and optionally count all) where resource is active
++ *
++ * \param[in]  rsc          Resource to check
++ * \param[out] count_all    If not NULL, will be set to count of active nodes
++ * \param[out] count_clean  If not NULL, will be set to count of clean nodes
++ *
++ * \return An active node (or NULL if resource is not active anywhere)
++ *
++ * \note The order of preference is: an active node that is the resource's
++ *       partial migration source; if the resource's "requires" is "quorum" or
++ *       "nothing", the first active node in the list that is clean and online;
++ *       the first active node in the list.
++ */
++pe_node_t *
++pe__find_active_on(const resource_t *rsc, unsigned int *count_all,
++                   unsigned int *count_clean)
++{
++    pe_node_t *active = NULL;
++    pe_node_t *node = NULL;
++    bool keep_looking = FALSE;
++    bool is_happy = FALSE;
++
++    if (count_all) {
++        *count_all = 0;
++    }
++    if (count_clean) {
++        *count_clean = 0;
++    }
++    if (rsc == NULL) {
++        return NULL;
++    }
++
++    for (GList *node_iter = rsc->running_on; node_iter != NULL;
++         node_iter = node_iter->next) {
++
++        node = node_iter->data;
++        keep_looking = FALSE;
++
++        is_happy = node->details->online && !node->details->unclean;
++
++        if (count_all) {
++            ++*count_all;
++        }
++        if (count_clean && is_happy) {
++            ++*count_clean;
++        }
++        if (count_all || count_clean) {
++            // If we're counting, we need to go through entire list
++            keep_looking = TRUE;
++        }
++
++        if (rsc->partial_migration_source != NULL) {
++            if (node->details == rsc->partial_migration_source->details) {
++                // This is the migration source
++                active = node;
++            } else {
++                keep_looking = TRUE;
++            }
++        } else if (is_not_set(rsc->flags, pe_rsc_needs_fencing)) {
++            if (is_happy && (!active || !active->details->online
++                             || active->details->unclean)) {
++                // This is the first clean node
++                active = node;
++            } else {
++                keep_looking = TRUE;
++            }
++        }
++        if (active == NULL) {
++            // This is first node in list
++            active = node;
++        }
++
++        if (keep_looking == FALSE) {
++            // Don't waste time iterating if we don't have to
++            break;
++        }
++    }
++    return active;
++}
++
++/*!
++ * \brief
++ * \internal Find and count active nodes according to "requires"
++ *
++ * \param[in]  rsc    Resource to check
++ * \param[out] count  If not NULL, will be set to count of active nodes
++ *
++ * \return An active node (or NULL if resource is not active anywhere)
++ *
++ * \note This is a convenience wrapper for pe__find_active_on() where the count
++ *       of all active nodes or only clean active nodes is desired according to
++ *       the "requires" meta-attribute.
++ */
++pe_node_t *
++pe__find_active_requires(const resource_t *rsc, unsigned int *count)
++{
++    if (rsc && is_not_set(rsc->flags, pe_rsc_needs_fencing)) {
++        return pe__find_active_on(rsc, NULL, count);
++    }
++    return pe__find_active_on(rsc, count, NULL);
++}
+-- 
+1.8.3.1
+
+
+From e752fcfa10ee68f8a8de48122ae0f73190ae30af Mon Sep 17 00:00:00 2001
+From: Ken Gaillot <kgaillot@redhat.com>
+Date: Mon, 21 May 2018 09:36:00 -0500
+Subject: [PATCH 3/3] Fix: libpe_status: find active instances properly
+ according to requires
+
+If a resource has "requires" set to "nothing" or "quorum", that means we can
+properly start it elsewhere, even if the node believed to be initially running
+the resource is unclean and waiting to be fenced.
+
+Previously, if we did start the resource elsewhere before fencing completed,
+the cluster would then consider the resource multiply active, and recover it.
+Now, we don't consider such a resource multiply active if it's active on
+only one clean node.
+
+Status displays still show the resource as started on the unclean node, to give
+the administrator a better idea of the actual situation. However, the clean
+node will be considered the "current" node.
+---
+ lib/pengine/native.c |  21 ++++++++--
+ pengine/native.c     | 107 +++++++++++++++++++++++++--------------------------
+ 2 files changed, 70 insertions(+), 58 deletions(-)
+
+diff --git a/lib/pengine/native.c b/lib/pengine/native.c
+index f6d1653..e01ef17 100644
+--- a/lib/pengine/native.c
++++ b/lib/pengine/native.c
+@@ -17,6 +17,21 @@
+ #define VARIANT_NATIVE 1
+ #include "./variant.h"
+ 
++/*!
++ * \internal
++ * \brief Check whether a resource is active on multiple nodes
++ */
++static bool
++is_multiply_active(pe_resource_t *rsc)
++{
++    unsigned int count = 0;
++
++    if (rsc->variant == pe_native) {
++        pe__find_active_requires(rsc, &count);
++    }
++    return count > 1;
++}
++
+ void
+ native_add_running(resource_t * rsc, node_t * node, pe_working_set_t * data_set)
+ {
+@@ -58,7 +73,7 @@ native_add_running(resource_t * rsc, node_t * node, pe_working_set_t * data_set)
+         return;
+     }
+ 
+-    if (rsc->variant == pe_native && g_list_length(rsc->running_on) > 1) {
++    if (is_multiply_active(rsc)) {
+         switch (rsc->recovery_type) {
+             case recovery_stop_only:
+                 {
+@@ -99,8 +114,8 @@ native_add_running(resource_t * rsc, node_t * node, pe_working_set_t * data_set)
+                 }
+                 break;
+         }
+-        crm_debug("%s is active on %d nodes including %s: %s",
+-                  rsc->id, g_list_length(rsc->running_on), node->details->uname,
++        crm_debug("%s is active on multiple nodes including %s: %s",
++                  rsc->id, node->details->uname,
+                   recovery2text(rsc->recovery_type));
+ 
+     } else {
+diff --git a/pengine/native.c b/pengine/native.c
+index e3e0c59..37ac2e4 100644
+--- a/pengine/native.c
++++ b/pengine/native.c
+@@ -1163,7 +1163,9 @@ native_create_actions(resource_t * rsc, pe_working_set_t * data_set)
+     gboolean allow_migrate = is_set(rsc->flags, pe_rsc_allow_migrate) ? TRUE : FALSE;
+ 
+     GListPtr gIter = NULL;
+-    int num_active_nodes = 0;
++    unsigned int num_all_active = 0;
++    unsigned int num_clean_active = 0;
++    bool multiply_active = FALSE;
+     enum rsc_role_e role = RSC_ROLE_UNKNOWN;
+     enum rsc_role_e next_role = RSC_ROLE_UNKNOWN;
+ 
+@@ -1181,18 +1183,7 @@ native_create_actions(resource_t * rsc, pe_working_set_t * data_set)
+     pe_rsc_trace(rsc, "Processing state transition for %s %p: %s->%s", rsc->id, rsc,
+                  role2text(rsc->role), role2text(rsc->next_role));
+ 
+-    if (rsc->running_on) {
+-        current = rsc->running_on->data;
+-    }
+-
+-    for (gIter = rsc->running_on; gIter != NULL; gIter = gIter->next) {
+-        node_t *n = (node_t *) gIter->data;
+-        if (rsc->partial_migration_source &&
+-            (n->details == rsc->partial_migration_source->details)) {
+-            current = rsc->partial_migration_source;
+-        }
+-        num_active_nodes++;
+-    }
++    current = pe__find_active_on(rsc, &num_all_active, &num_clean_active);
+ 
+     for (gIter = rsc->dangling_migrations; gIter != NULL; gIter = gIter->next) {
+         node_t *current = (node_t *) gIter->data;
+@@ -1207,47 +1198,57 @@ native_create_actions(resource_t * rsc, pe_working_set_t * data_set)
+         }
+     }
+ 
+-    if (num_active_nodes > 1) {
++    if ((num_all_active == 2) && (num_clean_active == 2) && chosen
++        && rsc->partial_migration_source && rsc->partial_migration_target
++        && (current->details == rsc->partial_migration_source->details)
++        && (chosen->details == rsc->partial_migration_target->details)) {
+ 
+-        if (num_active_nodes == 2
+-            && chosen
+-            && rsc->partial_migration_target
+-            && rsc->partial_migration_source
+-            && (current->details == rsc->partial_migration_source->details)
+-            && (chosen->details == rsc->partial_migration_target->details)) {
+-            /* Here the chosen node is still the migration target from a partial
+-             * migration. Attempt to continue the migration instead of recovering
+-             * by stopping the resource everywhere and starting it on a single node. */
+-            pe_rsc_trace(rsc,
+-                         "Will attempt to continue with a partial migration to target %s from %s",
+-                         rsc->partial_migration_target->details->id,
+-                         rsc->partial_migration_source->details->id);
+-        } else {
+-            const char *type = crm_element_value(rsc->xml, XML_ATTR_TYPE);
+-            const char *class = crm_element_value(rsc->xml, XML_AGENT_ATTR_CLASS);
++        /* The chosen node is still the migration target from a partial
++         * migration. Attempt to continue the migration instead of recovering
++         * by stopping the resource everywhere and starting it on a single node.
++         */
++        pe_rsc_trace(rsc,
++                     "Will attempt to continue with a partial migration to target %s from %s",
++                     rsc->partial_migration_target->details->id,
++                     rsc->partial_migration_source->details->id);
++
++    } else if (is_not_set(rsc->flags, pe_rsc_needs_fencing)) {
++        /* If a resource has "requires" set to nothing or quorum, don't consider
++         * it active on unclean nodes (similar to how all resources behave when
++         * stonith-enabled is false). We can start such resources elsewhere
++         * before fencing completes, and if we considered the resource active on
++         * the failed node, we would attempt recovery for being active on
++         * multiple nodes.
++         */
++        multiply_active = (num_clean_active > 1);
++    } else {
++        multiply_active = (num_all_active > 1);
++    }
+ 
+-            if(rsc->partial_migration_target && rsc->partial_migration_source) {
+-                crm_notice("Resource %s can no longer migrate to %s. Stopping on %s too", rsc->id,
+-                           rsc->partial_migration_target->details->uname,
+-                           rsc->partial_migration_source->details->uname);
++    if (multiply_active) {
++        if (rsc->partial_migration_target && rsc->partial_migration_source) {
++            // Migration was in progress, but we've chosen a different target
++            crm_notice("Resource %s can no longer migrate to %s. Stopping on %s too",
++                       rsc->id, rsc->partial_migration_target->details->uname,
++                       rsc->partial_migration_source->details->uname);
+ 
+-            } else {
+-                pe_proc_err("Resource %s (%s::%s) is active on %d nodes %s",
+-                            rsc->id, class, type, num_active_nodes, recovery2text(rsc->recovery_type));
+-                crm_warn("See %s for more information.",
+-                         "http://clusterlabs.org/wiki/FAQ#Resource_is_Too_Active");
+-            }
+-
+-            if (rsc->recovery_type == recovery_stop_start) {
+-                need_stop = TRUE;
+-            }
++        } else {
++            // Resource was incorrectly multiply active
++            pe_proc_err("Resource %s is active on %u nodes (%s)",
++                        rsc->id, num_all_active,
++                        recovery2text(rsc->recovery_type));
++            crm_notice("See https://wiki.clusterlabs.org/wiki/FAQ#Resource_is_Too_Active for more information");
++        }
+ 
+-            /* If by chance a partial migration is in process,
+-             * but the migration target is not chosen still, clear all
+-             * partial migration data.  */
+-            rsc->partial_migration_source = rsc->partial_migration_target = NULL;
+-            allow_migrate = FALSE;
++        if (rsc->recovery_type == recovery_stop_start) {
++            need_stop = TRUE;
+         }
++
++        /* If by chance a partial migration is in process, but the migration
++         * target is not chosen still, clear all partial migration data.
++         */
++        rsc->partial_migration_source = rsc->partial_migration_target = NULL;
++        allow_migrate = FALSE;
+     }
+ 
+     if (is_set(rsc->flags, pe_rsc_start_pending)) {
+@@ -1339,7 +1341,7 @@ native_create_actions(resource_t * rsc, pe_working_set_t * data_set)
+                is_not_set(rsc->flags, pe_rsc_managed) ||
+                is_set(rsc->flags, pe_rsc_failed) ||
+                is_set(rsc->flags, pe_rsc_start_pending) ||
+-               (current->details->unclean == TRUE) ||
++               (current && current->details->unclean) ||
+                rsc->next_role < RSC_ROLE_STARTED) {
+ 
+         allow_migrate = FALSE;
+@@ -2329,12 +2331,7 @@ LogActions(resource_t * rsc, pe_working_set_t * data_set, gboolean terminal)
+ 
+     next = rsc->allocated_to;
+     if (rsc->running_on) {
+-        if (g_list_length(rsc->running_on) > 1 && rsc->partial_migration_source) {
+-            current = rsc->partial_migration_source;
+-        } else {
+-            current = rsc->running_on->data;
+-        }
+-
++        current = pe__current_node(rsc);
+         if (rsc->role == RSC_ROLE_STOPPED) {
+             /*
+              * This can occur when resources are being recovered
+-- 
+1.8.3.1
+
