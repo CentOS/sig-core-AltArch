@@ -54,7 +54,7 @@ Summary: The Linux kernel
 %if 0%{?released_kernel}
 
 # Do we have a -stable update to apply?
-%define stable_update 43
+%define stable_update 52
 # Set rpm version accordingly
 %if 0%{?stable_update}
 %define stablerev %{stable_update}
@@ -638,7 +638,7 @@ Patch619: input-rmi4-remove-the-need-for-artifical-IRQ.patch
 Patch621: drm-i915-Boost-GPU-clocks-if-we-miss-the-pageflip-s-vblank.patch
 
 # rhbz 1509461
-Patch625: v3-2-2-Input-synaptics---Lenovo-X1-Carbon-5-should-use-SMBUS-RMI.patch
+#Patch625: v3-2-2-Input-synaptics---Lenovo-X1-Carbon-5-should-use-SMBUS-RMI.patch
 
 # Fixes for QXL issues
 #Patch627: qxl-fixes.patch
@@ -2240,6 +2240,10 @@ fi
 #
 #
 %changelog
+* Thu Jun 28 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.52-201
+- Remove upstream Patches no longer needed
+- Rebase to LTS 4.14.51
+
 * Fri May 25 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.43-201
 - Remove upstream Patches no longer needed
 - Rebase to LTS 4.14.43
