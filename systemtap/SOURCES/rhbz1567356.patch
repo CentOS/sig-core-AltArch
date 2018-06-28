@@ -1,0 +1,272 @@
+commit 553b6df07c9b7ab30ed468a6a4374cbdf73d1c0d
+Author: Mark Wielaard <mark@klomp.org>
+Date:   Tue Apr 17 14:36:13 2018 +0200
+
+    linux runtime: Add support for new kernel unwind fallback.
+    
+    In newer kernels dump_trace got replaced by a new unwind infrastructure.
+    Add a new autoconf-unwind-stack-trace.c to detect whether we can use it.
+    Extend the runtime/stack.c _stp_stack_print_fallback with a new pt_regs*
+    argument. Update all callers and add dbug_unwind output to show which
+    fallback unwinder we are selecting (or if we are just giving up).
+    Rename the struct unwind_state in unwind.c and unwind.h to uw_state
+    because the old name now conflicts with the one used in the kernel.
+
+diff --git a/buildrun.cxx b/buildrun.cxx
+index 403fa71..59b9e88 100644
+--- a/buildrun.cxx
++++ b/buildrun.cxx
+@@ -365,6 +365,8 @@ compile_pass (systemtap_session& s)
+                   "STAPCONF_KERNEL_STACKTRACE", NULL);
+   output_autoconf(s, o, "autoconf-save-stack-trace-no-bp.c",
+                   "STAPCONF_KERNEL_STACKTRACE_NO_BP", NULL);
++  output_autoconf(s, o, "autoconf-unwind-stack-trace.c",
++                  "STAPCONF_KERNEL_UNWIND_STACK", NULL);
+   output_autoconf(s, o, "autoconf-asm-syscall.c",
+ 		  "STAPCONF_ASM_SYSCALL_H", NULL);
+   output_autoconf(s, o, "autoconf-ring_buffer-flags.c", "STAPCONF_RING_BUFFER_FLAGS", NULL);
+diff --git a/runtime/linux/autoconf-unwind-stack-trace.c b/runtime/linux/autoconf-unwind-stack-trace.c
+new file mode 100644
+index 0000000..2ec399e
+--- /dev/null
++++ b/runtime/linux/autoconf-unwind-stack-trace.c
+@@ -0,0 +1,16 @@
++#include <linux/sched.h>
++#include <asm/unwind.h>
++
++void unwind_stack_trace (void)
++{
++  struct unwind_state state;
++  unwind_start (&state, current, 0, 0);
++  while (! unwind_done (&state))
++    {
++      unsigned long addr = unwind_get_return_address (&state);
++      if (addr == 0)
++	break;
++      unwind_next_frame (&state);
++    }
++}
++
+diff --git a/runtime/stack.c b/runtime/stack.c
+index c9d2c0c..43f98ef 100644
+--- a/runtime/stack.c
++++ b/runtime/stack.c
+@@ -43,7 +43,11 @@
+ #include <asm/stacktrace.h>
+ #endif
+ 
+-static void _stp_stack_print_fallback(unsigned long, int, int, int);
++#if defined(STAPCONF_KERNEL_UNWIND_STACK)
++#include <asm/unwind.h>
++#endif
++
++static void _stp_stack_print_fallback(unsigned long, struct pt_regs*, int, int, int);
+ 
+ #ifdef STP_USE_DWARF_UNWINDER
+ #ifdef STAPCONF_LINUX_UACCESS_H
+@@ -128,7 +132,7 @@ static const struct stacktrace_ops print_stack_ops = {
+ };
+ 
+ /* Used for kernel backtrace printing when other mechanisms fail. */
+-static void _stp_stack_print_fallback(unsigned long stack,
++static void _stp_stack_print_fallback(unsigned long stack, struct pt_regs *regs,
+ 				      int sym_flags, int levels, int skip)
+ {
+         struct print_stack_data print_data;
+@@ -136,20 +140,55 @@ static void _stp_stack_print_fallback(unsigned long stack,
+         print_data.levels = levels;
+         print_data.skip = skip;
+ #if defined(STAPCONF_KERNEL_STACKTRACE)
++        dbug_unwind(1, "fallback kernel stacktrace\n");
+         dump_trace(current, NULL, (long *)stack, 0, &print_stack_ops,
+                    &print_data);
+ #else
+ 	/* STAPCONF_KERNEL_STACKTRACE_NO_BP */
++        dbug_unwind(1, "fallback kernel stacktrace (no bp)\n");
+         dump_trace(current, NULL, (long *)stack, &print_stack_ops,
+                    &print_data);
+ #endif
+ }
+ #else
+-static void _stp_stack_print_fallback(unsigned long s, int v, int l, int k) {
++#if defined(STAPCONF_KERNEL_UNWIND_STACK)
++static void _stp_stack_print_fallback(unsigned long sp, struct pt_regs *regs,
++				      int sym_flags,
++				      int levels, int skip) {
++	struct unwind_state state;
++	unwind_start (&state, current, regs, (unsigned long *) sp);
++	dbug_unwind(1, "fallback kernel stacktrace (unwind)\n");
++	while (levels > 0 && ! unwind_done (&state))
++	  {
++	    if (skip == 0)
++	      {
++		unsigned long addr = unwind_get_return_address (&state);
++		/* When we have frame pointers, the unwind addresses can be
++		   (mostly) trusted, otherwise it is all guesswork.  */
++#ifdef CONFIG_FRAME_POINTER
++		_stp_print_addr(addr, sym_flags, NULL);
++#else
++		_stp_print_addr(addr, sym_flags | _STP_SYM_INEXACT, NULL);
++#endif
++		if (addr == 0)
++		  break;
++		levels--;
++	      }
++	    else
++	      {
++		dbug_unwind(1, "skipping frame\n");
++	        skip--;
++	      }
++	    unwind_next_frame(&state);
++	  }
++}
++#else /* no new unwind */
++static void _stp_stack_print_fallback(unsigned long s, struct pt_regs *r, int v, int l, int k) {
+ 	/* Don't guess, just give up. */
++        dbug_unwind(1, "no fallback kernel stacktrace (giving up)\n");
+ 	_stp_print_addr(0, v | _STP_SYM_INEXACT, NULL);
+ }
+-
++#endif /* new unwind */
+ #endif /* defined(STAPCONF_KERNEL_STACKTRACE) || defined(STAPCONF_KERNEL_STACKTRACE_NO_BP) */
+ 
+ 
+@@ -382,6 +421,7 @@ static void _stp_stack_kernel_print(struct context *c, int sym_flags)
+ 		if (l == 0) {
+ 			remaining = MAXBACKTRACE - n;
+ 			_stp_stack_print_fallback(UNW_SP(&c->uwcontext_kernel.info),
++						  &c->uwcontext_kernel.info.regs,
+ 						  sym_flags, remaining, 0);
+ 			break;
+ 		} else {
+@@ -408,7 +448,7 @@ static void _stp_stack_kernel_print(struct context *c, int sym_flags)
+ 		sp = 0;
+ 		skip = 5; /* yes, that many framework frames. */
+ #endif
+-		_stp_stack_print_fallback(sp, sym_flags,
++		_stp_stack_print_fallback(sp, NULL, sym_flags,
+ 					  MAXBACKTRACE, skip);
+ #else
+ 		if (sym_flags & _STP_SYM_SYMBOL)
+diff --git a/runtime/unwind.c b/runtime/unwind.c
+index ec7cd58..3a2d991 100644
+--- a/runtime/unwind.c
++++ b/runtime/unwind.c
+@@ -235,7 +235,7 @@ static int parse_fde_cie(const u32 *fde, const u32 *cie,
+ 
+ #define REG_STATE state->reg[state->stackDepth]
+ 
+-static int advance_loc(unsigned long delta, struct unwind_state *state)
++static int advance_loc(unsigned long delta, struct uw_state *state)
+ {
+ 	state->loc += delta * state->codeAlign;
+ 	dbug_unwind(1, "state->loc=%lx\n", state->loc);
+@@ -244,7 +244,7 @@ static int advance_loc(unsigned long delta, struct unwind_state *state)
+ 
+ /* Set Same or Nowhere rule for register. */
+ static void set_no_state_rule(uleb128_t reg, enum item_location where,
+-                              struct unwind_state *state)
++                              struct uw_state *state)
+ {
+ 	dbug_unwind(1, "reg=%lx, where=%d\n", reg, where);
+ 	if (reg < ARRAY_SIZE(REG_STATE.regs)) {
+@@ -254,7 +254,7 @@ static void set_no_state_rule(uleb128_t reg, enum item_location where,
+ 
+ /* Memory or Value rule */
+ static void set_offset_rule(uleb128_t reg, enum item_location where,
+-                            sleb128_t svalue, struct unwind_state *state)
++                            sleb128_t svalue, struct uw_state *state)
+ {
+ 	dbug_unwind(1, "reg=%lx, where=%d, svalue=%lx\n", reg, where, svalue);
+ 	if (reg < ARRAY_SIZE(REG_STATE.regs)) {
+@@ -265,7 +265,7 @@ static void set_offset_rule(uleb128_t reg, enum item_location where,
+ 
+ /* Register rule. */
+ static void set_register_rule(uleb128_t reg, uleb128_t value,
+-                              struct unwind_state *state)
++                              struct uw_state *state)
+ {
+ 	dbug_unwind(1, "reg=%lx, value=%lx\n", reg, value);
+ 	if (reg < ARRAY_SIZE(REG_STATE.regs)) {
+@@ -277,7 +277,7 @@ static void set_register_rule(uleb128_t reg, uleb128_t value,
+ /* Expr or ValExpr rule. */
+ static void set_expr_rule(uleb128_t reg, enum item_location where,
+ 			  const u8 **expr, const u8 *end,
+-			  struct unwind_state *state)
++			  struct uw_state *state)
+ {
+ 	const u8 *const start = *expr;
+ 	uleb128_t len = get_uleb128(expr, end);
+@@ -296,7 +296,7 @@ static void set_expr_rule(uleb128_t reg, enum item_location where,
+ #define MAX_CFI 512
+ 
+ static int processCFI(const u8 *start, const u8 *end, unsigned long targetLoc,
+-		      signed ptrType, int user, struct unwind_state *state, int compat_task)
++		      signed ptrType, int user, struct uw_state *state, int compat_task)
+ {
+ 	union {
+ 		const u8 *p8;
+@@ -1169,7 +1169,7 @@ static int unwind_frame(struct unwind_context *context,
+ 	unsigned i;
+ 	signed ptrType = -1, call_frame = 1;
+ 	uleb128_t retAddrReg = 0;
+-	struct unwind_state *state = &context->state;
++	struct uw_state *state = &context->state;
+ 	unsigned long addr;
+ 
+ 	if (unlikely(table_len == 0)) {
+diff --git a/runtime/unwind/unwind.h b/runtime/unwind/unwind.h
+index 9d66732..b3ff786 100644
+--- a/runtime/unwind/unwind.h
++++ b/runtime/unwind/unwind.h
+@@ -492,7 +492,7 @@ struct unwind_reg_state {
+ 	unsigned cfa_is_expr:1;
+ };
+ 
+-struct unwind_state {
++struct uw_state {
+ 	uleb128_t loc;
+ 	uleb128_t codeAlign;
+ 	sleb128_t dataAlign;
+@@ -503,7 +503,7 @@ struct unwind_state {
+ 
+ struct unwind_context {
+     struct unwind_frame_info info;
+-    struct unwind_state state;
++    struct uw_state state;
+ };
+ 
+ static const struct cfa badCFA = { ARRAY_SIZE(reg_info), 1 };
+
+commit 17ee540dd61113fe4f557f191db3480db875cca1
+Author: Mark Wielaard <mark@klomp.org>
+Date:   Wed Apr 18 15:00:24 2018 +0200
+
+    Make kernel DWARF unwinder work with ksalr.
+    
+    The .debug_frame loaded from disk is already relocated against the
+    expected load offset of the kernel, but the actual static (load)
+    address might be different (with kaslr). So adjust the startLoc
+    for that difference when reading any address from the unwind table.
+
+diff --git a/runtime/unwind.c b/runtime/unwind.c
+index 3a2d991..4c360d2 100644
+--- a/runtime/unwind.c
++++ b/runtime/unwind.c
+@@ -724,10 +724,15 @@ adjustStartLoc (unsigned long startLoc,
+   dbug_unwind(2, "adjustStartLoc=%lx, ptrType=%s, m=%s, s=%s eh=%d\n",
+ 	      startLoc, _stp_eh_enc_name(ptrType), m->path, s->name, is_ehframe);
+   if (startLoc == 0
+-      || strcmp (m->name, "kernel")  == 0
+       || (strcmp (s->name, ".absolute") == 0 && !is_ehframe))
+     return startLoc;
+ 
++  /* The .debug_frame loaded from disk is already relocated against the
++     expected load offset of the kernel, but the actual static (load)
++     address might be different (with kaslr).  */
++  if (strcmp (m->name, "kernel") == 0)
++    return startLoc - s->sec_load_offset + s->static_addr;
++
+   /* eh_frame data has been loaded in the kernel, so readjust offset. */
+   if (is_ehframe) {
+     dbug_unwind(2, "eh_frame=%lx, eh_frame_addr=%lx\n", (unsigned long) m->eh_frame, m->eh_frame_addr);

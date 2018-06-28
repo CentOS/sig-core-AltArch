@@ -18,7 +18,7 @@
 %else
 %{!?with_dyninst: %global with_dyninst 0}
 %endif
-%ifarch aarch64 %{arm}
+%ifarch aarch64
 # aarch64 rhel7 kernel is new enough to have linux/bpf.h
 %{!?with_bpf: %global with_bpf 0%{?fedora} >= 22 || 0%{?rhel} >= 7}
 %else
@@ -79,13 +79,17 @@
 
 Name: systemtap
 Version: 3.2
-Release: 4%{?dist}
+Release: 8%{?dist}
 # for version, see also configure.ac
 
 Patch10: rhbz1504009.patch
 Patch11: rhbz1506230.patch
 Patch12: rhbz1490862.patch
 Patch13: rhbz1527809.patch
+Patch14: rhbz1558350.patch
+Patch15: rhbz1567356.patch
+Patch16: rhbz1566422.patch
+Patch17: rhbz1563052.patch
 
 # Packaging abstract:
 #
@@ -492,6 +496,10 @@ cd ..
 %patch11 -p1
 %patch12 -p1
 %patch13 -p1
+%patch14 -p1
+%patch15 -p1
+%patch16 -p1
+%patch17 -p1
 
 %build
 
@@ -1172,8 +1180,17 @@ done
 
 # PRERELEASE
 %changelog
-* Mon Apr 16 2018 Fabian Arrotin <arrfab@centos.org> - 3.2-7
-- added %{arm} for armhfp inclusion for "with_bpf" parameter
+* Tue Apr 24 2018 Frank Ch. Eigler <fche@redhat.com> - 3.2-8
+- rhbz1563052 (stp_deref string truncation off-by-one error)
+
+* Tue Apr 24 2018 Frank Ch. Eigler <fche@redhat.com> - 3.2-7
+- rhbz1566422 (module build-id checking broken on unload)
+
+* Tue Apr 24 2018 Frank Ch. Eigler <fche@redhat.com> - 3.2-6
+- rhbz1567356 (backtraces broken w/ kaslr)
+
+* Tue Apr 24 2018 Frank Ch. Eigler <fche@redhat.com> - 3.2-5
+- rhbz1558350 (nfsd.proc.create typo fix)
 
 * Mon Jan 29 2018 Frank Ch. Eigler <fche@redhat.com> - 3.2-4
 - rhbz1527809 (staprun detach with SIGQUIT)
