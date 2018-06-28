@@ -1,0 +1,46 @@
+commit db9c9d6e30c6cfd7b85475b5c79ee2cc51201934
+Author: Serhei Makarov <smakarov@redhat.com>
+Date:   Tue Apr 17 11:35:00 2018 -0400
+
+    RHBZ1566422 - fix spurious Build-id mismatch when probing reinserted kernel module
+    
+    Code for newer kernels did not clear the address of the notes-section
+    when a probed module was unloaded. This caused spurious Build-id mismatch
+    when the module was reinserted as new addresses are not computed for
+    dynamically loaded modules (see also: PR23068) and the Build-id check
+    was trying to read the notes section at the no-longer-valid old address.
+    
+    * runtime/sym.c (_stp_module_notifier): clear addresses on
+    MODULE_STATE_GOING in newer kernels (>=3.10) too.
+    * runtime/transport/symbols.c (_stp_kmodule_update_address): fix logic
+    error and clear notes section addr when reloc=NULL (aka. 'all').
+
+diff --git a/runtime/sym.c b/runtime/sym.c
+index c11a35a..b6e0fd6 100644
+--- a/runtime/sym.c
++++ b/runtime/sym.c
+@@ -1045,7 +1045,7 @@ static void _stp_kmodule_update_address(const char* module,
+       if (strcmp (_stp_modules[mi]->name, module))
+         continue;
+ 
+-      if (reloc && !strcmp (note_sectname, reloc)) {
++      if (!reloc || !strcmp (note_sectname, reloc)) {
+         dbug_sym(1, "module %s special section %s address %#lx\n",
+                  _stp_modules[mi]->name,
+                  note_sectname,
+diff --git a/runtime/transport/symbols.c b/runtime/transport/symbols.c
+index 64c2aeb..076c562 100644
+--- a/runtime/transport/symbols.c
++++ b/runtime/transport/symbols.c
+@@ -167,6 +167,11 @@ static int _stp_module_notifier (struct notifier_block * nb,
+ 		/* Verify build-id. */
+ 		_stp_kmodule_check (mod->name);
+         }
++        else if (val == MODULE_STATE_GOING) {
++		/* Unregister all sections. */
++		dbug_sym(2, "unregister sections\n");
++		_stp_kmodule_update_address(mod->name, NULL, 0);
++        }
+         else if (val != MODULE_STATE_GOING) {
+ 		return NOTIFY_DONE;
+         }

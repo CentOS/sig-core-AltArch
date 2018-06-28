@@ -1,0 +1,60 @@
+commit 3b2cf9012d600bf61aaeff855e9dc95200859b1d
+Author: Serhei Makarov <smakarov@redhat.com>
+Date:   Tue Apr 10 14:40:19 2018 -0400
+
+    RHBZ1563052: fix off-by-one error in loc2c-runtime.h
+    
+    The new version of kderef_string (added along with the new eBPF
+    runtime) copies an additional character compared to the old version.
+    
+    * runtime/linux/loc2c-runtime.h (_stp_deref_string_nofault): reduce len by 1 to leave room for NUL terminator.
+    * testsuite/systemtap.base/set_kernel.stp: testcase for this bug.
+
+diff --git a/runtime/linux/loc2c-runtime.h b/runtime/linux/loc2c-runtime.h
+index 39dece0..fd736bd 100644
+--- a/runtime/linux/loc2c-runtime.h
++++ b/runtime/linux/loc2c-runtime.h
+@@ -722,7 +722,7 @@ static inline char *kderef_buffer_(char *dst, void *addr, size_t len)
+  *
+  * dst: read the string into this address
+  * addr: address to read from
+- * len: maximum number of bytes to read
++ * len: maximum number of bytes to store in dst, including the trailing NUL
+  * seg: memory segment to use, either kernel (KERNEL_DS) or user
+  * (USER_DS)
+  * 
+@@ -745,7 +745,8 @@ static inline long _stp_deref_string_nofault(char *dst, const char *addr,
+     err = 1;
+   else
+     {
+-      for (i = 0; i < len; ++i)
++      /* Reduce len by 1 to leave room for '\0' terminator. */
++      for (i = 0; i + 1 < len; ++i)
+ 	{
+ 	  u8 v;
+ 	  err = __stp_get_user(v, (u8 *)addr + i);
+diff --git a/testsuite/systemtap.base/set_kernel.stp b/testsuite/systemtap.base/set_kernel.stp
+index 729b477..dc93582 100644
+--- a/testsuite/systemtap.base/set_kernel.stp
++++ b/testsuite/systemtap.base/set_kernel.stp
+@@ -62,6 +62,20 @@ probe end(1)
+         assert_not_reached(test)
+     } catch {}
+ 
++    /* Be sure to also test in the other direction: */
++    test = "kernel_string_n"
++    addr = get_buffer()
++    if (assert_string(test, "", kernel_string_n(addr, 0))) {
++        set_kernel_string_n(addr, 7, "potatoe")
++        if (assert_string(test, "potatoe", kernel_string_n(addr, 7))) {
++            assert_string(test, "potato", kernel_string_n(addr, 6))
++        }
++    }
++    try {
++        println(kernel_string_n(-1, 10))
++        assert_not_reached(test)
++    } catch {}
++
+     test = "set_kernel_long"
+     addr = get_buffer()
+     long_val = %( CONFIG_64BIT == "y" %? 0x123456789ABCDEF0 %: 0x12345678 %)
