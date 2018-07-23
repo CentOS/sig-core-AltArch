@@ -1,15 +1,15 @@
-Remove unnecessary .gnu_debuglink sections from libjvm
+# HG changeset patch
+# User sgehwolf
+# Date 1530808022 -7200
+#      Thu Jul 05 18:27:02 2018 +0200
+# Node ID 5ba59d58d976db456c4455640111e8107b8d80e8
+# Parent  ad057f2e3211cd18bc56550d8a2c400d92ec35b1
+8206425: .gnu_debuglink sections added unconditionally when no debuginfo is stripped
+Summary: Only add .gnu_debuglink sections when there is some stripping done.
+Reviewed-by: erikj, dholmes
 
-The .gnu_debuglink section indicates which file contains the debuginfo. This
-is not needed if we not stripping the shared object.
-
-RPM's debuginfo extraction code will add the right file links automatically. As
-it is, RPM copies over the .gnu_debuglink link to the debug info file. Without
-this patch, the debug info file also ends up containing the .gnu_debuglink
-section pointing to a missing (and not needed) file.
-
-diff --git a/make/linux/makefiles/jsig.make b/make/linux/makefiles/jsig.make
---- openjdk/hotspot/make/linux/makefiles/jsig.make
+diff --git openjdk.orig/hotspot/make/linux/makefiles/jsig.make openjdk/hotspot/make/linux/makefiles/jsig.make
+--- openjdk.orig/hotspot/make/linux/makefiles/jsig.make
 +++ openjdk/hotspot/make/linux/makefiles/jsig.make
 @@ -57,14 +57,15 @@
                           $(LFLAGS_JSIG) $(JSIG_DEBUG_CFLAGS) $(EXTRA_CFLAGS) -o $@ $< -ldl
@@ -29,10 +29,10 @@ diff --git a/make/linux/makefiles/jsig.make b/make/linux/makefiles/jsig.make
    endif
    ifeq ($(ZIP_DEBUGINFO_FILES),1)
  	$(ZIPEXE) -q -y $(LIBJSIG_DIZ) $(LIBJSIG_DEBUGINFO)
-diff --git a/make/linux/makefiles/saproc.make b/make/linux/makefiles/saproc.make
---- openjdk/hotspot/make/linux/makefiles/saproc.make
+diff --git openjdk.orig/hotspot/make/linux/makefiles/saproc.make openjdk/hotspot/make/linux/makefiles/saproc.make
+--- openjdk.orig/hotspot/make/linux/makefiles/saproc.make
 +++ openjdk/hotspot/make/linux/makefiles/saproc.make
-@@ -99,14 +99,15 @@
+@@ -100,14 +100,15 @@
  	           -lthread_db
  ifeq ($(ENABLE_FULL_DEBUG_SYMBOLS),1)
  	$(QUIETLY) $(OBJCOPY) --only-keep-debug $@ $(LIBSAPROC_DEBUGINFO)
@@ -50,21 +50,21 @@ diff --git a/make/linux/makefiles/saproc.make b/make/linux/makefiles/saproc.make
    endif
    ifeq ($(ZIP_DEBUGINFO_FILES),1)
  	$(ZIPEXE) -q -y $(LIBSAPROC_DIZ) $(LIBSAPROC_DEBUGINFO)
-diff --git a/make/linux/makefiles/vm.make b/make/linux/makefiles/vm.make
---- openjdk/hotspot/make/linux/makefiles/vm.make
+diff --git openjdk.orig/hotspot/make/linux/makefiles/vm.make openjdk/hotspot/make/linux/makefiles/vm.make
+--- openjdk.orig/hotspot/make/linux/makefiles/vm.make
 +++ openjdk/hotspot/make/linux/makefiles/vm.make
 @@ -358,14 +358,15 @@
  
  ifeq ($(ENABLE_FULL_DEBUG_SYMBOLS),1)
  	$(QUIETLY) $(OBJCOPY) --only-keep-debug $@ $(LIBJVM_DEBUGINFO)
--	$(QUIETLY) $(OBJCOPY) --add-gnu-debuglink=$(LIBJVM_DEBUGINFO) $@
-   ifeq ($(STRIP_POLICY),all_strip)
++  ifeq ($(STRIP_POLICY),all_strip)
+ 	$(QUIETLY) $(OBJCOPY) --add-gnu-debuglink=$(LIBJVM_DEBUGINFO) $@
+-  ifeq ($(STRIP_POLICY),all_strip)
  	$(QUIETLY) $(STRIP) $@
-+	$(QUIETLY) $(OBJCOPY) --add-gnu-debuglink=$(LIBJVM_DEBUGINFO) $@
    else
      ifeq ($(STRIP_POLICY),min_strip)
- 	$(QUIETLY) $(STRIP) -g $@
 +	$(QUIETLY) $(OBJCOPY) --add-gnu-debuglink=$(LIBJVM_DEBUGINFO) $@
+ 	$(QUIETLY) $(STRIP) -g $@
 +    endif
      # implied else here is no stripping at all
 -    endif
