@@ -66,21 +66,14 @@
 %endif
 
 
-%ifarch %{aarch64}
-# Disable hardened build on AArch64 as it didn't bootcycle
-%undefine _hardened_build
-%global ourcppflags "-fstack-protector-strong"
-%global ourldflags %{nil}
-%else
 # Filter out flags from the optflags macro that cause problems with the OpenJDK build
 # We filter out -O flags so that the optimisation of HotSpot is not lowered from O3 to O2
 # We filter out -Wall which will otherwise cause HotSpot to produce hundreds of thousands of warnings (100+mb logs)
 # We replace it with -Wformat (required by -Werror=format-security) and -Wno-cpp to avoid FORTIFY_SOURCE warnings
 # We filter out -fexceptions as the HotSpot build explicitly does -fno-exceptions and it's otherwise the default for C++
 %global ourflags %(echo %optflags | sed -e 's|-Wall|-Wformat -Wno-cpp|' | sed -r -e 's|-O[0-9]*||')
-%global ourcppflags %(echo %ourflags | sed -e 's|-fexceptions||') "-fstack-protector-strong"
+%global ourcppflags %(echo %ourflags | sed -e 's|-fexceptions||')
 %global ourldflags %{__global_ldflags}
-%endif
 
 # With diabled nss is NSS deactivated, so in NSS_LIBDIR can be wrong path
 # the initialisation must be here. LAter the pkg-connfig have bugy behaviour
@@ -97,8 +90,13 @@
 %global NSS_BUILDTIME_VERSION %(if [ "x%{NSS_BUILDTIME_NUMBER}" == "x" ] ; then echo "" ;else echo ">= %{NSS_BUILDTIME_NUMBER}" ;fi)
 
 
-# fix for https://bugzilla.redhat.com/show_bug.cgi?id=1111349
-%global _privatelibs libmawt[.]so.*
+# Fix for https://bugzilla.redhat.com/show_bug.cgi?id=1111349.
+# See also https://bugzilla.redhat.com/show_bug.cgi?id=1590796
+# as to why some libraries *cannot* be excluded. In particular,
+# these are:
+# libjsig.so, libjava.so, libjawt.so, libjvm.so and libverify.so
+%global _privatelibs libatk-wrapper[.]so.*|libattach[.]so.*|libawt_headless[.]so.*|libawt[.]so.*|libawt_xawt[.]so.*|libdt_socket[.]so.*|libfontmanager[.]so.*|libhprof[.]so.*|libinstrument[.]so.*|libj2gss[.]so.*|libj2pcsc[.]so.*|libj2pkcs11[.]so.*|libjaas_unix[.]so.*|libjava_crw_demo[.]so.*|libjavajpeg[.]so.*|libjdwp[.]so.*|libjli[.]so.*|libjsdt[.]so.*|libjsoundalsa[.]so.*|libjsound[.]so.*|liblcms[.]so.*|libmanagement[.]so.*|libmlib_image[.]so.*|libnet[.]so.*|libnio[.]so.*|libnpt[.]so.*|libsaproc[.]so.*|libsctp[.]so.*|libsplashscreen[.]so.*|libsunec[.]so.*|libunpack[.]so.*|libzip[.]so.*|lib[.]so\\(SUNWprivate_.*
+
 %global __provides_exclude ^(%{_privatelibs})$
 %global __requires_exclude ^(%{_privatelibs})$
 
@@ -175,13 +173,14 @@
 
 # Standard JPackage naming and versioning defines.
 %global origin          openjdk
+%global top_level_dir_name   %{origin}
 # note, following three variables are sedded from update_sources if used correctly. Hardcode them rather there.
 %global project         aarch64-port
 %global repo            jdk8u
-%global revision        aarch64-jdk8u171-b10
+%global revision        aarch64-jdk8u181-b13
 %global shenandoah_project	aarch64-port
 %global shenandoah_repo		jdk8u-shenandoah
-%global shenandoah_revision    	aarch64-shenandoah-jdk8u171-b10
+%global shenandoah_revision    	aarch64-shenandoah-jdk8u181-b13
 
 # eg # jdk8u60-b27 -> jdk8u60 or # aarch64-jdk8u60-b27 -> aarch64-jdk8u60  (dont forget spec escape % by %%)
 %global whole_update    %(VERSION=%{revision}; echo ${VERSION%%-*})
@@ -199,7 +198,7 @@
 #images stub
 %global j2sdkimage       j2sdk-image
 # output dir stub
-%global buildoutputdir() %{expand:openjdk/build/jdk8.build%1}
+%global buildoutputdir() %{expand:%{top_level_dir_name}/build/jdk8.build%1}
 #we can copy the javadoc to not arched dir, or made it not noarch
 %global uniquejavadocdir()    %{expand:%{fullversion}%1}
 #main id and dir of this jdk
@@ -527,6 +526,9 @@ exit 0
 %{jvmjardir %%1}
 %dir %{_jvmdir}/%{jredir %%1}/lib/security
 %{_jvmdir}/%{jredir %%1}/lib/security/cacerts
+%dir %{_jvmdir}/%{jredir %%1}/lib/security/policy/unlimited/
+%dir %{_jvmdir}/%{jredir %%1}/lib/security/policy/limited/
+%dir %{_jvmdir}/%{jredir %%1}/lib/security/policy/
 %config(noreplace) %{_jvmdir}/%{jredir %%1}/lib/security/policy/unlimited/US_export_policy.jar
 %config(noreplace) %{_jvmdir}/%{jredir %%1}/lib/security/policy/unlimited/local_policy.jar
 %config(noreplace) %{_jvmdir}/%{jredir %%1}/lib/security/policy/limited/US_export_policy.jar
@@ -549,8 +551,8 @@ exit 0
 %config(noreplace) %{_jvmdir}/%{jredir %%1}/lib/security/nss.cfg
 %ifarch %{jit_arches}
 %ifnarch %{power64}
-%attr(664, root, root) %ghost %{_jvmdir}/%{jredir %%1}/lib/%{archinstall}/server/classes.jsa
-%attr(664, root, root) %ghost %{_jvmdir}/%{jredir %%1}/lib/%{archinstall}/client/classes.jsa
+%attr(444, root, root) %ghost %{_jvmdir}/%{jredir %%1}/lib/%{archinstall}/server/classes.jsa
+%attr(444, root, root) %ghost %{_jvmdir}/%{jredir %%1}/lib/%{archinstall}/client/classes.jsa
 %endif
 %endif
 %{_jvmdir}/%{jredir %%1}/lib/%{archinstall}/server/
@@ -794,7 +796,7 @@ Provides: java-%{javaver}-%{origin}-accessibility = %{epoch}:%{version}-%{releas
 
 Name:    java-%{javaver}-%{origin}
 Version: %{javaver}.%{updatever}
-Release: 8.%{buildver}%{?dist}
+Release: 3.%{buildver}%{?dist}
 # java-1.5.0-ibm from jpackage.org set Epoch to 1 for unknown reasons,
 # and this change was brought into RHEL-4.  java-1.5.0-ibm packages
 # also included the epoch in their virtual provides.  This created a
@@ -909,26 +911,25 @@ Patch509: rh1176206-root.patch
 Patch523: pr2974-rh1337583.patch
 # PR3083, RH1346460: Regression in SSL debug output without an ECC provider
 Patch528: pr3083-rh1346460.patch
+# RH1566890: CVE-2018-3639
 Patch529: rh1566890_embargoed20180521.patch
 
 # Upstreamable debugging patches
 # Patches 204 and 205 stop the build adding .gnu_debuglink sections to unstripped files
-Patch204: hotspot-remove-debuglink.patch
-Patch205: dont-add-unnecessary-debug-links.patch
-# Enable debug information for assembly code files
-Patch206: hotspot-assembler-debuginfo.patch
-# 8200556, PR3566: AArch64 port crashes on slowdebug builds
-Patch207: 8200556-pr3566.patch
+# 8207234: More libraries with .gnu_debuglink sections added unconditionally
+Patch205: 8207234-dont-add-unnecessary-debug-links.patch
 
 # Arch-specific upstreamable patches
-# PR2415: JVM -Xmx requirement is too high on s390
+# s390: PR2415: JVM -Xmx requirement is too high on s390
 Patch100: %{name}-s390-java-opts.patch
-# Type fixing for s390
+# s390: Type fixing for s390
 Patch102: %{name}-size_t.patch
-# Use "%z" for size_t on s390 as size_t != intptr_t
-Patch103: s390-size_t_format_flags.patch
-# Fix more cases of missing return statements on AArch64
-Patch104: pr3458-rh1540242.patch
+# s390: PR3593: Use "%z" for size_t on s390 as size_t != intptr_t
+Patch103: pr3593-s390-size_t_format_flags.patch
+# x86: S8199936, PR3533: HotSpot generates code with unaligned stack, crashes on SSE operations (-mstackrealign workaround)
+Patch105: 8199936-pr3533-workaround.patch
+# Zero: Fix more cases of missing return statements
+Patch106: pr3458-rh1540242-zero.patch
 
 # Patches which need backporting to 8u
 # S8073139, RH1191652; fix name of ppc64le architecture
@@ -955,9 +956,37 @@ Patch526: 6260348-pr3066.patch
 Patch538: 8061305-pr3335-rh1423421.patch
 # 8188030, PR3459, RH1484079: AWT java apps fail to start when some minimal fonts are present
 Patch560: 8188030-pr3459-rh1484079.patch
-# 8197429, PR3456, RH153662{2,3}: 32 bit java app started via JNI crashes with larger stack sizes
-Patch561: 8197429-pr3456-rh1536622.patch
- 
+# 8197429, PR3546, RH153662{2,3}: 32 bit java app started via JNI crashes with larger stack sizes
+Patch561: 8197429-pr3546-rh1536622.patch
+# 8171000, PR3542, RH1402819: Robot.createScreenCapture() crashes in wayland mode
+Patch563: 8171000-pr3542-rh1402819.patch
+# 8197546, PR3542, RH1402819: Fix for 8171000 breaks Solaris + Linux builds
+Patch564: 8197546-pr3542-rh1402819.patch
+# 8185723, PR3553: Zero: segfaults on Power PC 32-bit
+Patch565: 8185723-pr3553.patch
+# 8186461, PR3557: Zero's atomic_copy64() should use SPE instructions on linux-powerpcspe
+Patch566: 8186461-pr3557.patch
+# PR3559: Use ldrexd for atomic reads on ARMv7.
+Patch567: pr3559.patch
+# 8201509, PR3579: Zero: S390 31bit atomic_copy64 inline assembler is wrong
+Patch569: 8201509-pr3579.patch
+# PR3591: Fix for bug 3533 doesn't add -mstackrealign to JDK code
+Patch571: pr3591.patch
+# 8184309, PR3596: Build warnings from GCC 7.1 on Fedora 26
+Patch572: 8184309-pr3596.patch
+# 8207057, PR3613: Enable debug information for assembly code files
+Patch206: 8207057-pr3613-hotspot-assembler-debuginfo.patch
+
+# Patches appearing in 8u192
+# 8205104, PR3539, RH1548475: Pass EXTRA_LDFLAGS to HotSpot build
+Patch562: pr3539-rh1548475.patch
+# 8165489, PR3589: Missing G1 barrier in Unsafe_GetObjectVolatile
+Patch570: 8165489-pr3589.patch
+# 8206406, PR3610, RH1597825: StubCodeDesc constructor publishes partially-constructed objects on StubCodeDesc::_list
+Patch580: 8206406-pr3610-rh1597825.patch
+# 8206425: .gnu_debuglink sections added unconditionally when no debuginfo is stripped
+Patch204: 8206425-hotspot-remove-debuglink.patch
+
 # Patches ineligible for 8u
 # 8043805: Allow using a system-installed libjpeg
 Patch201: system-libjpeg.patch
@@ -969,10 +998,10 @@ Patch525: pr1834-rh1022017.patch
 Patch534: always_assumemp.patch
 # PR2888: OpenJDK should check for system cacerts database (e.g. /etc/pki/java/cacerts)
 Patch539: pr2888.patch
+# PR3575, RH1567204: System cacerts database handling should not affect jssecacerts
+Patch540: pr3575-rh1567204.patch
 
 # Shenandoah fixes
-# PR3573: Fix TCK crash with Shenandoah
-Patch700: pr3573.patch
 
 # Non-OpenJDK fixes
 
@@ -1239,15 +1268,15 @@ if [ $prioritylength -ne 7 ] ; then
  exit 14
 fi
 # For old patches
-ln -s openjdk jdk8
+ln -s %{top_level_dir_name} jdk8
 %if %{use_shenandoah_hotspot}
 # On Shenandoah-supported architectures, replace HotSpot with
 # the Shenandoah version
-pushd openjdk
+pushd %{top_level_dir_name}
 tar -xf %{SOURCE1}
 rm -rf hotspot
-mv openjdk/hotspot .
-rm -rf openjdk
+mv %{top_level_dir_name}/hotspot .
+rm -rf %{top_level_dir_name}
 popd
 %endif
 
@@ -1257,8 +1286,8 @@ cp %{SOURCE2} .
 #
 # the configure macro will do this too, but it also passes a few flags not
 # supported by openjdk configure script
-cp %{SOURCE100} openjdk/common/autoconf/build-aux/
-cp %{SOURCE101} openjdk/common/autoconf/build-aux/
+cp %{SOURCE100} %{top_level_dir_name}/common/autoconf/build-aux/
+cp %{SOURCE101} %{top_level_dir_name}/common/autoconf/build-aux/
 
 # OpenJDK patches
 
@@ -1274,7 +1303,6 @@ sh %{SOURCE12}
 %patch204
 %patch205
 %patch206
-%patch207
 
 %patch1
 %patch3
@@ -1287,7 +1315,9 @@ sh %{SOURCE12}
 %patch103
 
 # AArch64 fixes
-%patch104
+
+# x86 fixes
+%patch105
 
 # ppc64le fixes
 %patch603
@@ -1295,6 +1325,7 @@ sh %{SOURCE12}
 %patch602
 
 # Zero fixes.
+%patch106
 
 # Upstreamable fixes
 %patch502
@@ -1320,10 +1351,21 @@ sh %{SOURCE12}
 %patch538
 %patch560
 %patch561
+%patch562
+%patch563
+%patch564
+%patch565
+%patch566
+%patch567
+%patch569
+%patch571
+%patch572
+%patch580
 
 # RPM-only fixes
 %patch525
 %patch539
+%patch540
 
 # RHEL-only patches
 %if 0%{?rhel}
@@ -1332,7 +1374,8 @@ sh %{SOURCE12}
 
 # Shenandoah-only patches
 %if %{use_shenandoah_hotspot}
-%patch700
+%else
+%patch570
 %endif
 
 # Extract systemtap tapsets
@@ -1405,7 +1448,7 @@ EXTRA_CFLAGS="$EXTRA_CFLAGS -fno-strict-aliasing"
 %endif
 export EXTRA_CFLAGS
 
-(cd openjdk/common/autoconf
+(cd %{top_level_dir_name}/common/autoconf
  bash ./autogen.sh
 )
 
@@ -1415,6 +1458,9 @@ debugbuild=%{debugbuild_parameter}
 else
 debugbuild=%{normalbuild_parameter}
 fi
+
+# Variable used in hs_err hook on build failures
+top_dir_abs_path=$(pwd)/%{top_level_dir_name}
 
 mkdir -p %{buildoutputdir $suffix}
 pushd %{buildoutputdir $suffix}
@@ -1458,7 +1504,7 @@ make \
     STRIP_POLICY=no_strip \
     POST_STRIP_CMD="" \
     LOG=trace \
-    %{targets}
+    %{targets} || ( pwd; find $top_dir_abs_path -name "hs_err_pid*.log" | xargs cat && false )
 
 make zip-docs
 
@@ -1693,7 +1739,7 @@ cp -a %{buildoutputdir $suffix}/bundles/jdk-%{javaver}_%{updatever}$suffix-%{bui
 # Install icons and menu entries.
 for s in 16 24 32 48 ; do
   install -D -p -m 644 \
-    openjdk/jdk/src/solaris/classes/sun/awt/X11/java-icon${s}.png \
+    %{top_level_dir_name}/jdk/src/solaris/classes/sun/awt/X11/java-icon${s}.png \
     $RPM_BUILD_ROOT%{_datadir}/icons/hicolor/${s}x${s}/apps/java-%{javaver}.png
 done
 
@@ -1770,7 +1816,6 @@ find $RPM_BUILD_ROOT%{_jvmdir}/%{sdkdir $suffix}/demo \
   | sed 's|^|%doc |' \
   >> %{name}-demo.files"$suffix"
 
-# intentionally after the files generation, as it goes to separate package
 # Create links which leads to separately installed java-atk-bridge and allow configuration
 # links points to java-atk-wrapper - an dependence
   pushd $RPM_BUILD_ROOT/%{_jvmdir}/%{jredir $suffix}/lib/%{archinstall}
@@ -1973,8 +2018,101 @@ require "copy_jdk_configs.lua"
 %endif
 
 %changelog
-* Mon May 21 2018 Fabian Arrotin <arrfab@centos.org>
+* Mon Jul 23 2018 Fabian Arrotin <arrfab@centos.org>
 - disabled gdb test as segfaults on armhfp
+
+* Mon Jul 16 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.181-7.b13
+- Update to aarch64-jdk8u181-b13 and aarch64-shenandoah-jdk8u181-b13.
+- Remove 8187577/PR3578 now applied upstream.
+- Resolves: rhbz#1594249
+
+* Mon Jul 16 2018 Severin Gehwolf <sgehwolf@redhat.com> - 1:1.8.0.181-3.b04
+- Fix hook to show hs_err*.log files on failures.
+- Resolves: rhbz#1594249
+
+* Mon Jul 16 2018 Severin Gehwolf <sgehwolf@redhat.com> - 1:1.8.0.181-3.b04
+- Fix requires/provides filters for internal libs. See RHBZ#1590796
+- Resolves: rhbz#1594249
+
+* Mon Jul 16 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.181-3.b04
+- Update bug status and add missing bug IDs
+- Resolves: rhbz#1594249
+
+* Wed Jul 11 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.181-2.b04
+- Add "8206406, PR3610, RH1597825: StubCodeDesc constructor publishes partially-constructed objects on StubCodeDesc::_list"
+- Resolves: rhbz#1594249
+
+* Wed Jun 27 2018 Severin Gehwolf <sgehwolf@redhat.com> - 1:1.8.0.181-1.b04
+- Add hook to show hs_err*.log files on failures.
+- Resolves: rhbz#1594249
+
+* Wed Jun 27 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.181-1.b04
+- Mark bugs that have been pushed to 8u upstream and are scheduled for a release.
+- Resolves: rhbz#1594249
+
+* Wed Jun 27 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.181-1.b04
+- Update to aarch64-jdk8u181-b04 and aarch64-shenandoah-jdk8u181-b04.
+- Resolves: rhbz#1594249
+
+* Sun Jun 24 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.181-0.b03
+- Update to aarch64-jdk8u181-b03 and aarch64-shenandoah-jdk8u181-b03.
+- Remove AArch64 patch for PR3458/RH1540242 as applied upstream.
+- Resolves: rhbz#1594249
+
+* Thu Jun 21 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.172-4.b11
+- Read jssecacerts file prior to trying either cacerts file (system or local) (PR3575)
+- Resolves: rhbz#1593737
+
+* Thu Jun 21 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.172-3.b11
+- Update Shenandoah tarball to fix TCK overflow failure.
+- Resolves: rhbz#1588364
+
+* Wed Jun 20 2018 Jiri Vanek <jvanek@redhat.com> - 11:1.8.0.172-3.b11
+- jsa files changed to 444 to pass rpm verification
+- Fix reg-ex for filtering private libraries' provides/requires.
+- Resolves: rhbz#1588364
+
+* Wed Jun 13 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.172-2.b11
+- Remove build flags exemption for aarch64 now the platform is more mature and can bootstrap OpenJDK with these flags.
+- Remove duplicate -fstack-protector-strong; it is provided by the RHEL cflags.
+- Resolves: rhbz#1588364
+
+* Mon Jun 11 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.172-1.b11
+- Fix a number of bad bug identifiers (PR3546 should be PR3578, PR3456 should be PR3546)
+- Resolves: rhbz#1588364
+
+* Mon Jun 11 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.172-1.b11
+- Update Shenandoah tarball to include 2018-05-15 merge.
+- Split PR3458/RH1540242 fix into AArch64 & Zero sections, so former can be skipped on Shenandoah builds.
+- Drop PR3573 patch applied upstream.
+- Restrict 8187577 fix to non-Shenandoah builds, as it's included in the new tarball.
+- Resolves: rhbz#1588364
+
+* Mon Jun 11 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.172-1.b11
+- Sync with IcedTea 3.8.0.
+- Label architecture-specific fixes with architecture concerned
+- x86: S8199936, PR3533: HotSpot generates code with unaligned stack, crashes on SSE operations (-mstackrealign workaround)
+- PR3539, RH1548475: Pass EXTRA_LDFLAGS to HotSpot build
+- 8171000, PR3542, RH1402819: Robot.createScreenCapture() crashes in wayland mode
+- 8197546, PR3542, RH1402819: Fix for 8171000 breaks Solaris + Linux builds
+- 8185723, PR3553: Zero: segfaults on Power PC 32-bit
+- 8186461, PR3557: Zero's atomic_copy64() should use SPE instructions on linux-powerpcspe
+- PR3559: Use ldrexd for atomic reads on ARMv7.
+- 8187577, PR3578: JVM crash during gc doing concurrent marking
+- 8201509, PR3579: Zero: S390 31bit atomic_copy64 inline assembler is wrong
+- 8165489, PR3589: Missing G1 barrier in Unsafe_GetObjectVolatile
+- PR3591: Fix for bug 3533 doesn't add -mstackrealign to JDK code
+- 8184309, PR3596: Build warnings from GCC 7.1 on Fedora 26
+- Resolves: rhbz#1588364
+
+* Mon Jun 11 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.172-0.b11
+- Update to aarch64-jdk8u172-b11 and aarch64-shenandoah-jdk8u172-b11.
+- Resolves: rhbz#1588364
+
+* Mon Jun 11 2018 Andrew Hughes <gnu.andrew@redhat.com> - 1:1.8.0.171-9.b12
+- Update to aarch64-jdk8u171-b12 and aarch64-shenandoah-jdk8u171-b12.
+- Remove patch for 8200556/PR3566 as applied upstream.
+- Resolves: rhbz#1588364
 
 * Wed May 16 2018 Jiri Vanek <jvanek@redhat.com> - 1:1.8.0.171-8.b10
 - added and applied 1566890_embargoed20180521.patch
