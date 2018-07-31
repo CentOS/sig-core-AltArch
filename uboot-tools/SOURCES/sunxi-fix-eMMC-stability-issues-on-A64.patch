@@ -1,0 +1,118 @@
+From patchwork Sat Apr 28 21:16:27 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Subject: [U-Boot,1/2] sunxi-mmc: use new mode on A64
+X-Patchwork-Submitter: Vasily Khoruzhick <anarsoul@gmail.com>
+X-Patchwork-Id: 906216
+Message-Id: <20180428211628.13753-2-anarsoul@gmail.com>
+To: Jagan Teki <jagan@openedev.com>,
+ Maxime Ripard <maxime.ripard@bootlin.com>, 
+ Albert Aribaud <albert.u.boot@aribaud.net>,
+ Jaehoon Chung <jh80.chung@samsung.com>, u-boot@lists.denx.de
+Date: Sat, 28 Apr 2018 14:16:27 -0700
+From: Vasily Khoruzhick <anarsoul@gmail.com>
+List-Id: U-Boot discussion <u-boot.lists.denx.de>
+
+That is necessary for using automatic calibration on A64 eMMC.
+
+Signed-off-by: Vasily khoruzhick <anarsoul@gmail.com>
+---
+ arch/arm/mach-sunxi/Kconfig | 1 +
+ drivers/mmc/sunxi_mmc.c     | 4 ++++
+ 2 files changed, 5 insertions(+)
+
+diff --git a/arch/arm/mach-sunxi/Kconfig b/arch/arm/mach-sunxi/Kconfig
+index b868f0e350..774a39f580 100644
+--- a/arch/arm/mach-sunxi/Kconfig
++++ b/arch/arm/mach-sunxi/Kconfig
+@@ -256,6 +256,7 @@ config MACH_SUN50I
+ 	select SUNXI_DE2
+ 	select SUNXI_GEN_SUN6I
+ 	select SUNXI_HIGH_SRAM
++	select MMC_SUNXI_HAS_NEW_MODE
+ 	select SUPPORT_SPL
+ 	select SUNXI_DRAM_DW
+ 	select SUNXI_DRAM_DW_32BIT
+diff --git a/drivers/mmc/sunxi_mmc.c b/drivers/mmc/sunxi_mmc.c
+index df6f32850e..06b0fd491c 100644
+--- a/drivers/mmc/sunxi_mmc.c
++++ b/drivers/mmc/sunxi_mmc.c
+@@ -167,8 +167,12 @@ static int mmc_set_mod_clk(struct sunxi_mmc_priv *priv, unsigned int hz)
+ 
+ 	if (new_mode) {
+ #ifdef CONFIG_MMC_SUNXI_HAS_NEW_MODE
++#ifdef CONFIG_MACH_SUN50I
++		val = 0;
++#else
+ 		val = CCM_MMC_CTRL_MODE_SEL_NEW;
+ 		setbits_le32(&priv->reg->ntsr, SUNXI_MMC_NTSR_MODE_SEL_NEW);
++#endif
+ #endif
+ 	} else {
+ 		val = CCM_MMC_CTRL_OCLK_DLY(oclk_dly) |
+
+From patchwork Sat Apr 28 21:16:28 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Subject: [U-Boot,2/2] mmc: sunxi: run calibration on A64
+X-Patchwork-Submitter: Vasily Khoruzhick <anarsoul@gmail.com>
+X-Patchwork-Id: 906217
+Message-Id: <20180428211628.13753-3-anarsoul@gmail.com>
+To: Jagan Teki <jagan@openedev.com>,
+ Maxime Ripard <maxime.ripard@bootlin.com>, 
+ Albert Aribaud <albert.u.boot@aribaud.net>,
+ Jaehoon Chung <jh80.chung@samsung.com>, u-boot@lists.denx.de
+Date: Sat, 28 Apr 2018 14:16:28 -0700
+From: Vasily Khoruzhick <anarsoul@gmail.com>
+List-Id: U-Boot discussion <u-boot.lists.denx.de>
+
+Along with using new mode it fixes eMMC instability on Pinebook
+
+Signed-off-by: Vasily Khoruzhick <anarsoul@gmail.com>
+---
+ arch/arm/include/asm/arch-sunxi/mmc.h | 6 +++++-
+ drivers/mmc/sunxi_mmc.c               | 6 ++++++
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm/include/asm/arch-sunxi/mmc.h b/arch/arm/include/asm/arch-sunxi/mmc.h
+index 69f737f3bf..8575b393e5 100644
+--- a/arch/arm/include/asm/arch-sunxi/mmc.h
++++ b/arch/arm/include/asm/arch-sunxi/mmc.h
+@@ -47,7 +47,9 @@ struct sunxi_mmc {
+ 	u32 cbda;		/* 0x94 */
+ 	u32 res2[26];
+ #ifdef CONFIG_SUNXI_GEN_SUN6I
+-	u32 res3[64];
++	u32 res3[17];
++	u32 samp_dl;
++	u32 res4[46];
+ #endif
+ 	u32 fifo;		/* 0x100 / 0x200 FIFO access address */
+ };
+@@ -131,5 +133,7 @@ struct sunxi_mmc {
+ #define SUNXI_MMC_COMMON_CLK_GATE		(1 << 16)
+ #define SUNXI_MMC_COMMON_RESET			(1 << 18)
+ 
++#define SUNXI_MMC_CAL_DL_SW_EN		(0x1 << 7)
++
+ struct mmc *sunxi_mmc_init(int sdc_no);
+ #endif /* _SUNXI_MMC_H */
+diff --git a/drivers/mmc/sunxi_mmc.c b/drivers/mmc/sunxi_mmc.c
+index 06b0fd491c..9e7c42c571 100644
+--- a/drivers/mmc/sunxi_mmc.c
++++ b/drivers/mmc/sunxi_mmc.c
+@@ -227,6 +227,12 @@ static int mmc_config_clock(struct sunxi_mmc_priv *priv, struct mmc *mmc)
+ 	rval &= ~SUNXI_MMC_CLK_DIVIDER_MASK;
+ 	writel(rval, &priv->reg->clkcr);
+ 
++#ifdef CONFIG_MACH_SUN50I
++	/* Run calibration on A64 */
++	if (priv->mmc_no == 2)
++		writel(SUNXI_MMC_CAL_DL_SW_EN, &priv->reg->samp_dl);
++#endif
++
+ 	/* Re-enable Clock */
+ 	rval |= SUNXI_MMC_CLK_ENABLE;
+ 	writel(rval, &priv->reg->clkcr);
