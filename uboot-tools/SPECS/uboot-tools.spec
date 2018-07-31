@@ -1,7 +1,7 @@
 #global candidate rc3
 
 Name:      uboot-tools
-Version:   2018.01
+Version:   2018.05
 Release:   1%{?candidate:.%{candidate}}%{?dist}
 Summary:   U-Boot utilities
 License:   GPLv2+ BSD LGPL-2.1+ LGPL-2.0+
@@ -22,21 +22,24 @@ Patch2:    uefi-distro-load-FDT-from-any-partition-on-boot-device.patch
 Patch3:    usb-kbd-fixes.patch
 
 # Board fixes and enablement
-Patch10:   db-generic-fixes.patch
-Patch11:   db410c-fixes.patch
-Patch12:   db820c-support.patch
-Patch13:   dragonboard-fixes.patch
-# Patch14:   mvebu-enable-generic-distro-boot-config.patch
-# Patch15:   mx6-Initial-Hummingboard-2-support.patch
+Patch11:   mx6cuboxi-add-support-for-detecting-Revision-1.5-SoM.patch
+Patch12:   dragonboard-fixes.patch
+Patch13:   rockchip-make_fit_atf-fix-warning-unit_address_vs_reg.patch
+Patch14:   tegra186-jetson-tx2-disable-onboard-emmc.patch
+Patch15:   sunxi-fix-eMMC-stability-issues-on-A64.patch
+#Patch19:   rpi-Enable-using-the-DT-provided-by-the-Raspberry-Pi.patch
+
+# Patch99:   mvebu-enable-generic-distro-boot-config.patch
 
 BuildRequires:  bc
 BuildRequires:  dtc
-BuildRequires:  gcc
-BuildRequires:  git
+BuildRequires:  gcc make
+BuildRequires:  git-core
 BuildRequires:  openssl-devel
 BuildRequires:  python2-devel
 BuildRequires:  python2-setuptools
 BuildRequires:  python2-libfdt
+BuildRequires:  python-pyelftools
 BuildRequires:  SDL-devel
 BuildRequires:  swig
 %ifarch %{arm} aarch64
@@ -49,6 +52,7 @@ BuildRequires:  arm-trusted-firmware-armv8
 # Added for .el7 rebuild, so newer gcc is needed
 %if 0%{?rhel} == 7
 BuildRequires: devtoolset-6-build
+BuildRequires: devtoolset-6-binutils
 BuildRequires: devtoolset-6-gcc
 BuildRequires: devtoolset-6-gcc-c++
 %endif
@@ -113,6 +117,7 @@ mkdir builds
 #Enabling DTS for .el7
 %{?enable_devtoolset6:%{enable_devtoolset6}}
 
+
 %ifarch aarch64 %{arm}
 for board in $(cat %{_arch}-boards)
 do
@@ -122,21 +127,23 @@ do
   sun50i=(pine64_plus a64-olinuxino bananapi_m64 nanopi_a64 nanopi_neo2 orangepi_pc2 orangepi_prime orangepi_win orangepi_zero_plus2 sopine_baseboard)
   if [[ " ${sun50i[*]} " == *" $board "* ]]; then
     echo "Board: $board using sun50iw1p1"
-    cp /usr/share/arm-trusted-firmware/sun50iw1p1/bl31.bin builds/$(echo $board)/
+    cp /usr/share/arm-trusted-firmware/sun50iw1p1/* builds/$(echo $board)/
   fi
-  rk3368=(geekbox sheep-rk3368)
-  if [[ " ${rk3368[*]} " == *" $board "* ]]; then
-    echo "Board: $board using rk3368"
-    cp /usr/share/arm-trusted-firmware/rk3368/bl31.bin builds/$(echo $board)/
-  fi
-  rk3399=(evb-rk3399 firefly-rk3399 puma-rk3399)
+  rk3399=(evb-rk3399 firefly-rk3399)
   if [[ " ${rk3399[*]} " == *" $board "* ]]; then
     echo "Board: $board using rk3399"
-    cp /usr/share/arm-trusted-firmware/rk3399/bl31.bin builds/$(echo $board)/
+    cp /usr/share/arm-trusted-firmware/rk3399/* builds/$(echo $board)/
   fi
   # End ATF
   make $(echo $board)_defconfig O=builds/$(echo $board)/
   make HOSTCC="gcc $RPM_OPT_FLAGS" CROSS_COMPILE="" %{?_smp_mflags} V=1 O=builds/$(echo $board)/
+  rk33xx=(evb-rk3399 firefly-rk3399)
+  if [[ " ${rk33xx[*]} " == *" $board "* ]]; then
+    echo "Board: $board using rk33xx"
+    make HOSTCC="gcc $RPM_OPT_FLAGS" CROSS_COMPILE="" u-boot.itb V=1 O=builds/$(echo $board)/
+    builds/$(echo $board)/tools/mkimage -n rk3399 -T rksd  -d builds/$(echo $board)/spl/u-boot-spl.bin builds/$(echo $board)/spl_sd.img
+    builds/$(echo $board)/tools/mkimage -n rk3399 -T rkspi -d builds/$(echo $board)/spl/u-boot-spl.bin builds/$(echo $board)/spl_spi.img
+  fi
 done
 
 %endif
@@ -198,7 +205,7 @@ done
 for board in $(cat %{_arch}-boards)
 do
 mkdir -p $RPM_BUILD_ROOT%{_datadir}/uboot/$(echo $board)/
- for file in MLO SPL spl/arndale-spl.bin spl/origen-spl.bin spl/smdkv310-spl.bin u-boot.bin u-boot.dtb u-boot-dtb-tegra.bin u-boot.img u-boot.imx u-boot-nodtb-tegra.bin u-boot-spl.kwb u-boot-sunxi-with-spl.bin
+ for file in MLO SPL spl/arndale-spl.bin spl/origen-spl.bin spl/smdkv310-spl.bin u-boot.bin u-boot.dtb u-boot-dtb-tegra.bin u-boot.img u-boot.imx u-boot-nodtb-tegra.bin u-boot-spl.kwb u-boot-sunxi-with-spl.bin spl_sd.img spl_spi.img
  do
   if [ -f builds/$(echo $board)/$(echo $file) ]; then
     install -p -m 0644 builds/$(echo $board)/$(echo $file) $RPM_BUILD_ROOT%{_datadir}/uboot/$(echo $board)/
@@ -269,7 +276,7 @@ cp -p board/warp7/README builds/docs/README.warp7
 
 %files
 %doc README doc/README.imximage doc/README.kwbimage doc/README.distro doc/README.gpt
-%doc doc/README.odroid doc/README.rockchip doc/README.efi doc/uImage.FIT doc/README.arm64
+%doc doc/README.odroid doc/README.rockchip doc/README.uefi doc/uImage.FIT doc/README.arm64
 %doc doc/README.chromium builds/docs/*
 %{_bindir}/*
 %{_mandir}/man1/mkimage.1*
@@ -295,8 +302,80 @@ cp -p board/warp7/README builds/docs/README.warp7
 %endif
 
 %changelog
-* Thu Mar  8 2018 Fabian Arrotin <arrfab@centos.org> 2018.01-1
+* Mon May  7 2018 Fabian Arrotin <arrfab@centos.org> 2018.05-1
 - Added conditional to enable devtoolset-6-gcc for .el7 build
+- Renamed BuildRequires: python2-pyelftools to python-pyelftools (.el7)
+
+* Mon May  7 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.05-1
+- 2018.05 GA
+
+* Wed May  2 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.05-0.5-rc3
+- Build Xilnix ZynqMP zcu100 (96boards Ultra96)
+
+* Tue May  1 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.05-0.4-rc3
+- 2018.05 RC3
+
+* Thu Apr 26 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.05-0.3-rc2
+- uEFI improvements
+- Fixes for Rockchips rk33xx 64 bit devices
+- Build AllWinner 64 bit devices against new ATF
+
+* Tue Apr 17 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.05-0.2-rc2
+- 2018.05 RC2
+- Enable Raspberry Pi option to use firmware DT
+
+* Sun Apr  8 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.05-0.1-rc1
+- 2018.05 RC1
+
+* Fri Apr  6 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.03-4
+- Improvements for Raspberry Pi, AllWinner MMC perf, mvebu devices
+
+* Tue Mar 20 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.03-3
+- Fix issue with certain MMC cards on Raspberry Pi
+
+* Fri Mar 16 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.03-2
+- Add support for Raspberry Pi 3+
+
+* Tue Mar 13 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.03-1
+- 2018.03 GA
+
+* Fri Mar  9 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.03-0.11.rc4
+- Enable support for Jetson TX2
+
+* Thu Mar  8 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.03-0.10.rc4
+- Fix for Raspberry Pi 2 boot
+
+* Wed Mar  7 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.03-0.9.rc4
+- 2018.03 RC4
+- Fixes for Raspberry Pi 3 boot
+- Minor kernel install fixes
+- Enable am335x_evm_usbspl for Beagle Pocket
+- DragonBoard patch rebase
+
+* Sun Mar  4 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.03-0.8.rc3
+- Add support for SoM rev 1.5 to mx6cuboxi
+- Rebuild for new ATF 1.5 rc0 release
+
+* Sun Feb 25 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.03-0.7.rc3
+- Build 64 bit Rockchips FIT images with ARM Trusted Firmware
+
+* Tue Feb 20 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.03-0.6.rc3
+- 2018.03 RC3
+
+* Fri Feb 16 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.03-0.5.rc2
+- A few upstream fixes
+
+* Thu Feb 15 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.03-0.4.rc2
+- Fix for GBps network on some AllWinner devices
+
+* Tue Feb 13 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.03-0.3.rc2
+- 2018.03 RC2
+
+* Wed Feb  7 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.03-0.2.rc1
+- Update uEFI patches
+
+* Tue Jan 30 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.03-0.1.rc1
+- 2018.03 RC1
 
 * Tue Jan  9 2018 Peter Robinson <pbrobinson@fedoraproject.org> 2018.01-1
 - 2018.01
@@ -341,115 +420,3 @@ cp -p board/warp7/README builds/docs/README.warp7
 * Wed Sep 27 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.09-2
 - Add patch to fix some uEFI console output
 - Minor other tweaks
-
-* Mon Sep 18 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.09-1
-- 2017.09
-
-* Tue Sep 12 2017 Than Ngo <than@redhat.com> - 2017.09-0.6.rc4
-- fixed the check for rockchip rk3368 boards
-
-* Tue Sep  5 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.09-0.5.rc4
-- 2017.09 RC4
-- Add qemu arm target config
-
-* Fri Aug 25 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.09-0.4.rc2
-- Raspberry Pi and Allwinner fixes
-- Enable some new devices
-
-* Tue Aug 15 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.09-0.3.rc2
-- 2017.09 RC2
-
-* Thu Aug  3 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.09-0.2.rc1
-- uEFI fixes
-- DragonBoard 410c fixes
-
-* Tue Aug  1 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.09-0.1.rc1
-- 2017.09 RC1
-- Initial patch rebase
-
-* Thu Jul 27 2017 Fedora Release Engineering <releng@fedoraproject.org> - 2017.07-2
-- Rebuilt for https://fedoraproject.org/wiki/Fedora_27_Mass_Rebuild
-
-* Wed Jul 12 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.07-1
-- 2017.07
-
-* Thu Jul  6 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.07-0.3.rc3
-- 2017.07 RC3
-
-* Tue Jun 20 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.07-0.2.rc2
-- 2017.07 RC2
-- Enable AllWinner: NanoPi M1+, NanoPi Neo2, SoPine baseboard, OrangePi Zero+2, OrangePi Win
-- Enable Rockchips: GeekBox, Sheep
-- Dragonboard fixes
-- uEFI fixes
-
-* Tue Jun  6 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.07-0.1.rc1
-- 2017.07 RC1
-- Build BananaPi m64, OrangePi pc2, OrangePi Prime with ATF
-
-* Mon May 29 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.05-02
-- Add distro-boot support for ClearFog
-- Add support for building a chained u-boot for nyan-big
-
-* Tue May  9 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.05-01
-- 2017.05
-
-* Wed May  3 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.05-0.7.rc7
-- 2017.05 RC3
-
-* Mon Apr 24 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.05-0.6.rc2
-- Add SPL/ATF support for AllWinner A64 SoCs
-- Ship u-boot elf binaries for all aarch64 devices
-- Cleanups and spec updates
-- Add some more docs/tools
-
-* Mon Apr 17 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.05-0.5.rc2
-- Ship the elf u-boot binaries for aarch64
-
-* Mon Apr 17 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.05-0.4.rc2
-- 2017.05 RC2
-
-* Tue Apr 11 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.05-0.3.rc1
-- Add support for STi STiH410
-
-* Wed Apr  5 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.05-0.2.rc1
-- Build am335x_evm
-
-* Wed Apr  5 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.05-0.1.rc1
-- 2017.05 RC1
-- Enable TinkerBoard and MacchiatoBIN
-
-* Mon Mar 20 2017 Jon Disnard <parasense@fedoraproject.org> 2017.03-2
-- Pass --no-dynamic-linker for linkers newer than 2.26 
-- Add build dependency on gcc
-
-* Mon Mar 13 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.03-1
-- 2017.03
-
-* Mon Mar  6 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.03-0.7.rc3
-- Add support for SATA on Cubox-i and Hummingboard
-- Add initial Hummingboard 2 (Gate/Edge) support
-- Add initial Marvell ESPRESSOBin board support
-
-* Tue Feb 28 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.03-0.6.rc3
-- 2017.03 RC3
-
-* Wed Feb 15 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.03-0.5.rc2
-- Rebase OpenSSL 1.1 patches
-
-* Mon Feb 13 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.03-0.4.rc2
-- 2017.03 RC2
-- Temporarily drop OpenSSL 1.1 patches (need rebase)
-- Add fix for UDOO Neo distro boot
-
-* Mon Feb 13 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.03-0.3.rc1
-- Add patches to fix build against OpenSSL 1.1
-
-* Sat Feb 11 2017 Fedora Release Engineering <releng@fedoraproject.org> - 2017.03-0.2.rc1
-- Rebuilt for https://fedoraproject.org/wiki/Fedora_26_Mass_Rebuild
-
-* Tue Jan 31 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.03-0.1.rc1
-- 2017.03 RC1
-
-* Tue Jan 10 2017 Peter Robinson <pbrobinson@fedoraproject.org> 2017.01-1
-- 2017.01
