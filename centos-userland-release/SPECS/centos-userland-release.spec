@@ -14,7 +14,7 @@
 
 Name:           centos-userland-release
 Version:        %{base_release_version}
-Release:        %{centos_rel}%{?dist}.0.7
+Release:        %{centos_rel}.1%{?dist}
 Summary:        %{product_family} release file
 Group:          System Environment/Base
 License:        GPLv2
@@ -155,7 +155,7 @@ rm -rf %{buildroot}
 %attr(0755,root,root) %{_bindir}/update-boot
 %attr(0755,root,root) %{_bindir}/rootfs-expand
 
-%post
+%posttrans
 if [ -e /usr/local/bin/rootfs-expand ];then
 rm -f /usr/local/bin/rootfs-expand
 fi
@@ -163,6 +163,9 @@ fi
 /usr/bin/uname -m | grep -q 'x86_64'  && echo 'centos' >/etc/yum/vars/contentdir || echo 'altarch' > /etc/yum/vars/contentdir
 
 %changelog
+* Thu Aug  2 2018 Pablo Greco <pablo@fliagreco.com.ar>
+- Sync version and fixes with centos-release
+
 * Fri May  4 2018 Pablo Greco <pablo@fliagreco.com.ar>
 - Require extlinux-bootloader now that update-boot was obsoleted
 
