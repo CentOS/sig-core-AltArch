@@ -2,35 +2,54 @@
 %define product_family CentOS Linux
 %define variant_titlecase Server
 %define variant_lowercase server
+%ifarch x86_64
 %define release_name Core
+%else
+%define release_name AltArch
+%endif
+%ifarch aarch64
+%define dist_suffix .a
+%endif
+%ifarch ppc ppc64 ppc64le
+%define dist_suffix .p
+%define tuned_profile :server
+%endif
+%ifarch %{ix86}
+%define dist_suffix .i
+%endif
 %define base_release_version 7
 %define full_release_version 7
 %define dist_release_version 7
 %define upstream_rel_long 7.5-8
 %define upstream_rel 7.5
 %define centos_rel 5.1804
-%define beta Beta
-%define dist .el%{dist_release_version}.centos
+#define beta Beta
+%define dist .el%{dist_release_version}.centos%{?dist_suffix}
 
+%ifarch %{arm}
 Name:           centos-userland-release
+%else
+Name:           centos-release
+%endif
 Version:        %{base_release_version}
 Release:        %{centos_rel}.1%{?dist}
 Summary:        %{product_family} release file
 Group:          System Environment/Base
 License:        GPLv2
+Requires(post): coreutils, grep
+%ifarch %{arm}
+Requires:       extlinux-bootloader
+%endif
 Provides:       centos-release = %{version}-%{release}
 Provides:       centos-release(upstream) = %{upstream_rel}
 Provides:       redhat-release = %{upstream_rel_long}
 Provides:       system-release = %{upstream_rel_long}
 Provides:       system-release(releasever) = %{base_release_version}
-Requires:       coreutils, grep
-Requires:       extlinux-bootloader
 Source0:        centos-release-%{base_release_version}-%{centos_rel}.tar.gz
 Source1:        85-display-manager.preset
 Source2:        90-default.preset
-Source99:	update-boot
-Source100:	rootfs-expand
-
+Source99:       update-boot
+Source100:      rootfs-expand
 
 %description
 %{product_family} release files
@@ -62,7 +81,7 @@ ID_LIKE="rhel fedora"
 VERSION_ID="%{full_release_version}"
 PRETTY_NAME="%{product_family} %{full_release_version} (%{release_name})"
 ANSI_COLOR="0;31"
-CPE_NAME="cpe:/o:centos:centos:7"
+CPE_NAME="cpe:/o:centos:centos:7%{?tuned_profile}"
 HOME_URL="https://www.centos.org/"
 BUG_REPORT_URL="https://bugs.centos.org/"
 
@@ -95,7 +114,9 @@ done
 
 mkdir -p -m 755 %{buildroot}/etc/yum/vars
 install -m 0644 yum-vars-infra %{buildroot}/etc/yum/vars/infra
+%ifarch %{arm}
 install -m 0644 yum-vars-releasever %{buildroot}/etc/yum/vars/releasever
+%endif
 
 # set up the dist tag macros
 install -d -m 755 %{buildroot}/etc/rpm
@@ -105,7 +126,7 @@ cat >> %{buildroot}/etc/rpm/macros.dist << EOF
 %%centos_ver %{base_release_version}
 %%centos %{base_release_version}
 %%rhel %{base_release_version}
-%%dist %dist
+%%dist .el7
 %%el%{base_release_version} 1
 EOF
 
@@ -125,10 +146,22 @@ mkdir -p %{buildroot}%{_prefix}/lib/systemd/system-preset/
 install -m 0644 %{SOURCE1} %{buildroot}%{_prefix}/lib/systemd/system-preset/
 install -m 0644 %{SOURCE2} %{buildroot}%{_prefix}/lib/systemd/system-preset/
 
+%ifarch %{arm}
 # Install armhfp specific tools
 mkdir -p %{buildroot}/%{_bindir}/
 install -m 0755 %{SOURCE99} %{buildroot}%{_bindir}/
 install -m 0755 %{SOURCE100} %{buildroot}%{_bindir}/
+%endif
+
+%posttrans
+%ifarch %{arm}
+if [ -e /usr/local/bin/rootfs-expand ];then
+rm -f /usr/local/bin/rootfs-expand
+fi
+%endif
+
+/usr/bin/uname -m | grep -q 'x86_64'  && echo 'centos' >/etc/yum/vars/contentdir || echo 'altarch' > /etc/yum/vars/contentdir
+
 
 %clean
 rm -rf %{buildroot}
@@ -152,57 +185,65 @@ rm -rf %{buildroot}
 %{_datadir}/redhat-release
 %{_datadir}/centos-release/*
 %{_prefix}/lib/systemd/system-preset/*
+%ifarch %{arm}
 %attr(0755,root,root) %{_bindir}/update-boot
 %attr(0755,root,root) %{_bindir}/rootfs-expand
-
-%posttrans
-if [ -e /usr/local/bin/rootfs-expand ];then
-rm -f /usr/local/bin/rootfs-expand
-fi
-
-/usr/bin/uname -m | grep -q 'x86_64'  && echo 'centos' >/etc/yum/vars/contentdir || echo 'altarch' > /etc/yum/vars/contentdir
+%endif
 
 %changelog
 * Thu Aug  2 2018 Pablo Greco <pablo@fliagreco.com.ar>
 - Sync version and fixes with centos-release
+- Unified spec for all arches
+
+* Thu Aug  2 2018 Johnny Hughes <johnny@centos.org>
+- Post Trans for contentdir
 
 * Fri May  4 2018 Pablo Greco <pablo@fliagreco.com.ar>
-- Require extlinux-bootloader now that update-boot was obsoleted
+- armhfp: Require extlinux-bootloader now that update-boot was obsoleted
 
-* Thu Apr 12 2018 Fabian Arrotin <arrfab@centos.org>
-- Bump release for 7.5.1804
+* Wed Apr 11 2018 Johnny Hughes <johnny@centos.org>
+- Bump Release for 1804
 
 * Wed Mar 21 2018 Pablo Greco <pablo@fliagreco.com.ar>
-- Update rootfs-expand to detect rootfs
-- Obsolete update-boot
-- Remove old versions of rootfs-expand
+- armhfp: Update rootfs-expand to detect rootfs
+- armhfp: Obsolete update-boot
+- armhfp: Remove old versions of rootfs-expand
 
 * Thu Dec 28 2017 Fabian Arrotin <arrfab@centos.org>
-- Fixed the post scriptlet to detect correctly rpi2/rpi3 with 4.9 kernel
+- armhfp: Fixed the post scriptlet to detect correctly rpi2/rpi3 with 4.9 kernel
 
-* Fri Sep 1 2017 Fabian Arrotin <arrfab@centos.org>
-- Bumped to 7.4.1708
+* Wed Aug 30 2017 Johnny Hughes <johnny@centos.org>
+- Bump Release for 1708
 
 * Mon Feb 27 2017 Fabian Arrotin <arrfab@centos.org>
-- Added rootfs-expand and update-boot tools for armhfp
+- armhfp: Added rootfs-expand and update-boot tools for armhfp
 
-* Thu Nov 24 2016 Fabian Arrotin <arrfab@centos.org>
-- Bumped to 7.3.1611
+* Tue Nov 29 2016 Johnny Hughes <johnny@centos.org>
+- Bump Release for 1611
 
 * Mon Oct 24 2016 Fabian Arrotin <arrfab@centos.org>
-- Using a new kvariant yum var to point to correct kernel repo path
+- armhfp: Using a new kvariant yum var to point to correct kernel repo path
 
 * Wed Dec 2 2015 Fabian Arrotin <arrfab@centos.org>
-- Fixed the definitive altarch path for altarch/armhfp
+- armhfp: Fixed the definitive altarch path for altarch/armhfp
+
+* Tue Dec  1 2015 Johnny Hughes <johnny@centos.org>
+- Bump Release for 1511
+- Add CentOS-Media.repo and put CentOS-CR.repo in the
+  tarball, then removed patch1000 
 
 * Mon Nov 30 2015 Fabian Arrotin <arrfab@centos.org>
-- Defaulting to normal repositories now (release approaching)
+- armhfp: Defaulting to normal repositories now (release approaching)
 
 * Sat Nov 28 2015 Fabian Arrotin <arrfab@centos.org>
-- Overriding the releasever yum var, as pkg name isn't centos-release
+- armhfp: Overriding the releasever yum var, as pkg name isn't centos-release
 
 * Fri Nov 27 2015 Fabian Arrotin <arrfab@centos.org>
-- initial release for the AltArch armhfp userland
+- armhfp: initial release for the AltArch armhfp userland
+
+* Tue Mar 31 2015 Karanbir Singh <kbsingh@centos.org>
+- rework upstream communication
+- re-establish redhat-release as a symlink from centos-release
 
 * Fri Mar 27 2015 Karanbir Singh <kbsingh@centos.org>
 - dont auto enable the initial-setup tui mode
@@ -249,3 +290,4 @@ fi
 
 * Fri Jun 13 2014 Karanbir Singh <kbsingh@centos.org> 7-0.el7
 - initial setup for centos-rc
+
