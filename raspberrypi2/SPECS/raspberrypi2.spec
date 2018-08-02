@@ -1,14 +1,14 @@
-%global commit_firmware_short afc71fd
-%global commit_firmware_long  afc71fd252cc947b50b3140cb3935af9ab0f260d
-%global commit_linux_short 11dc869
-%global commit_linux_long  11dc869d874d04293849d830637130269fd0ada9
+%global commit_firmware_short bffe7ee
+%global commit_firmware_long  bffe7ee6b276f23822883f3d7fd7b705d12c26b9
+%global commit_linux_short a06f9e5
+%global commit_linux_long  a06f9e522301dfacc1f382d72e6a9792d8350328
 
 %define Arch arm
 %define local_version v7
 %define extra_version 1
 
 Name:           raspberrypi2
-Version:        4.14.52
+Version:        4.14.58
 Release:        %{local_version}.%{extra_version}%{?dist}
 Summary:        Specific kernel and bootcode for Raspberry Pi
 
@@ -48,6 +48,7 @@ input and output, etc.
 Group:          System Environment/Kernel
 Summary:        Development package for building kernel modules to match the kernel
 Provides:       kernel-devel = %{version}-%{release}
+Provides:       kernel-devel-uname-r = %{version}-%{release}
 
 %description kernel-devel
 This package provides kernel headers and makefiles sufficient to build modules
@@ -184,6 +185,10 @@ cp $(ls -1d /usr/share/%{name}-kernel/*-*/|tail -1)/boot/overlays/*.dtb* /boot/o
 %doc /boot/LICENCE.broadcom
 
 %changelog
+* Mon Jul 30 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.58-v1.el7
+- updated to 4.14.58
+- added kernel-devel-uname-r
+
 * Thu Jun 28 2018 Fabian Arrotin <arrfab@centos.org> - 4.14.52-v1.el7
 - updated to 4.14.52 (fixes CVE-2018-5803)
 
