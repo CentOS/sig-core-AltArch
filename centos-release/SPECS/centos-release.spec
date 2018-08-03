@@ -32,7 +32,7 @@ Name:           centos-userland-release
 Name:           centos-release
 %endif
 Version:        %{base_release_version}
-Release:        %{centos_rel}.1%{?dist}
+Release:        %{centos_rel}.2%{?dist}
 Summary:        %{product_family} release file
 Group:          System Environment/Base
 License:        GPLv2
@@ -100,6 +100,7 @@ echo 'Kernel \r on an \m' >> %{buildroot}/etc/issue
 cp %{buildroot}/etc/issue %{buildroot}/etc/issue.net
 echo >> %{buildroot}/etc/issue
 
+pushd %{_target_cpu}
 # copy GPG keys
 mkdir -p -m 755 %{buildroot}/etc/pki/rpm-gpg
 for file in RPM-GPG-KEY* ; do
@@ -117,6 +118,7 @@ install -m 0644 yum-vars-infra %{buildroot}/etc/yum/vars/infra
 %ifarch %{arm}
 install -m 0644 yum-vars-releasever %{buildroot}/etc/yum/vars/releasever
 %endif
+popd
 
 # set up the dist tag macros
 install -d -m 755 %{buildroot}/etc/rpm
@@ -191,6 +193,9 @@ rm -rf %{buildroot}
 %endif
 
 %changelog
+* Fri Aug  3 2018 Pablo Greco <pablo@fliagreco.com.ar>
+- Unified tarball for all arches, so it can be built from the same src.rpm
+
 * Thu Aug  2 2018 Pablo Greco <pablo@fliagreco.com.ar>
 - Sync version and fixes with centos-release
 - Unified spec for all arches
