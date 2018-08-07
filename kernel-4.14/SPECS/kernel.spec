@@ -54,7 +54,7 @@ Summary: The Linux kernel
 %if 0%{?released_kernel}
 
 # Do we have a -stable update to apply?
-%define stable_update 52
+%define stable_update 61
 # Set rpm version accordingly
 %if 0%{?stable_update}
 %define stablerev %{stable_update}
@@ -2240,9 +2240,12 @@ fi
 #
 #
 %changelog
+* Tue Aug  7 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.61-201
+- Rebase to LTS 4.14.61
+
 * Thu Jun 28 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.52-201
 - Remove upstream Patches no longer needed
-- Rebase to LTS 4.14.51
+- Rebase to LTS 4.14.52
 
 * Fri May 25 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.43-201
 - Remove upstream Patches no longer needed
