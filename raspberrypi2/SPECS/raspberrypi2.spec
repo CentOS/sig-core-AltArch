@@ -1,14 +1,16 @@
-%global commit_firmware_short bffe7ee
-%global commit_firmware_long  bffe7ee6b276f23822883f3d7fd7b705d12c26b9
-%global commit_linux_short a06f9e5
-%global commit_linux_long  a06f9e522301dfacc1f382d72e6a9792d8350328
+%global commit_firmware_short 1b51c69
+%global commit_firmware_long  1b51c69e77c995a2da223948ab3844db177704af
+#wget https://github.com/raspberrypi/firmware/tarball/%{commit_firmware_long}
+%global commit_linux_short 52d350f
+%global commit_linux_long  52d350fb107dbd9fa30d44685ed52d2c52b09d96
+#wget https://github.com/raspberrypi/linux/tarball/%{commit_linux_long}
 
 %define Arch arm
 %define local_version v7
 %define extra_version 1
 
 Name:           raspberrypi2
-Version:        4.14.58
+Version:        4.14.61
 Release:        %{local_version}.%{extra_version}%{?dist}
 Summary:        Specific kernel and bootcode for Raspberry Pi
 
@@ -185,6 +187,9 @@ cp $(ls -1d /usr/share/%{name}-kernel/*-*/|tail -1)/boot/overlays/*.dtb* /boot/o
 %doc /boot/LICENCE.broadcom
 
 %changelog
+* Tue Aug  7 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.61-v1.el7
+- updated to 4.14.61
+
 * Mon Jul 30 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.58-v1.el7
 - updated to 4.14.58
 - added kernel-devel-uname-r
