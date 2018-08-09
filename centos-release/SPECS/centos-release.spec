@@ -32,7 +32,7 @@ Name:           centos-userland-release
 Name:           centos-release
 %endif
 Version:        %{base_release_version}
-Release:        %{centos_rel}.2%{?dist}
+Release:        %{centos_rel}.3%{?dist}
 Summary:        %{product_family} release file
 Group:          System Environment/Base
 License:        GPLv2
@@ -193,6 +193,9 @@ rm -rf %{buildroot}
 %endif
 
 %changelog
+* Thu Aug  9 2018 Pablo Greco <pablo@fliagreco.com.ar>
+- Enable ostree-remount in presets
+
 * Fri Aug  3 2018 Pablo Greco <pablo@fliagreco.com.ar>
 - Unified tarball for all arches, so it can be built from the same src.rpm
 
