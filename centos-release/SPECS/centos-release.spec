@@ -2,6 +2,7 @@
 %define product_family CentOS Linux
 %define variant_titlecase Server
 %define variant_lowercase server
+%define targetdir %{_target_cpu}
 %ifarch x86_64
 %define release_name Core
 %else
@@ -13,6 +14,12 @@
 %ifarch ppc ppc64 ppc64le
 %define dist_suffix .p
 %define tuned_profile :server
+%endif
+%ifarch ppc64le
+%if "%{dist}" == ".el7a"
+%define dist_suffix .p9
+%define targetdir power9
+%endif
 %endif
 %ifarch %{ix86}
 %define dist_suffix .i
@@ -32,7 +39,7 @@ Name:           centos-userland-release
 Name:           centos-release
 %endif
 Version:        %{base_release_version}
-Release:        %{centos_rel}.3%{?dist}
+Release:        %{centos_rel}.4%{?dist}
 Summary:        %{product_family} release file
 Group:          System Environment/Base
 License:        GPLv2
@@ -100,7 +107,7 @@ echo 'Kernel \r on an \m' >> %{buildroot}/etc/issue
 cp %{buildroot}/etc/issue %{buildroot}/etc/issue.net
 echo >> %{buildroot}/etc/issue
 
-pushd %{_target_cpu}
+pushd %{targetdir}
 # copy GPG keys
 mkdir -p -m 755 %{buildroot}/etc/pki/rpm-gpg
 for file in RPM-GPG-KEY* ; do
@@ -195,6 +202,7 @@ rm -rf %{buildroot}
 %changelog
 * Thu Aug  9 2018 Pablo Greco <pablo@fliagreco.com.ar>
 - Enable ostree-remount in presets
+- Include power9 as a separate ppc64le arch
 
 * Fri Aug  3 2018 Pablo Greco <pablo@fliagreco.com.ar>
 - Unified tarball for all arches, so it can be built from the same src.rpm
