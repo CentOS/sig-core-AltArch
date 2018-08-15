@@ -54,7 +54,7 @@ Summary: The Linux kernel
 %if 0%{?released_kernel}
 
 # Do we have a -stable update to apply?
-%define stable_update 61
+%define stable_update 63
 # Set rpm version accordingly
 %if 0%{?stable_update}
 %define stablerev %{stable_update}
@@ -2240,6 +2240,9 @@ fi
 #
 #
 %changelog
+* Tue Aug  7 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.63-201
+- Rebase to LTS 4.14.63 to fix multiple CVEs
+
 * Tue Aug  7 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.61-201
 - Rebase to LTS 4.14.61
 
