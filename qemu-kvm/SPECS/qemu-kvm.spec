@@ -79,7 +79,7 @@ Obsoletes: %1 < %{obsoletes_version}                                      \
 Summary: QEMU is a machine emulator and virtualizer
 Name: %{pkgname}%{?pkgsuffix}
 Version: 1.5.3
-Release: 156%{?dist}.3
+Release: 156%{?dist}.5
 # Epoch because we pushed a qemu-1.0 package. AIUI this can't ever be dropped
 Epoch: 10
 License: GPLv2+ and LGPLv2+ and BSD
@@ -3878,6 +3878,32 @@ Patch1908: kvm-i386-define-the-ssbd-CPUID-feature-bit-CVE-2018-3639.patch
 Patch1909: kvm-i386-Define-the-Virt-SSBD-MSR-and-handling-of-it-CVE.patch
 # For bz#1584363 - CVE-2018-3639 qemu-kvm: hw: cpu: AMD: speculative store bypass [rhel-7.5.z]
 Patch1910: kvm-i386-define-the-AMD-virt-ssbd-CPUID-feature-bit-CVE-.patch
+# For bz#1596302 - Windows 2012 Guest hangs after live migration with RTC clock stopped. [rhel-7.5.z]
+Patch1911: kvm-target-i386-introduce-kvm_put_one_msr.patch
+# For bz#1596302 - Windows 2012 Guest hangs after live migration with RTC clock stopped. [rhel-7.5.z]
+Patch1912: kvm-apic-fix-2.2-2.1-migration.patch
+# For bz#1596302 - Windows 2012 Guest hangs after live migration with RTC clock stopped. [rhel-7.5.z]
+Patch1913: kvm-x86-lapic-Load-LAPIC-state-at-post_load.patch
+# For bz#1596302 - Windows 2012 Guest hangs after live migration with RTC clock stopped. [rhel-7.5.z]
+Patch1914: kvm-apic-drop-debugging.patch
+# For bz#1596302 - Windows 2012 Guest hangs after live migration with RTC clock stopped. [rhel-7.5.z]
+Patch1915: kvm-apic-set-APIC-base-as-part-of-kvm_apic_put.patch
+# For bz#1549824 - CVE-2018-7550 qemu-kvm: Qemu: i386:  multiboot OOB access while loading kernel image [rhel-7.5.z]
+Patch1916: kvm-multiboot-bss_end_addr-can-be-zero.patch
+# For bz#1549824 - CVE-2018-7550 qemu-kvm: Qemu: i386:  multiboot OOB access while loading kernel image [rhel-7.5.z]
+Patch1917: kvm-multiboot-Remove-unused-variables-from-multiboot.c.patch
+# For bz#1549824 - CVE-2018-7550 qemu-kvm: Qemu: i386:  multiboot OOB access while loading kernel image [rhel-7.5.z]
+Patch1918: kvm-multiboot-Use-header-names-when-displaying-fields.patch
+# For bz#1549824 - CVE-2018-7550 qemu-kvm: Qemu: i386:  multiboot OOB access while loading kernel image [rhel-7.5.z]
+Patch1919: kvm-multiboot-fprintf-stderr.-error_report.patch
+# For bz#1549824 - CVE-2018-7550 qemu-kvm: Qemu: i386:  multiboot OOB access while loading kernel image [rhel-7.5.z]
+Patch1920: kvm-multiboot-Reject-kernels-exceeding-the-address-space.patch
+# For bz#1549824 - CVE-2018-7550 qemu-kvm: Qemu: i386:  multiboot OOB access while loading kernel image [rhel-7.5.z]
+Patch1921: kvm-multiboot-Check-validity-of-mh_header_addr.patch
+# For bz#1586248 - CVE-2018-11806 qemu-kvm: QEMU: slirp: heap buffer overflow while reassembling fragmented datagrams [rhel-7.5.z]
+Patch1922: kvm-slirp-remove-mbuf-m_hdr-m_dat-indirection.patch
+# For bz#1586248 - CVE-2018-11806 qemu-kvm: QEMU: slirp: heap buffer overflow while reassembling fragmented datagrams [rhel-7.5.z]
+Patch1923: kvm-slirp-correct-size-computation-while-concatenating-m.patch
 
 
 BuildRequires: zlib-devel
@@ -5966,6 +5992,19 @@ tar -xf %{SOURCE21}
 %patch1908 -p1
 %patch1909 -p1
 %patch1910 -p1
+%patch1911 -p1
+%patch1912 -p1
+%patch1913 -p1
+%patch1914 -p1
+%patch1915 -p1
+%patch1916 -p1
+%patch1917 -p1
+%patch1918 -p1
+%patch1919 -p1
+%patch1920 -p1
+%patch1921 -p1
+%patch1922 -p1
+%patch1923 -p1
 
 %build
 buildarch="%{kvm_target}-softmmu"
@@ -6411,8 +6450,31 @@ sh %{_sysconfdir}/sysconfig/modules/kvm.modules &> /dev/null || :
 %{_mandir}/man8/qemu-nbd.8*
 
 %changelog
-* Wed Jun 27 2018 Fabian Arrotin <arrfab@centos.org> - 1.5.3-156.el7_5.3
+* Thu Aug 16 2018 Fabian Arrotin <arrfab@centos.org> - 1.5.3-156.el7_5.5
 - Added kvm_target arm (Jacco@redsleeve.org)
+
+* Wed Aug 01 2018 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-156.el7_5.5
+- kvm-multiboot-bss_end_addr-can-be-zero.patch [bz#1549824]
+- kvm-multiboot-Remove-unused-variables-from-multiboot.c.patch [bz#1549824]
+- kvm-multiboot-Use-header-names-when-displaying-fields.patch [bz#1549824]
+- kvm-multiboot-fprintf-stderr.-error_report.patch [bz#1549824]
+- kvm-multiboot-Reject-kernels-exceeding-the-address-space.patch [bz#1549824]
+- kvm-multiboot-Check-validity-of-mh_header_addr.patch [bz#1549824]
+- kvm-slirp-remove-mbuf-m_hdr-m_dat-indirection.patch [bz#1586248]
+- kvm-slirp-correct-size-computation-while-concatenating-m.patch [bz#1586248]
+- Resolves: bz#1549824
+  (CVE-2018-7550 qemu-kvm: Qemu: i386:  multiboot OOB access while loading kernel image [rhel-7.5.z])
+- Resolves: bz#1586248
+  (CVE-2018-11806 qemu-kvm: QEMU: slirp: heap buffer overflow while reassembling fragmented datagrams [rhel-7.5.z])
+
+* Mon Jul 23 2018 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-156.el7_5.4
+- kvm-target-i386-introduce-kvm_put_one_msr.patch [bz#1596302]
+- kvm-apic-fix-2.2-2.1-migration.patch [bz#1596302]
+- kvm-x86-lapic-Load-LAPIC-state-at-post_load.patch [bz#1596302]
+- kvm-apic-drop-debugging.patch [bz#1596302]
+- kvm-apic-set-APIC-base-as-part-of-kvm_apic_put.patch [bz#1596302]
+- Resolves: bz#1596302
+  (Windows 2012 Guest hangs after live migration with RTC clock stopped. [rhel-7.5.z])
 
 * Fri Jun 08 2018 Miroslav Rezanina <mrezanin@redhat.com> - 1.5.3-156.el7_5.3
 - kvm-i386-Define-the-Virt-SSBD-MSR-and-handling-of-it-CVE.patch [bz#1584363]

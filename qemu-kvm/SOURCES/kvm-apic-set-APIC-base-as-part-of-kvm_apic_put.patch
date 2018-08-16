@@ -1,0 +1,106 @@
+From 62a4c6bf428aaf562fb4b4ebfac22486be7b8ab8 Mon Sep 17 00:00:00 2001
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+Date: Thu, 28 Jun 2018 17:57:10 +0200
+Subject: [PATCH 5/5] kvm: apic: set APIC base as part of kvm_apic_put
+
+RH-Author: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Message-id: <20180628175710.56848-6-dgilbert@redhat.com>
+Patchwork-id: 81148
+O-Subject: [RHEL-7.5.z/RHEL-7.4.z/RHEL-7.3.z qemu-kvm PATCH 5/5] kvm: apic: set APIC base as part of kvm_apic_put
+Bugzilla: 1596302
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+
+RH-Author: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Message-id: <20180515115634.24469-6-dgilbert@redhat.com>
+Patchwork-id: 80271
+O-Subject: [RHEL-7.6 qemu-kvm PATCH v2 5/5] kvm: apic: set APIC base as part of kvm_apic_put
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+
+The parsing of KVM_SET_LAPIC's input depends on the current value of the
+APIC base MSR---which indeed is stored in APICCommonState---but for historical
+reasons APIC base is set through KVM_SET_SREGS together with cr8 (which is
+really just the APIC TPR) and the actual "special CPU registers".
+
+APIC base must now be set before the actual LAPIC registers, so do that
+in kvm_apic_put.  It will be set again to the same value with KVM_SET_SREGS,
+but that's not a big issue.
+
+This only happens since Linux 4.8, which checks for x2apic mode in
+KVM_SET_LAPIC.  However it's really a QEMU bug; until the recent
+commit 78d6a05 ("x86/lapic: Load LAPIC state at post_load", 2016-09-13)
+QEMU was indeed setting APIC base (via KVM_SET_SREGS) before the other
+LAPIC registers.
+
+Signed-off-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit f8d9ccf8d5f9f4b7d364100871c4c7303b546de5)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+(cherry picked from commit 4142f7546da561898f15169f6e8085167601e878)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/kvm/apic.c     | 2 ++
+ target-i386/kvm.c      | 8 ++++++++
+ target-i386/kvm_i386.h | 2 ++
+ 3 files changed, 12 insertions(+)
+
+diff --git a/hw/i386/kvm/apic.c b/hw/i386/kvm/apic.c
+index d47d8da..77d2999 100644
+--- a/hw/i386/kvm/apic.c
++++ b/hw/i386/kvm/apic.c
+@@ -12,6 +12,7 @@
+ #include "hw/i386/apic_internal.h"
+ #include "hw/pci/msi.h"
+ #include "sysemu/kvm.h"
++#include "target-i386/kvm_i386.h"
+ 
+ static inline void kvm_apic_set_reg(struct kvm_lapic_state *kapic,
+                                     int reg_id, uint32_t val)
+@@ -127,6 +128,7 @@ static void kvm_apic_put(void *data)
+     struct kvm_lapic_state kapic;
+     int ret;
+ 
++    kvm_put_apicbase(s->cpu, s->apicbase);
+     kvm_put_apic_state(s, &kapic);
+ 
+     ret = kvm_vcpu_ioctl(CPU(s->cpu), KVM_SET_LAPIC, &kapic);
+diff --git a/target-i386/kvm.c b/target-i386/kvm.c
+index 1658621..35a9cf4 100644
+--- a/target-i386/kvm.c
++++ b/target-i386/kvm.c
+@@ -1157,6 +1157,14 @@ static int kvm_put_one_msr(X86CPU *cpu, int index, uint64_t value)
+     return kvm_vcpu_ioctl(CPU(cpu), KVM_SET_MSRS, &msr_data);
+ }
+ 
++void kvm_put_apicbase(X86CPU *cpu, uint64_t value)
++{
++    int ret;
++
++    ret = kvm_put_one_msr(cpu, MSR_IA32_APICBASE, value);
++    assert(ret == 1);
++}
++
+ static int kvm_put_tscdeadline_msr(X86CPU *cpu)
+ {
+     CPUX86State *env = &cpu->env;
+diff --git a/target-i386/kvm_i386.h b/target-i386/kvm_i386.h
+index 4392ab4..b260b31 100644
+--- a/target-i386/kvm_i386.h
++++ b/target-i386/kvm_i386.h
+@@ -35,4 +35,6 @@ int kvm_device_msix_set_vector(KVMState *s, uint32_t dev_id, uint32_t vector,
+ int kvm_device_msix_assign(KVMState *s, uint32_t dev_id);
+ int kvm_device_msix_deassign(KVMState *s, uint32_t dev_id);
+ 
++void kvm_put_apicbase(X86CPU *cpu, uint64_t value);
++
+ #endif
+-- 
+1.8.3.1
+

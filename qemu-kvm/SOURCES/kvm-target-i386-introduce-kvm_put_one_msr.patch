@@ -1,0 +1,98 @@
+From 608f71fea5a9cc79483d0b66aa59cd652ee5bf9c Mon Sep 17 00:00:00 2001
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+Date: Thu, 28 Jun 2018 17:57:06 +0200
+Subject: [PATCH 1/5] target-i386: introduce kvm_put_one_msr
+
+RH-Author: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Message-id: <20180628175710.56848-2-dgilbert@redhat.com>
+Patchwork-id: 81144
+O-Subject: [RHEL-7.5.z/RHEL-7.4.z/RHEL-7.3.z qemu-kvm PATCH 1/5] target-i386: introduce kvm_put_one_msr
+Bugzilla: 1596302
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+
+RH-Author: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Message-id: <20180515115634.24469-2-dgilbert@redhat.com>
+Patchwork-id: 80272
+O-Subject: [RHEL-7.6 qemu-kvm PATCH v2 1/5] target-i386: introduce kvm_put_one_msr
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+
+Avoid further code duplication in the next patch.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 73e1b8f2f9b8a90361f9c1af306ee17bfcfd592d)
+(cherry picked from commit e9e26236af6a858961280cd4997c437eab27c1e9)
+  Merge conflict:
+      We don't yet have Eduardo's patch where kvm_msr_entry_add
+      was added, so rework to the older kvm_msr_entry_set.
+
+      No msr_feature_control in this world
+
+Signed-off-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+(cherry picked from commit 596e3e7f77a1570aff586199e7bb34de0b4e0ba6)
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ target-i386/kvm.c | 28 +++++++++++++++++++++-------
+ 1 file changed, 21 insertions(+), 7 deletions(-)
+
+diff --git a/target-i386/kvm.c b/target-i386/kvm.c
+index 656e24b..8544e52 100644
+--- a/target-i386/kvm.c
++++ b/target-i386/kvm.c
+@@ -1141,24 +1141,38 @@ static void kvm_msr_entry_set(struct kvm_msr_entry *entry,
+     entry->data = value;
+ }
+ 
+-static int kvm_put_tscdeadline_msr(X86CPU *cpu)
++static int kvm_put_one_msr(X86CPU *cpu, int index, uint64_t value)
+ {
+-    CPUX86State *env = &cpu->env;
+     struct {
+         struct kvm_msrs info;
+         struct kvm_msr_entry entries[1];
+     } msr_data;
+-    struct kvm_msr_entry *msrs = msr_data.entries;
++
++    kvm_msr_entry_set(&msr_data.entries[0], index, value);
++
++    msr_data.info = (struct kvm_msrs) {
++        .nmsrs = 1,
++    };
++
++    return kvm_vcpu_ioctl(CPU(cpu), KVM_SET_MSRS, &msr_data);
++}
++
++static int kvm_put_tscdeadline_msr(X86CPU *cpu)
++{
++    CPUX86State *env = &cpu->env;
++    int ret;
+ 
+     if (!has_msr_tsc_deadline) {
+         return 0;
+     }
+ 
+-    kvm_msr_entry_set(&msrs[0], MSR_IA32_TSCDEADLINE, env->tsc_deadline);
+-
+-    msr_data.info.nmsrs = 1;
++    ret = kvm_put_one_msr(cpu, MSR_IA32_TSCDEADLINE, env->tsc_deadline);
++    if (ret < 0) {
++        return ret;
++    }
+ 
+-    return kvm_vcpu_ioctl(CPU(cpu), KVM_SET_MSRS, &msr_data);
++    assert(ret == 1);
++    return 0;
+ }
+ 
+ static int kvm_put_msrs(X86CPU *cpu, int level)
+-- 
+1.8.3.1
+
