@@ -1,0 +1,110 @@
+From 8af398963fd14ea74210c0796b47b870b58ad497 Mon Sep 17 00:00:00 2001
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+Date: Thu, 28 Jun 2018 17:57:07 +0200
+Subject: [PATCH 2/5] kvm/apic: fix 2.2->2.1 migration
+
+RH-Author: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Message-id: <20180628175710.56848-3-dgilbert@redhat.com>
+Patchwork-id: 81146
+O-Subject: [RHEL-7.5.z/RHEL-7.4.z/RHEL-7.3.z qemu-kvm PATCH 2/5] kvm/apic: fix 2.2->2.1 migration
+Bugzilla: 1596302
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Laurent Vivier <lvivier@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+
+From: "Dr. David Alan Gilbert" <dgilbert@redhat.com>
+
+RH-Author: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Message-id: <20180515115634.24469-3-dgilbert@redhat.com>
+Patchwork-id: 80269
+O-Subject: [RHEL-7.6 qemu-kvm PATCH v2 2/5] kvm/apic: fix 2.2->2.1 migration
+RH-Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+RH-Acked-by: Eduardo Habkost <ehabkost@redhat.com>
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+The wait_for_sipi field is set back to 1 after an INIT, so it was not
+effective to reset it in kvm_apic_realize.  Introduce a reset callback
+and reset wait_for_sipi there.
+
+Reported-by: Igor Mammedov <imammedo@redhat.com>
+Cc: qemu-stable@nongnu.org
+Reviewed-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 575a6f4082c45778b93032ef1e7fbea4467b3a2a)
+   We're adding this just to get the reset member; 1.5.3 doesn't
+   currently have the wait_for_sipi change in the kvm code.
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+(cherry picked from commit 9001bf38b596c0eb50daa52181ec6b4cf56cfb94)
+Signed-off-by: Dr. David Alan Gilbert <dgilbert@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ hw/i386/kvm/apic.c              | 6 ++++++
+ hw/intc/apic_common.c           | 5 +++++
+ include/hw/i386/apic_internal.h | 1 +
+ 3 files changed, 12 insertions(+)
+
+diff --git a/hw/i386/kvm/apic.c b/hw/i386/kvm/apic.c
+index 8f80425..6ead17c 100644
+--- a/hw/i386/kvm/apic.c
++++ b/hw/i386/kvm/apic.c
+@@ -171,6 +171,11 @@ static const MemoryRegionOps kvm_apic_io_ops = {
+     .endianness = DEVICE_NATIVE_ENDIAN,
+ };
+ 
++static void kvm_apic_reset(APICCommonState *s)
++{
++    /* This function intentionally left blank, for now */
++}
++
+ static void kvm_apic_init(APICCommonState *s)
+ {
+     memory_region_init_io(&s->io_memory, &kvm_apic_io_ops, s, "kvm-apic-msi",
+@@ -186,6 +191,7 @@ static void kvm_apic_class_init(ObjectClass *klass, void *data)
+     APICCommonClass *k = APIC_COMMON_CLASS(klass);
+ 
+     k->init = kvm_apic_init;
++    k->reset = kvm_apic_reset;
+     k->set_base = kvm_apic_set_base;
+     k->set_tpr = kvm_apic_set_tpr;
+     k->get_tpr = kvm_apic_get_tpr;
+diff --git a/hw/intc/apic_common.c b/hw/intc/apic_common.c
+index ff413de..fff9266 100644
+--- a/hw/intc/apic_common.c
++++ b/hw/intc/apic_common.c
+@@ -173,6 +173,7 @@ bool apic_next_timer(APICCommonState *s, int64_t current_time)
+ void apic_init_reset(DeviceState *d)
+ {
+     APICCommonState *s = DO_UPCAST(APICCommonState, busdev.qdev, d);
++    APICCommonClass *info = APIC_COMMON_GET_CLASS(s);
+     int i;
+ 
+     if (!s) {
+@@ -201,6 +202,10 @@ void apic_init_reset(DeviceState *d)
+         qemu_del_timer(s->timer);
+     }
+     s->timer_expiry = -1;
++
++    if (info->reset) {
++        info->reset(s);
++    }
+ }
+ 
+ void apic_designate_bsp(DeviceState *d)
+diff --git a/include/hw/i386/apic_internal.h b/include/hw/i386/apic_internal.h
+index 1b0a7fb..a77da1c 100644
+--- a/include/hw/i386/apic_internal.h
++++ b/include/hw/i386/apic_internal.h
+@@ -89,6 +89,7 @@ typedef struct APICCommonClass
+     void (*external_nmi)(APICCommonState *s);
+     void (*pre_save)(APICCommonState *s);
+     void (*post_load)(APICCommonState *s);
++    void (*reset)(APICCommonState *s);
+ } APICCommonClass;
+ 
+ struct APICCommonState {
+-- 
+1.8.3.1
+

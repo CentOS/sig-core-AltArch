@@ -1,0 +1,113 @@
+From 58416c6786fa972314cb699a7df28d8c09268f03 Mon Sep 17 00:00:00 2001
+From: Xiao Wang <jasowang@redhat.com>
+Date: Mon, 30 Jul 2018 06:31:57 +0200
+Subject: [PATCH 8/8] slirp: correct size computation while concatenating mbuf
+
+RH-Author: Xiao Wang <jasowang@redhat.com>
+Message-id: <1532932317-6100-3-git-send-email-jasowang@redhat.com>
+Patchwork-id: 81543
+O-Subject: [RHEL7.6/7.5.z qemu-kvm PATCH 2/2] slirp: correct size computation while concatenating mbuf
+Bugzilla: 1586248
+RH-Acked-by: wexu@redhat.com
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Michael S. Tsirkin <mst@redhat.com>
+
+From: Prasad J Pandit <pjp@fedoraproject.org>
+
+Upstream: 70f2e64e4dde slirp: Convert mbufs to use g_malloc() and g_free()
+Notes: Conflict since we lacks 70f2e64e4dde
+       ("slirp: Convert mbufs to use g_malloc() and g_free()")
+
+While reassembling incoming fragmented datagrams, 'm_cat' routine
+extends the 'mbuf' buffer, if it has insufficient room. It computes
+a wrong buffer size, which leads to overwriting adjacent heap buffer
+area. Correct this size computation in m_cat.
+
+Reported-by: ZDI Disclosures <zdi-disclosures@trendmicro.com>
+Signed-off-by: Prasad J Pandit <pjp@fedoraproject.org>
+Signed-off-by: Samuel Thibault <samuel.thibault@ens-lyon.org>
+Signed-off-by: Jason Wang <jasowang@redhat.com>
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ slirp/mbuf.c | 11 +++++------
+ slirp/mbuf.h |  8 +++-----
+ 2 files changed, 8 insertions(+), 11 deletions(-)
+
+diff --git a/slirp/mbuf.c b/slirp/mbuf.c
+index 5565fd1..ced2033 100644
+--- a/slirp/mbuf.c
++++ b/slirp/mbuf.c
+@@ -139,7 +139,7 @@ m_cat(struct mbuf *m, struct mbuf *n)
+ 	 * If there's no room, realloc
+ 	 */
+ 	if (M_FREEROOM(m) < n->m_len)
+-		m_inc(m,m->m_size+MINCSIZE);
++		m_inc(m, m->m_len + n->m_len);
+ 
+ 	memcpy(m->m_data+m->m_len, n->m_data, n->m_len);
+ 	m->m_len += n->m_len;
+@@ -148,7 +148,7 @@ m_cat(struct mbuf *m, struct mbuf *n)
+ }
+ 
+ 
+-/* make m size bytes large */
++/* make m 'size' bytes large from m_data */
+ void
+ m_inc(struct mbuf *m, int size)
+ {
+@@ -159,12 +159,12 @@ m_inc(struct mbuf *m, int size)
+ 
+         if (m->m_flags & M_EXT) {
+ 	  datasize = m->m_data - m->m_ext;
+-	  m->m_ext = (char *)realloc(m->m_ext,size);
++	  m->m_ext = (char *)realloc(m->m_ext, size + datasize);
+ 	  m->m_data = m->m_ext + datasize;
+         } else {
+ 	  char *dat;
+ 	  datasize = m->m_data - m->m_dat;
+-	  dat = (char *)malloc(size);
++	  dat = (char *)malloc(size + datasize);
+ 	  memcpy(dat, m->m_dat, m->m_size);
+ 
+ 	  m->m_ext = dat;
+@@ -172,8 +172,7 @@ m_inc(struct mbuf *m, int size)
+ 	  m->m_flags |= M_EXT;
+         }
+ 
+-        m->m_size = size;
+-
++        m->m_size = size + datasize;
+ }
+ 
+ 
+diff --git a/slirp/mbuf.h b/slirp/mbuf.h
+index b144f1c..32e5120 100644
+--- a/slirp/mbuf.h
++++ b/slirp/mbuf.h
+@@ -33,8 +33,6 @@
+ #ifndef _MBUF_H_
+ #define _MBUF_H_
+ 
+-#define MINCSIZE 4096	/* Amount to increase mbuf if too small */
+-
+ /*
+  * Macros for type conversion
+  * mtod(m,t) -	convert mbuf pointer to data pointer of correct type
+@@ -72,11 +70,11 @@ struct mbuf {
+ 	struct	mbuf *m_prevpkt;	/* Flags aren't used in the output queue */
+ 	int	m_flags;		/* Misc flags */
+ 
+-	int	m_size;			/* Size of data */
++	int	m_size;			/* Size of mbuf, from m_dat or m_ext */
+ 	struct	socket *m_so;
+ 
+-	caddr_t	m_data;			/* Location of data */
+-	int	m_len;			/* Amount of data in this mbuf */
++	caddr_t	m_data;			/* Current location of data */
++	int	m_len;			/* Amount of data in this mbuf, from m_data */
+ 
+ 	Slirp *slirp;
+ 	bool	arp_requested;
+-- 
+1.8.3.1
+
