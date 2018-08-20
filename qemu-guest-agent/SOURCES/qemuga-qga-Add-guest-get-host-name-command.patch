@@ -1,0 +1,93 @@
+From 1878782a30dac5279c050a381015d9590d96a22e Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Thu, 19 Apr 2018 12:33:42 -0300
+Subject: [PATCH 1/7] qga: Add 'guest-get-host-name' command
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Miroslav Rezanina <mrezanin@redhat.com>
+Message-id: <a597a6984027d2276a75bd08d3d10ed43d0807a8.1524139831.git.mrezanin@redhat.com>
+Patchwork-id: 79710
+O-Subject: [RHEL-7.5.z qemu-guest-agent PATCH 1/7] qga: Add 'guest-get-host-name' command
+Bugzilla: 1598210
+RH-Acked-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Tomáš Golembiovský <tgolembi@redhat.com>
+
+From: Vinzenz Feenstra <vfeenstr@redhat.com>
+
+Retrieving the guest host name is a very useful feature for virtual management
+systems. This information can help to have more user friendly VM access
+details, instead of an IP there would be the host name. Also the host name
+reported can be used to have automated checks for valid SSL certificates.
+
+virsh # qemu-agent-command F25 '{ "execute": "guest-get-host-name" }'
+{"return":{"host-name":"F25.lab.evilissimo.net"}}
+
+Signed-off-by: Vinzenz Feenstra <vfeenstr@redhat.com>
+* minor whitespace fix-ups
+Signed-off-by: Michael Roth <mdroth@linux.vnet.ibm.com>
+(cherry picked from commit 0a3d197a71b0508f5ca066488fbbbe45a61c44fe)
+Signed-off-by: Wainer dos Santos Moschetta <wainersm@redhat.com>
+---
+ qga/commands.c       | 11 +++++++++++
+ qga/qapi-schema.json | 26 ++++++++++++++++++++++++++
+ 2 files changed, 37 insertions(+)
+
+diff --git a/qga/commands.c b/qga/commands.c
+index edd3e830e6..8c09938e28 100644
+--- a/qga/commands.c
++++ b/qga/commands.c
+@@ -499,3 +499,14 @@ int ga_parse_whence(GuestFileWhence *whence, Error **errp)
+     error_setg(errp, "invalid whence code %"PRId64, whence->u.value);
+     return -1;
+ }
++
++GuestHostName *qmp_guest_get_host_name(Error **err)
++{
++    GuestHostName *result = NULL;
++    gchar const *hostname = g_get_host_name();
++    if (hostname != NULL) {
++        result = g_new0(GuestHostName, 1);
++        result->host_name = g_strdup(hostname);
++    }
++    return result;
++}
+diff --git a/qga/qapi-schema.json b/qga/qapi-schema.json
+index 94c03128fd..8271c1eb84 100644
+--- a/qga/qapi-schema.json
++++ b/qga/qapi-schema.json
+@@ -1028,3 +1028,29 @@
+   'data':    { 'path': 'str', '*arg': ['str'], '*env': ['str'],
+                '*input-data': 'str', '*capture-output': 'bool' },
+   'returns': 'GuestExec' }
++
++
++##
++# @GuestHostName:
++# @host-name: Fully qualified domain name of the guest OS
++#
++# Since: 2.10
++##
++{ 'struct': 'GuestHostName',
++  'data':   { 'host-name': 'str' } }
++
++##
++# @guest-get-host-name:
++#
++# Return a name for the machine.
++#
++# The returned name is not necessarily a fully-qualified domain name, or even
++# present in DNS or some other name service at all. It need not even be unique
++# on your local network or site, but usually it is.
++#
++# Returns: the host name of the machine on success
++#
++# Since: 2.10
++##
++{ 'command': 'guest-get-host-name',
++  'returns': 'GuestHostName' }
+-- 
+2.13.6
+

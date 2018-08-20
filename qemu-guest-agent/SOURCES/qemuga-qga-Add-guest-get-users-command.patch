@@ -1,0 +1,311 @@
+From c456b78c44d3f132b06d5b77de0de5e6e81870e7 Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Thu, 19 Apr 2018 12:33:43 -0300
+Subject: [PATCH 2/7] qga: Add 'guest-get-users' command
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Miroslav Rezanina <mrezanin@redhat.com>
+Message-id: <9c0e4bb70a07f0e6cc94bab75d0aedd193f21be8.1524139831.git.mrezanin@redhat.com>
+Patchwork-id: 79708
+O-Subject: [RHEL-7.5.z qemu-guest-agent PATCH 2/7] qga: Add 'guest-get-users' command
+Bugzilla: 1598210
+RH-Acked-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Tomáš Golembiovský <tgolembi@redhat.com>
+
+From: Vinzenz Feenstra <vfeenstr@redhat.com>
+
+A command that will list all currently logged in users, and the time
+since when they are logged in.
+
+Examples:
+
+virsh # qemu-agent-command F25 '{ "execute": "guest-get-users" }'
+{"return":[{"login-time":1490622289.903835,"user":"root"}]}
+
+virsh # qemu-agent-command Win2k12r2 '{ "execute": "guest-get-users" }'
+{"return":[{"login-time":1490351044.670552,"domain":"LADIDA",
+"user":"Administrator"}]}
+
+Signed-off-by: Vinzenz Feenstra <vfeenstr@redhat.com>
+* make g_hash_table_contains compat func inline to avoid
+  unused warnings
+Signed-off-by: Michael Roth <mdroth@linux.vnet.ibm.com>
+(cherry picked from commit 161a56a9065feb6fa2f69cec6237a5c4e714b9d3)
+Signed-off-by: Wainer dos Santos Moschetta <wainersm@redhat.com>
+---
+ configure             |   2 +-
+ include/glib-compat.h |   6 +++
+ qga/commands-posix.c  |  60 +++++++++++++++++++++++++++++
+ qga/commands-win32.c  | 103 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ qga/qapi-schema.json  |  25 ++++++++++++
+ 5 files changed, 195 insertions(+), 1 deletion(-)
+
+diff --git a/configure b/configure
+index 3770d7c263..ccd2a0e230 100755
+--- a/configure
++++ b/configure
+@@ -724,7 +724,7 @@ if test "$mingw32" = "yes" ; then
+   sysconfdir="\${prefix}"
+   local_statedir=
+   confsuffix=""
+-  libs_qga="-lws2_32 -lwinmm -lpowrprof -liphlpapi -lnetapi32 $libs_qga"
++  libs_qga="-lws2_32 -lwinmm -lpowrprof -lwtsapi32 -liphlpapi -lnetapi32 $libs_qga"
+ fi
+ 
+ werror=""
+diff --git a/include/glib-compat.h b/include/glib-compat.h
+index acf254d2a0..f84ed5d64a 100644
+--- a/include/glib-compat.h
++++ b/include/glib-compat.h
+@@ -217,6 +217,12 @@ static inline void g_hash_table_add(GHashTable *hash_table, gpointer key)
+ {
+     g_hash_table_replace(hash_table, key, key);
+ }
++
++static inline gboolean g_hash_table_contains(GHashTable *hash_table,
++                                             gpointer key)
++{
++    return g_hash_table_lookup_extended(hash_table, key, NULL, NULL);
++}
+ #endif
+ 
+ #ifndef g_assert_true
+diff --git a/qga/commands-posix.c b/qga/commands-posix.c
+index ea37c097cf..55ac4fe9e7 100644
+--- a/qga/commands-posix.c
++++ b/qga/commands-posix.c
+@@ -15,6 +15,7 @@
+ #include <sys/ioctl.h>
+ #include <sys/wait.h>
+ #include <dirent.h>
++#include <utmpx.h>
+ #include "qga/guest-agent-core.h"
+ #include "qga-qmp-commands.h"
+ #include "qapi/qmp/qerror.h"
+@@ -2512,3 +2513,62 @@ void ga_command_state_init(GAState *s, GACommandState *cs)
+     ga_command_state_add(cs, NULL, guest_fsfreeze_cleanup);
+ #endif
+ }
++
++#define QGA_MICRO_SECOND_TO_SECOND 1000000
++
++static double ga_get_login_time(struct utmpx *user_info)
++{
++    double seconds = (double)user_info->ut_tv.tv_sec;
++    double useconds = (double)user_info->ut_tv.tv_usec;
++    useconds /= QGA_MICRO_SECOND_TO_SECOND;
++    return seconds + useconds;
++}
++
++GuestUserList *qmp_guest_get_users(Error **err)
++{
++    GHashTable *cache = NULL;
++    GuestUserList *head = NULL, *cur_item = NULL;
++    struct utmpx *user_info = NULL;
++    gpointer value = NULL;
++    GuestUser *user = NULL;
++    GuestUserList *item = NULL;
++    double login_time = 0;
++
++    cache = g_hash_table_new(g_str_hash, g_str_equal);
++    setutxent();
++
++    for (;;) {
++        user_info = getutxent();
++        if (user_info == NULL) {
++            break;
++        } else if (user_info->ut_type != USER_PROCESS) {
++            continue;
++        } else if (g_hash_table_contains(cache, user_info->ut_user)) {
++            value = g_hash_table_lookup(cache, user_info->ut_user);
++            user = (GuestUser *)value;
++            login_time = ga_get_login_time(user_info);
++            /* We're ensuring the earliest login time to be sent */
++            if (login_time < user->login_time) {
++                user->login_time = login_time;
++            }
++            continue;
++        }
++
++        item = g_new0(GuestUserList, 1);
++        item->value = g_new0(GuestUser, 1);
++        item->value->user = g_strdup(user_info->ut_user);
++        item->value->login_time = ga_get_login_time(user_info);
++
++        g_hash_table_insert(cache, item->value->user, item->value);
++
++        if (!cur_item) {
++            head = cur_item = item;
++        } else {
++            cur_item->next = item;
++            cur_item = item;
++        }
++    }
++    endutxent();
++    g_hash_table_destroy(cache);
++    return head;
++}
+diff --git a/qga/commands-win32.c b/qga/commands-win32.c
+index 19d72b2411..fa99a8f846 100644
+--- a/qga/commands-win32.c
++++ b/qga/commands-win32.c
+@@ -11,6 +11,9 @@
+  * See the COPYING file in the top-level directory.
+  */
+ 
++#ifndef _WIN32_WINNT
++#   define _WIN32_WINNT 0x0600
++#endif
+ #include "qemu/osdep.h"
+ #include <wtypes.h>
+ #include <powrprof.h>
+@@ -25,6 +28,7 @@
+ #include <initguid.h>
+ #endif
+ #include <lm.h>
++#include <wtsapi32.h>
+ 
+ #include "qga/guest-agent-core.h"
+ #include "qga/vss-win32.h"
+@@ -1536,3 +1540,102 @@ void ga_command_state_init(GAState *s, GACommandState *cs)
+         ga_command_state_add(cs, NULL, guest_fsfreeze_cleanup);
+     }
+ }
++
++/* MINGW is missing two fields: IncomingFrames & OutgoingFrames */
++typedef struct _GA_WTSINFOA {
++    WTS_CONNECTSTATE_CLASS State;
++    DWORD SessionId;
++    DWORD IncomingBytes;
++    DWORD OutgoingBytes;
++    DWORD IncomingFrames;
++    DWORD OutgoingFrames;
++    DWORD IncomingCompressedBytes;
++    DWORD OutgoingCompressedBy;
++    CHAR WinStationName[WINSTATIONNAME_LENGTH];
++    CHAR Domain[DOMAIN_LENGTH];
++    CHAR UserName[USERNAME_LENGTH + 1];
++    LARGE_INTEGER ConnectTime;
++    LARGE_INTEGER DisconnectTime;
++    LARGE_INTEGER LastInputTime;
++    LARGE_INTEGER LogonTime;
++    LARGE_INTEGER CurrentTime;
++
++} GA_WTSINFOA;
++
++GuestUserList *qmp_guest_get_users(Error **err)
++{
++#if (_WIN32_WINNT >= 0x0600)
++#define QGA_NANOSECONDS 10000000
++
++    GHashTable *cache = NULL;
++    GuestUserList *head = NULL, *cur_item = NULL;
++
++    DWORD buffer_size = 0, count = 0, i = 0;
++    GA_WTSINFOA *info = NULL;
++    WTS_SESSION_INFOA *entries = NULL;
++    GuestUserList *item = NULL;
++    GuestUser *user = NULL;
++    gpointer value = NULL;
++    INT64 login = 0;
++    double login_time = 0;
++
++    cache = g_hash_table_new(g_str_hash, g_str_equal);
++
++    if (WTSEnumerateSessionsA(NULL, 0, 1, &entries, &count)) {
++        for (i = 0; i < count; ++i) {
++            buffer_size = 0;
++            info = NULL;
++            if (WTSQuerySessionInformationA(
++                NULL,
++                entries[i].SessionId,
++                WTSSessionInfo,
++                (LPSTR *)&info,
++                &buffer_size
++            )) {
++
++                if (strlen(info->UserName) == 0) {
++                    WTSFreeMemory(info);
++                    continue;
++                }
++
++                login = info->LogonTime.QuadPart;
++                login -= W32_FT_OFFSET;
++                login_time = ((double)login) / QGA_NANOSECONDS;
++
++                if (g_hash_table_contains(cache, info->UserName)) {
++                    value = g_hash_table_lookup(cache, info->UserName);
++                    user = (GuestUser *)value;
++                    if (user->login_time > login_time) {
++                        user->login_time = login_time;
++                    }
++                } else {
++                    item = g_new0(GuestUserList, 1);
++                    item->value = g_new0(GuestUser, 1);
++
++                    item->value->user = g_strdup(info->UserName);
++                    item->value->domain = g_strdup(info->Domain);
++                    item->value->has_domain = true;
++
++                    item->value->login_time = login_time;
++
++                    g_hash_table_add(cache, item->value->user);
++
++                    if (!cur_item) {
++                        head = cur_item = item;
++                    } else {
++                        cur_item->next = item;
++                        cur_item = item;
++                    }
++                }
++            }
++            WTSFreeMemory(info);
++        }
++        WTSFreeMemory(entries);
++    }
++    g_hash_table_destroy(cache);
++    return head;
++#else
++    error_setg(err, QERR_UNSUPPORTED);
++    return NULL;
++#endif
++}
+diff --git a/qga/qapi-schema.json b/qga/qapi-schema.json
+index 8271c1eb84..1695afe3a9 100644
+--- a/qga/qapi-schema.json
++++ b/qga/qapi-schema.json
+@@ -1054,3 +1054,28 @@
+ ##
+ { 'command': 'guest-get-host-name',
+   'returns': 'GuestHostName' }
++
++
++##
++# @GuestUser:
++# @user:       Username
++# @domain:     Logon domain (windows only)
++# @login-time: Time of login of this user on the computer. If multiple
++#              instances of the user are logged in, the earliest login time is
++#              reported. The value is in fractional seconds since epoch time.
++#
++# Since: 2.10
++##
++{ 'struct': 'GuestUser',
++  'data': { 'user': 'str', 'login-time': 'number', '*domain': 'str' } }
++
++##
++# @guest-get-users:
++# Retrieves a list of currently active users on the VM.
++#
++# Returns: A unique list of users.
++#
++# Since: 2.10
++##
++{ 'command': 'guest-get-users',
++  'returns': ['GuestUser'] }
+-- 
+2.13.6
+

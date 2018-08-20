@@ -1,0 +1,121 @@
+From c3d3a693c4bb181f6673071de95e79fd97eda526 Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Thu, 19 Apr 2018 12:33:44 -0300
+Subject: [PATCH 3/7] qga: Add `guest-get-timezone` command
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Miroslav Rezanina <mrezanin@redhat.com>
+Message-id: <605280b778254624582ec8aa72c72155d2206948.1524139831.git.mrezanin@redhat.com>
+Patchwork-id: 79705
+O-Subject: [RHEL-7.5.z qemu-guest-agent PATCH 3/7] qga: Add `guest-get-timezone` command
+Bugzilla: 1598210
+RH-Acked-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Tomáš Golembiovský <tgolembi@redhat.com>
+
+From: Vinzenz Feenstra <vfeenstr@redhat.com>
+
+Adds a new command `guest-get-timezone` reporting the currently
+configured timezone on the system. The information on what timezone is
+currently is configured is useful in case of Windows VMs where the
+offset of the hardware clock is required to have the same offset. This
+can be used for management systems like `oVirt` to detect the timezone
+difference and warn administrators of the misconfiguration.
+
+Signed-off-by: Vinzenz Feenstra <vfeenstr@redhat.com>
+Reviewed-by: Sameeh Jubran <sameeh@daynix.com>
+Tested-by: Sameeh Jubran <sameeh@daynix.com>
+* moved stub implementation to end of function for consistency
+* document that timezone names are for informational use only.
+Signed-off-by: Michael Roth <mdroth@linux.vnet.ibm.com>
+(cherry picked from commit 53c58e64d0a27c59d763778faa2b5a522c544719)
+Signed-off-by: Wainer dos Santos Moschetta <wainersm@redhat.com>
+---
+ qga/commands.c       | 38 ++++++++++++++++++++++++++++++++++++++
+ qga/qapi-schema.json | 25 +++++++++++++++++++++++++
+ 2 files changed, 63 insertions(+)
+
+diff --git a/qga/commands.c b/qga/commands.c
+index 8c09938e28..5b73cd0e4d 100644
+--- a/qga/commands.c
++++ b/qga/commands.c
+@@ -510,3 +510,41 @@ GuestHostName *qmp_guest_get_host_name(Error **err)
+     }
+     return result;
+ }
++
++GuestTimezone *qmp_guest_get_timezone(Error **errp)
++{
++#if GLIB_CHECK_VERSION(2, 28, 0)
++    GuestTimezone *info = NULL;
++    GTimeZone *tz = NULL;
++    gint64 now = 0;
++    gint32 intv = 0;
++    gchar const *name = NULL;
++
++    info = g_new0(GuestTimezone, 1);
++    tz = g_time_zone_new_local();
++    if (tz == NULL) {
++        error_setg(errp, QERR_QGA_COMMAND_FAILED,
++                   "Couldn't retrieve local timezone");
++        goto error;
++    }
++
++    now = g_get_real_time() / G_USEC_PER_SEC;
++    intv = g_time_zone_find_interval(tz, G_TIME_TYPE_UNIVERSAL, now);
++    info->offset = g_time_zone_get_offset(tz, intv);
++    name = g_time_zone_get_abbreviation(tz, intv);
++    if (name != NULL) {
++        info->has_zone = true;
++        info->zone = g_strdup(name);
++    }
++    g_time_zone_unref(tz);
++
++    return info;
++
++error:
++    g_free(info);
++    return NULL;
++#else
++    error_setg(errp, QERR_UNSUPPORTED);
++    return NULL;
++#endif
++}
+diff --git a/qga/qapi-schema.json b/qga/qapi-schema.json
+index 1695afe3a9..5af73fedae 100644
+--- a/qga/qapi-schema.json
++++ b/qga/qapi-schema.json
+@@ -1079,3 +1079,28 @@
+ ##
+ { 'command': 'guest-get-users',
+   'returns': ['GuestUser'] }
++
++##
++# @GuestTimezone:
++#
++# @zone:    Timezone name. These values may differ depending on guest/OS and
++#           should only be used for informational purposes.
++# @offset:  Offset to UTC in seconds, negative numbers for time zones west of
++#           GMT, positive numbers for east
++#
++# Since: 2.10
++##
++{ 'struct': 'GuestTimezone',
++  'data':   { '*zone': 'str', 'offset': 'int' } }
++
++##
++# @guest-get-timezone:
++#
++# Retrieves the timezone information from the guest.
++#
++# Returns: A GuestTimezone dictionary.
++#
++# Since: 2.10
++##
++{ 'command': 'guest-get-timezone',
++  'returns': 'GuestTimezone' }
+-- 
+2.13.6
+

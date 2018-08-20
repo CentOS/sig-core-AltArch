@@ -1,0 +1,122 @@
+From f19ba10fbf079a0470ccc0e4b457fd4694c52f7a Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Thu, 19 Apr 2018 12:33:45 -0300
+Subject: [PATCH 4/7] qemu-ga: check if utmpx.h is available on the system
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RH-Author: Miroslav Rezanina <mrezanin@redhat.com>
+Message-id: <adde72cbe44e837391c64ac13b70ac0927d08775.1524139831.git.mrezanin@redhat.com>
+Patchwork-id: 79706
+O-Subject: [RHEL-7.5.z qemu-guest-agent PATCH 4/7] qemu-ga: check if utmpx.h is available on the system
+Bugzilla: 1598210
+RH-Acked-by: Marc-André Lureau <marcandre.lureau@redhat.com>
+RH-Acked-by: Stefan Hajnoczi <stefanha@redhat.com>
+RH-Acked-by: Tomáš Golembiovský <tgolembi@redhat.com>
+
+From: Tomáš Golembiovský <tgolembi@redhat.com>
+
+Commit 161a56a9065 added command guest-get-users and requires the
+utmpx.h (defined by POSIX) to work. It is however not always available
+(e.g. on OpenBSD) therefor a check for its existence is necessary.
+
+Signed-off-by: Tomáš Golembiovský <tgolembi@redhat.com>
+Signed-off-by: Michael Roth <mdroth@linux.vnet.ibm.com>
+
+Conflicts:
+	configure - Incorrect context due to missing commits
+
+(cherry picked from commit e674605f9821a275e3ed87ce9accc835d565b753)
+Signed-off-by: Wainer dos Santos Moschetta <wainersm@redhat.com>
+---
+ configure            | 19 +++++++++++++++++++
+ qga/commands-posix.c | 17 ++++++++++++++++-
+ 2 files changed, 35 insertions(+), 1 deletion(-)
+
+diff --git a/configure b/configure
+index ccd2a0e230..606368a506 100755
+--- a/configure
++++ b/configure
+@@ -4734,6 +4734,21 @@ if test "$modules" = "yes" && test "$LD_REL_FLAGS" = ""; then
+ fi
+ 
+ ##########################################
++# check for utmpx.h, it is missing e.g. on OpenBSD
++
++have_utmpx=no
++cat > $TMPC << EOF
++#include <utmpx.h>
++struct utmpx user_info;
++int main(void) {
++    return 0;
++}
++EOF
++if compile_prog "" "" ; then
++    have_utmpx=yes
++fi
++
++##########################################
+ # End of CC checks
+ # After here, no more $cc or $ld runs
+ 
+@@ -5706,6 +5721,10 @@ if test "$have_af_vsock" = "yes" ; then
+   echo "CONFIG_AF_VSOCK=y" >> $config_host_mak
+ fi
+ 
++if test "$have_utmpx" = "yes" ; then
++  echo "HAVE_UTMPX=y" >> $config_host_mak
++fi
++
+ # Hold two types of flag:
+ #   CONFIG_THREAD_SETNAME_BYTHREAD  - we've got a way of setting the name on
+ #                                     a thread we have a handle to
+diff --git a/qga/commands-posix.c b/qga/commands-posix.c
+index 55ac4fe9e7..70348aa8c8 100644
+--- a/qga/commands-posix.c
++++ b/qga/commands-posix.c
+@@ -15,7 +15,6 @@
+ #include <sys/ioctl.h>
+ #include <sys/wait.h>
+ #include <dirent.h>
+-#include <utmpx.h>
+ #include "qga/guest-agent-core.h"
+ #include "qga-qmp-commands.h"
+ #include "qapi/qmp/qerror.h"
+@@ -25,6 +24,10 @@
+ #include "qemu/base64.h"
+ #include "qemu/cutils.h"
+ 
++#ifdef HAVE_UTMPX
++#include <utmpx.h>
++#endif
++
+ #ifndef CONFIG_HAS_ENVIRON
+ #ifdef __APPLE__
+ #include <crt_externs.h>
+@@ -2514,6 +2517,8 @@ void ga_command_state_init(GAState *s, GACommandState *cs)
+ #endif
+ }
+ 
++#ifdef HAVE_UTMPX
++
+ #define QGA_MICRO_SECOND_TO_SECOND 1000000
+ 
+ static double ga_get_login_time(struct utmpx *user_info)
+@@ -2572,3 +2577,13 @@ GuestUserList *qmp_guest_get_users(Error **err)
+     g_hash_table_destroy(cache);
+     return head;
+ }
++
++#else
++
++GuestUserList *qmp_guest_get_users(Error **errp)
++{
++    error_setg(errp, QERR_UNSUPPORTED);
++    return NULL;
++}
++
++#endif
+-- 
+2.13.6
+
