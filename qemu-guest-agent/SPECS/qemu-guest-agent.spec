@@ -18,7 +18,7 @@
     %global have_usbredir 0
 %endif
 
-%ifarch s390 s390x
+%ifarch s390 s390x %{arm}
     %global have_librdma 0
     %global have_numa 0
     %global have_tcmalloc 0
@@ -49,6 +49,10 @@
 %endif
 %ifarch aarch64
     %global kvm_target    aarch64
+    %global have_fdt     1
+%endif
+%ifarch %{arm}
+    %global kvm_target    arm
     %global have_fdt     1
 %endif
 
@@ -278,6 +282,9 @@ install -m 0644  qemu-ga.8 ${RPM_BUILD_ROOT}%{_mandir}/man8/
 
 
 %changelog
+* Thu Aug 16 2018 Pablo Greco <pablo@fliagreco.com.ar> - 2.8.0-2.el7_5.1
+- Added kvm_target arm
+
 * Tue Jul 17 2018 Wainer dos Santos Moschetta <wainersm@redhat.com> - 2.8.0-2.el7_5.1
 - Corrected the package version from 2.8.0-3.el7 to 2.8.0-2.el7_5.1
 - Resolves: bz#1598210
