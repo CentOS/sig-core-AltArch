@@ -95,7 +95,7 @@
 Summary: GCC version 7
 Name: %{?scl_prefix}gcc
 Version: %{gcc_version}
-Release: %{gcc_release}.10%{?dist}
+Release: %{gcc_release}.13%{?dist}
 # libgcc, libgfortran, libgomp, libstdc++ and crtstuff have
 # GCC Runtime Exception.
 License: GPLv3+ and GPLv3+ with exceptions and GPLv2+ with exceptions and LGPLv2+ and BSD
@@ -243,9 +243,6 @@ Provides: liblto_plugin.so.0
 %ifarch aarch64
 %global oformat OUTPUT_FORMAT(elf64-littleaarch64)
 %endif
-%ifarch %{arm}
-%global oformat OUTPUT_FORMAT(elf32-littlearm)
-%endif
 
 Patch0: gcc7-hack.patch
 Patch2: gcc7-i386-libgomp.patch
@@ -262,6 +259,7 @@ Patch13: gcc7-rh1512529-aarch64.patch
 Patch14: gcc7-pr84524.patch
 Patch15: gcc7-pr84128.patch
 Patch16: gcc7-rh1570967.patch
+Patch17: gcc7-pr86138.patch
 
 Patch1000: gcc7-libstdc++-compat.patch
 Patch1001: gcc7-alt-compat-test.patch
@@ -297,11 +295,9 @@ Patch3020: 0020-Add-test-for-STRUCTURE-and-RECORD.patch
 Patch3022: 0022-Default-values-for-certain-field-descriptors-in-form.patch
 Patch3023: gcc7-fortranlines.patch
 Patch3024: gcc7-fortran-include.patch
+Patch3025: gcc7-fortran-equivalence.patch
 
 
-
-# specific patches for .el7 armhfp build
-Patch10001: gcc7-dts-arm.patch
 
 %if 0%{?rhel} >= 7
 %global nonsharedver 48
@@ -310,9 +306,7 @@ Patch10001: gcc7-dts-arm.patch
 %endif
 
 %if 0%{?scl:1}
-%ifnarch %{arm}
 %global _gnu %{nil}
-%endif
 %else
 %global _gnu 7E
 %endif
@@ -322,10 +316,7 @@ Patch10001: gcc7-dts-arm.patch
 %ifarch ppc
 %global gcc_target_platform ppc64-%{_vendor}-%{_target_os}%{?_gnu}
 %endif
-%ifarch %{arm}
-%global gcc_target_platform armv7hl-%{_vendor}-%{_target_os}-gnueabi
-%endif
-%ifnarch sparcv9 ppc %{arm}
+%ifnarch sparcv9 ppc
 %global gcc_target_platform %{_target_platform}
 %endif
 
@@ -700,6 +691,7 @@ This package contains the Memory Protection Extensions static runtime libraries.
 %patch14 -p0 -b .pr84524~
 %patch15 -p0 -b .pr84128~
 %patch16 -p0 -b .rh1570967~
+%patch17 -p0 -b .pr86138~
 
 %if 0%{?rhel} <= 7
 %patch1000 -p0 -b .libstdc++-compat~
@@ -757,10 +749,7 @@ cd ..
 %patch3022 -p1 -b .fortran22~
 %patch3023 -p1 -b .fortran23~
 %patch3024 -p1 -b .fortran24~
-%endif
-
-%ifarch %{arm}
-%patch10001 -p1 -b .arm1
+%patch3025 -p1 -b .fortran25~
 %endif
 
 echo 'Red Hat %{version}-%{gcc_release}' > gcc/DEV-PHASE
@@ -959,10 +948,6 @@ CONFIGURE_OPTS="\
 %endif
 %ifarch s390 s390x
 	--with-arch=z9-109 --with-tune=z10 --enable-decimal-float \
-%endif
-%ifarch armv7hl
-	--with-tune=cortex-a8 --with-arch=armv7-a \
-	--with-float=hard --with-fpu=vfpv3-d16 --with-abi=aapcs-linux \
 %endif
 %ifnarch sparc sparcv9 ppc
 	--build=%{gcc_target_platform} \
@@ -2920,8 +2905,14 @@ fi
 %doc rpm.doc/changelogs/libcc1/ChangeLog*
 
 %changelog
-* Mon Jun 18 2018 Pablo Greco <pablo@fliagreco.com.ar> 7.3.1-5.10
-- Fix for armhfp
+* Tue Aug 14 2018 Marek Polacek <polacek@redhat.com> 7.3.1-5.13
+- prevent implicit instantiation of COW empty rep (#1572583)
+
+* Tue Aug 14 2018 Jeff Law <law@redhat.com> 7.3.1-5.12
+- Fix codegen issue with EQUIVALENCE/AUTOMATIC
+
+* Fri Jul 13 2018 Jeff Law <law@redhat.com> 7.3.1-5.11
+- Revamp attribute checking for EQUIVALENCEs
 
 * Tue Jun 12 2018 Marek Polacek <polacek@redhat.com> 7.3.1-5.10
 - bump for rebuild
@@ -2930,7 +2921,6 @@ fi
 - Fix INCLUDE handling when pathname is on a separate line
 - Integrate updates to patches #0005 and #0014.  Add testcases for
 - various legacy fortran extensions (#1586289)
-
 
 * Sat May 19 2018 Marek Polacek <polacek@redhat.com> 7.3.1-5.8
 - bump for rebuild
