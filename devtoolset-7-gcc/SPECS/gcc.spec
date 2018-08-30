@@ -243,6 +243,9 @@ Provides: liblto_plugin.so.0
 %ifarch aarch64
 %global oformat OUTPUT_FORMAT(elf64-littleaarch64)
 %endif
+%ifarch %{arm}
+%global oformat OUTPUT_FORMAT(elf32-littlearm)
+%endif
 
 Patch0: gcc7-hack.patch
 Patch2: gcc7-i386-libgomp.patch
@@ -299,6 +302,9 @@ Patch3025: gcc7-fortran-equivalence.patch
 
 
 
+# specific patches for .el7 armhfp build
+Patch10001: gcc7-dts-arm.patch
+
 %if 0%{?rhel} >= 7
 %global nonsharedver 48
 %else
@@ -306,7 +312,9 @@ Patch3025: gcc7-fortran-equivalence.patch
 %endif
 
 %if 0%{?scl:1}
+%ifnarch %{arm}
 %global _gnu %{nil}
+%endif
 %else
 %global _gnu 7E
 %endif
@@ -316,7 +324,10 @@ Patch3025: gcc7-fortran-equivalence.patch
 %ifarch ppc
 %global gcc_target_platform ppc64-%{_vendor}-%{_target_os}%{?_gnu}
 %endif
-%ifnarch sparcv9 ppc
+%ifarch %{arm}
+%global gcc_target_platform armv7hl-%{_vendor}-%{_target_os}-gnueabi
+%endif
+%ifnarch sparcv9 ppc %{arm}
 %global gcc_target_platform %{_target_platform}
 %endif
 
@@ -752,6 +763,10 @@ cd ..
 %patch3025 -p1 -b .fortran25~
 %endif
 
+%ifarch %{arm}
+%patch10001 -p1 -b .arm1
+%endif
+
 echo 'Red Hat %{version}-%{gcc_release}' > gcc/DEV-PHASE
 
 %if 0%{?rhel} == 6
@@ -948,6 +963,10 @@ CONFIGURE_OPTS="\
 %endif
 %ifarch s390 s390x
 	--with-arch=z9-109 --with-tune=z10 --enable-decimal-float \
+%endif
+%ifarch armv7hl
+	--with-tune=cortex-a8 --with-arch=armv7-a \
+	--with-float=hard --with-fpu=vfpv3-d16 --with-abi=aapcs-linux \
 %endif
 %ifnarch sparc sparcv9 ppc
 	--build=%{gcc_target_platform} \
@@ -2905,6 +2924,9 @@ fi
 %doc rpm.doc/changelogs/libcc1/ChangeLog*
 
 %changelog
+* Thu Aug 30 2018 Pablo Greco <pablo@fliagreco.com.ar> 7.3.1-5.13
+- Fix for armhfp
+
 * Tue Aug 14 2018 Marek Polacek <polacek@redhat.com> 7.3.1-5.13
 - prevent implicit instantiation of COW empty rep (#1572583)
 
