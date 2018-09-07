@@ -1,0 +1,1355 @@
+diff --git a/backends/Makefile.am b/backends/Makefile.am
+index 37dc2d2..03b9d20 100644
+--- a/backends/Makefile.am
++++ b/backends/Makefile.am
+@@ -41,12 +41,38 @@ libebl_pic = libebl_i386_pic.a libebl_sh_pic.a libebl_x86_64_pic.a    \
+ 	     libebl_m68k_pic.a libebl_bpf_pic.a
+ noinst_LIBRARIES = $(libebl_pic)
+ noinst_DATA = $(libebl_pic:_pic.a=.so)
++lib_LIBRARIES = libebl_static_pic.a
+ 
+ 
+ libelf = ../libelf/libelf.so
+ libdw = ../libdw/libdw.so
+ libeu = ../lib/libeu.a
+ 
++# The following is minimal set of backends that we link with libdw to
++# avoid dlopen. Note repeats files below because some backends reuse
++# each others files.
++static_SRCS = i386_init.c i386_symbol.c i386_corenote.c i386_cfi.c \
++	     i386_retval.c i386_regs.c i386_auxv.c i386_syscall.c \
++	     i386_initreg.c i386_unwind.c \
++	     x86_64_init.c x86_64_symbol.c x86_64_corenote.c x86_64_cfi.c \
++	     x86_64_retval.c x86_64_regs.c x86_64_syscall.c \
++	     x86_64_initreg.c x86_64_unwind.c x32_corenote.c \
++	     ia64_init.c ia64_symbol.c ia64_regs.c ia64_retval.c \
++	     aarch64_init.c aarch64_regs.c aarch64_symbol.c   \
++	     aarch64_corenote.c aarch64_retval.c aarch64_cfi.c \
++	     aarch64_initreg.c aarch64_unwind.c \
++	     ppc_init.c ppc_symbol.c ppc_retval.c ppc_regs.c \
++	     ppc_corenote.c ppc_auxv.c ppc_attrs.c ppc_syscall.c \
++	     ppc_cfi.c ppc_initreg.c \
++	     ppc64_init.c ppc64_symbol.c ppc64_retval.c ppc64_corenote.c \
++	     ppc64_resolve_sym.c ppc64_unwind.c \
++	     s390_init.c s390_symbol.c s390_regs.c s390_retval.c \
++	     s390_corenote.c s390x_corenote.c s390_cfi.c s390_initreg.c \
++	     s390_unwind.c bpf_init.c bpf_regs.c
++
++libebl_static_pic_a_SOURCES = $(static_SRCS)
++am_libebl_static_pic_a_OBJECTS = $(static_SRCS:.c=.os)
++
+ i386_SRCS = i386_init.c i386_symbol.c i386_corenote.c i386_cfi.c \
+ 	    i386_retval.c i386_regs.c i386_auxv.c i386_syscall.c \
+ 	    i386_initreg.c i386_unwind.c
+diff --git a/configure.ac b/configure.ac
+index 1f1856d..0ca9ae2 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -25,6 +25,12 @@ m4_ifndef([AC_PACKAGE_URL],
+                     [Define to home page for this package])
+           AC_SUBST([PACKAGE_URL], ["http://elfutils.org/"])])
+ 
++dnl Workaround for older autoconf < 2.64
++m4_ifndef([AC_PACKAGE_URL],
++         [AC_DEFINE([PACKAGE_URL], ["http://elfutils.org/"],
++                    [Define to home page for this package])
++          AC_SUBST([PACKAGE_URL], ["http://elfutils.org/"])])
++
+ # We want eu- as default program prefix if none was given by the user.
+ # But if the user explicitly provided --program-prefix="" then pretend
+ # it wasn't set at all (NONE). We want to test this really early before
+diff --git a/libasm/Makefile.am b/libasm/Makefile.am
+index 9effa6c..0e10150 100644
+--- a/libasm/Makefile.am
++++ b/libasm/Makefile.am
+@@ -38,6 +38,7 @@ noinst_LIBRARIES = libasm_pic.a
+ noinst_PROGRAMS = $(noinst_LIBRARIES:_pic.a=.so)
+ pkginclude_HEADERS = libasm.h
+ 
++libasm_a_CFLAGS = -fPIC -fvisibility=hidden $(AM_CFLAGS)
+ libasm_a_SOURCES = asm_begin.c asm_abort.c asm_end.c asm_error.c \
+ 		   asm_getelf.c asm_newscn.c asm_newscn_ingrp.c \
+ 		   asm_newsubscn.c asm_newsym.c asm_newcomsym.c \
+diff --git a/libcpu/Makefile.am b/libcpu/Makefile.am
+index 94de56e..d16ba69 100644
+--- a/libcpu/Makefile.am
++++ b/libcpu/Makefile.am
+@@ -36,9 +36,11 @@ LEX_OUTPUT_ROOT = lex.$(<F:lex.l=)
+ AM_YFLAGS = -p$(<F:parse.y=)
+ 
+ noinst_LIBRARIES = libcpu_i386.a libcpu_x86_64.a
++lib_LIBRARIES = libcpu_static_pic.a
+ 
+ libcpu_i386_a_SOURCES = i386_disasm.c i386_dis.h
+ libcpu_x86_64_a_SOURCES = x86_64_disasm.c x86_64_dis.h
++libcpu_static_pic_a_SOURCES = $(libcpu_i386_a_SOURCES) $(libcpu_x86_64_a_SOURCES)
+ 
+ i386_gendis_SOURCES = i386_gendis.c i386_lex.l i386_parse.y
+ 
+@@ -48,6 +50,8 @@ x86_64_disasm.o: x86_64.mnemonics $(srcdir)/x86_64_dis.h
+ noinst_LIBRARIES += libcpu_bpf.a
+ libcpu_bpf_a_SOURCES = bpf_disasm.c
+ libcpu_bpf_a_CFLAGS = $(AM_CFLAGS) -Wno-format-nonliteral
++libcpu_static_pic_a_SOURCES += $(libcpu_bpf_a_SOURCES)
++bpf_disasm_CFLAGS = -fPIC -Wno-format-nonliteral
+ 
+ %_defs: $(srcdir)/defs/i386
+ 	$(AM_V_GEN)m4 -D$* -DDISASSEMBLER $< > $@T
+diff --git a/libdw/Makefile.am b/libdw/Makefile.am
+index ff8c291..b3e781d 100644
+--- a/libdw/Makefile.am
++++ b/libdw/Makefile.am
+@@ -35,12 +35,13 @@ AM_CPPFLAGS += -I$(srcdir)/../libelf
+ VERSION = 1
+ 
+ lib_LIBRARIES = libdw.a
+-noinst_LIBRARIES = libdw_pic.a
+-noinst_PROGRAMS = $(noinst_LIBRARIES:_pic.a=.so)
++noinst_LIBRARIES = libdw_pic.a libdw_static_pic.a
++noinst_PROGRAMS = libdw.so
+ 
+ include_HEADERS = dwarf.h
+ pkginclude_HEADERS = libdw.h known-dwarf.h
+ 
++libdw_a_CFLAGS = -fPIC -fvisibility=hidden $(AM_CFLAGS)
+ libdw_a_SOURCES = dwarf_begin.c dwarf_begin_elf.c dwarf_end.c dwarf_getelf.c \
+ 		  dwarf_getpubnames.c dwarf_getabbrev.c dwarf_tag.c \
+ 		  dwarf_error.c dwarf_nextcu.c dwarf_diename.c dwarf_offdie.c \
+@@ -91,6 +92,21 @@ libdw_a_SOURCES = dwarf_begin.c dwarf_begin_elf.c dwarf_end.c dwarf_getelf.c \
+ 		  dwarf_getalt.c dwarf_setalt.c dwarf_cu_getdwarf.c \
+ 		  dwarf_cu_die.c dwarf_peel_type.c dwarf_default_lower_bound.c
+ 
++# Minimal library with symbols needed by those libebl backends that we
++# ship statically.  This is so that e.g. strip doesn't end up bringing
++# in the whole of libdw, and depending on libbz2, liblzma, etc.
++libdw_static_pic_a_SOURCES = libdw_form.c dwarf_child.c dwarf_attr.c \
++		dwarf_attr_integrate.c dwarf_formref_die.c dwarf_error.c \
++		dwarf_tag.c dwarf_formref.c \
++		dwarf_abbrev_hash.c dwarf_sig8_hash.c \
++		dwarf_formudata.c libdw_findcu.c dwarf_offdie.c \
++		dwarf_getabbrev.c dwarf_nextcu.c libdw_alloc.c \
++		dwarf_hasattr_integrate.c dwarf_hasattr.c \
++		dwarf_aggregate_size.c dwarf_siblingof.c dwarf_formsdata.c \
++		dwarf_srclang.c dwarf_formflag.c dwarf_diecu.c \
++		dwarf_bytesize.c dwarf_bitsize.c dwarf_peel_type.c \
++		dwarf_default_lower_bound.c
++
+ if MAINTAINER_MODE
+ BUILT_SOURCES = $(srcdir)/known-dwarf.h
+ MAINTAINERCLEANFILES = $(srcdir)/known-dwarf.h
+@@ -101,9 +117,12 @@ endif
+ 
+ libdw_pic_a_SOURCES =
+ am_libdw_pic_a_OBJECTS = $(libdw_a_SOURCES:.c=.os)
++am_libdw_static_pic_a_OBJECTS = $(libdw_static_pic_a_SOURCES:.c=.os)
+ 
+ libdw_so_LIBS = libdw_pic.a ../libdwelf/libdwelf_pic.a \
+-	  ../libdwfl/libdwfl_pic.a ../libebl/libebl.a
++	  ../libdwfl/libdwfl_pic.a ../libebl/libebl.a \
++	  ../backends/libebl_static_pic.a \
++	  ../libcpu/libcpu_static_pic.a
+ libdw_so_DEPS = ../lib/libeu.a ../libelf/libelf.so
+ libdw_so_LDLIBS = $(libdw_so_DEPS) -ldl -lz $(argp_LDADD) $(zip_LIBS)
+ libdw_so_SOURCES =
+diff --git a/libdwelf/Makefile.am b/libdwelf/Makefile.am
+index 7ca767a..b526b7c 100644
+--- a/libdwelf/Makefile.am
++++ b/libdwelf/Makefile.am
+@@ -39,6 +39,7 @@ noinst_LIBRARIES = libdwelf.a libdwelf_pic.a
+ pkginclude_HEADERS = libdwelf.h
+ noinst_HEADERS = libdwelfP.h
+ 
++libdwelf_a_CFLAGS = -fPIC -fvisibility=hidden $(AM_CFLAGS)
+ libdwelf_a_SOURCES = dwelf_elf_gnu_debuglink.c dwelf_dwarf_gnu_debugaltlink.c \
+ 		     dwelf_elf_gnu_build_id.c dwelf_scn_gnu_compressed_size.c \
+ 		     dwelf_strtab.c
+diff --git a/libdwfl/Makefile.am b/libdwfl/Makefile.am
+index 89ca92e..d9d13b2 100644
+--- a/libdwfl/Makefile.am
++++ b/libdwfl/Makefile.am
+@@ -39,6 +39,7 @@ noinst_LIBRARIES += libdwfl_pic.a
+ 
+ pkginclude_HEADERS = libdwfl.h
+ 
++libdwfl_a_CFLAGS = -fPIC -fvisibility=hidden $(AM_CFLAGS)
+ libdwfl_a_SOURCES = dwfl_begin.c dwfl_end.c dwfl_error.c dwfl_version.c \
+ 		    dwfl_module.c dwfl_report_elf.c relocate.c \
+ 		    dwfl_module_build_id.c dwfl_module_report_build_id.c \
+diff --git a/libebl/Makefile.am b/libebl/Makefile.am
+index 2491df8..6d5b07f 100644
+--- a/libebl/Makefile.am
++++ b/libebl/Makefile.am
+@@ -56,6 +56,7 @@ gen_SOURCES = eblopenbackend.c eblclosebackend.c \
+ 	      eblunwind.c eblresolvesym.c eblcheckreloctargettype.c \
+ 	      ebl_data_marker_symbol.c
+ 
++libebl_a_CFLAGS = -fvisibility=hidden $(AM_CFLAGS)
+ libebl_a_SOURCES = $(gen_SOURCES)
+ 
+ noinst_HEADERS = libeblP.h ebl-hooks.h
+diff --git a/libebl/eblclosebackend.c b/libebl/eblclosebackend.c
+index 67fbdfe..501e5c7 100644
+--- a/libebl/eblclosebackend.c
++++ b/libebl/eblclosebackend.c
+@@ -44,10 +44,6 @@ ebl_closebackend (Ebl *ebl)
+       /* Run the destructor.  */
+       ebl->destr (ebl);
+ 
+-      /* Close the dynamically loaded object.  */
+-      if (ebl->dlhandle != NULL)
+-	(void) dlclose (ebl->dlhandle);
+-
+       /* Free the resources.  */
+       free (ebl);
+     }
+diff --git a/libebl/eblopenbackend.c b/libebl/eblopenbackend.c
+index 1f81477..1728115 100644
+--- a/libebl/eblopenbackend.c
++++ b/libebl/eblopenbackend.c
+@@ -42,6 +42,14 @@
+ #include <system.h>
+ #include <libeblP.h>
+ 
++const char *i386_init (Elf *elf, GElf_Half machine, Ebl *eh, size_t ehlen);
++const char *x86_64_init (Elf *elf, GElf_Half machine, Ebl *eh, size_t ehlen);
++const char *ppc_init (Elf *elf, GElf_Half machine, Ebl *eh, size_t ehlen);
++const char *ppc64_init (Elf *elf, GElf_Half machine, Ebl *eh, size_t ehlen);
++const char *ia64_init (Elf *elf, GElf_Half machine, Ebl *eh, size_t ehlen);
++const char *s390_init (Elf *elf, GElf_Half machine, Ebl *eh, size_t ehlen);
++const char *aarch64_init (Elf *elf, GElf_Half machine, Ebl *eh, size_t ehlen);
++const char *bpf_init (Elf *elf, GElf_Half machine, Ebl *eh, size_t ehlen);
+ 
+ /* This table should contain the complete list of architectures as far
+    as the ELF specification is concerned.  */
+@@ -49,7 +57,7 @@
+    arrays to avoid relocations.  */
+ static const struct
+ {
+-  const char *dsoname;
++  ebl_bhinit_t initptr;
+   const char *emulation;
+   const char *prefix;
+   int prefix_len;
+@@ -58,82 +66,82 @@ static const struct
+   int data;
+ } machines[] =
+ {
+-  { "i386", "elf_i386", "i386", 4, EM_386, ELFCLASS32, ELFDATA2LSB },
+-  { "ia64", "elf_ia64", "ia64", 4, EM_IA_64, ELFCLASS64, ELFDATA2LSB },
+-  { "alpha", "elf_alpha", "alpha", 5, EM_ALPHA, ELFCLASS64, ELFDATA2LSB },
+-  { "x86_64", "elf_x86_64", "x86_64", 6, EM_X86_64, ELFCLASS64, ELFDATA2LSB },
+-  { "ppc", "elf_ppc", "ppc", 3, EM_PPC, ELFCLASS32, ELFDATA2MSB },
+-  { "ppc64", "elf_ppc64", "ppc64", 5, EM_PPC64, ELFCLASS64, ELFDATA2MSB },
+-  { "tilegx", "elf_tilegx", "tilegx", 6, EM_TILEGX, ELFCLASS64, ELFDATA2LSB },
++  { i386_init, "elf_i386", "i386", 4, EM_386, ELFCLASS32, ELFDATA2LSB },
++  { ia64_init, "elf_ia64", "ia64", 4, EM_IA_64, ELFCLASS64, ELFDATA2LSB },
++  { NULL, "elf_alpha", "alpha", 5, EM_ALPHA, ELFCLASS64, ELFDATA2LSB },
++  { x86_64_init, "elf_x86_64", "x86_64", 6, EM_X86_64, ELFCLASS64, ELFDATA2LSB },
++  { ppc_init, "elf_ppc", "ppc", 3, EM_PPC, ELFCLASS32, ELFDATA2MSB },
++  { ppc64_init, "elf_ppc64", "ppc64", 5, EM_PPC64, ELFCLASS64, ELFDATA2MSB },
++  { NULL, "elf_tilegx", "tilegx", 6, EM_TILEGX, ELFCLASS64, ELFDATA2LSB },
+   // XXX class and machine fields need to be filled in for all archs.
+-  { "sh", "elf_sh", "sh", 2, EM_SH, 0, 0 },
+-  { "arm", "ebl_arm", "arm", 3, EM_ARM, 0, 0 },
+-  { "sparc", "elf_sparcv9", "sparc", 5, EM_SPARCV9, 0, 0 },
+-  { "sparc", "elf_sparc", "sparc", 5, EM_SPARC, 0, 0 },
+-  { "sparc", "elf_sparcv8plus", "sparc", 5, EM_SPARC32PLUS, 0, 0 },
+-  { "s390", "ebl_s390", "s390", 4, EM_S390, 0, 0 },
+-
+-  { "m32", "elf_m32", "m32", 3, EM_M32, 0, 0 },
+-  { "m68k", "elf_m68k", "m68k", 4, EM_68K, ELFCLASS32, ELFDATA2MSB },
+-  { "m88k", "elf_m88k", "m88k", 4, EM_88K, 0, 0 },
+-  { "i860", "elf_i860", "i860", 4, EM_860, 0, 0 },
+-  { "s370", "ebl_s370", "s370", 4, EM_S370, 0, 0 },
+-  { "parisc", "elf_parisc", "parisc", 6, EM_PARISC, 0, 0 },
+-  { "vpp500", "elf_vpp500", "vpp500", 5, EM_VPP500, 0, 0 },
+-  { "sparc", "elf_v8plus", "v8plus", 6, EM_SPARC32PLUS, 0, 0 },
+-  { "i960", "elf_i960", "i960", 4, EM_960, 0, 0 },
+-  { "v800", "ebl_v800", "v800", 4, EM_V800, 0, 0 },
+-  { "fr20", "ebl_fr20", "fr20", 4, EM_FR20, 0, 0 },
+-  { "rh32", "ebl_rh32", "rh32", 4, EM_RH32, 0, 0 },
+-  { "rce", "ebl_rce", "rce", 3, EM_RCE, 0, 0 },
+-  { "tricore", "elf_tricore", "tricore", 7, EM_TRICORE, 0, 0 },
+-  { "arc", "elf_arc", "arc", 3, EM_ARC, 0, 0 },
+-  { "h8", "elf_h8_300", "h8_300", 6, EM_H8_300, 0, 0 },
+-  { "h8", "elf_h8_300h", "h8_300h", 6, EM_H8_300H, 0, 0 },
+-  { "h8", "elf_h8s", "h8s", 6, EM_H8S, 0, 0 },
+-  { "h8", "elf_h8_500", "h8_500", 6, EM_H8_500, 0, 0 },
+-  { "coldfire", "elf_coldfire", "coldfire", 8, EM_COLDFIRE, 0, 0 },
+-  { "m68k", "elf_68hc12", "68hc12", 6, EM_68HC12, 0, 0 },
+-  { "mma", "elf_mma", "mma", 3, EM_MMA, 0, 0 },
+-  { "pcp", "elf_pcp", "pcp", 3, EM_PCP, 0, 0 },
+-  { "ncpu", "elf_ncpu", "ncpu", 4, EM_NCPU, 0, 0 },
+-  { "ndr1", "elf_ndr1", "ndr1", 4, EM_NDR1, 0, 0 },
+-  { "starcore", "elf_starcore", "starcore", 8, EM_STARCORE, 0, 0 },
+-  { "me16", "elf_me16", "em16", 4, EM_ME16, 0, 0 },
+-  { "st100", "elf_st100", "st100", 5, EM_ST100, 0, 0 },
+-  { "tinyj", "elf_tinyj", "tinyj", 5, EM_TINYJ, 0, 0 },
+-  { "pdsp", "elf_pdsp", "pdsp", 4, EM_PDSP, 0, 0 },
+-  { "fx66", "elf_fx66", "fx66", 4, EM_FX66, 0, 0 },
+-  { "st9plus", "elf_st9plus", "st9plus", 7, EM_ST9PLUS, 0, 0 },
+-  { "st7", "elf_st7", "st7", 3, EM_ST7, 0, 0 },
+-  { "m68k", "elf_68hc16", "68hc16", 6, EM_68HC16, 0, 0 },
+-  { "m68k", "elf_68hc11", "68hc11", 6, EM_68HC11, 0, 0 },
+-  { "m68k", "elf_68hc08", "68hc08", 6, EM_68HC08, 0, 0 },
+-  { "m68k", "elf_68hc05", "68hc05", 6, EM_68HC05, 0, 0 },
+-  { "svx", "elf_svx", "svx", 3, EM_SVX, 0, 0 },
+-  { "st19", "elf_st19", "st19", 4, EM_ST19, 0, 0 },
+-  { "vax", "elf_vax", "vax", 3, EM_VAX, 0, 0 },
+-  { "cris", "elf_cris", "cris", 4, EM_CRIS, 0, 0 },
+-  { "javelin", "elf_javelin", "javelin", 7, EM_JAVELIN, 0, 0 },
+-  { "firepath", "elf_firepath", "firepath", 8, EM_FIREPATH, 0, 0 },
+-  { "zsp", "elf_zsp", "zsp", 3, EM_ZSP, 0, 0 },
+-  { "mmix", "elf_mmix", "mmix", 4, EM_MMIX, 0, 0 },
+-  { "hunay", "elf_huany", "huany", 5, EM_HUANY, 0, 0 },
+-  { "prism", "elf_prism", "prism", 5, EM_PRISM, 0, 0 },
+-  { "avr", "elf_avr", "avr", 3, EM_AVR, 0, 0 },
+-  { "fr30", "elf_fr30", "fr30", 4, EM_FR30, 0, 0 },
+-  { "dv10", "elf_dv10", "dv10", 4, EM_D10V, 0, 0 },
+-  { "dv30", "elf_dv30", "dv30", 4, EM_D30V, 0, 0 },
+-  { "v850", "elf_v850", "v850", 4, EM_V850, 0, 0 },
+-  { "m32r", "elf_m32r", "m32r", 4, EM_M32R, 0, 0 },
+-  { "mn10300", "elf_mn10300", "mn10300", 7, EM_MN10300, 0, 0 },
+-  { "mn10200", "elf_mn10200", "mn10200", 7, EM_MN10200, 0, 0 },
+-  { "pj", "elf_pj", "pj", 2, EM_PJ, 0, 0 },
+-  { "openrisc", "elf_openrisc", "openrisc", 8, EM_OPENRISC, 0, 0 },
+-  { "arc", "elf_arc_a5", "arc_a5", 6, EM_ARC_A5, 0, 0 },
+-  { "xtensa", "elf_xtensa", "xtensa", 6, EM_XTENSA, 0, 0 },
+-  { "aarch64", "elf_aarch64", "aarch64", 7, EM_AARCH64, ELFCLASS64, 0 },
+-  { "bpf", "elf_bpf", "bpf", 3, EM_BPF, 0, 0 },
++  { NULL, "elf_sh", "sh", 2, EM_SH, 0, 0 },
++  { NULL, "ebl_arm", "arm", 3, EM_ARM, 0, 0 },
++  { NULL, "elf_sparcv9", "sparc", 5, EM_SPARCV9, 0, 0 },
++  { NULL, "elf_sparc", "sparc", 5, EM_SPARC, 0, 0 },
++  { NULL, "elf_sparcv8plus", "sparc", 5, EM_SPARC32PLUS, 0, 0 },
++  { s390_init, "ebl_s390", "s390", 4, EM_S390, 0, 0 },
++
++  { NULL, "elf_m32", "m32", 3, EM_M32, 0, 0 },
++  { NULL, "elf_m68k", "m68k", 4, EM_68K, ELFCLASS32, ELFDATA2MSB },
++  { NULL, "elf_m88k", "m88k", 4, EM_88K, 0, 0 },
++  { NULL, "elf_i860", "i860", 4, EM_860, 0, 0 },
++  { NULL, "ebl_s370", "s370", 4, EM_S370, 0, 0 },
++  { NULL, "elf_parisc", "parisc", 6, EM_PARISC, 0, 0 },
++  { NULL, "elf_vpp500", "vpp500", 5, EM_VPP500, 0, 0 },
++  { NULL, "elf_v8plus", "v8plus", 6, EM_SPARC32PLUS, 0, 0 },
++  { NULL, "elf_i960", "i960", 4, EM_960, 0, 0 },
++  { NULL, "ebl_v800", "v800", 4, EM_V800, 0, 0 },
++  { NULL, "ebl_fr20", "fr20", 4, EM_FR20, 0, 0 },
++  { NULL, "ebl_rh32", "rh32", 4, EM_RH32, 0, 0 },
++  { NULL, "ebl_rce", "rce", 3, EM_RCE, 0, 0 },
++  { NULL, "elf_tricore", "tricore", 7, EM_TRICORE, 0, 0 },
++  { NULL, "elf_arc", "arc", 3, EM_ARC, 0, 0 },
++  { NULL, "elf_h8_300", "h8_300", 6, EM_H8_300, 0, 0 },
++  { NULL, "elf_h8_300h", "h8_300h", 6, EM_H8_300H, 0, 0 },
++  { NULL, "elf_h8s", "h8s", 6, EM_H8S, 0, 0 },
++  { NULL, "elf_h8_500", "h8_500", 6, EM_H8_500, 0, 0 },
++  { NULL, "elf_coldfire", "coldfire", 8, EM_COLDFIRE, 0, 0 },
++  { NULL, "elf_68hc12", "68hc12", 6, EM_68HC12, 0, 0 },
++  { NULL, "elf_mma", "mma", 3, EM_MMA, 0, 0 },
++  { NULL, "elf_pcp", "pcp", 3, EM_PCP, 0, 0 },
++  { NULL, "elf_ncpu", "ncpu", 4, EM_NCPU, 0, 0 },
++  { NULL, "elf_ndr1", "ndr1", 4, EM_NDR1, 0, 0 },
++  { NULL, "elf_starcore", "starcore", 8, EM_STARCORE, 0, 0 },
++  { NULL, "elf_me16", "em16", 4, EM_ME16, 0, 0 },
++  { NULL, "elf_st100", "st100", 5, EM_ST100, 0, 0 },
++  { NULL, "elf_tinyj", "tinyj", 5, EM_TINYJ, 0, 0 },
++  { NULL, "elf_pdsp", "pdsp", 4, EM_PDSP, 0, 0 },
++  { NULL, "elf_fx66", "fx66", 4, EM_FX66, 0, 0 },
++  { NULL, "elf_st9plus", "st9plus", 7, EM_ST9PLUS, 0, 0 },
++  { NULL, "elf_st7", "st7", 3, EM_ST7, 0, 0 },
++  { NULL, "elf_68hc16", "68hc16", 6, EM_68HC16, 0, 0 },
++  { NULL, "elf_68hc11", "68hc11", 6, EM_68HC11, 0, 0 },
++  { NULL, "elf_68hc08", "68hc08", 6, EM_68HC08, 0, 0 },
++  { NULL, "elf_68hc05", "68hc05", 6, EM_68HC05, 0, 0 },
++  { NULL, "elf_svx", "svx", 3, EM_SVX, 0, 0 },
++  { NULL, "elf_st19", "st19", 4, EM_ST19, 0, 0 },
++  { NULL, "elf_vax", "vax", 3, EM_VAX, 0, 0 },
++  { NULL, "elf_cris", "cris", 4, EM_CRIS, 0, 0 },
++  { NULL, "elf_javelin", "javelin", 7, EM_JAVELIN, 0, 0 },
++  { NULL, "elf_firepath", "firepath", 8, EM_FIREPATH, 0, 0 },
++  { NULL, "elf_zsp", "zsp", 3, EM_ZSP, 0, 0 },
++  { NULL, "elf_mmix", "mmix", 4, EM_MMIX, 0, 0 },
++  { NULL, "elf_huany", "huany", 5, EM_HUANY, 0, 0 },
++  { NULL, "elf_prism", "prism", 5, EM_PRISM, 0, 0 },
++  { NULL, "elf_avr", "avr", 3, EM_AVR, 0, 0 },
++  { NULL, "elf_fr30", "fr30", 4, EM_FR30, 0, 0 },
++  { NULL, "elf_dv10", "dv10", 4, EM_D10V, 0, 0 },
++  { NULL, "elf_dv30", "dv30", 4, EM_D30V, 0, 0 },
++  { NULL, "elf_v850", "v850", 4, EM_V850, 0, 0 },
++  { NULL, "elf_m32r", "m32r", 4, EM_M32R, 0, 0 },
++  { NULL, "elf_mn10300", "mn10300", 7, EM_MN10300, 0, 0 },
++  { NULL, "elf_mn10200", "mn10200", 7, EM_MN10200, 0, 0 },
++  { NULL, "elf_pj", "pj", 2, EM_PJ, 0, 0 },
++  { NULL, "elf_openrisc", "openrisc", 8, EM_OPENRISC, 0, 0 },
++  { NULL, "elf_arc_a5", "arc_a5", 6, EM_ARC_A5, 0, 0 },
++  { NULL, "elf_xtensa", "xtensa", 6, EM_XTENSA, 0, 0 },
++  { aarch64_init, "elf_aarch64", "aarch64", 7, EM_AARCH64, ELFCLASS64, 0 },
++  { bpf_init, "elf_bpf", "bpf", 3, EM_BPF, 0, 0 },
+ };
+ #define nmachines (sizeof (machines) / sizeof (machines[0]))
+ 
+@@ -317,46 +325,17 @@ openbackend (Elf *elf, const char *emulation, GElf_Half machine)
+ #endif
+ #define ORIGINDIR "$ORIGIN/../$LIB/" LIBEBL_SUBDIR "/"
+ 
+-	/* Give it a try.  At least the machine type matches.  First
+-           try to load the module.  */
+-	char dsoname[100];
+-	strcpy (stpcpy (stpcpy (dsoname, ORIGINDIR "libebl_"),
+-			machines[cnt].dsoname),
+-		".so");
+-
+-	void *h = dlopen (dsoname, RTLD_LAZY);
+-	if (h == NULL)
+-	  {
+-	    strcpy (stpcpy (stpcpy (dsoname, "libebl_"),
+-			    machines[cnt].dsoname),
+-		    ".so");
+-	    h = dlopen (dsoname, RTLD_LAZY);
+-	  }
+-
+-	  /* Try without an explicit path.  */
+-	if (h != NULL)
++	ebl_bhinit_t initp = machines[cnt].initptr;
++	if (1)
+ 	  {
+-	    /* We managed to load the object.  Now see whether the
+-	       initialization function likes our file.  */
+ 	    static const char version[] = MODVERSION;
+ 	    const char *modversion;
+-	    ebl_bhinit_t initp;
+-
+-	    // We use a static number to help the compiler see we don't
+-	    // overflow the stack with an arbitrary number.
+-	    assert (machines[cnt].prefix_len <= MAX_PREFIX_LEN);
+-	    char symname[MAX_PREFIX_LEN + sizeof "_init"];
+-
+-	    strcpy (mempcpy (symname, machines[cnt].prefix,
+-			     machines[cnt].prefix_len), "_init");
+-
+-	    initp = (ebl_bhinit_t) dlsym (h, symname);
+ 	    if (initp != NULL
+ 		&& (modversion = initp (elf, machine, result, sizeof (Ebl)))
+ 		&& strcmp (version, modversion) == 0)
+ 	      {
+ 		/* We found a module to handle our file.  */
+-		result->dlhandle = h;
++		result->dlhandle = NULL;
+ 		result->elf = elf;
+ 
+ 		/* A few entries are mandatory.  */
+@@ -365,9 +344,6 @@ openbackend (Elf *elf, const char *emulation, GElf_Half machine)
+ 
+ 		return result;
+ 	      }
+-
+-	    /* Not the module we need.  */
+-	    (void) dlclose (h);
+ 	  }
+ 
+ 	/* We cannot find a DSO but the emulation/machine ID matches.
+diff --git a/libelf/Makefile.am b/libelf/Makefile.am
+index 88c1edd..f873ed0 100644
+--- a/libelf/Makefile.am
++++ b/libelf/Makefile.am
+@@ -41,6 +41,7 @@ include_HEADERS = libelf.h gelf.h nlist.h
+ 
+ pkginclude_HEADERS = elf-knowledge.h
+ 
++libelf_a_CFLAGS = -fPIC -fvisibility=hidden $(AM_CFLAGS)
+ libelf_a_SOURCES = elf_version.c elf_hash.c elf_error.c elf_fill.c \
+ 		   elf_begin.c elf_next.c elf_rand.c elf_end.c elf_kind.c \
+ 		   gelf_getclass.c elf_getbase.c elf_getident.c \
+diff --git a/src/Makefile.am b/src/Makefile.am
+index 2b1c0dc..657b21a 100644
+--- a/src/Makefile.am
++++ b/src/Makefile.am
+@@ -47,7 +47,8 @@ libasm = ../libasm/libasm.so
+ libdw = ../libdw/libdw.so
+ libelf = ../libelf/libelf.so
+ endif
+-libebl = ../libebl/libebl.a
++libebl = ../libebl/libebl.a ../backends/libebl_static_pic.a ../libcpu/libcpu_static_pic.a
++libdw_static = ../libdw/libdw_static_pic.a
+ libeu = ../lib/libeu.a
+ 
+ if DEMANGLE
+@@ -67,16 +68,17 @@ ranlib_no_Wstack_usage = yes
+ ar_no_Wstack_usage = yes
+ unstrip_no_Wstack_usage = yes
+ 
++
+ readelf_LDADD = $(libdw) $(libebl) $(libelf) $(libeu) $(argp_LDADD) -ldl
+ nm_LDADD = $(libdw) $(libebl) $(libelf) $(libeu) $(argp_LDADD) -ldl \
+ 	   $(demanglelib)
+ size_LDADD = $(libelf) $(libeu) $(argp_LDADD)
+ strip_LDADD = $(libebl) $(libelf) $(libdw) $(libeu) $(argp_LDADD) -ldl
+-elflint_LDADD  = $(libebl) $(libelf) $(libeu) $(argp_LDADD) -ldl
++elflint_LDADD  = $(libebl) $(libdw_static) $(libelf) $(libeu) $(argp_LDADD) -ldl
+ findtextrel_LDADD = $(libdw) $(libelf) $(libeu) $(argp_LDADD)
+ addr2line_LDADD = $(libdw) $(libelf) $(libeu) $(argp_LDADD) $(demanglelib)
+-elfcmp_LDADD = $(libebl) $(libelf) $(libeu) $(argp_LDADD) -ldl
+-objdump_LDADD  = $(libasm) $(libebl) $(libelf) $(libeu) $(argp_LDADD) -ldl
++elfcmp_LDADD = $(libebl) $(libdw_static) $(libeu) $(libelf) $(argp_LDADD) -ldl
++objdump_LDADD  = $(libasm) $(libebl) $(libdw_static) $(libelf) $(libeu) $(argp_LDADD) -ldl
+ ranlib_LDADD = libar.a $(libelf) $(libeu) $(argp_LDADD)
+ strings_LDADD = $(libelf) $(libeu) $(argp_LDADD)
+ ar_LDADD = libar.a $(libelf) $(libeu) $(argp_LDADD)
+diff --git a/tests/Makefile.am b/tests/Makefile.am
+index 3735084..483f387 100644
+--- a/tests/Makefile.am
++++ b/tests/Makefile.am
+@@ -80,7 +80,7 @@ TESTS = run-arextract.sh run-arsymtest.sh newfile test-nlist \
+ 	newscn run-strip-test.sh run-strip-test2.sh \
+ 	run-strip-test3.sh run-strip-test4.sh run-strip-test5.sh \
+ 	run-strip-test6.sh run-strip-test7.sh run-strip-test8.sh \
+-	run-strip-test9.sh run-strip-test10.sh run-strip-test11.sh \
++	run-strip-test9.sh run-strip-test10.sh \
+ 	run-strip-nothing.sh run-strip-g.sh \
+ 	run-strip-groups.sh run-strip-reloc.sh run-strip-strmerge.sh \
+ 	run-strip-nobitsalign.sh run-strip-remove-keep.sh \
+@@ -404,7 +404,8 @@ libdw = ../libdw/libdw.so
+ libelf = ../libelf/libelf.so
+ libasm = ../libasm/libasm.so
+ endif
+-libebl = ../libebl/libebl.a
++libebl = ../libebl/libebl.a ../backends/libebl_static_pic.a ../libcpu/libcpu_static_pic.a
++libdw_static = ../libdw/libdw_static_pic.a
+ libeu = ../lib/libeu.a
+ endif !STANDALONE
+ 
+@@ -432,6 +433,7 @@ get_lines_LDADD = $(libdw) $(libelf)
+ get_files_LDADD = $(libdw) $(libelf)
+ get_aranges_LDADD = $(libdw) $(libelf)
+ allfcts_LDADD = $(libdw) $(libelf)
++line2addr_no_Wformat = yes
+ line2addr_LDADD = $(libdw) $(argp_LDADD)
+ addrscopes_LDADD = $(libdw) $(argp_LDADD)
+ funcscopes_LDADD = $(libdw) $(argp_LDADD)
+diff --git a/tests/run-addrcfi.sh b/tests/run-addrcfi.sh
+index 376a6dc..7fc46e5 100755
+--- a/tests/run-addrcfi.sh
++++ b/tests/run-addrcfi.sh
+@@ -3521,82 +3521,6 @@ testrun_compare ${abs_builddir}/addrcfi -e testfiles390x 0x0000000080000510 <<\E
+ handle_cfi no CFI (.debug_frame): no error
+ EOF
+ 
+-# EM_ARM (function bar 0x00008510)
+-# Note. Only in .debug_frame, the .eh_frame is actually empty.
+-# Same as s390 and ppc above.
+-testfiles testfilearm
+-testrun_compare ${abs_builddir}/addrcfi -e testfilearm 0x00008510 <<\EOF
+-dwarf_cfi_addrframe (.eh_frame): no matching address range
+-.debug_frame has 0x8510 => [0x8510, 0x8524):
+-	return address in reg14
+-	CFA location expression: bregx(13)
+-	integer reg0 (r0): undefined
+-	integer reg1 (r1): undefined
+-	integer reg2 (r2): undefined
+-	integer reg3 (r3): undefined
+-	integer reg4 (r4): same_value
+-	integer reg5 (r5): same_value
+-	integer reg6 (r6): same_value
+-	integer reg7 (r7): same_value
+-	integer reg8 (r8): same_value
+-	integer reg9 (r9): undefined
+-	integer reg10 (r10): same_value
+-	integer reg11 (r11): same_value
+-	integer reg12 (r12): undefined
+-	integer reg13 (sp): location expression: call_frame_cfa stack_value
+-	integer reg14 (lr): same_value
+-	integer reg15 (pc): location expression: regx(14)
+-	FPA reg16 (f0): undefined
+-	FPA reg17 (f1): undefined
+-	FPA reg18 (f2): undefined
+-	FPA reg19 (f3): undefined
+-	FPA reg20 (f4): undefined
+-	FPA reg21 (f5): undefined
+-	FPA reg22 (f6): undefined
+-	FPA reg23 (f7): undefined
+-	FPA reg96 (f0): undefined
+-	FPA reg97 (f1): undefined
+-	FPA reg98 (f2): undefined
+-	FPA reg99 (f3): undefined
+-	FPA reg100 (f4): undefined
+-	FPA reg101 (f5): undefined
+-	FPA reg102 (f6): undefined
+-	FPA reg103 (f7): undefined
+-	integer reg128 (spsr): undefined
+-	VFP reg256 (d0): undefined
+-	VFP reg257 (d1): undefined
+-	VFP reg258 (d2): undefined
+-	VFP reg259 (d3): undefined
+-	VFP reg260 (d4): undefined
+-	VFP reg261 (d5): undefined
+-	VFP reg262 (d6): undefined
+-	VFP reg263 (d7): undefined
+-	VFP reg264 (d8): same_value
+-	VFP reg265 (d9): same_value
+-	VFP reg266 (d10): same_value
+-	VFP reg267 (d11): same_value
+-	VFP reg268 (d12): same_value
+-	VFP reg269 (d13): same_value
+-	VFP reg270 (d14): same_value
+-	VFP reg271 (d15): same_value
+-	VFP reg272 (d16): undefined
+-	VFP reg273 (d17): undefined
+-	VFP reg274 (d18): undefined
+-	VFP reg275 (d19): undefined
+-	VFP reg276 (d20): undefined
+-	VFP reg277 (d21): undefined
+-	VFP reg278 (d22): undefined
+-	VFP reg279 (d23): undefined
+-	VFP reg280 (d24): undefined
+-	VFP reg281 (d25): undefined
+-	VFP reg282 (d26): undefined
+-	VFP reg283 (d27): undefined
+-	VFP reg284 (d28): undefined
+-	VFP reg285 (d29): undefined
+-	VFP reg286 (d30): undefined
+-	VFP reg287 (d31): undefined
+-EOF
+-
+ # EM_AARCH64 (function bar 0x400550)
+ # Same as arm, 390 and ppc above.
+ # Note missing coverage in .eh_frame.
+diff --git a/tests/run-allregs.sh b/tests/run-allregs.sh
+index 7ddd452..0d2eb52 100755
+--- a/tests/run-allregs.sh
++++ b/tests/run-allregs.sh
+@@ -2344,387 +2344,6 @@ control registers:
+ 	 65: %pswa (pswa), address 64 bits
+ EOF
+ 
+-regs_test testfile30 <<\EOF
+-integer registers:
+-	  0: %g0 (g0), signed 32 bits
+-	  1: %g1 (g1), signed 32 bits
+-	  2: %g2 (g2), signed 32 bits
+-	  3: %g3 (g3), signed 32 bits
+-	  4: %g4 (g4), signed 32 bits
+-	  5: %g5 (g5), signed 32 bits
+-	  6: %g6 (g6), signed 32 bits
+-	  7: %g7 (g7), signed 32 bits
+-	  8: %o0 (o0), signed 32 bits
+-	  9: %o1 (o1), signed 32 bits
+-	 10: %o2 (o2), signed 32 bits
+-	 11: %o3 (o3), signed 32 bits
+-	 12: %o4 (o4), signed 32 bits
+-	 13: %o5 (o5), signed 32 bits
+-	 14: %o6 (o6), address 32 bits
+-	 15: %o7 (o7), signed 32 bits
+-	 16: %l0 (l0), signed 32 bits
+-	 17: %l1 (l1), signed 32 bits
+-	 18: %l2 (l2), signed 32 bits
+-	 19: %l3 (l3), signed 32 bits
+-	 20: %l4 (l4), signed 32 bits
+-	 21: %l5 (l5), signed 32 bits
+-	 22: %l6 (l6), signed 32 bits
+-	 23: %l7 (l7), signed 32 bits
+-	 24: %i0 (i0), signed 32 bits
+-	 25: %i1 (i1), signed 32 bits
+-	 26: %i2 (i2), signed 32 bits
+-	 27: %i3 (i3), signed 32 bits
+-	 28: %i4 (i4), signed 32 bits
+-	 29: %i5 (i5), signed 32 bits
+-	 30: %i6 (i6), address 32 bits
+-	 31: %i7 (i7), signed 32 bits
+-FPU registers:
+-	 32: %f0 (f0), float 32 bits
+-	 33: %f1 (f1), float 32 bits
+-	 34: %f2 (f2), float 32 bits
+-	 35: %f3 (f3), float 32 bits
+-	 36: %f4 (f4), float 32 bits
+-	 37: %f5 (f5), float 32 bits
+-	 38: %f6 (f6), float 32 bits
+-	 39: %f7 (f7), float 32 bits
+-	 40: %f8 (f8), float 32 bits
+-	 41: %f9 (f9), float 32 bits
+-	 42: %f10 (f10), float 32 bits
+-	 43: %f11 (f11), float 32 bits
+-	 44: %f12 (f12), float 32 bits
+-	 45: %f13 (f13), float 32 bits
+-	 46: %f14 (f14), float 32 bits
+-	 47: %f15 (f15), float 32 bits
+-	 48: %f16 (f16), float 32 bits
+-	 49: %f17 (f17), float 32 bits
+-	 50: %f18 (f18), float 32 bits
+-	 51: %f19 (f19), float 32 bits
+-	 52: %f20 (f20), float 32 bits
+-	 53: %f21 (f21), float 32 bits
+-	 54: %f22 (f22), float 32 bits
+-	 55: %f23 (f23), float 32 bits
+-	 56: %f24 (f24), float 32 bits
+-	 57: %f25 (f25), float 32 bits
+-	 58: %f26 (f26), float 32 bits
+-	 59: %f27 (f27), float 32 bits
+-	 60: %f28 (f28), float 32 bits
+-	 61: %f29 (f29), float 32 bits
+-	 62: %f30 (f30), float 32 bits
+-	 63: %f31 (f31), float 32 bits
+-control registers:
+-	 64: %y (y), unsigned 32 bits
+-	 65: %psr (psr), unsigned 32 bits
+-	 66: %wim (wim), unsigned 32 bits
+-	 67: %tbr (tbr), unsigned 32 bits
+-	 68: %pc (pc), address 32 bits
+-	 69: %npc (npc), address 32 bits
+-	 70: %fsr (fsr), unsigned 32 bits
+-	 71: %csr (csr), unsigned 32 bits
+-EOF
+-
+-regs_test testfile31 <<\EOF
+-integer registers:
+-	  0: %g0 (g0), signed 64 bits
+-	  1: %g1 (g1), signed 64 bits
+-	  2: %g2 (g2), signed 64 bits
+-	  3: %g3 (g3), signed 64 bits
+-	  4: %g4 (g4), signed 64 bits
+-	  5: %g5 (g5), signed 64 bits
+-	  6: %g6 (g6), signed 64 bits
+-	  7: %g7 (g7), signed 64 bits
+-	  8: %o0 (o0), signed 64 bits
+-	  9: %o1 (o1), signed 64 bits
+-	 10: %o2 (o2), signed 64 bits
+-	 11: %o3 (o3), signed 64 bits
+-	 12: %o4 (o4), signed 64 bits
+-	 13: %o5 (o5), signed 64 bits
+-	 14: %o6 (o6), address 64 bits
+-	 15: %o7 (o7), signed 64 bits
+-	 16: %l0 (l0), signed 64 bits
+-	 17: %l1 (l1), signed 64 bits
+-	 18: %l2 (l2), signed 64 bits
+-	 19: %l3 (l3), signed 64 bits
+-	 20: %l4 (l4), signed 64 bits
+-	 21: %l5 (l5), signed 64 bits
+-	 22: %l6 (l6), signed 64 bits
+-	 23: %l7 (l7), signed 64 bits
+-	 24: %i0 (i0), signed 64 bits
+-	 25: %i1 (i1), signed 64 bits
+-	 26: %i2 (i2), signed 64 bits
+-	 27: %i3 (i3), signed 64 bits
+-	 28: %i4 (i4), signed 64 bits
+-	 29: %i5 (i5), signed 64 bits
+-	 30: %i6 (i6), address 64 bits
+-	 31: %i7 (i7), signed 64 bits
+-FPU registers:
+-	 32: %f0 (f0), float 32 bits
+-	 33: %f1 (f1), float 32 bits
+-	 34: %f2 (f2), float 32 bits
+-	 35: %f3 (f3), float 32 bits
+-	 36: %f4 (f4), float 32 bits
+-	 37: %f5 (f5), float 32 bits
+-	 38: %f6 (f6), float 32 bits
+-	 39: %f7 (f7), float 32 bits
+-	 40: %f8 (f8), float 32 bits
+-	 41: %f9 (f9), float 32 bits
+-	 42: %f10 (f10), float 32 bits
+-	 43: %f11 (f11), float 32 bits
+-	 44: %f12 (f12), float 32 bits
+-	 45: %f13 (f13), float 32 bits
+-	 46: %f14 (f14), float 32 bits
+-	 47: %f15 (f15), float 32 bits
+-	 48: %f16 (f16), float 32 bits
+-	 49: %f17 (f17), float 32 bits
+-	 50: %f18 (f18), float 32 bits
+-	 51: %f19 (f19), float 32 bits
+-	 52: %f20 (f20), float 32 bits
+-	 53: %f21 (f21), float 32 bits
+-	 54: %f22 (f22), float 32 bits
+-	 55: %f23 (f23), float 32 bits
+-	 56: %f24 (f24), float 32 bits
+-	 57: %f25 (f25), float 32 bits
+-	 58: %f26 (f26), float 32 bits
+-	 59: %f27 (f27), float 32 bits
+-	 60: %f28 (f28), float 32 bits
+-	 61: %f29 (f29), float 32 bits
+-	 62: %f30 (f30), float 32 bits
+-	 63: %f31 (f31), float 32 bits
+-	 64: %f32 (f32), float 64 bits
+-	 65: %f34 (f34), float 64 bits
+-	 66: %f36 (f36), float 64 bits
+-	 67: %f38 (f38), float 64 bits
+-	 68: %f40 (f40), float 64 bits
+-	 69: %f42 (f42), float 64 bits
+-	 70: %f44 (f44), float 64 bits
+-	 71: %f46 (f46), float 64 bits
+-	 72: %f48 (f48), float 64 bits
+-	 73: %f50 (f50), float 64 bits
+-	 74: %f52 (f52), float 64 bits
+-	 75: %f54 (f54), float 64 bits
+-	 76: %f56 (f56), float 64 bits
+-	 77: %f58 (f58), float 64 bits
+-	 78: %f60 (f60), float 64 bits
+-	 79: %f62 (f62), float 64 bits
+-control registers:
+-	 80: %pc (pc), address 64 bits
+-	 81: %npc (npc), address 64 bits
+-	 82: %state (state), unsigned 64 bits
+-	 83: %fsr (fsr), unsigned 64 bits
+-	 84: %fprs (fprs), unsigned 64 bits
+-	 85: %y (y), unsigned 64 bits
+-EOF
+-
+-regs_test testfile10 <<\EOF
+-integer registers:
+-	  0: $v0 (v0), signed 64 bits
+-	  1: $t0 (t0), signed 64 bits
+-	  2: $t1 (t1), signed 64 bits
+-	  3: $t2 (t2), signed 64 bits
+-	  4: $t3 (t3), signed 64 bits
+-	  5: $t4 (t4), signed 64 bits
+-	  6: $t5 (t5), signed 64 bits
+-	  7: $t6 (t6), signed 64 bits
+-	  8: $t7 (t7), signed 64 bits
+-	  9: $s0 (s0), signed 64 bits
+-	 10: $s1 (s1), signed 64 bits
+-	 11: $s2 (s2), signed 64 bits
+-	 12: $s3 (s3), signed 64 bits
+-	 13: $s4 (s4), signed 64 bits
+-	 14: $s5 (s5), signed 64 bits
+-	 15: $s6 (s6), signed 64 bits
+-	 16: $a0 (a0), signed 64 bits
+-	 17: $a1 (a1), signed 64 bits
+-	 18: $a2 (a2), signed 64 bits
+-	 19: $a3 (a3), signed 64 bits
+-	 20: $a4 (a4), signed 64 bits
+-	 21: $a5 (a5), signed 64 bits
+-	 22: $t8 (t8), signed 64 bits
+-	 23: $t9 (t9), signed 64 bits
+-	 24: $t10 (t10), signed 64 bits
+-	 25: $t11 (t11), signed 64 bits
+-	 26: $ra (ra), address 64 bits
+-	 27: $t12 (t12), signed 64 bits
+-	 28: $at (at), signed 64 bits
+-	 29: $gp (gp), address 64 bits
+-	 30: $sp (sp), address 64 bits
+-	 31: $zero (zero), signed 64 bits
+-	 64: $pc (pc), address 64 bits
+-	 66: $unique (unique), address 64 bits
+-FPU registers:
+-	 32: $f0 (f0), float 64 bits
+-	 33: $f1 (f1), float 64 bits
+-	 34: $f2 (f2), float 64 bits
+-	 35: $f3 (f3), float 64 bits
+-	 36: $f4 (f4), float 64 bits
+-	 37: $f5 (f5), float 64 bits
+-	 38: $f6 (f6), float 64 bits
+-	 39: $f7 (f7), float 64 bits
+-	 40: $f8 (f8), float 64 bits
+-	 41: $f9 (f9), float 64 bits
+-	 42: $f10 (f10), float 64 bits
+-	 43: $f11 (f11), float 64 bits
+-	 44: $f12 (f12), float 64 bits
+-	 45: $f13 (f13), float 64 bits
+-	 46: $f14 (f14), float 64 bits
+-	 47: $f15 (f15), float 64 bits
+-	 48: $f16 (f16), float 64 bits
+-	 49: $f17 (f17), float 64 bits
+-	 50: $f18 (f18), float 64 bits
+-	 51: $f19 (f19), float 64 bits
+-	 52: $f20 (f20), float 64 bits
+-	 53: $f21 (f21), float 64 bits
+-	 54: $f22 (f22), float 64 bits
+-	 55: $f23 (f23), float 64 bits
+-	 56: $f24 (f24), float 64 bits
+-	 57: $f25 (f25), float 64 bits
+-	 58: $f26 (f26), float 64 bits
+-	 59: $f27 (f27), float 64 bits
+-	 60: $f28 (f28), float 64 bits
+-	 61: $f29 (f29), float 64 bits
+-	 62: $f30 (f30), float 64 bits
+-	 63: $fpcr (fpcr), unsigned 64 bits
+-EOF
+-
+-regs_test testfile60 <<\EOF
+-integer registers:
+-	  0: r0 (r0), signed 64 bits
+-	  1: r1 (r1), signed 64 bits
+-	  2: r2 (r2), signed 64 bits
+-	  3: r3 (r3), signed 64 bits
+-	  4: r4 (r4), signed 64 bits
+-	  5: r5 (r5), signed 64 bits
+-	  6: r6 (r6), signed 64 bits
+-	  7: r7 (r7), signed 64 bits
+-	  8: r8 (r8), signed 64 bits
+-	  9: r9 (r9), signed 64 bits
+-	 10: r10 (r10), signed 64 bits
+-	 11: r11 (r11), signed 64 bits
+-	 12: r12 (r12), signed 64 bits
+-	 13: r13 (r13), signed 64 bits
+-	 14: r14 (r14), signed 64 bits
+-	 15: r15 (r15), signed 64 bits
+-	 16: r16 (r16), signed 64 bits
+-	 17: r17 (r17), signed 64 bits
+-	 18: r18 (r18), signed 64 bits
+-	 19: r19 (r19), signed 64 bits
+-	 20: r20 (r20), signed 64 bits
+-	 21: r21 (r21), signed 64 bits
+-	 22: r22 (r22), signed 64 bits
+-	 23: r23 (r23), signed 64 bits
+-	 24: r24 (r24), signed 64 bits
+-	 25: r25 (r25), signed 64 bits
+-	 26: r26 (r26), signed 64 bits
+-	 27: r27 (r27), signed 64 bits
+-	 28: r28 (r28), signed 64 bits
+-	 29: r29 (r29), signed 64 bits
+-	 30: r30 (r30), signed 64 bits
+-	 31: r31 (r31), signed 64 bits
+-	 32: r32 (r32), signed 64 bits
+-	 33: r33 (r33), signed 64 bits
+-	 34: r34 (r34), signed 64 bits
+-	 35: r35 (r35), signed 64 bits
+-	 36: r36 (r36), signed 64 bits
+-	 37: r37 (r37), signed 64 bits
+-	 38: r38 (r38), signed 64 bits
+-	 39: r39 (r39), signed 64 bits
+-	 40: r40 (r40), signed 64 bits
+-	 41: r41 (r41), signed 64 bits
+-	 42: r42 (r42), signed 64 bits
+-	 43: r43 (r43), signed 64 bits
+-	 44: r44 (r44), signed 64 bits
+-	 45: r45 (r45), signed 64 bits
+-	 46: r46 (r46), signed 64 bits
+-	 47: r47 (r47), signed 64 bits
+-	 48: r48 (r48), signed 64 bits
+-	 49: r49 (r49), signed 64 bits
+-	 50: r50 (r50), signed 64 bits
+-	 51: r51 (r51), signed 64 bits
+-	 52: r52 (r52), signed 64 bits
+-	 53: tp (tp), address 64 bits
+-	 54: sp (sp), address 64 bits
+-	 55: lr (lr), address 64 bits
+-	 56: sn (sn), unsigned 64 bits
+-	 57: idn0 (idn0), unsigned 64 bits
+-	 58: idn1 (idn1), unsigned 64 bits
+-	 59: udn0 (udn0), unsigned 64 bits
+-	 60: udn1 (udn1), unsigned 64 bits
+-	 61: udn2 (udn2), unsigned 64 bits
+-	 62: udn3 (udn3), unsigned 64 bits
+-	 63: zero (zero), unsigned 64 bits
+-	 64: pc (pc), address 64 bits
+-EOF
+-
+-regs_test testfile61 <<\EOF
+-integer registers:
+-	  0: r0 (r0), signed 32 bits
+-	  1: r1 (r1), signed 32 bits
+-	  2: r2 (r2), signed 32 bits
+-	  3: r3 (r3), signed 32 bits
+-	  4: r4 (r4), signed 32 bits
+-	  5: r5 (r5), signed 32 bits
+-	  6: r6 (r6), signed 32 bits
+-	  7: r7 (r7), signed 32 bits
+-	  8: r8 (r8), signed 32 bits
+-	  9: r9 (r9), signed 32 bits
+-	 10: r10 (r10), signed 32 bits
+-	 11: r11 (r11), signed 32 bits
+-	 12: r12 (r12), signed 32 bits
+-	 13: sp (sp), address 32 bits
+-	 14: lr (lr), address 32 bits
+-	 15: pc (pc), address 32 bits
+-	128: spsr (spsr), unsigned 32 bits
+-FPA registers:
+-	 16: f0 (f0), float 96 bits
+-	 17: f1 (f1), float 96 bits
+-	 18: f2 (f2), float 96 bits
+-	 19: f3 (f3), float 96 bits
+-	 20: f4 (f4), float 96 bits
+-	 21: f5 (f5), float 96 bits
+-	 22: f6 (f6), float 96 bits
+-	 23: f7 (f7), float 96 bits
+-	 96: f0 (f0), float 96 bits
+-	 97: f1 (f1), float 96 bits
+-	 98: f2 (f2), float 96 bits
+-	 99: f3 (f3), float 96 bits
+-	100: f4 (f4), float 96 bits
+-	101: f5 (f5), float 96 bits
+-	102: f6 (f6), float 96 bits
+-	103: f7 (f7), float 96 bits
+-VFP registers:
+-	256: d0 (d0), float 64 bits
+-	257: d1 (d1), float 64 bits
+-	258: d2 (d2), float 64 bits
+-	259: d3 (d3), float 64 bits
+-	260: d4 (d4), float 64 bits
+-	261: d5 (d5), float 64 bits
+-	262: d6 (d6), float 64 bits
+-	263: d7 (d7), float 64 bits
+-	264: d8 (d8), float 64 bits
+-	265: d9 (d9), float 64 bits
+-	266: d10 (d10), float 64 bits
+-	267: d11 (d11), float 64 bits
+-	268: d12 (d12), float 64 bits
+-	269: d13 (d13), float 64 bits
+-	270: d14 (d14), float 64 bits
+-	271: d15 (d15), float 64 bits
+-	272: d16 (d16), float 64 bits
+-	273: d17 (d17), float 64 bits
+-	274: d18 (d18), float 64 bits
+-	275: d19 (d19), float 64 bits
+-	276: d20 (d20), float 64 bits
+-	277: d21 (d21), float 64 bits
+-	278: d22 (d22), float 64 bits
+-	279: d23 (d23), float 64 bits
+-	280: d24 (d24), float 64 bits
+-	281: d25 (d25), float 64 bits
+-	282: d26 (d26), float 64 bits
+-	283: d27 (d27), float 64 bits
+-	284: d28 (d28), float 64 bits
+-	285: d29 (d29), float 64 bits
+-	286: d30 (d30), float 64 bits
+-	287: d31 (d31), float 64 bits
+-EOF
+-
+ # See run-readelf-mixed-corenote.sh for instructions to regenerate
+ # this core file.
+ regs_test testfile_aarch64_core <<\EOF
+@@ -2871,35 +2490,4 @@ x87 registers:
+ 	 40: %st7 (st7), float 80 bits
+ EOF
+ 
+-# See run-readelf-mixed-corenote.sh for instructions to regenerate
+-# this core file.
+-regs_test testfile-m68k-core <<\EOF
+-integer registers:
+-	  0: %d0 (d0), signed 32 bits
+-	  1: %d1 (d1), signed 32 bits
+-	  2: %d2 (d2), signed 32 bits
+-	  3: %d3 (d3), signed 32 bits
+-	  4: %d4 (d4), signed 32 bits
+-	  5: %d5 (d5), signed 32 bits
+-	  6: %d6 (d6), signed 32 bits
+-	  7: %d7 (d7), signed 32 bits
+-	  8: %a0 (a0), address 32 bits
+-	  9: %a1 (a1), address 32 bits
+-	 10: %a2 (a2), address 32 bits
+-	 11: %a3 (a3), address 32 bits
+-	 12: %a4 (a4), address 32 bits
+-	 13: %a5 (a5), address 32 bits
+-	 14: %a6 (a6), address 32 bits
+-	 15: %a7 (a7), address 32 bits
+-	 24: %pc (pc), address 32 bits
+-FPU registers:
+-	 16: %fp0 (fp0), float 96 bits
+-	 17: %fp1 (fp1), float 96 bits
+-	 18: %fp2 (fp2), float 96 bits
+-	 19: %fp3 (fp3), float 96 bits
+-	 20: %fp4 (fp4), float 96 bits
+-	 21: %fp5 (fp5), float 96 bits
+-	 22: %fp6 (fp6), float 96 bits
+-	 23: %fp7 (fp7), float 96 bits
+-EOF
+ exit 0
+diff --git a/tests/run-arextract.sh b/tests/run-arextract.sh
+index 44f4a52..0532952 100755
+--- a/tests/run-arextract.sh
++++ b/tests/run-arextract.sh
+@@ -26,7 +26,7 @@ if test -f $archive; then
+     echo -n "Extracting symbols... $ac_c"
+ 
+     # The files we are looking at.
+-    for f in ${abs_top_builddir}/libelf/*.o; do
++    for f in ${abs_top_builddir}/libelf/libelf_a-*.o; do
+ 	testrun ${abs_builddir}/arextract $archive `basename $f` arextract.test || exit 1
+ 	cmp $f arextract.test || {
+ 	    echo "Extraction of $1 failed"
+diff --git a/tests/run-elflint-test.sh b/tests/run-elflint-test.sh
+index caf172a..bd88611 100755
+--- a/tests/run-elflint-test.sh
++++ b/tests/run-elflint-test.sh
+@@ -31,12 +31,14 @@ testfiles testfile33
+ testrun ${abs_top_builddir}/src/elflint -q testfile33
+ 
+ testfiles testfile42
+-testrun ${abs_top_builddir}/src/elflint -q --gnu-ld testfile42
++# sparc unsupported
++#testrun ${abs_top_builddir}/src/elflint -q --gnu-ld testfile42
+ 
+ # Contains debuginfo, compress it, recheck
+ tempfiles testfile42z
+ testrun ${abs_top_builddir}/src/elfcompress -f -q -o testfile42z testfile42
+-testrun ${abs_top_builddir}/src/elflint -q --gnu-ld testfile42z
++# sparc unsupported
++#testrun ${abs_top_builddir}/src/elflint -q --gnu-ld testfile42z
+ 
+ testfiles testfile46
+ testrun ${abs_top_builddir}/src/elflint -q testfile46
+diff --git a/tests/run-readelf-A.sh b/tests/run-readelf-A.sh
+index b7432be..46e7a42 100755
+--- a/tests/run-readelf-A.sh
++++ b/tests/run-readelf-A.sh
+@@ -18,51 +18,19 @@
+ 
+ . $srcdir/test-subr.sh
+ 
+-# See run-addrcfi.sh for testfilearm.
+-
+ # = testfileppc32attrs.s =
+ # .gnu_attribute 8,1
+ # .gnu_attribute 12,1
+ #
+ # gcc -m32 -c testfileppc32attrs.s
+ 
+-# = testfilesparc64attrs.s =
+-# .gnu_attribute 4,0x0aaaaaaa
+-# .gnu_attribute 8,0x00000055
+-#
+-# gcc -c testfilesparc64attrs.s
+-
+ # = testfileppc64attrs.s =
+ # .gnu_attribute 4,3
+ #
+ # gcc -c testfileppc64attrs.s
+ 
+-testfiles testfilearm testfileppc32attrs.o testfilesparc64attrs.o testfileppc64attrs.o
+ 
+-testrun_compare ${abs_top_builddir}/src/readelf -A testfilearm <<\EOF
+-
+-Object attributes section [27] '.ARM.attributes' of 53 bytes at offset 0x718:
+-  Owner          Size
+-  aeabi            52
+-    File:          42
+-      CPU_name: 7-A
+-      CPU_arch: v7
+-      CPU_arch_profile: Application
+-      ARM_ISA_use: Yes
+-      THUMB_ISA_use: Thumb-2
+-      VFP_arch: VFPv3-D16
+-      ABI_PCS_wchar_t: 4
+-      ABI_FP_rounding: Needed
+-      ABI_FP_denormal: Needed
+-      ABI_FP_exceptions: Needed
+-      ABI_FP_number_model: IEEE 754
+-      ABI_align8_needed: Yes
+-      ABI_align8_preserved: Yes, except leaf SP
+-      ABI_enum_size: int
+-      ABI_HardFP_use: SP and DP
+-      ABI_VFP_args: VFP registers
+-      CPU_unaligned_access: v6
+-EOF
++testfiles testfileppc32attrs.o testfileppc64attrs.o
+ 
+ testrun_compare ${abs_top_builddir}/src/readelf -A testfileppc32attrs.o <<\EOF
+ 
+@@ -74,16 +42,6 @@ Object attributes section [ 4] '.gnu.attributes' of 18 bytes at offset 0x34:
+       GNU_Power_ABI_Struct_Return: r3/r4
+ EOF
+ 
+-testrun_compare ${abs_top_builddir}/src/readelf -A testfilesparc64attrs.o <<\EOF
+-
+-Object attributes section [ 4] '.gnu.attributes' of 21 bytes at offset 0x40:
+-  Owner          Size
+-  gnu              20
+-    File:          12
+-      GNU_Sparc_HWCAPS: div32,v8plus,vis,asi_blk_init,vis3,random,fjfmau,asi_cache_sparing,des,camellia,sha1,sha512,mont,cbcond
+-      GNU_Sparc_HWCAPS2: fjathplus,adp,mwait,xmont
+-EOF
+-
+ testrun_compare ${abs_top_builddir}/src/readelf -A testfileppc64attrs.o <<\EOF
+ 
+ Object attributes section [ 4] '.gnu.attributes' of 16 bytes at offset 0x40:
+diff --git a/tests/run-readelf-mixed-corenote.sh b/tests/run-readelf-mixed-corenote.sh
+index 86171c4..382ea14 100755
+--- a/tests/run-readelf-mixed-corenote.sh
++++ b/tests/run-readelf-mixed-corenote.sh
+@@ -18,73 +18,6 @@
+ 
+ . $srcdir/test-subr.sh
+ 
+-testfiles testfile63
+-
+-testrun_compare ${abs_top_builddir}/src/readelf -n testfile63 <<\EOF
+-
+-Note segment of 892 bytes at offset 0x274:
+-  Owner          Data size  Type
+-  CORE                 148  PRSTATUS
+-    info.si_signo: 11, info.si_code: 0, info.si_errno: 0, cursig: 11
+-    sigpend: <>
+-    sighold: <>
+-    pid: 11087, ppid: 11063, pgrp: 11087, sid: 11063
+-    utime: 0.000000, stime: 0.010000, cutime: 0.000000, cstime: 0.000000
+-    orig_r0: -1, fpvalid: 1
+-    r0:             1  r1:   -1091672508  r2:   -1091672500
+-    r3:             0  r4:             0  r5:             0
+-    r6:         33728  r7:             0  r8:             0
+-    r9:             0  r10:  -1225703496  r11:  -1091672844
+-    r12:            0  sp:    0xbeee64f4  lr:    0xb6dc3f48
+-    pc:    0x00008500  spsr:  0x60000010
+-  CORE                 124  PRPSINFO
+-    state: 0, sname: R, zomb: 0, nice: 0, flag: 0x00400500
+-    uid: 0, gid: 0, pid: 11087, ppid: 11063, pgrp: 11087, sid: 11063
+-    fname: a.out, psargs: ./a.out 
+-  CORE                 144  AUXV
+-    HWCAP: 0xe8d7  <swp half thumb fast-mult vfp edsp>
+-    PAGESZ: 4096
+-    CLKTCK: 100
+-    PHDR: 0x8034
+-    PHENT: 32
+-    PHNUM: 8
+-    BASE: 0xb6eee000
+-    FLAGS: 0
+-    ENTRY: 0x83c0
+-    UID: 0
+-    EUID: 0
+-    GID: 0
+-    EGID: 0
+-    SECURE: 0
+-    RANDOM: 0xbeee674e
+-    EXECFN: 0xbeee6ff4
+-    PLATFORM: 0xbeee675e
+-    NULL
+-  CORE                 116  FPREGSET
+-    f0: 0x000000000000000000000000  f1: 0x000000000000000000000000
+-    f2: 0x000000000000000000000000  f3: 0x000000000000000000000000
+-    f4: 0x000000000000000000000000  f5: 0x000000000000000000000000
+-    f6: 0x000000000000000000000000  f7: 0x000000000000000000000000
+-  LINUX                260  ARM_VFP
+-    fpscr: 0x00000000
+-    d0:  0x0000000000000000  d1:  0x0000000000000000
+-    d2:  0x0000000000000000  d3:  0x0000000000000000
+-    d4:  0x0000000000000000  d5:  0x0000000000000000
+-    d6:  0x0000000000000000  d7:  0x0000000000000000
+-    d8:  0x0000000000000000  d9:  0x0000000000000000
+-    d10: 0x0000000000000000  d11: 0x0000000000000000
+-    d12: 0x0000000000000000  d13: 0x0000000000000000
+-    d14: 0x0000000000000000  d15: 0x0000000000000000
+-    d16: 0x0000000000000000  d17: 0x0000000000000000
+-    d18: 0x0000000000000000  d19: 0x0000000000000000
+-    d20: 0x0000000000000000  d21: 0x0000000000000000
+-    d22: 0x0000000000000000  d23: 0x0000000000000000
+-    d24: 0x0000000000000000  d25: 0x0000000000000000
+-    d26: 0x0000000000000000  d27: 0x0000000000000000
+-    d28: 0x0000000000000000  d29: 0x0000000000000000
+-    d30: 0x0000000000000000  d31: 0x0000000000000000
+-EOF
+-
+ testfiles testfile67
+ testrun_compare ${abs_top_builddir}/src/readelf -n testfile67 <<\EOF
+ 
+@@ -582,68 +515,4 @@ Note segment of 2548 bytes at offset 0x234:
+   LINUX                832  X86_XSTATE
+ EOF
+ 
+-# To reproduce this core dump, do this on an m68k machine:
+-# $ gcc -x c <(echo 'int main () { return *(int *)0x12345678; }')
+-# $ ./a.out
+-testfiles testfile-m68k-core
+-testrun_compare ${abs_top_builddir}/src/readelf -n testfile-m68k-core <<\EOF
+-
+-Note segment of 1056 bytes at offset 0x1f4:
+-  Owner          Data size  Type
+-  CORE                 154  PRSTATUS
+-    info.si_signo: 11, info.si_code: 0, info.si_errno: 0, cursig: 11
+-    sigpend: <>
+-    sighold: <>
+-    pid: 1963, ppid: 1084, pgrp: 1963, sid: 1084
+-    utime: 0.000000, stime: 0.010000, cutime: 0.000000, cstime: 0.000000
+-    fpvalid: 1
+-    d1:           1  d2:           0  d3: -2146476616  d4: -2146476616
+-    d5:           0  d6: -2147393212  d7: -2144827216  a0:  0x12345678
+-    a1:  0xefe71460  a2:  0x00000000  a3:  0x80288df8  a4:  0x80000340
+-    a5:  0xc017a000  a6:  0xefe71434  d0: -1073595312  a7:  0xefe71434
+-    pc:  0x800003fe
+-  CORE                 124  PRPSINFO
+-    state: 0, sname: R, zomb: 0, nice: 0, flag: 0x00400600
+-    uid: 1000, gid: 501, pid: 1963, ppid: 1084, pgrp: 1963, sid: 1084
+-    fname: a.out, psargs: ./a.out 
+-  CORE                 128  SIGINFO
+-    si_signo: 11, si_errno: 0, si_code: 1
+-    fault address: 0x12345678
+-  CORE                 136  AUXV
+-    HWCAP: 0
+-    PAGESZ: 4096
+-    CLKTCK: 100
+-    PHDR: 0x80000034
+-    PHENT: 32
+-    PHNUM: 9
+-    BASE: 0xc0000000
+-    FLAGS: 0
+-    ENTRY: 0x80000340
+-    UID: 1000
+-    EUID: 1000
+-    GID: 501
+-    EGID: 501
+-    SECURE: 0
+-    RANDOM: 0xefe716d9
+-    EXECFN: 0xefe71ff4
+-    NULL
+-  CORE                 281  FILE
+-    10 files:
+-      80000000-80001000 00000000 4096                /tmp/a.out
+-      80003000-80004000 00001000 4096                /tmp/a.out
+-      80004000-80005000 00002000 4096                /tmp/a.out
+-      c0000000-c001c000 00000000 114688              /lib/ld-2.23.so
+-      c001f000-c0020000 0001d000 4096                /lib/ld-2.23.so
+-      c0020000-c0021000 0001e000 4096                /lib/ld-2.23.so
+-      c0032000-c0177000 00000000 1331200             /lib/libc-2.23.so
+-      c0177000-c0178000 00145000 4096                /lib/libc-2.23.so
+-      c0178000-c017a000 00144000 8192                /lib/libc-2.23.so
+-      c017a000-c017e000 00146000 16384               /lib/libc-2.23.so
+-  CORE                 108  FPREGSET
+-    fp0: 0x7fff0000ffffffffffffffff  fp1: 0x7fff0000ffffffffffffffff
+-    fp2: 0x7fff0000ffffffffffffffff  fp3: 0x7fff0000ffffffffffffffff
+-    fp4: 0x7fff0000ffffffffffffffff  fp5: 0x7fff0000ffffffffffffffff
+-    fp6: 0x7fff0000ffffffffffffffff  fp7: 0x7fff0000ffffffffffffffff
+-EOF
+-
+ exit 0
+diff --git a/tests/run-strip-g.sh b/tests/run-strip-g.sh
+index 1303819..8024aa5 100755
+--- a/tests/run-strip-g.sh
++++ b/tests/run-strip-g.sh
+@@ -49,31 +49,6 @@ if test $status -ne 1; then
+   exit 1
+ fi
+ 
+-# arm (with data marker in .debug_frame). See tests/run-addrcfi.sh
+-testfiles testfilearm
+-
+-echo arm strip -g to file with debug file
+-testrun ${abs_top_builddir}/src/strip -g -o strip.out -f debug.out testfilearm ||
+-  { echo "*** failed to strip -g -o strip.out -f debug.out a.out"; exit -1; }
+-
+-status=0
+-testrun ${abs_top_builddir}/src/readelf -S strip.out > readelf.out
+-grep SYMTAB readelf.out || status=$?
+-echo $status
+-if test $status -ne 0; then
+-  echo no symtab found in strip.out
+-  exit 1
+-fi
+-
+-status=0
+-testrun ${abs_top_builddir}/src/readelf -S debug.out > readelf.out
+-grep SYMTAB readelf.out || status=$?
+-echo $status
+-if test $status -ne 1; then
+-  echo symtab found in debug.out
+-  exit 1
+-fi
+-
+ # aarch64 (with data marker in .debug_frame). See tests/run-addrcfi.sh
+ testfiles testfileaarch64
+ 
+diff --git a/tests/run-strip-reloc.sh b/tests/run-strip-reloc.sh
+index e587eab..5c847a4 100755
+--- a/tests/run-strip-reloc.sh
++++ b/tests/run-strip-reloc.sh
+@@ -18,7 +18,7 @@
+ . $srcdir/test-subr.sh
+ 
+ testfiles hello_i386.ko hello_x86_64.ko hello_ppc64.ko hello_s390.ko \
+-	hello_aarch64.ko hello_m68k.ko
++	hello_aarch64.ko
+ 
+ tempfiles readelf.out readelf.out1 readelf.out2
+ tempfiles out.stripped1 out.debug1 out.stripped2 out.debug2
+@@ -102,7 +102,6 @@ runtest hello_x86_64.ko 1
+ runtest hello_ppc64.ko 1
+ runtest hello_s390.ko 1
+ runtest hello_aarch64.ko 1
+-runtest hello_m68k.ko 1
+ 
+ # self test, shouldn't impact non-ET_REL files at all.
+ runtest ${abs_top_builddir}/src/strip 0
