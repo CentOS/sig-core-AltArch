@@ -1,0 +1,129 @@
+2018-06-22  Jonathan Wakely  <jwakely@redhat.com>
+
+	PR libstdc++/86138
+	* include/bits/basic_string.tcc:
+	[__cplusplus > 201402 && !_GLIBCXX_USE_CXX11_ABI]
+	(basic_string<char>::_Rep::_S_empty_rep_storage)
+	(basic_string<wchar_t>::_Rep::_S_empty_rep_storage): Add explicit
+	instantiation declarations.
+	[__cplusplus > 201402] (operator>>, operator<<, getline): Re-enable
+	explicit instantiation declarations.
+	* testsuite/21_strings/basic_string/cons/char/86138.cc: New.
+	* testsuite/21_strings/basic_string/cons/wchar_t/86138.cc: New.
+
+--- libstdc++-v3/include/bits/basic_string.tcc
++++ libstdc++-v3/include/bits/basic_string.tcc
+@@ -1597,8 +1597,21 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
+ 
+   // Inhibit implicit instantiations for required instantiations,
+   // which are defined via explicit instantiations elsewhere.
+-#if _GLIBCXX_EXTERN_TEMPLATE > 0 && __cplusplus <= 201402L
++#if _GLIBCXX_EXTERN_TEMPLATE > 0
++  // The explicit instantiations definitions in src/c++11/string-inst.cc
++  // are compiled as C++14, so the new C++17 members aren't instantiated.
++  // Until those definitions are compiled as C++17 suppress the declaration,
++  // so C++17 code will implicitly instantiate std::string and std::wstring
++  // as needed.
++# if __cplusplus <= 201402L
+   extern template class basic_string<char>;
++# elif ! _GLIBCXX_USE_CXX11_ABI
++  // Still need to prevent implicit instantiation of the COW empty rep,
++  // to ensure the definition in libstdc++.so is unique (PR 86138).
++  extern template basic_string<char>::size_type
++    basic_string<char>::_Rep::_S_empty_rep_storage[];
++# endif
++
+   extern template
+     basic_istream<char>&
+     operator>>(basic_istream<char>&, string&);
+@@ -1613,7 +1626,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
+     getline(basic_istream<char>&, string&);
+ 
+ #ifdef _GLIBCXX_USE_WCHAR_T
++# if __cplusplus <= 201402L
+   extern template class basic_string<wchar_t>;
++# elif ! _GLIBCXX_USE_CXX11_ABI
++  extern template basic_string<wchar_t>::size_type
++    basic_string<wchar_t>::_Rep::_S_empty_rep_storage[];
++# endif
++
+   extern template
+     basic_istream<wchar_t>&
+     operator>>(basic_istream<wchar_t>&, wstring&);
+@@ -1626,8 +1645,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
+   extern template
+     basic_istream<wchar_t>&
+     getline(basic_istream<wchar_t>&, wstring&);
+-#endif
+-#endif
++#endif // _GLIBCXX_USE_WCHAR_T
++#endif // _GLIBCXX_EXTERN_TEMPLATE > 0
+ 
+ _GLIBCXX_END_NAMESPACE_VERSION
+ } // namespace std
+--- /dev/null
++++ libstdc++-v3/testsuite/21_strings/basic_string/cons/char/86138.cc
+@@ -0,0 +1,30 @@
++// Copyright (C) 2018 Free Software Foundation, Inc.
++//
++// This file is part of the GNU ISO C++ Library.  This library is free
++// software; you can redistribute it and/or modify it under the
++// terms of the GNU General Public License as published by the
++// Free Software Foundation; either version 3, or (at your option)
++// any later version.
++
++// This library is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++
++// You should have received a copy of the GNU General Public License along
++// with this library; see the file COPYING3.  If not see
++// <http://www.gnu.org/licenses/>.
++
++// { dg-options "-std=gnu++17" }
++// { dg-do compile { target c++1z } }
++// { dg-final { scan-assembler-not "_ZNSs4_Rep20_S_empty_rep_storageE:" } }
++
++#undef _GLIBCXX_USE_CXX11_ABI
++#define _GLIBCXX_USE_CXX11_ABI 0
++#include <string>
++
++void
++test01(std::string* s)
++{
++  s->~basic_string();
++}
+--- /dev/null
++++ libstdc++-v3/testsuite/21_strings/basic_string/cons/wchar_t/86138.cc
+@@ -0,0 +1,30 @@
++// Copyright (C) 2018 Free Software Foundation, Inc.
++//
++// This file is part of the GNU ISO C++ Library.  This library is free
++// software; you can redistribute it and/or modify it under the
++// terms of the GNU General Public License as published by the
++// Free Software Foundation; either version 3, or (at your option)
++// any later version.
++
++// This library is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++
++// You should have received a copy of the GNU General Public License along
++// with this library; see the file COPYING3.  If not see
++// <http://www.gnu.org/licenses/>.
++
++// { dg-options "-std=gnu++17" }
++// { dg-do compile { target c++1z } }
++// { dg-final { scan-assembler-not "_ZNSbIwSt11char_traitsIwESaIwEE4_Rep20_S_empty_rep_storageE:" } }
++
++#undef _GLIBCXX_USE_CXX11_ABI
++#define _GLIBCXX_USE_CXX11_ABI 0
++#include <string>
++
++void
++test01(std::wstring* s)
++{
++  s->~basic_string();
++}

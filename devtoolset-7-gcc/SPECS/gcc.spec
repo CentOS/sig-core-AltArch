@@ -95,7 +95,7 @@
 Summary: GCC version 7
 Name: %{?scl_prefix}gcc
 Version: %{gcc_version}
-Release: %{gcc_release}.10%{?dist}
+Release: %{gcc_release}.13%{?dist}
 # libgcc, libgfortran, libgomp, libstdc++ and crtstuff have
 # GCC Runtime Exception.
 License: GPLv3+ and GPLv3+ with exceptions and GPLv2+ with exceptions and LGPLv2+ and BSD
@@ -262,6 +262,7 @@ Patch13: gcc7-rh1512529-aarch64.patch
 Patch14: gcc7-pr84524.patch
 Patch15: gcc7-pr84128.patch
 Patch16: gcc7-rh1570967.patch
+Patch17: gcc7-pr86138.patch
 
 Patch1000: gcc7-libstdc++-compat.patch
 Patch1001: gcc7-alt-compat-test.patch
@@ -297,6 +298,7 @@ Patch3020: 0020-Add-test-for-STRUCTURE-and-RECORD.patch
 Patch3022: 0022-Default-values-for-certain-field-descriptors-in-form.patch
 Patch3023: gcc7-fortranlines.patch
 Patch3024: gcc7-fortran-include.patch
+Patch3025: gcc7-fortran-equivalence.patch
 
 
 
@@ -700,6 +702,7 @@ This package contains the Memory Protection Extensions static runtime libraries.
 %patch14 -p0 -b .pr84524~
 %patch15 -p0 -b .pr84128~
 %patch16 -p0 -b .rh1570967~
+%patch17 -p0 -b .pr86138~
 
 %if 0%{?rhel} <= 7
 %patch1000 -p0 -b .libstdc++-compat~
@@ -757,6 +760,7 @@ cd ..
 %patch3022 -p1 -b .fortran22~
 %patch3023 -p1 -b .fortran23~
 %patch3024 -p1 -b .fortran24~
+%patch3025 -p1 -b .fortran25~
 %endif
 
 %ifarch %{arm}
@@ -2920,8 +2924,17 @@ fi
 %doc rpm.doc/changelogs/libcc1/ChangeLog*
 
 %changelog
-* Mon Jun 18 2018 Pablo Greco <pablo@fliagreco.com.ar> 7.3.1-5.10
+* Thu Aug 30 2018 Pablo Greco <pablo@fliagreco.com.ar> 7.3.1-5.13
 - Fix for armhfp
+
+* Tue Aug 14 2018 Marek Polacek <polacek@redhat.com> 7.3.1-5.13
+- prevent implicit instantiation of COW empty rep (#1572583)
+
+* Tue Aug 14 2018 Jeff Law <law@redhat.com> 7.3.1-5.12
+- Fix codegen issue with EQUIVALENCE/AUTOMATIC
+
+* Fri Jul 13 2018 Jeff Law <law@redhat.com> 7.3.1-5.11
+- Revamp attribute checking for EQUIVALENCEs
 
 * Tue Jun 12 2018 Marek Polacek <polacek@redhat.com> 7.3.1-5.10
 - bump for rebuild
@@ -2930,7 +2943,6 @@ fi
 - Fix INCLUDE handling when pathname is on a separate line
 - Integrate updates to patches #0005 and #0014.  Add testcases for
 - various legacy fortran extensions (#1586289)
-
 
 * Sat May 19 2018 Marek Polacek <polacek@redhat.com> 7.3.1-5.8
 - bump for rebuild
