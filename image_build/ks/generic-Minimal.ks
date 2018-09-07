@@ -206,6 +206,9 @@ EOF
 
 
 
+# Remove ifcfg-link on pre generated images
+rm -f /etc/sysconfig/network-scripts/ifcfg-link
+
 # Remove machine-id on pre generated images
 rm -f /etc/machine-id
 touch /etc/machine-id
