@@ -41,6 +41,8 @@ Patch2: elfutils-0.170-x86_64-backtrace-test-override.patch
 Patch100: elfutils-0.170-dts.patch
 Patch101: elfutils-dts-libs-version.patch
 
+Patch1001: elfutils-dts7-armhfp.patch
+
 Requires: %{?scl_prefix}elfutils-libelf%{depsuffix} = %{version}-%{release}
 Requires: %{?scl_prefix}elfutils-libs%{depsuffix} = %{version}-%{release}
 
@@ -176,6 +178,9 @@ cp %SOURCE1 tests/
 %patch100 -p1 -b .dts
 %patch101 -p1 -b .versions
 
+%ifarch %{arm}
+%patch1001 -p1 -b .armhfp
+%endif
 autoreconf
 
 find . -name \*.sh ! -perm -0100 -print | xargs chmod +x
