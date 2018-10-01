@@ -39,7 +39,7 @@ Name:           centos-userland-release
 Name:           centos-release
 %endif
 Version:        %{base_release_version}
-Release:        %{centos_rel}.4%{?dist}
+Release:        %{centos_rel}.5%{?dist}
 Summary:        %{product_family} release file
 Group:          System Environment/Base
 License:        GPLv2
@@ -200,6 +200,9 @@ rm -rf %{buildroot}
 %endif
 
 %changelog
+* Mon Oct  1 2018 Anssi Johansson <avij@centosproject.org>
+- Point AltArch URLs to mirrorlist.c.o instead of mirror.c.o
+
 * Thu Aug  9 2018 Pablo Greco <pablo@fliagreco.com.ar>
 - Enable ostree-remount in presets
 - Include power9 as a separate ppc64le arch
