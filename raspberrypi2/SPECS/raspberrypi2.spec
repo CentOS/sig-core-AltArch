@@ -1,8 +1,8 @@
-%global commit_firmware_short 3221a3d
-%global commit_firmware_long  3221a3d2a8f181fb0984b3f93287afe25573deb0
+%global commit_firmware_short 10c1c5f
+%global commit_firmware_long  10c1c5f9637849e8a3a70e114d3837e25987fc7c
 #wget https://github.com/raspberrypi/firmware/tarball/%{commit_firmware_long}
-%global commit_linux_short 675e29f
-%global commit_linux_long  675e29ff7124059cb3b8b56fd7ae0ea131196982
+%global commit_linux_short b839be4
+%global commit_linux_long  b839be4a86818a7ded1867c53ed2d5071a5c63db
 #wget https://github.com/raspberrypi/linux/tarball/%{commit_linux_long}
 
 %define Arch arm
@@ -10,7 +10,7 @@
 %define extra_version 1
 
 Name:           raspberrypi2
-Version:        4.14.71
+Version:        4.14.77
 Release:        %{local_version}.%{extra_version}%{?dist}
 Summary:        Specific kernel and bootcode for Raspberry Pi
 
@@ -28,7 +28,6 @@ BuildRequires: pciutils-devel gettext ncurses-devel
 
 # Compile with SELinux but disable per default
 Patch0:         bcm2709_selinux_config.patch
-Patch1:         update-to-4.14.71.patch
 
 %description
 Specific kernel and bootcode for Raspberry Pi
@@ -81,7 +80,6 @@ including the kernel bootloader.
 %prep
 %setup -q -n raspberrypi-linux-%{commit_linux_short}
 %patch0 -p1
-%patch1 -p1
 perl -p -i -e "s/^EXTRAVERSION.*/EXTRAVERSION = -%{release}/" Makefile
 perl -p -i -e "s/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION=/" arch/%{Arch}/configs/bcm2709_defconfig
 
@@ -189,6 +187,9 @@ cp $(ls -1d /usr/share/%{name}-kernel/*-*/|tail -1)/boot/overlays/*.dtb* /boot/o
 %doc /boot/LICENCE.broadcom
 
 %changelog
+* Thu Oct 18 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.77-v1.el7
+- Rebase to LTS 4.14.77
+
 * Wed Sep 19 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.71-v1.el7
 - Rebase to LTS 4.14.71
 
