@@ -54,7 +54,7 @@ Summary: The Linux kernel
 %if 0%{?released_kernel}
 
 # Do we have a -stable update to apply?
-%define stable_update 77
+%define stable_update 78
 # Set rpm version accordingly
 %if 0%{?stable_update}
 %define stablerev %{stable_update}
@@ -2240,6 +2240,9 @@ fi
 #
 #
 %changelog
+* Sat Oct 20 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.78-201
+- Rebase to LTS 4.14.78
+
 * Thu Oct 18 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.77-201
 - Rebase to LTS 4.14.77
 
