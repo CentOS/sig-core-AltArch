@@ -10,7 +10,7 @@
 %define extra_version 1
 
 Name:           raspberrypi2
-Version:        4.14.77
+Version:        4.14.78
 Release:        %{local_version}.%{extra_version}%{?dist}
 Summary:        Specific kernel and bootcode for Raspberry Pi
 
@@ -28,6 +28,7 @@ BuildRequires: pciutils-devel gettext ncurses-devel
 
 # Compile with SELinux but disable per default
 Patch0:         bcm2709_selinux_config.patch
+Patch1:         update-to-4.14.78.patch
 
 %description
 Specific kernel and bootcode for Raspberry Pi
@@ -80,6 +81,7 @@ including the kernel bootloader.
 %prep
 %setup -q -n raspberrypi-linux-%{commit_linux_short}
 %patch0 -p1
+%patch1 -p1
 perl -p -i -e "s/^EXTRAVERSION.*/EXTRAVERSION = -%{release}/" Makefile
 perl -p -i -e "s/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION=/" arch/%{Arch}/configs/bcm2709_defconfig
 
@@ -187,6 +189,9 @@ cp $(ls -1d /usr/share/%{name}-kernel/*-*/|tail -1)/boot/overlays/*.dtb* /boot/o
 %doc /boot/LICENCE.broadcom
 
 %changelog
+* Sat Oct 20 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.78-v1.el7
+- Rebase to LTS 4.14.78
+
 * Thu Oct 18 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.77-v1.el7
 - Rebase to LTS 4.14.77
 
