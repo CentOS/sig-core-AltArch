@@ -27,9 +27,9 @@
 %define base_release_version 7
 %define full_release_version 7
 %define dist_release_version 7
-%define upstream_rel_long 7.5-8
-%define upstream_rel 7.5
-%define centos_rel 5.1804
+%define upstream_rel_long 7.6-1
+%define upstream_rel 7.6
+%define centos_rel 6.1810
 #define beta Beta
 %define dist .el%{dist_release_version}.centos%{?dist_suffix}
 
@@ -39,7 +39,7 @@ Name:           centos-userland-release
 Name:           centos-release
 %endif
 Version:        %{base_release_version}
-Release:        %{centos_rel}.5%{?dist}
+Release:        %{centos_rel}.1%{?dist}
 Summary:        %{product_family} release file
 Group:          System Environment/Base
 License:        GPLv2
