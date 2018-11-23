@@ -39,7 +39,7 @@ Name:           centos-userland-release
 Name:           centos-release
 %endif
 Version:        %{base_release_version}
-Release:        %{centos_rel}.1%{?dist}
+Release:        %{centos_rel}.2%{?dist}
 Summary:        %{product_family} release file
 Group:          System Environment/Base
 License:        GPLv2
@@ -200,6 +200,10 @@ rm -rf %{buildroot}
 %endif
 
 %changelog
+* Fri Nov 23 2018 Pablo Greco <pablo@fliagreco.com.ar>
+- Update to 7.6
+- Fix vault repos
+
 * Mon Oct  1 2018 Anssi Johansson <avij@centosproject.org>
 - Point AltArch URLs to mirrorlist.c.o instead of mirror.c.o
 
