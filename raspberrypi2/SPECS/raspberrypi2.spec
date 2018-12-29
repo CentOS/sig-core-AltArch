@@ -1,7 +1,7 @@
-%global commit_firmware_long  91e955e3786a807f4af8ae7e4a4bbf9ec470b843
+%global commit_firmware_long  e1bd9b0b8cda901ee9b23cbb8b3334cde71320a7
 %global commit_firmware_short  %(c=%{commit_firmware_long}; echo ${c:0:7})
 #wget https://github.com/raspberrypi/firmware/tarball/%{commit_firmware_long}
-%global commit_linux_long  f6878de4d2818c2256b2a340eaeeabfb0b24c71b
+%global commit_linux_long  f9cbf9d7b8b14d808ff683e87fa52691a9a72a87
 %global commit_linux_short  %(c=%{commit_linux_long}; echo ${c:0:7})
 #wget https://github.com/raspberrypi/linux/tarball/%{commit_linux_long}
 
@@ -10,7 +10,7 @@
 %define extra_version 1
 
 Name:           raspberrypi2
-Version:        4.14.82
+Version:        4.14.91
 Release:        %{local_version}.%{extra_version}%{?dist}
 Summary:        Specific kernel and bootcode for Raspberry Pi
 
@@ -28,7 +28,7 @@ BuildRequires: pciutils-devel gettext ncurses-devel
 
 # Compile with SELinux but disable per default
 Patch0:         bcm2709_selinux_config.patch
-Patch1:         patch-4.14.81-82.xz
+Patch1:         patch-4.14.90-91.xz
 
 %description
 Specific kernel and bootcode for Raspberry Pi
