@@ -243,6 +243,9 @@ Provides: liblto_plugin.so.0
 %ifarch aarch64
 %global oformat OUTPUT_FORMAT(elf64-littleaarch64)
 %endif
+%ifarch %{arm}
+%global oformat OUTPUT_FORMAT(elf32-littlearm)
+%endif
 
 Patch0: gcc7-hack.patch
 Patch2: gcc7-i386-libgomp.patch
@@ -301,6 +304,9 @@ Patch3027: gcc7-fortran-fdec-include-doc.patch
 Patch3028: gcc7-fortran-fpad-source.patch
 
 
+# specific patches for .el7 armhfp build
+Patch10001: gcc7-dts-arm.patch
+
 %if 0%{?rhel} >= 7
 %global nonsharedver 48
 %else
@@ -308,7 +314,9 @@ Patch3028: gcc7-fortran-fpad-source.patch
 %endif
 
 %if 0%{?scl:1}
+%ifnarch %{arm}
 %global _gnu %{nil}
+%endif
 %else
 %global _gnu 7E
 %endif
@@ -318,7 +326,10 @@ Patch3028: gcc7-fortran-fpad-source.patch
 %ifarch ppc
 %global gcc_target_platform ppc64-%{_vendor}-%{_target_os}%{?_gnu}
 %endif
-%ifnarch sparcv9 ppc
+%ifarch %{arm}
+%global gcc_target_platform armv7hl-%{_vendor}-%{_target_os}-gnueabi
+%endif
+%ifnarch sparcv9 ppc %{arm}
 %global gcc_target_platform %{_target_platform}
 %endif
 
@@ -757,6 +768,10 @@ cd ..
 %patch3028 -p0 -b .fortran28~
 %endif
 
+%ifarch %{arm}
+%patch10001 -p1 -b .arm1
+%endif
+
 echo 'Red Hat %{version}-%{gcc_release}' > gcc/DEV-PHASE
 
 %if 0%{?rhel} == 6
@@ -953,6 +968,10 @@ CONFIGURE_OPTS="\
 %endif
 %ifarch s390 s390x
 	--with-arch=z9-109 --with-tune=z10 --enable-decimal-float \
+%endif
+%ifarch armv7hl
+	--with-tune=cortex-a8 --with-arch=armv7-a \
+	--with-float=hard --with-fpu=vfpv3-d16 --with-abi=aapcs-linux \
 %endif
 %ifnarch sparc sparcv9 ppc
 	--build=%{gcc_target_platform} \
@@ -2910,6 +2929,9 @@ fi
 %doc rpm.doc/changelogs/libcc1/ChangeLog*
 
 %changelog
+* Mon Jan  7 2019 Pablo Greco <pablo@fliagreco.com.ar> 7.3.1-5.15
+- Fix for armhfp
+
 * Mon Dec 17 2018 Jeff Law <polacek@redhat.com> 7.3.1-5.15
 - Fix C++ ICE (#1660242)
 
