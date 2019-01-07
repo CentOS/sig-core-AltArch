@@ -1,0 +1,53 @@
+commit 0ff050a998827c27f216c373331d643b7875d5a7
+Author: jason <jason@138bc75d-0d04-0410-961f-82ee72b054a4>
+Date:   Sat Mar 10 03:35:17 2018 +0000
+
+            PR c++/84785 - ICE with alias template and default targs.
+    
+            * pt.c (type_unification_real): Set processing_template_decl if
+            saw_undeduced == 1.
+    
+    git-svn-id: svn+ssh://gcc.gnu.org/svn/gcc/branches/gcc-7-branch@258409 138bc75d-0d04-0410-961f-82ee72b054a4
+
+diff --git a/gcc/cp/pt.c b/gcc/cp/pt.c
+index 9815df63c28..b4032550849 100644
+--- a/gcc/cp/pt.c
++++ b/gcc/cp/pt.c
+@@ -19490,7 +19490,13 @@ type_unification_real (tree tparms,
+ 	  location_t save_loc = input_location;
+ 	  if (DECL_P (parm))
+ 	    input_location = DECL_SOURCE_LOCATION (parm);
++
++	  if (saw_undeduced == 1)
++	    ++processing_template_decl;
+ 	  arg = tsubst_template_arg (arg, full_targs, complain, NULL_TREE);
++	  if (saw_undeduced == 1)
++	    --processing_template_decl;
++
+ 	  if (arg != error_mark_node && !uses_template_parms (arg))
+ 	    arg = convert_template_argument (parm, arg, full_targs, complain,
+ 					     i, NULL_TREE);
+diff --git a/gcc/testsuite/g++.dg/cpp0x/alias-decl-63.C b/gcc/testsuite/g++.dg/cpp0x/alias-decl-63.C
+new file mode 100644
+index 00000000000..04fb42d9e09
+--- /dev/null
++++ b/gcc/testsuite/g++.dg/cpp0x/alias-decl-63.C
+@@ -0,0 +1,18 @@
++// PR c++/84785
++// { dg-do compile { target c++11 } }
++
++template <typename> struct A;
++template <bool> struct B;
++template <bool B, typename> using enable_if_t = typename B<B>::type;
++template <long> using type_pack_element = int;
++struct variant {
++  variant() {}
++  template <typename Arg, long I = Arg::type::value,
++            typename = type_pack_element<I>, enable_if_t<A<Arg>::value, int>>
++  variant(Arg &&);
++};
++
++struct S {
++  variant var;
++};
++int main() { S s; }

@@ -95,7 +95,7 @@
 Summary: GCC version 7
 Name: %{?scl_prefix}gcc
 Version: %{gcc_version}
-Release: %{gcc_release}.13%{?dist}
+Release: %{gcc_release}.15%{?dist}
 # libgcc, libgfortran, libgomp, libstdc++ and crtstuff have
 # GCC Runtime Exception.
 License: GPLv3+ and GPLv3+ with exceptions and GPLv2+ with exceptions and LGPLv2+ and BSD
@@ -243,9 +243,6 @@ Provides: liblto_plugin.so.0
 %ifarch aarch64
 %global oformat OUTPUT_FORMAT(elf64-littleaarch64)
 %endif
-%ifarch %{arm}
-%global oformat OUTPUT_FORMAT(elf32-littlearm)
-%endif
 
 Patch0: gcc7-hack.patch
 Patch2: gcc7-i386-libgomp.patch
@@ -263,6 +260,7 @@ Patch14: gcc7-pr84524.patch
 Patch15: gcc7-pr84128.patch
 Patch16: gcc7-rh1570967.patch
 Patch17: gcc7-pr86138.patch
+Patch18: gcc7-rh1660242.patch
 
 Patch1000: gcc7-libstdc++-compat.patch
 Patch1001: gcc7-alt-compat-test.patch
@@ -297,13 +295,11 @@ Patch3019: 0019-Add-tests-for-AUTOMATIC-keyword.patch
 Patch3020: 0020-Add-test-for-STRUCTURE-and-RECORD.patch
 Patch3022: 0022-Default-values-for-certain-field-descriptors-in-form.patch
 Patch3023: gcc7-fortranlines.patch
-Patch3024: gcc7-fortran-include.patch
 Patch3025: gcc7-fortran-equivalence.patch
+Patch3026: gcc7-fortran-fdec-include.patch
+Patch3027: gcc7-fortran-fdec-include-doc.patch
+Patch3028: gcc7-fortran-fpad-source.patch
 
-
-
-# specific patches for .el7 armhfp build
-Patch10001: gcc7-dts-arm.patch
 
 %if 0%{?rhel} >= 7
 %global nonsharedver 48
@@ -312,9 +308,7 @@ Patch10001: gcc7-dts-arm.patch
 %endif
 
 %if 0%{?scl:1}
-%ifnarch %{arm}
 %global _gnu %{nil}
-%endif
 %else
 %global _gnu 7E
 %endif
@@ -324,10 +318,7 @@ Patch10001: gcc7-dts-arm.patch
 %ifarch ppc
 %global gcc_target_platform ppc64-%{_vendor}-%{_target_os}%{?_gnu}
 %endif
-%ifarch %{arm}
-%global gcc_target_platform armv7hl-%{_vendor}-%{_target_os}-gnueabi
-%endif
-%ifnarch sparcv9 ppc %{arm}
+%ifnarch sparcv9 ppc
 %global gcc_target_platform %{_target_platform}
 %endif
 
@@ -703,6 +694,7 @@ This package contains the Memory Protection Extensions static runtime libraries.
 %patch15 -p0 -b .pr84128~
 %patch16 -p0 -b .rh1570967~
 %patch17 -p0 -b .pr86138~
+%patch18 -p1 -b .rh1660242~
 
 %if 0%{?rhel} <= 7
 %patch1000 -p0 -b .libstdc++-compat~
@@ -759,12 +751,10 @@ cd ..
 %patch3020 -p1 -b .fortran20~
 %patch3022 -p1 -b .fortran22~
 %patch3023 -p1 -b .fortran23~
-%patch3024 -p1 -b .fortran24~
 %patch3025 -p1 -b .fortran25~
-%endif
-
-%ifarch %{arm}
-%patch10001 -p1 -b .arm1
+%patch3026 -p0 -b .fortran26~
+%patch3027 -p0 -b .fortran27~
+%patch3028 -p0 -b .fortran28~
 %endif
 
 echo 'Red Hat %{version}-%{gcc_release}' > gcc/DEV-PHASE
@@ -963,10 +953,6 @@ CONFIGURE_OPTS="\
 %endif
 %ifarch s390 s390x
 	--with-arch=z9-109 --with-tune=z10 --enable-decimal-float \
-%endif
-%ifarch armv7hl
-	--with-tune=cortex-a8 --with-arch=armv7-a \
-	--with-float=hard --with-fpu=vfpv3-d16 --with-abi=aapcs-linux \
 %endif
 %ifnarch sparc sparcv9 ppc
 	--build=%{gcc_target_platform} \
@@ -2924,8 +2910,12 @@ fi
 %doc rpm.doc/changelogs/libcc1/ChangeLog*
 
 %changelog
-* Thu Aug 30 2018 Pablo Greco <pablo@fliagreco.com.ar> 7.3.1-5.13
-- Fix for armhfp
+* Mon Dec 17 2018 Jeff Law <polacek@redhat.com> 7.3.1-5.15
+- Fix C++ ICE (#1660242)
+
+* Wed Dec  5 2018 Marek Polacek <polacek@redhat.com> 7.3.1-5.14
+- drop gcc7-fortran-include.patch
+- add -fdec-include and -fpad-source (#1647042)
 
 * Tue Aug 14 2018 Marek Polacek <polacek@redhat.com> 7.3.1-5.13
 - prevent implicit instantiation of COW empty rep (#1572583)
