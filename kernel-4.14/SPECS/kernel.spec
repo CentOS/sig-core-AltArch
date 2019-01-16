@@ -54,7 +54,7 @@ Summary: The Linux kernel
 %if 0%{?released_kernel}
 
 # Do we have a -stable update to apply?
-%define stable_update 82
+%define stable_update 91
 # Set rpm version accordingly
 %if 0%{?stable_update}
 %define stablerev %{stable_update}
@@ -659,7 +659,7 @@ Patch635: Add-support-for-One-by-Wacom-CTL-472-CTL-672.patch
 #Patch636: ACPI-sbshc-remove-raw-pointer-from-printk-message.patch
 
 # rhbz 1492664 1492665
-Patch637: 0001-mm-don-t-warn-about-allocations-which-stall-for-too-.patch
+#Patch637: 0001-mm-don-t-warn-about-allocations-which-stall-for-too-.patch
 
 # END OF PATCH DEFINITIONS
 
@@ -2240,6 +2240,9 @@ fi
 #
 #
 %changelog
+* Sat Dec 29 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.91-201
+- Rebase to LTS 4.14.91
+
 * Wed Nov 21 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.82-201
 - Rebase to LTS 4.14.82
 
