@@ -1,7 +1,7 @@
-%global commit_firmware_long  e1bd9b0b8cda901ee9b23cbb8b3334cde71320a7
+%global commit_firmware_long  c589f89f8df058f8aaac563227fb912a4e1dc88c
 %global commit_firmware_short  %(c=%{commit_firmware_long}; echo ${c:0:7})
 #wget https://github.com/raspberrypi/firmware/tarball/%{commit_firmware_long}
-%global commit_linux_long  f9cbf9d7b8b14d808ff683e87fa52691a9a72a87
+%global commit_linux_long  3acfcdec59180815f1341a4cff63eadb6d1da654
 %global commit_linux_short  %(c=%{commit_linux_long}; echo ${c:0:7})
 #wget https://github.com/raspberrypi/linux/tarball/%{commit_linux_long}
 
@@ -10,7 +10,7 @@
 %define extra_version 1
 
 Name:           raspberrypi2
-Version:        4.14.91
+Version:        4.14.94
 Release:        %{local_version}.%{extra_version}%{?dist}
 Summary:        Specific kernel and bootcode for Raspberry Pi
 
@@ -28,7 +28,7 @@ BuildRequires: pciutils-devel gettext ncurses-devel
 
 # Compile with SELinux but disable per default
 Patch0:         bcm2709_selinux_config.patch
-Patch1:         patch-4.14.90-91.xz
+Patch1:         patch-4.14.93-94.xz
 
 %description
 Specific kernel and bootcode for Raspberry Pi
@@ -189,6 +189,12 @@ cp $(ls -1d /usr/share/%{name}-kernel/*-*/|tail -1)/boot/overlays/*.dtb* /boot/o
 %doc /boot/LICENCE.broadcom
 
 %changelog
+* Thu Jan 17 2019 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.94-v1.el7
+- Rebase to LTS 4.14.94
+
+* Sat Dec 29 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.91-v1.el7
+- Rebase to LTS 4.14.91
+
 * Wed Nov 21 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.82-v1.el7
 - Rebase to LTS 4.14.82
 
