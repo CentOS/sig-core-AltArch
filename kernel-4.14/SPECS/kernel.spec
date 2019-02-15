@@ -383,7 +383,8 @@ ExclusiveOS: Linux
 Requires: kernel-core-uname-r = %{KVERREL}%{?variant}
 Requires: kernel-modules-uname-r = %{KVERREL}%{?variant}
 %endif
-Requires: xorg-x11-drv-vmmouse >= 14.0.0
+
+Conflicts: xorg-x11-drv-vmmouse < 14.0.0
 
 #
 # List the packages used during the kernel build
@@ -700,9 +701,7 @@ AutoProv: yes\
 %package headers
 Summary: Header files for the Linux kernel for use by glibc
 Group: Development/System
-Obsoletes: xorg-x11-drv-vmmouse < 14.0.0
 Obsoletes: glibc-kernheaders < 3.0-46
-Provides: xorg-x11-drv-vmmouse = 14.0.0
 Provides: glibc-kernheaders = 3.0-46
 %if "0%{?variant}"
 Obsoletes: kernel-headers < %{rpmversion}-%{pkg_release}
