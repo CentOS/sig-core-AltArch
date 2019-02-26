@@ -1,0 +1,615 @@
+From 76202e874f06ab641fbe1caaddd4cfcf7158f174 Mon Sep 17 00:00:00 2001
+From: Hans de Goede <hdegoede@redhat.com>
+Date: Wed, 10 Oct 2018 13:00:58 +0200
+Subject: [PATCH 1/5] brcmfmac: Remove firmware-loading code duplication
+
+brcmf_fw_request_next_item and brcmf_fw_request_done both have identical
+code to complete the fw-request depending on the item-type.
+
+This commit adds a new brcmf_fw_complete_request helper removing this code
+duplication.
+
+Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+---
+ .../broadcom/brcm80211/brcmfmac/firmware.c    | 62 +++++++++----------
+ 1 file changed, 31 insertions(+), 31 deletions(-)
+
+diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c
+index 9095b830ae4d..784c84f0e9e7 100644
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c
+@@ -504,6 +504,34 @@ static int brcmf_fw_request_nvram_done(const struct firmware *fw, void *ctx)
+ 	return -ENOENT;
+ }
+ 
++static int brcmf_fw_complete_request(const struct firmware *fw,
++				     struct brcmf_fw *fwctx)
++{
++	struct brcmf_fw_item *cur = &fwctx->req->items[fwctx->curpos];
++	int ret = 0;
++
++	brcmf_dbg(TRACE, "firmware %s %sfound\n", cur->path, fw ? "" : "not ");
++
++	switch (cur->type) {
++	case BRCMF_FW_TYPE_NVRAM:
++		ret = brcmf_fw_request_nvram_done(fw, fwctx);
++		break;
++	case BRCMF_FW_TYPE_BINARY:
++		if (fw)
++			cur->binary = fw;
++		else
++			ret = -ENOENT;
++		break;
++	default:
++		/* something fishy here so bail out early */
++		brcmf_err("unknown fw type: %d\n", cur->type);
++		release_firmware(fw);
++		ret = -EINVAL;
++	}
++
++	return (cur->flags & BRCMF_FW_REQF_OPTIONAL) ? 0 : ret;
++}
++
+ static int brcmf_fw_request_next_item(struct brcmf_fw *fwctx, bool async)
+ {
+ 	struct brcmf_fw_item *cur;
+@@ -525,15 +553,7 @@ static int brcmf_fw_request_next_item(struct brcmf_fw *fwctx, bool async)
+ 	if (ret < 0) {
+ 		brcmf_fw_request_done(NULL, fwctx);
+ 	} else if (!async && fw) {
+-		brcmf_dbg(TRACE, "firmware %s %sfound\n", cur->path,
+-			  fw ? "" : "not ");
+-		if (cur->type == BRCMF_FW_TYPE_BINARY)
+-			cur->binary = fw;
+-		else if (cur->type == BRCMF_FW_TYPE_NVRAM)
+-			brcmf_fw_request_nvram_done(fw, fwctx);
+-		else
+-			release_firmware(fw);
+-
++		brcmf_fw_complete_request(fw, fwctx);
+ 		return -EAGAIN;
+ 	}
+ 	return 0;
+@@ -547,28 +567,8 @@ static void brcmf_fw_request_done(const struct firmware *fw, void *ctx)
+ 
+ 	cur = &fwctx->req->items[fwctx->curpos];
+ 
+-	brcmf_dbg(TRACE, "enter: firmware %s %sfound\n", cur->path,
+-		  fw ? "" : "not ");
+-
+-	if (!fw)
+-		ret = -ENOENT;
+-
+-	switch (cur->type) {
+-	case BRCMF_FW_TYPE_NVRAM:
+-		ret = brcmf_fw_request_nvram_done(fw, fwctx);
+-		break;
+-	case BRCMF_FW_TYPE_BINARY:
+-		cur->binary = fw;
+-		break;
+-	default:
+-		/* something fishy here so bail out early */
+-		brcmf_err("unknown fw type: %d\n", cur->type);
+-		release_firmware(fw);
+-		ret = -EINVAL;
+-		goto fail;
+-	}
+-
+-	if (ret < 0 && !(cur->flags & BRCMF_FW_REQF_OPTIONAL))
++	ret = brcmf_fw_complete_request(fw, fwctx);
++	if (ret < 0)
+ 		goto fail;
+ 
+ 	do {
+-- 
+2.19.1
+
+From a3c4b522bff976360fb21c9205fcb37a121d4074 Mon Sep 17 00:00:00 2001
+From: Hans de Goede <hdegoede@redhat.com>
+Date: Wed, 10 Oct 2018 13:00:59 +0200
+Subject: [PATCH 2/5] brcmfmac: Remove recursion from firmware load error
+ handling
+
+Before this commit brcmf_fw_request_done would call
+brcmf_fw_request_next_item to load the next item, which on an error would
+call brcmf_fw_request_done, which if the error is recoverable (*) will
+then continue calling brcmf_fw_request_next_item for the next item again
+which on an error will call brcmf_fw_request_done again...
+
+This does not blow up because we only have a limited number of items so
+we never recurse too deep. But the recursion is still quite ugly and
+frankly is giving me a headache, so lets fix this.
+
+This commit fixes this by removing brcmf_fw_request_next_item and by
+making brcmf_fw_get_firmwares and brcmf_fw_request_done directly call
+firmware_request_nowait resp. firmware_request themselves.
+
+*) brcmf_fw_request_nvram_done fallback path succeeds or
+   BRCMF_FW_REQF_OPTIONAL is set
+
+Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+---
+ .../broadcom/brcm80211/brcmfmac/firmware.c    | 65 ++++++-------------
+ 1 file changed, 19 insertions(+), 46 deletions(-)
+
+diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c
+index 784c84f0e9e7..08aaf99fee34 100644
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c
+@@ -532,33 +532,6 @@ static int brcmf_fw_complete_request(const struct firmware *fw,
+ 	return (cur->flags & BRCMF_FW_REQF_OPTIONAL) ? 0 : ret;
+ }
+ 
+-static int brcmf_fw_request_next_item(struct brcmf_fw *fwctx, bool async)
+-{
+-	struct brcmf_fw_item *cur;
+-	const struct firmware *fw = NULL;
+-	int ret;
+-
+-	cur = &fwctx->req->items[fwctx->curpos];
+-
+-	brcmf_dbg(TRACE, "%srequest for %s\n", async ? "async " : "",
+-		  cur->path);
+-
+-	if (async)
+-		ret = request_firmware_nowait(THIS_MODULE, true, cur->path,
+-					      fwctx->dev, GFP_KERNEL, fwctx,
+-					      brcmf_fw_request_done);
+-	else
+-		ret = request_firmware(&fw, cur->path, fwctx->dev);
+-
+-	if (ret < 0) {
+-		brcmf_fw_request_done(NULL, fwctx);
+-	} else if (!async && fw) {
+-		brcmf_fw_complete_request(fw, fwctx);
+-		return -EAGAIN;
+-	}
+-	return 0;
+-}
+-
+ static void brcmf_fw_request_done(const struct firmware *fw, void *ctx)
+ {
+ 	struct brcmf_fw *fwctx = ctx;
+@@ -568,26 +541,19 @@ static void brcmf_fw_request_done(const struct firmware *fw, void *ctx)
+ 	cur = &fwctx->req->items[fwctx->curpos];
+ 
+ 	ret = brcmf_fw_complete_request(fw, fwctx);
+-	if (ret < 0)
+-		goto fail;
+-
+-	do {
+-		if (++fwctx->curpos == fwctx->req->n_items) {
+-			ret = 0;
+-			goto done;
+-		}
+ 
+-		ret = brcmf_fw_request_next_item(fwctx, false);
+-	} while (ret == -EAGAIN);
+-
+-	return;
++	while (ret == 0 && ++fwctx->curpos < fwctx->req->n_items) {
++		cur = &fwctx->req->items[fwctx->curpos];
++		request_firmware(&fw, cur->path, fwctx->dev);
++		ret = brcmf_fw_complete_request(fw, ctx);
++	}
+ 
+-fail:
+-	brcmf_dbg(TRACE, "failed err=%d: dev=%s, fw=%s\n", ret,
+-		  dev_name(fwctx->dev), cur->path);
+-	brcmf_fw_free_request(fwctx->req);
+-	fwctx->req = NULL;
+-done:
++	if (ret) {
++		brcmf_dbg(TRACE, "failed err=%d: dev=%s, fw=%s\n", ret,
++			  dev_name(fwctx->dev), cur->path);
++		brcmf_fw_free_request(fwctx->req);
++		fwctx->req = NULL;
++	}
+ 	fwctx->done(fwctx->dev, ret, fwctx->req);
+ 	kfree(fwctx);
+ }
+@@ -611,7 +577,9 @@ int brcmf_fw_get_firmwares(struct device *dev, struct brcmf_fw_request *req,
+ 			   void (*fw_cb)(struct device *dev, int err,
+ 					 struct brcmf_fw_request *req))
+ {
++	struct brcmf_fw_item *first = &req->items[0];
+ 	struct brcmf_fw *fwctx;
++	int ret;
+ 
+ 	brcmf_dbg(TRACE, "enter: dev=%s\n", dev_name(dev));
+ 	if (!fw_cb)
+@@ -628,7 +596,12 @@ int brcmf_fw_get_firmwares(struct device *dev, struct brcmf_fw_request *req,
+ 	fwctx->req = req;
+ 	fwctx->done = fw_cb;
+ 
+-	brcmf_fw_request_next_item(fwctx, true);
++	ret = request_firmware_nowait(THIS_MODULE, true, first->path,
++				      fwctx->dev, GFP_KERNEL, fwctx,
++				      brcmf_fw_request_done);
++	if (ret < 0)
++		brcmf_fw_request_done(NULL, fwctx);
++
+ 	return 0;
+ }
+ 
+-- 
+2.19.1
+
+From c2c41d3f837ed492369607940af950ef554b8685 Mon Sep 17 00:00:00 2001
+From: Hans de Goede <hdegoede@redhat.com>
+Date: Wed, 10 Oct 2018 13:01:00 +0200
+Subject: [PATCH 3/5] brcmfmac: Add support for first trying to get a board
+ specific nvram file
+
+The nvram files which some brcmfmac chips need are board-specific. To be
+able to distribute these as part of linux-firmware, so that devices with
+such a wifi chip will work OOTB, multiple (one per board) versions must
+co-exist under /lib/firmware.
+
+This commit adds support for callers of the brcmfmac/firmware.c code to
+pass in a board_type parameter through the request structure.
+
+If that parameter is set then the code will first try to load
+chipmodel.board_type.txt before falling back to the old chipmodel.txt name.
+
+Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+---
+ .../broadcom/brcm80211/brcmfmac/firmware.c    | 27 ++++++++++++++++++-
+ .../broadcom/brcm80211/brcmfmac/firmware.h    |  1 +
+ 2 files changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c
+index 08aaf99fee34..6755b2388fbc 100644
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c
+@@ -532,6 +532,31 @@ static int brcmf_fw_complete_request(const struct firmware *fw,
+ 	return (cur->flags & BRCMF_FW_REQF_OPTIONAL) ? 0 : ret;
+ }
+ 
++static int brcmf_fw_request_firmware(const struct firmware **fw,
++				     struct brcmf_fw *fwctx)
++{
++	struct brcmf_fw_item *cur = &fwctx->req->items[fwctx->curpos];
++	int ret;
++
++	/* nvram files are board-specific, first try a board-specific path */
++	if (cur->type == BRCMF_FW_TYPE_NVRAM && fwctx->req->board_type) {
++		char alt_path[BRCMF_FW_NAME_LEN];
++
++		strlcpy(alt_path, cur->path, BRCMF_FW_NAME_LEN);
++		/* strip .txt at the end */
++		alt_path[strlen(alt_path) - 4] = 0;
++		strlcat(alt_path, ".", BRCMF_FW_NAME_LEN);
++		strlcat(alt_path, fwctx->req->board_type, BRCMF_FW_NAME_LEN);
++		strlcat(alt_path, ".txt", BRCMF_FW_NAME_LEN);
++
++		ret = request_firmware(fw, alt_path, fwctx->dev);
++		if (ret == 0)
++			return ret;
++	}
++
++	return request_firmware(fw, cur->path, fwctx->dev);
++}
++
+ static void brcmf_fw_request_done(const struct firmware *fw, void *ctx)
+ {
+ 	struct brcmf_fw *fwctx = ctx;
+@@ -544,7 +569,7 @@ static void brcmf_fw_request_done(const struct firmware *fw, void *ctx)
+ 
+ 	while (ret == 0 && ++fwctx->curpos < fwctx->req->n_items) {
+ 		cur = &fwctx->req->items[fwctx->curpos];
+-		request_firmware(&fw, cur->path, fwctx->dev);
++		brcmf_fw_request_firmware(&fw, fwctx);
+ 		ret = brcmf_fw_complete_request(fw, ctx);
+ 	}
+ 
+diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.h b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.h
+index 2893e56910f0..a0834be8864e 100644
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.h
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.h
+@@ -70,6 +70,7 @@ struct brcmf_fw_request {
+ 	u16 domain_nr;
+ 	u16 bus_nr;
+ 	u32 n_items;
++	const char *board_type;
+ 	struct brcmf_fw_item items[0];
+ };
+ 
+-- 
+2.19.1
+
+From 282477a8e4034ee2ea906d2eb234ce9c86f5685f Mon Sep 17 00:00:00 2001
+From: Peter Robinson <pbrobinson@gmail.com>
+Date: Sat, 17 Nov 2018 15:18:35 +0000
+Subject: [PATCH 4/5] brcmfmac: Set board_type used for nvram file selection to
+ machine-compatible
+
+For of/devicetree using machines, set the board_type used for nvram file
+selection to the first string listed in the top-level's node compatible
+string, aka the machine-compatible as used by of_machine_is_compatible().
+
+The board_type setting is used to load the board-specific nvram file with
+a board-specific name so that we can ship files for each supported board
+in linux-firmware.
+
+Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+Signed-off-by: Peter Robinson <pbrobinson@gmail.com>
+---
+ .../broadcom/brcm80211/brcmfmac/Makefile      |   2 +
+ .../broadcom/brcm80211/brcmfmac/common.c      |   3 +-
+ .../broadcom/brcm80211/brcmfmac/common.h      |   8 ++
+ .../broadcom/brcm80211/brcmfmac/dmi.c         | 116 ++++++++++++++++++
+ .../wireless/broadcom/brcm80211/brcmfmac/of.c |  11 +-
+ .../broadcom/brcm80211/brcmfmac/pcie.c        |   1 +
+ .../broadcom/brcm80211/brcmfmac/sdio.c        |   1 +
+ 7 files changed, 140 insertions(+), 2 deletions(-)
+ create mode 100644 drivers/net/wireless/broadcom/brcm80211/brcmfmac/dmi.c
+
+diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/Makefile b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/Makefile
+index 1f5a9b948abf..22fd95a736a8 100644
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/Makefile
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/Makefile
+@@ -54,3 +54,5 @@ brcmfmac-$(CONFIG_BRCM_TRACING) += \
+ 		tracepoint.o
+ brcmfmac-$(CONFIG_OF) += \
+ 		of.o
++brcmfmac-$(CONFIG_DMI) += \
++		dmi.o
+diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.c
+index cd3651069d0c..b93b1e797333 100644
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.c
+@@ -450,7 +450,8 @@ struct brcmf_mp_device *brcmf_get_module_param(struct device *dev,
+ 		}
+ 	}
+ 	if (!found) {
+-		/* No platform data for this device, try OF (Open Firwmare) */
++		/* No platform data for this device, try OF and DMI data */
++		brcmf_dmi_probe(settings, chip, chiprev);
+ 		brcmf_of_probe(dev, bus_type, settings);
+ 	}
+ 	return settings;
+diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.h b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.h
+index a34642cb4d2f..4ce56be90b74 100644
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.h
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.h
+@@ -59,6 +59,7 @@ struct brcmf_mp_device {
+ 	bool		iapp;
+ 	bool		ignore_probe_fail;
+ 	struct brcmfmac_pd_cc *country_codes;
++	const char	*board_type;
+ 	union {
+ 		struct brcmfmac_sdio_pd sdio;
+ 	} bus;
+@@ -74,4 +75,11 @@ void brcmf_release_module_param(struct brcmf_mp_device *module_param);
+ /* Sets dongle media info (drv_version, mac address). */
+ int brcmf_c_preinit_dcmds(struct brcmf_if *ifp);
+ 
++#ifdef CONFIG_DMI
++void brcmf_dmi_probe(struct brcmf_mp_device *settings, u32 chip, u32 chiprev);
++#else
++static inline void
++brcmf_dmi_probe(struct brcmf_mp_device *settings, u32 chip, u32 chiprev) {}
++#endif
++
+ #endif /* BRCMFMAC_COMMON_H */
+diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/dmi.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/dmi.c
+new file mode 100644
+index 000000000000..51d76ac45075
+--- /dev/null
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/dmi.c
+@@ -0,0 +1,116 @@
++/*
++ * Copyright 2018 Hans de Goede <hdegoede@redhat.com>
++ *
++ * Permission to use, copy, modify, and/or distribute this software for any
++ * purpose with or without fee is hereby granted, provided that the above
++ * copyright notice and this permission notice appear in all copies.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
++ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
++ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
++ * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
++ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
++ * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
++ * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
++ */
++
++#include <linux/dmi.h>
++#include <linux/mod_devicetable.h>
++#include "core.h"
++#include "common.h"
++#include "brcm_hw_ids.h"
++
++/* The DMI data never changes so we can use a static buf for this */
++static char dmi_board_type[128];
++
++struct brcmf_dmi_data {
++	u32 chip;
++	u32 chiprev;
++	const char *board_type;
++};
++
++/* NOTE: Please keep all entries sorted alphabetically */
++
++static const struct brcmf_dmi_data gpd_win_pocket_data = {
++	BRCM_CC_4356_CHIP_ID, 2, "gpd-win-pocket"
++};
++
++static const struct brcmf_dmi_data jumper_ezpad_mini3_data = {
++	BRCM_CC_43430_CHIP_ID, 0, "jumper-ezpad-mini3"
++};
++
++static const struct brcmf_dmi_data meegopad_t08_data = {
++	BRCM_CC_43340_CHIP_ID, 2, "meegopad-t08"
++};
++
++static const struct dmi_system_id dmi_platform_data[] = {
++	{
++		/* Match for the GPDwin which unfortunately uses somewhat
++		 * generic dmi strings, which is why we test for 4 strings.
++		 * Comparing against 23 other byt/cht boards, board_vendor
++		 * and board_name are unique to the GPDwin, where as only one
++		 * other board has the same board_serial and 3 others have
++		 * the same default product_name. Also the GPDwin is the
++		 * only device to have both board_ and product_name not set.
++		 */
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "AMI Corporation"),
++			DMI_MATCH(DMI_BOARD_NAME, "Default string"),
++			DMI_MATCH(DMI_BOARD_SERIAL, "Default string"),
++			DMI_MATCH(DMI_PRODUCT_NAME, "Default string"),
++		},
++		.driver_data = (void *)&gpd_win_pocket_data,
++	},
++	{
++		/* Jumper EZpad mini3 */
++		.matches = {
++			DMI_MATCH(DMI_SYS_VENDOR, "Insyde"),
++			DMI_MATCH(DMI_PRODUCT_NAME, "CherryTrail"),
++			/* jumperx.T87.KFBNEEA02 with the version-nr dropped */
++			DMI_MATCH(DMI_BIOS_VERSION, "jumperx.T87.KFBNEEA"),
++		},
++		.driver_data = (void *)&jumper_ezpad_mini3_data,
++	},
++	{
++		/* Meegopad T08 */
++		.matches = {
++			DMI_MATCH(DMI_SYS_VENDOR, "Default string"),
++			DMI_MATCH(DMI_PRODUCT_NAME, "Default string"),
++			DMI_MATCH(DMI_BOARD_NAME, "T3 MRD"),
++			DMI_MATCH(DMI_BOARD_VERSION, "V1.1"),
++		},
++		.driver_data = (void *)&meegopad_t08_data,
++	},
++	{}
++};
++
++void brcmf_dmi_probe(struct brcmf_mp_device *settings, u32 chip, u32 chiprev)
++{
++	const struct dmi_system_id *match;
++	const struct brcmf_dmi_data *data;
++	const char *sys_vendor;
++	const char *product_name;
++
++	/* Some models have DMI strings which are too generic, e.g.
++	 * "Default string", we use a quirk table for these.
++	 */
++	for (match = dmi_first_match(dmi_platform_data);
++	     match;
++	     match = dmi_first_match(match + 1)) {
++		data = match->driver_data;
++
++		if (data->chip == chip && data->chiprev == chiprev) {
++			settings->board_type = data->board_type;
++			return;
++		}
++	}
++
++	/* Not found in the quirk-table, use sys_vendor-product_name */
++	sys_vendor = dmi_get_system_info(DMI_SYS_VENDOR);
++	product_name = dmi_get_system_info(DMI_PRODUCT_NAME);
++	if (sys_vendor && product_name) {
++		snprintf(dmi_board_type, sizeof(dmi_board_type), "%s-%s",
++			 sys_vendor, product_name);
++		settings->board_type = dmi_board_type;
++	}
++}
+diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/of.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/of.c
+index aee6e5937c41..84e3373289eb 100644
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/of.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/of.c
+@@ -27,11 +27,20 @@ void brcmf_of_probe(struct device *dev, enum brcmf_bus_type bus_type,
+ 		    struct brcmf_mp_device *settings)
+ {
+ 	struct brcmfmac_sdio_pd *sdio = &settings->bus.sdio;
+-	struct device_node *np = dev->of_node;
++	struct device_node *root, *np = dev->of_node;
++	struct property *prop;
+ 	int irq;
+ 	u32 irqf;
+ 	u32 val;
+ 
++	/* Set board-type to the first string of the machine compatible prop */
++	root = of_find_node_by_path("/");
++	if (root) {
++		prop = of_find_property(root, "compatible", NULL);
++		settings->board_type = of_prop_next_string(prop, NULL);
++		of_node_put(root);
++	}
++
+ 	if (!np || bus_type != BRCMF_BUSTYPE_SDIO ||
+ 	    !of_device_is_compatible(np, "brcm,bcm4329-fmac"))
+ 		return;
+diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c
+index 4fffa6988087..b12f3e0ee69c 100644
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c
+@@ -1785,6 +1785,7 @@ brcmf_pcie_prepare_fw_request(struct brcmf_pciedev_info *devinfo)
+ 	fwreq->items[BRCMF_PCIE_FW_CODE].type = BRCMF_FW_TYPE_BINARY;
+ 	fwreq->items[BRCMF_PCIE_FW_NVRAM].type = BRCMF_FW_TYPE_NVRAM;
+ 	fwreq->items[BRCMF_PCIE_FW_NVRAM].flags = BRCMF_FW_REQF_OPTIONAL;
++	fwreq->board_type = devinfo->settings->board_type;
+ 	/* NVRAM reserves PCI domain 0 for Broadcom's SDK faked bus */
+ 	fwreq->domain_nr = pci_domain_nr(devinfo->pdev->bus) + 1;
+ 	fwreq->bus_nr = devinfo->pdev->bus->number;
+diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/sdio.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/sdio.c
+index a907d7b065fa..3dbbbb117563 100644
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/sdio.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/sdio.c
+@@ -4177,6 +4177,7 @@ brcmf_sdio_prepare_fw_request(struct brcmf_sdio *bus)
+ 
+ 	fwreq->items[BRCMF_SDIO_FW_CODE].type = BRCMF_FW_TYPE_BINARY;
+ 	fwreq->items[BRCMF_SDIO_FW_NVRAM].type = BRCMF_FW_TYPE_NVRAM;
++	fwreq->board_type = bus->sdiodev->settings->board_type;
+ 
+ 	return fwreq;
+ }
+-- 
+2.19.1
+
+From 6351ca678eb1391129cf5afccab518f376d57596 Mon Sep 17 00:00:00 2001
+From: Hans de Goede <hdegoede@redhat.com>
+Date: Wed, 10 Oct 2018 13:01:03 +0200
+Subject: [PATCH 5/5] brcmfmac: Cleanup brcmf_fw_request_done()
+
+The "cur" variable is now only used for a debug print and we already
+print the same info from brcmf_fw_complete_request(), so the debug print
+does not provide any extra info and we can remove it.
+
+Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+---
+ .../net/wireless/broadcom/brcm80211/brcmfmac/firmware.c   | 8 +-------
+ 1 file changed, 1 insertion(+), 7 deletions(-)
+
+diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c
+index 6755b2388fbc..b38c4b40b235 100644
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c
+@@ -560,22 +560,16 @@ static int brcmf_fw_request_firmware(const struct firmware **fw,
+ static void brcmf_fw_request_done(const struct firmware *fw, void *ctx)
+ {
+ 	struct brcmf_fw *fwctx = ctx;
+-	struct brcmf_fw_item *cur;
+-	int ret = 0;
+-
+-	cur = &fwctx->req->items[fwctx->curpos];
++	int ret;
+ 
+ 	ret = brcmf_fw_complete_request(fw, fwctx);
+ 
+ 	while (ret == 0 && ++fwctx->curpos < fwctx->req->n_items) {
+-		cur = &fwctx->req->items[fwctx->curpos];
+ 		brcmf_fw_request_firmware(&fw, fwctx);
+ 		ret = brcmf_fw_complete_request(fw, ctx);
+ 	}
+ 
+ 	if (ret) {
+-		brcmf_dbg(TRACE, "failed err=%d: dev=%s, fw=%s\n", ret,
+-			  dev_name(fwctx->dev), cur->path);
+ 		brcmf_fw_free_request(fwctx->req);
+ 		fwctx->req = NULL;
+ 	}
+-- 
+2.19.1
+

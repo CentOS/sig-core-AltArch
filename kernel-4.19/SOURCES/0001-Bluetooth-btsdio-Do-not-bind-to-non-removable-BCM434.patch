@@ -1,0 +1,45 @@
+From 70ecdd3d8b36cd2bb960bc4e7ae047fbb94c031b Mon Sep 17 00:00:00 2001
+From: "Cho, Yu-Chen" <acho@suse.com>
+Date: Tue, 2 Oct 2018 17:57:04 +0800
+Subject: [PATCH] Bluetooth: btsdio: Do not bind to non-removable BCM43430
+
+BCM43430 devices soldered onto the PCB (non-removable)
+use an UART connection for bluetooth.
+But also advertise btsdio support on their 3th sdio function.
+
+Signed-off-by: Cho, Yu-Chen <acho@suse.com>
+Signed-off-by: Marcel Holtmann <marcel@holtmann.org>
+---
+ drivers/bluetooth/btsdio.c | 14 +++++++++-----
+ 1 file changed, 9 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/bluetooth/btsdio.c b/drivers/bluetooth/btsdio.c
+index 20142bc77554..282d1af1d3ba 100644
+--- a/drivers/bluetooth/btsdio.c
++++ b/drivers/bluetooth/btsdio.c
+@@ -293,13 +293,17 @@ static int btsdio_probe(struct sdio_func *func,
+ 		tuple = tuple->next;
+ 	}
+ 
+-	/* BCM43341 devices soldered onto the PCB (non-removable) use an
+-	 * uart connection for bluetooth, ignore the BT SDIO interface.
++	/* Broadcom devices soldered onto the PCB (non-removable) use an
++	 * UART connection for Bluetooth, ignore the BT SDIO interface.
+ 	 */
+ 	if (func->vendor == SDIO_VENDOR_ID_BROADCOM &&
+-	    func->device == SDIO_DEVICE_ID_BROADCOM_43341 &&
+-	    !mmc_card_is_removable(func->card->host))
+-		return -ENODEV;
++	    !mmc_card_is_removable(func->card->host)) {
++		switch (func->device) {
++		case SDIO_DEVICE_ID_BROADCOM_43341:
++		case SDIO_DEVICE_ID_BROADCOM_43430:
++			return -ENODEV;
++		}
++	}
+ 
+ 	data = devm_kzalloc(&func->dev, sizeof(*data), GFP_KERNEL);
+ 	if (!data)
+-- 
+2.20.1
+

@@ -42,7 +42,7 @@ Summary: The Linux kernel
 # For non-released -rc kernels, this will be appended after the rcX and
 # gitX tags, so a 3 here would become part of release "0.rcX.gitX.3"
 #
-%global baserelease 201
+%global baserelease 200
 %global fedora_build %{baserelease}
 
 # base_sublevel is the kernel version we're starting with and patching
@@ -54,7 +54,7 @@ Summary: The Linux kernel
 %if 0%{?released_kernel}
 
 # Do we have a -stable update to apply?
-%define stable_update 91
+%define stable_update 101
 # Set rpm version accordingly
 %if 0%{?stable_update}
 %define stablerev %{stable_update}
@@ -383,7 +383,8 @@ ExclusiveOS: Linux
 Requires: kernel-core-uname-r = %{KVERREL}%{?variant}
 Requires: kernel-modules-uname-r = %{KVERREL}%{?variant}
 %endif
-Requires: xorg-x11-drv-vmmouse >= 14.0.0
+
+Conflicts: xorg-x11-drv-vmmouse < 14.0.0
 
 #
 # List the packages used during the kernel build
@@ -700,9 +701,7 @@ AutoProv: yes\
 %package headers
 Summary: Header files for the Linux kernel for use by glibc
 Group: Development/System
-Obsoletes: xorg-x11-drv-vmmouse < 14.0.0
 Obsoletes: glibc-kernheaders < 3.0-46
-Provides: xorg-x11-drv-vmmouse = 14.0.0
 Provides: glibc-kernheaders = 3.0-46
 %if "0%{?variant}"
 Obsoletes: kernel-headers < %{rpmversion}-%{pkg_release}
@@ -2240,6 +2239,12 @@ fi
 #
 #
 %changelog
+* Fri Feb 15 2019 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.101-200
+- Rebase to LTS 4.14.101
+
+* Thu Jan 17 2019 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.94-200
+- Rebase to LTS 4.14.94
+
 * Sat Dec 29 2018 Pablo Greco <pablo@fliagreco.com.ar> - 4.14.91-201
 - Rebase to LTS 4.14.91
 
