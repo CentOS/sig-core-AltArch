@@ -23,7 +23,7 @@ repo --name="instKern" --baseurl=http://mirror.centos.org/altarch/7/kernel/armhf
 clearpart --initlabel --all
 part /boot --asprimary --fstype=vfat --size=300 --label=boot
 part swap --asprimary --fstype=swap --size=512 --label=swap
-part / --asprimary --fstype=ext4 --size=3800 --label=rootfs
+part / --asprimary --fstype=ext4 --size=4000 --label=rootfs
 
 # Package setup
 %packages

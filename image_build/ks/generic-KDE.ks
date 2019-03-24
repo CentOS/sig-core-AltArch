@@ -23,7 +23,7 @@ clearpart --initlabel --all
 part /boot/fw --asprimary --fstype=vfat --size=30
 part /boot --asprimary --fstype=ext3 --size=700 --label=boot
 part swap --asprimary --fstype=swap --size=512 --label=swap
-part / --asprimary --fstype=ext4 --size=3600 --label=rootfs
+part / --asprimary --fstype=ext4 --size=4000 --label=rootfs
 
 # Package setup
 %packages
