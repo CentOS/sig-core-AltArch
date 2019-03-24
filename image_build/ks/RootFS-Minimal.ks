@@ -33,7 +33,13 @@ extlinux-bootloader
 kernel
 net-tools
 uboot-images-armv7
+-caribou*
 -dracut-config-rescue
+-gnome-shell-browser-plugin
+-java-1.6.0-*
+-java-1.7.0-*
+-java-11-*
+-python*-caribou*
 
 %end
 

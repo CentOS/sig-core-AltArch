@@ -37,8 +37,13 @@ net-tools
 raspberrypi-vc-utils
 raspberrypi2-firmware
 raspberrypi2-kernel
-#raspberrypi2-kernel-firmware
 uboot-images-armv7
+-caribou*
+-gnome-shell-browser-plugin
+-java-1.6.0-*
+-java-1.7.0-*
+-java-11-*
+-python*-caribou*
 
 %end
 

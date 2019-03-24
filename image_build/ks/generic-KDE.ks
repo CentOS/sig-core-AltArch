@@ -37,8 +37,16 @@ dracut-config-generic
 extlinux-bootloader
 kernel
 net-tools
+pinentry-qt
+qt3
 uboot-images-armv7
+-caribou*
 -dracut-config-rescue
+-gnome-shell-browser-plugin
+-java-1.6.0-*
+-java-1.7.0-*
+-java-11-*
+-python*-caribou*
 
 %end
 

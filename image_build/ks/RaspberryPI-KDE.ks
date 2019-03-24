@@ -34,11 +34,18 @@ chrony
 cloud-utils-growpart
 firefox
 net-tools
+pinentry-qt
+qt3
 raspberrypi-vc-utils
 raspberrypi2-firmware
-#raspberrypi2-kernel-firmware
 raspberrypi2-kernel
 uboot-images-armv7
+-caribou*
+-gnome-shell-browser-plugin
+-java-1.6.0-*
+-java-1.7.0-*
+-java-11-*
+-python*-caribou*
 
 %end
 
