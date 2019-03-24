@@ -27,7 +27,7 @@ part / --fstype=ext4 --size=3600 --label=rootfs --asprimary
 # Package setup
 %packages
 @core
-@x-window-system
+@x11
 @gnome-desktop
 net-tools
 cloud-utils-growpart

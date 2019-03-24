@@ -27,7 +27,7 @@ part / --fstype=ext4 --size=3800 --label=rootfs --asprimary
 # Package setup
 %packages
 @core
-@x-window-system
+@x11
 @gnome-desktop
 firefox
 net-tools
