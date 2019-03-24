@@ -19,13 +19,13 @@ repo --name="instKern" --baseurl=https://armv7.dev.centos.org/repos/7.5.1804/ker
 
 # Disk setup
 clearpart --initlabel --all
-part /boot/fw --asprimary --fstype=vfat  --size=30 
+part /boot/fw --asprimary --fstype=vfat --size=30
 part /boot  --fstype=ext3   --size=700  --label=boot --asprimary
 part swap --fstype=swap --size=512 --label=swap --asprimary
 part / --fstype=ext4 --size=1500 --label=rootfs --asprimary
 
 # Package setup
-%packages 
+%packages
 @core
 net-tools
 cloud-utils-growpart
@@ -36,16 +36,15 @@ dracut-config-generic
 extlinux-bootloader
 bcm283x-firmware
 uboot-images-armv7
-%end
 
+%end
 
 %pre
 
 #End of Pre script for partitions
 %end
 
-
-%post 
+%post
 
 # Mandatory README file
 cat >/root/README << EOF
@@ -63,7 +62,7 @@ systemctl enable chronyd
 echo "generic" > /etc/yum/vars/kvariant
 
 # For cubietruck WiFi : kernel module works and linux-firmware has the needed file
-# But it just needs a .txt config file 
+# But it just needs a .txt config file
 
 cat > /lib/firmware/brcm/brcmfmac43362-sdio.txt << EOF
 
@@ -196,7 +195,7 @@ muxenab=0x1
 #cldo_pwm=0x4
 
 #VCO freq 326.4MHz
-spurconfig=0x3 
+spurconfig=0x3
 
 edonthd20l=-75
 edoffthd20ul=-80

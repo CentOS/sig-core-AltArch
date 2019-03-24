@@ -22,7 +22,7 @@ clearpart --initlabel --all
 part / --fstype=ext4 --size=1500 --label=rootfs --asprimary
 
 # Package setup
-%packages 
+%packages
 @core
 net-tools
 cloud-utils-growpart
@@ -33,16 +33,15 @@ dracut-config-generic
 extlinux-bootloader
 bcm283x-firmware
 uboot-images-armv7
-%end
 
+%end
 
 %pre
 
 #End of Pre script for partitions
 %end
 
-
-%post 
+%post
 
 # Mandatory README file
 cat >/root/README << EOF
@@ -60,7 +59,7 @@ systemctl enable chronyd
 echo "generic" > /etc/yum/vars/kvariant
 
 # For cubietruck WiFi : kernel module works and linux-firmware has the needed file
-# But it just needs a .txt config file 
+# But it just needs a .txt config file
 
 cat > /lib/firmware/brcm/brcmfmac43362-sdio.txt << EOF
 

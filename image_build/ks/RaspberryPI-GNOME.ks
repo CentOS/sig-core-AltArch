@@ -1,4 +1,3 @@
-
 # Basic setup information
 url --url="http://mirror.centos.org/altarch/7/os/armhfp/"
 install
@@ -26,7 +25,7 @@ part swap --fstype=swap --size=512 --label=swap --asprimary
 part / --fstype=ext4 --size=3800 --label=rootfs --asprimary
 
 # Package setup
-%packages 
+%packages
 @core
 @x-window-system
 @gnome-desktop
@@ -39,16 +38,15 @@ raspberrypi2-kernel
 #raspberrypi2-kernel-firmware
 raspberrypi2-firmware
 raspberrypi-vc-utils
-%end
 
+%end
 
 %pre
 
 #End of Pre script for partitions
 %end
 
-
-%post 
+%post
 # Generating initrd
 export kvr=$(rpm -q --queryformat '%{version}-%{release}' $(rpm -q raspberrypi2-kernel|tail -n 1))
 dracut --force /boot/initramfs-$kvr.armv7hl.img $kvr.armv7hl
@@ -140,7 +138,7 @@ muxenab=0x1
 #cldo_pwm=0x4
 
 #VCO freq 326.4MHz
-spurconfig=0x3 
+spurconfig=0x3
 
 edonthd20l=-75
 edoffthd20ul=-80
@@ -149,7 +147,7 @@ EOF
 
 # RaspberryPI 3 model+ wifi
 cat > /usr/lib/firmware/brcm/brcmfmac43455-sdio.txt << EOF
-# Cloned from bcm94345wlpagb_p2xx.txt 
+# Cloned from bcm94345wlpagb_p2xx.txt
 NVRAMRev=$Rev: 498373 $
 sromrev=11
 vendid=0x14e4
