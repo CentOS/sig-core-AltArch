@@ -2,10 +2,10 @@
 url --url="http://mirror.centos.org/altarch/7/os/armhfp/"
 install
 keyboard us --xlayouts=us --vckeymap=us
-rootpw centos
+rootpw --plaintext centos
 timezone --isUtc --nontp UTC
 selinux --enforcing
-firewall --enabled --port=22
+firewall --enabled --port=22:tcp
 network --bootproto=dhcp --device=link --activate --onboot=on
 services --enabled=sshd,NetworkManager,chronyd
 shutdown
@@ -20,24 +20,24 @@ repo --name="instKern" --baseurl=http://mirror.centos.org/altarch/7/kernel/armhf
 
 # Disk setup
 clearpart --initlabel --all
-part /boot  --fstype=vfat   --size=300  --label=boot --asprimary
-part swap --fstype=swap --size=512 --label=swap --asprimary
-part / --fstype=ext4 --size=3800 --label=rootfs --asprimary
+part /boot --asprimary --fstype=vfat --size=300 --label=boot
+part swap --asprimary --fstype=swap --size=512 --label=swap
+part / --asprimary --fstype=ext4 --size=3800 --label=rootfs
 
 # Package setup
 %packages
 @core
-@x11
 @gnome-desktop
+@x11
+chrony
+cloud-utils-growpart
 firefox
 net-tools
-cloud-utils-growpart
-chrony
-uboot-images-armv7
+raspberrypi-vc-utils
+raspberrypi2-firmware
 raspberrypi2-kernel
 #raspberrypi2-kernel-firmware
-raspberrypi2-firmware
-raspberrypi-vc-utils
+uboot-images-armv7
 
 %end
 

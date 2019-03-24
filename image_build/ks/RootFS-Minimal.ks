@@ -2,10 +2,10 @@
 url --url="http://mirror.centos.org/altarch/7/os/armhfp/"
 install
 keyboard us --xlayouts=us --vckeymap=us
-rootpw centos
+rootpw --plaintext centos
 timezone --isUtc --nontp UTC
 selinux --enforcing
-firewall --enabled --port=22
+firewall --enabled --port=22:tcp
 network --bootproto=dhcp --device=link --activate --onboot=on
 shutdown
 bootloader --location=mbr
@@ -19,20 +19,20 @@ repo --name="instKern" --baseurl=http://mirror.centos.org/altarch/7/kernel/armhf
 
 # Disk setup
 clearpart --initlabel --all
-part / --fstype=ext4 --size=1500 --label=rootfs --asprimary
+part / --asprimary --fstype=ext4 --size=1500 --label=rootfs
 
 # Package setup
 %packages
 @core
-net-tools
-cloud-utils-growpart
-chrony
-kernel
-dracut-config-generic
--dracut-config-rescue
-extlinux-bootloader
 bcm283x-firmware
+chrony
+cloud-utils-growpart
+dracut-config-generic
+extlinux-bootloader
+kernel
+net-tools
 uboot-images-armv7
+-dracut-config-rescue
 
 %end
 
