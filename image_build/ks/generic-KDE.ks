@@ -14,6 +14,7 @@ lang en_US.UTF-8
 # Repositories to use
 repo --name="instCentOS" --baseurl=http://mirror.centos.org/altarch/7/os/armhfp/ --cost=100
 repo --name="instUpdates" --baseurl=http://mirror.centos.org/altarch/7/updates/armhfp/ --cost=100
+repo --name="instCentCR" --baseurl=http://mirror.centos.org/altarch/7/cr/armhfp/ --cost=100
 repo --name="instExtras" --baseurl=http://mirror.centos.org/altarch/7/extras/armhfp/ --cost=100
 repo --name="instKern" --baseurl=http://mirror.centos.org/altarch/7/kernel/armhfp/kernel-generic/ --cost=100
 
