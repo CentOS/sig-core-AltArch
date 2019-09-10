@@ -1,0 +1,123 @@
+2018-11-23  Jakub Jelinek  <jakub@redhat.com>
+
+	* lang.opt (fpad-source): New option.
+	* scanner.c (load_line): Don't pad fixed form lines if
+	!flag_pad_source.
+	* invoke.texi (-fno-pad-source): Document.
+
+--- gcc/fortran/invoke.texi
++++ gcc/fortran/invoke.texi
+@@ -119,7 +119,7 @@ by type.  Explanations are in the follow
+ -fdec -fdec-structure -fdec-intrinsic-ints -fdec-static -fdec-math @gol
+ -fdec-include -fdefault-double-8 -fdefault-integer-8 @gol
+ -fdefault-real-8 -fdollar-ok -ffixed-line-length-@var{n} @gol
+--ffixed-line-length-none -ffree-form -ffree-line-length-@var{n} @gol
++-ffixed-line-length-none -fpad-source -ffree-form -ffree-line-length-@var{n} @gol
+ -ffree-line-length-none -fimplicit-none -finteger-4-integer-8 @gol
+ -fmax-identifier-length -fmodule-private -ffixed-form -fno-range-check @gol
+ -fopenacc -fopenmp -freal-4-real-10 -freal-4-real-16 -freal-4-real-8 @gol
+@@ -321,8 +321,9 @@ declared as @code{PUBLIC}.
+ @opindex @code{ffixed-line-length-}@var{n}
+ @cindex file format, fixed
+ Set column after which characters are ignored in typical fixed-form
+-lines in the source file, and through which spaces are assumed (as
+-if padded to that length) after the ends of short fixed-form lines.
++lines in the source file, and, unless @code{-fno-pad-source}, through which
++spaces are assumed (as if padded to that length) after the ends of short
++fixed-form lines.
+ 
+ Popular values for @var{n} include 72 (the
+ standard and the default), 80 (card image), and 132 (corresponding
+@@ -333,6 +334,15 @@ to them to fill out the line.
+ @option{-ffixed-line-length-0} means the same thing as
+ @option{-ffixed-line-length-none}.
+ 
++@item -fno-pad-source
++@opindex @code{fpad-source}
++By default fixed-form lines have spaces assumed (as if padded to that length)
++after the ends of short fixed-form lines.  This is not done either if
++@option{-ffixed-line-length-0}, @option{-ffixed-line-length-none} or
++if @option{-fno-pad-source} option is used.  With any of those options
++continued character constants never have implicit spaces appended
++to them to fill out the line.
++
+ @item -ffree-line-length-@var{n}
+ @opindex @code{ffree-line-length-}@var{n}
+ @cindex file format, free
+--- gcc/fortran/lang.opt
++++ gcc/fortran/lang.opt
+@@ -536,6 +536,10 @@ ffixed-line-length-
+ Fortran RejectNegative Joined UInteger Var(flag_fixed_line_length) Init(72)
+ -ffixed-line-length-<n>	Use n as character line width in fixed mode.
+ 
++fpad-source
++Fortran Var(flag_pad_source) Init(1)
++Pad shorter fixed form lines to line width with spaces.
++
+ ffpe-trap=
+ Fortran RejectNegative JoinedOrMissing
+ -ffpe-trap=[...]	Stop on following floating point exceptions.
+--- gcc/fortran/scanner.c
++++ gcc/fortran/scanner.c
+@@ -1924,6 +1924,7 @@ next_char:
+   /* Pad lines to the selected line length in fixed form.  */
+   if (gfc_current_form == FORM_FIXED
+       && flag_fixed_line_length != 0
++      && flag_pad_source
+       && !preprocessor_flag
+       && c != EOF)
+     {
+--- /dev/null
++++ gcc/testsuite/gfortran.dg/pad_source_1.f
+@@ -0,0 +1,8 @@
++c { dg-do run }
++c { dg-skip-if "non-standard options" { *-*-* } { "-ffixed-line-length*" "-f*pad-source" } }
++      character(80) a
++      a = 'abc
++     +def'
++      if (a(:61) .ne. 'abc') stop 1
++      if (a(62:) .ne. 'def') stop 2
++      end
+--- /dev/null
++++ gcc/testsuite/gfortran.dg/pad_source_2.f
+@@ -0,0 +1,9 @@
++c { dg-do run }
++c { dg-skip-if "non-standard options" { *-*-* } { "-ffixed-line-length*" } }
++c { dg-options "-fpad-source" }
++      character(80) a
++      a = 'abc
++     +def'
++      if (a(:61) .ne. 'abc') stop 1
++      if (a(62:) .ne. 'def') stop 2
++      end
+--- /dev/null
++++ gcc/testsuite/gfortran.dg/pad_source_3.f
+@@ -0,0 +1,8 @@
++c { dg-do run }
++c { dg-skip-if "non-standard options" { *-*-* } { "-ffixed-line-length*" } }
++c { dg-options "-fno-pad-source" }
++      character(80) a
++      a = 'abc
++     +def'
++      if (a .ne. 'abcdef') stop 1
++      end
+--- /dev/null
++++ gcc/testsuite/gfortran.dg/pad_source_4.f
+@@ -0,0 +1,7 @@
++c { dg-do run }
++c { dg-options "-ffixed-line-length-none" }
++      character(80) a
++      a = 'abc
++     +def'
++      if (a .ne. 'abcdef') stop 1
++      end
+--- /dev/null
++++ gcc/testsuite/gfortran.dg/pad_source_5.f
+@@ -0,0 +1,7 @@
++c { dg-do run }
++c { dg-options "-ffixed-line-length-0" }
++      character(80) a
++      a = 'abc
++     +def'
++      if (a .ne. 'abcdef') stop 1
++      end
