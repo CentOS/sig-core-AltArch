@@ -161,6 +161,7 @@ devid=0x43ab
 manfid=0x2d0
 prodid=0x06e4
 #macaddr=00:90:4c:c5:12:38
+macaddr=b8:27:eb:74:f2:6c
 nocrc=1
 boardtype=0x6e4
 boardrev=0x1304
@@ -175,7 +176,7 @@ btc_mode=1
 #            bit1 for btcoex
 boardflags=0x00480201
 boardflags2=0x40800000
-boardflags3=0x48200100
+boardflags3=0x44200100
 phycal_tempdelta=15
 rxchain=1
 txchain=1
@@ -244,6 +245,11 @@ txpwr5gAdcScale=1
 dot11b_opts=0x3aa85
 cbfilttype=1
 fdsslevel_ch11=6
+
+# Improved Bluetooth coexistence parameters from Cypress
+btc_mode=1
+btc_params8=0x4e20
+btc_params1=0x7530
 
 EOF
 
