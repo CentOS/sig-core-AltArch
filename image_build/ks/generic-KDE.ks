@@ -142,6 +142,7 @@ EOF
 cp -Pr /usr/share/bcm283x-firmware/* /boot/fw/
 cp -P /usr/share/uboot/rpi_2/u-boot.bin /boot/fw/rpi2-u-boot.bin
 cp -P /usr/share/uboot/rpi_3_32b/u-boot.bin /boot/fw/rpi3-u-boot.bin
+cp -P /usr/share/uboot/rpi_4_32b/u-boot.bin /boot/fw/rpi4-u-boot.bin
 
 # RaspberryPi 3 config for wifi
 cat > /usr/lib/firmware/brcm/brcmfmac43430-sdio.txt << EOF
