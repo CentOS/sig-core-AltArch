@@ -34,8 +34,10 @@ part / --asprimary --fstype=ext4 --size=4000 --label=rootfs
 bcm283x-firmware
 chrony
 cloud-utils-growpart
+dracut-config-extradrivers
 dracut-config-generic
 extlinux-bootloader
+grubby
 kernel
 net-tools
 pinentry-qt
@@ -217,6 +219,7 @@ EOF
 
 
 
+yum -y remove dracut-config-generic
 
 # Remove ifcfg-link on pre generated images
 rm -f /etc/sysconfig/network-scripts/ifcfg-link
