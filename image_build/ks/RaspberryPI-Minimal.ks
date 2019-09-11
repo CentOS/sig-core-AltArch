@@ -1,12 +1,11 @@
-
 # Basic setup information
 url --url="http://mirror.centos.org/altarch/7/os/armhfp/"
 install
 keyboard us --xlayouts=us --vckeymap=us
-rootpw centos
+rootpw --plaintext centos
 timezone --isUtc --nontp UTC
 selinux --enforcing
-firewall --enabled --port=22
+firewall --enabled --port=22:tcp
 network --bootproto=dhcp --device=link --activate --onboot=on
 services --enabled=sshd,NetworkManager,chronyd
 shutdown
@@ -14,38 +13,43 @@ bootloader --location=mbr
 lang en_US.UTF-8
 
 # Repositories to use
-repo --name="instCentOS" --baseurl=https://armv7.dev.centos.org/repos/7.5.1804/os/armhfp/ --cost=100
+repo --name="instCentOS" --baseurl=http://mirror.centos.org/altarch/7/os/armhfp/ --cost=100
 repo --name="instUpdates" --baseurl=http://mirror.centos.org/altarch/7/updates/armhfp/ --cost=100
+repo --name="instCentCR" --baseurl=http://mirror.centos.org/altarch/7/cr/armhfp/ --cost=100
 repo --name="instExtras" --baseurl=http://mirror.centos.org/altarch/7/extras/armhfp/ --cost=100
-repo --name="instKern" --baseurl=https://armv7.dev.centos.org/repos/7.5.1804/kernel/armhfp/kernel-rpi2/ --cost=100
+repo --name="instKern" --baseurl=http://mirror.centos.org/altarch/7/kernel/armhfp/kernel-rpi2/ --cost=100
 
 # Disk setup
 clearpart --initlabel --all
-part /boot  --fstype=vfat   --size=700  --label=boot --asprimary
-part swap --fstype=swap --size=512 --label=swap --asprimary
-part / --fstype=ext4 --size=1500 --label=rootfs --asprimary
+part /boot --asprimary --fstype=vfat --size=300 --label=boot
+part swap --asprimary --fstype=swap --size=512 --label=swap
+part / --asprimary --fstype=ext4 --size=1500 --label=rootfs
 
 # Package setup
-%packages 
+%packages
 @core
-net-tools
-cloud-utils-growpart
 chrony
-uboot-images-armv7
-raspberrypi2-kernel
-#raspberrypi2-kernel-firmware
-raspberrypi2-firmware
+cloud-utils-growpart
+net-tools
 raspberrypi-vc-utils
-%end
+raspberrypi2-firmware
+raspberrypi2-kernel
+uboot-images-armv7
+-caribou*
+-gnome-shell-browser-plugin
+-java-1.6.0-*
+-java-1.7.0-*
+-java-11-*
+-python*-caribou*
 
+%end
 
 %pre
 
 #End of Pre script for partitions
 %end
 
-
-%post 
+%post
 # Generating initrd
 export kvr=$(rpm -q --queryformat '%{version}-%{release}' $(rpm -q raspberrypi2-kernel|tail -n 1))
 dracut --force /boot/initramfs-$kvr.armv7hl.img $kvr.armv7hl
@@ -137,7 +141,7 @@ muxenab=0x1
 #cldo_pwm=0x4
 
 #VCO freq 326.4MHz
-spurconfig=0x3 
+spurconfig=0x3
 
 edonthd20l=-75
 edoffthd20ul=-80
@@ -146,7 +150,7 @@ EOF
 
 # RaspberryPI 3 model+ wifi
 cat > /usr/lib/firmware/brcm/brcmfmac43455-sdio.txt << EOF
-# Cloned from bcm94345wlpagb_p2xx.txt 
+# Cloned from bcm94345wlpagb_p2xx.txt
 NVRAMRev=$Rev: 498373 $
 sromrev=11
 vendid=0x14e4

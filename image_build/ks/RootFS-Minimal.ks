@@ -2,11 +2,12 @@
 url --url="http://mirror.centos.org/altarch/7/os/armhfp/"
 install
 keyboard us --xlayouts=us --vckeymap=us
-rootpw centos
+rootpw --plaintext centos
 timezone --isUtc --nontp UTC
 selinux --enforcing
-firewall --enabled --port=22
+firewall --enabled --port=22:tcp
 network --bootproto=dhcp --device=link --activate --onboot=on
+services --enabled=sshd,NetworkManager,chronyd
 shutdown
 bootloader --location=mbr
 lang en_US.UTF-8
@@ -14,35 +15,41 @@ lang en_US.UTF-8
 # Repositories to use
 repo --name="instCentOS" --baseurl=http://mirror.centos.org/altarch/7/os/armhfp/ --cost=100
 repo --name="instUpdates" --baseurl=http://mirror.centos.org/altarch/7/updates/armhfp/ --cost=100
+repo --name="instCentCR" --baseurl=http://mirror.centos.org/altarch/7/cr/armhfp/ --cost=100
 repo --name="instExtras" --baseurl=http://mirror.centos.org/altarch/7/extras/armhfp/ --cost=100
 repo --name="instKern" --baseurl=http://mirror.centos.org/altarch/7/kernel/armhfp/kernel-generic/ --cost=100
 
 # Disk setup
 clearpart --initlabel --all
-part / --fstype=ext4 --size=1500 --label=rootfs --asprimary
+part / --asprimary --fstype=ext4 --size=1500 --label=rootfs
 
 # Package setup
-%packages 
+%packages
 @core
-net-tools
-cloud-utils-growpart
-chrony
-kernel
-dracut-config-generic
--dracut-config-rescue
-extlinux-bootloader
 bcm283x-firmware
+chrony
+cloud-utils-growpart
+dracut-config-generic
+extlinux-bootloader
+kernel
+net-tools
 uboot-images-armv7
-%end
+-caribou*
+-dracut-config-rescue
+-gnome-shell-browser-plugin
+-java-1.6.0-*
+-java-1.7.0-*
+-java-11-*
+-python*-caribou*
 
+%end
 
 %pre
 
 #End of Pre script for partitions
 %end
 
-
-%post 
+%post
 
 # Mandatory README file
 cat >/root/README << EOF
@@ -60,7 +67,7 @@ systemctl enable chronyd
 echo "generic" > /etc/yum/vars/kvariant
 
 # For cubietruck WiFi : kernel module works and linux-firmware has the needed file
-# But it just needs a .txt config file 
+# But it just needs a .txt config file
 
 cat > /lib/firmware/brcm/brcmfmac43362-sdio.txt << EOF
 

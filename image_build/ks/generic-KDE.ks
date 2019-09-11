@@ -2,52 +2,61 @@
 url --url="http://mirror.centos.org/altarch/7/os/armhfp/"
 install
 keyboard us --xlayouts=us --vckeymap=us
-rootpw centos
+rootpw --plaintext centos
 timezone --isUtc --nontp UTC
 selinux --enforcing
-firewall --enabled --port=22
+firewall --enabled --port=22:tcp
 network --bootproto=dhcp --device=link --activate --onboot=on
+services --enabled=sshd,NetworkManager,chronyd
 shutdown
 bootloader --location=mbr
 lang en_US.UTF-8
 
 # Repositories to use
-repo --name="instCentOS" --baseurl=https://armv7.dev.centos.org/repos/7.5.1804/os/armhfp/ --cost=100
+repo --name="instCentOS" --baseurl=http://mirror.centos.org/altarch/7/os/armhfp/ --cost=100
 repo --name="instUpdates" --baseurl=http://mirror.centos.org/altarch/7/updates/armhfp/ --cost=100
+repo --name="instCentCR" --baseurl=http://mirror.centos.org/altarch/7/cr/armhfp/ --cost=100
 repo --name="instExtras" --baseurl=http://mirror.centos.org/altarch/7/extras/armhfp/ --cost=100
-repo --name="instKern" --baseurl=https://armv7.dev.centos.org/repos/7.5.1804/kernel/armhfp/kernel-generic/ --cost=100
+repo --name="instKern" --baseurl=http://mirror.centos.org/altarch/7/kernel/armhfp/kernel-generic/ --cost=100
 
 # Disk setup
 clearpart --initlabel --all
-part /boot/fw --asprimary --fstype=vfat  --size=30 
-part /boot  --fstype=ext3   --size=700  --label=boot --asprimary
-part swap --fstype=swap --size=512 --label=swap --asprimary
-part / --fstype=ext4 --size=3600 --label=rootfs --asprimary
+part /boot/fw --asprimary --fstype=vfat --size=30
+part /boot --asprimary --fstype=ext3 --size=700 --label=boot
+part swap --asprimary --fstype=swap --size=512 --label=swap
+part / --asprimary --fstype=ext4 --size=4000 --label=rootfs
 
 # Package setup
-%packages 
+%packages
 @core
-@x-window-system
 @kde
-net-tools
-cloud-utils-growpart
-chrony
-kernel
-dracut-config-generic
--dracut-config-rescue
-extlinux-bootloader
+@x11
 bcm283x-firmware
+chrony
+cloud-utils-growpart
+dracut-config-generic
+extlinux-bootloader
+kernel
+net-tools
+pinentry-qt
+qt3
 uboot-images-armv7
-%end
+-caribou*
+-dracut-config-rescue
+-gnome-shell-browser-plugin
+-java-1.6.0-*
+-java-1.7.0-*
+-java-11-*
+-python*-caribou*
 
+%end
 
 %pre
 
 #End of Pre script for partitions
 %end
 
-
-%post 
+%post
 
 # Mandatory README file
 cat >/root/README << EOF
@@ -65,7 +74,7 @@ systemctl enable chronyd
 echo "generic" > /etc/yum/vars/kvariant
 
 # For cubietruck WiFi : kernel module works and linux-firmware has the needed file
-# But it just needs a .txt config file 
+# But it just needs a .txt config file
 
 cat > /lib/firmware/brcm/brcmfmac43362-sdio.txt << EOF
 
@@ -198,7 +207,7 @@ muxenab=0x1
 #cldo_pwm=0x4
 
 #VCO freq 326.4MHz
-spurconfig=0x3 
+spurconfig=0x3
 
 edonthd20l=-75
 edoffthd20ul=-80
