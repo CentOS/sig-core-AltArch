@@ -31,6 +31,7 @@ part / --asprimary --fstype=ext4 --size=1500 --label=rootfs
 chrony
 cloud-utils-growpart
 net-tools
+NetworkManager-wifi
 raspberrypi-vc-utils
 raspberrypi2-firmware
 raspberrypi2-kernel

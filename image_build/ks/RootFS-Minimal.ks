@@ -21,7 +21,7 @@ repo --name="instKern" --baseurl=http://mirror.centos.org/altarch/7/kernel/armhf
 
 # Disk setup
 clearpart --initlabel --all
-part / --asprimary --fstype=ext4 --size=1500 --label=rootfs
+part / --asprimary --fstype=ext4 --size=1600 --label=rootfs
 
 # Package setup
 %packages
@@ -35,6 +35,7 @@ extlinux-bootloader
 grubby
 kernel
 net-tools
+NetworkManager-wifi
 uboot-images-armv7
 -caribou*
 -dracut-config-rescue
