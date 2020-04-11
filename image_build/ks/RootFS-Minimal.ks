@@ -12,4 +12,4 @@ repo --name="instKern" --baseurl=http://mirror.centos.org/altarch/7/kernel/armhf
 
 # Disk setup
 clearpart --initlabel --all
-part / --asprimary --fstype=ext4 --size=1600 --label=rootfs
+part / --asprimary --fstype=ext4 --size=1800 --label=rootfs
