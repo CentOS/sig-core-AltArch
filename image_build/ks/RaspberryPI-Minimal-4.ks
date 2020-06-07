@@ -20,13 +20,13 @@ part / --asprimary --fstype=ext4 --size=1800 --label=rootfs
 %packages
 raspberrypi-vc-utils
 raspberrypi2-firmware
-raspberrypi2-kernel
+raspberrypi2-kernel4
 
 %end
 
 %post
 # Generating initrd
-export kvr=$(rpm -q --queryformat '%{version}-%{release}' $(rpm -q raspberrypi2-kernel|tail -n 1))
+export kvr=$(rpm -q --queryformat '%{version}-%{release}' $(rpm -q raspberrypi2-kernel4|tail -n 1))
 dracut --force /boot/initramfs-$kvr.armv7hl.img $kvr.armv7hl
 
 %end

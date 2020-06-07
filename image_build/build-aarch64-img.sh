@@ -11,4 +11,4 @@ ks="$1"
 
 img=$(echo $ks|rev|cut -f 1 -d "/"|rev|sed s/\.ks//g)
 
-time appliance-creator$comp --config=${ks} --name="CentOS-Userland-7-armv7hl-$img-2003" --version="7" --debug 2>&1 | tee $img.log
+time appliance-creator$comp --config=${ks} --name="CentOS-Userland-7-aarch64-$img-2003" --version="7" --debug 2>&1 | tee $img.log
