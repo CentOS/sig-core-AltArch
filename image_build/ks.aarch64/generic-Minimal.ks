@@ -43,6 +43,16 @@ if [ -x /lib/kernel/install.d/10-devicetree.install ];then
     /lib/kernel/install.d/10-devicetree.install remove
 fi
 
+cat << EOF > /etc/sysconfig/kernel
+# Written by image installer
+# UPDATEDEFAULT specifies if new-kernel-pkg should make new kernels the default
+UPDATEDEFAULT=yes
+
+# DEFAULTKERNEL specifies the default kernel package type
+DEFAULTKERNEL=kernel
+EOF
+chmod 644 /etc/sysconfig/kernel
+
 %end
 
 %post --nochroot --erroronfail
