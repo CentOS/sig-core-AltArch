@@ -1,3 +1,3 @@
 #!/bin/bash
 
-tar -czvf centos-release-7-8.2003.tar.gz centos-release-7/
+tar -czvf centos-release-7-9.2009.tar.gz centos-release-7/

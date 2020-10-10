@@ -35,7 +35,7 @@ for i in x86_64 i686 ppc ppc64 ppc64le aarch64 armv7hl power9;do
     fi
     versions+=" 7.3.1611 7.4.1708"
     versions+=" 7.5.1804 7.6.1810"
-    versions+=" 7.7.1908"
+    versions+=" 7.7.1908 7.8.2003"
     for j in $versions ;do
         if [ "$i" == "power9" ] && [[ "$j" > "7.4.1708" ]];then
             basearch=$i
