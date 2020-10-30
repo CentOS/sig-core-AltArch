@@ -17,7 +17,7 @@ clearpart --initlabel --all
 part /boot/efi --asprimary --fstype=efi --size=100
 part /boot --asprimary --fstype=ext3 --size=700 --label=boot
 part swap --asprimary --fstype=swap --size=512 --label=swap
-part / --asprimary --fstype=ext4 --size=2000 --label=rootfs
+part / --asprimary --fstype=ext4 --size=2200 --label=rootfs
 
 %packages
 dracut-config-extradrivers
